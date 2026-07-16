@@ -8,15 +8,18 @@
 
 ## P0 — misleading or wrong in production today
 
-- [ ] **KYC is a stub in prod.** `KYC_PRIMARY_PROVIDER` defaults to `stub`: every bank
-  account (except test patterns) penny-drop-"verifies" with holder name "VERIFIED
-  HOLDER"; PAN verify is regex-only; DigiLocker returns a fake session
-  (`api/src/integrations/kyc/stub.ts`, `customers/service.ts:247`). Staff must NOT
-  trust "Verified" badges until the Decentro adapter lands + keys in SSM.
-- [ ] **All notifications are stubs.** Email/SMS/WhatsApp providers return success
-  without sending (`api/src/integrations/notify/index.ts`). This includes the
-  **customer-portal OTP** — portal login is effectively unusable until SES/WappCloud
-  adapters + keys land.
+- [~] **KYC — LIVE via Decentro since 2026-07-16 evening** (adapter ported from the
+  wealth app; keys copied from /dhanam/wealth/*): PAN verify + BAV-v3 penny drop
+  with real account_status verdicts and local fuzzy name-match. Still stubbed:
+  DigiLocker/Aadhaar uistream (needs session model + callback route), CKYC.
+  NOTE: first real penny-drop/PAN call not yet fired — exercise on first
+  customer bank-add and watch `journalctl -u dhanam-newwealth` for [decentro].
+- [~] **Notifications — email LIVE via SES since 2026-07-16 evening** (instance-role
+  auth, same verified identity as the wealth app; verified end-to-end — queued
+  row drained with a real SES message id). WhatsApp wired via WappCloud for the
+  approved OTP template (portal_otp); other WhatsApp templates fail gracefully
+  until approved counterparts exist. SMS still stub (Moplet port pending —
+  LockerHub owns SMS today). Portal OTP now deliverable via email/WhatsApp.
 - [x] **Lead → convert posts hardcoded values** — FIXED 2026-07-16: inline convert
   form (amount prefilled from expected_amount + Open-series picker) replaces the
   hardcoded `100000 / series 1`.
@@ -76,8 +79,9 @@
 
 ## P3 — ops & integrations
 
-- [ ] Live provider keys not in SSM: DECENTRO_*, DIGIO_*, WAPPCLOUD_*, SES/
-  NOTIFICATIONS_* (blocked on owner obtaining keys).
+- [x] Provider keys — CLOSED 2026-07-16: Decentro/WappCloud/notifications params
+  copied from the wealth app's SSM (13 params); Digio keys exist in
+  /dhanam/wealth/DIGIO_* for when the eSign webhook gets built.
 - [ ] Digio eSign: only manual mark-esigned exists; no webhook/poller.
 - [ ] Payment adapters (Cashfree/Easebuzz): nothing behind the stub default.
 - [ ] Crons from docs/00 §12: daily book-summary email, backup-check email, LockerHub

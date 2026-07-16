@@ -44,10 +44,20 @@
 - [ ] Leads: edit, notes/follow-up history, duplicate-phone check all API-only; create
   form missing place/category/referred-by/scheme/expected-amount/follow-up fields.
 - [~] Applications — receipt upload CLOSED 2026-07-16 (upload/replace button on the
-  application page, ≤4 MB). Approvals detail view + reject-with-reason CLOSED
+  application page, ≤4 MB; body-parser raised to 8 MB on upload routes so the cap
+  is actually reachable). Approvals detail view + reject-with-reason CLOSED
   2026-07-16. Still API-only: clubbing candidates.
-- [ ] Payouts/statements/incentives: mark-row-failed, statements list, agent
-  eligibility grant/revoke, payee balance — API-only.
+- [x] Upload hardening — CLOSED 2026-07-16 (found in re-audit): server-side
+  magic-byte validation (JPEG/PNG/WebP/PDF only, 5 MB cap, sniffed mime stored)
+  on receipts + KYC docs (staff, portal-mirror and integration paths); stored
+  files now served with the sniffed type and sanitized Content-Disposition,
+  unknown/legacy types download as attachment — closes a stored-XSS vector
+  (client-controlled mime served inline with CSP off).
+- [x] Nominee/joint-holder second-add 400 — FIXED 2026-07-16 (found in re-audit):
+  route schemas now nullish, so UI round-trips of NULL fields validate.
+- [ ] Payouts/statements/incentives: mark-row-failed, statements list, and *agent*
+  eligibility grant/revoke — API-only. (Payee balances and *referrer* eligibility
+  ARE wired via the Incentives page — corrected 2026-07-16 re-audit.)
 - [ ] Portal: service-requests endpoints unused; documents list has no real download
   links (only the SOA PDF generator exists — bond certificate / allotment letter /
   acknowledgment PDFs not built).
@@ -75,6 +85,15 @@
 - [ ] LockerHub/DhanamFin cutover: integration façade is live behind
   `LOCKERHUB_INTEGRATION_KEY`, but the LockerHub app still points at the old wealth
   app; byte-compat of L1–L10/LA1–LA4 unverified against doc 08.
+
+## P4 — minor / cosmetic (from 2026-07-16 re-audit)
+
+- [ ] `customers:delete` permission is defined but orphaned — no route, no UI.
+  Either build customer deletion (with guards) or drop the catalog entry.
+- [ ] migrate-legacy report counts (`frozenRows`/`loadedPaidRows`) are table-wide,
+  not migration-scoped — over-count if ever re-run on a non-empty DB.
+- [ ] Masters/Events pages use hand-rolled tables, not the shared DataTable
+  (no sort/filter there); DataTable's "Filter" toggle clears filters on collapse.
 
 ## Verified working (deployed + exercised 2026-07-16)
 

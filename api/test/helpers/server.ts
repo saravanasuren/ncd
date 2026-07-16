@@ -66,10 +66,10 @@ export class Client {
   del(p: string) { return this.req('DELETE', p); }
 
   /** Fetch raw bytes (for binary downloads like xlsx). */
-  async raw(path: string): Promise<{ status: number; buffer: Buffer }> {
+  async raw(path: string): Promise<{ status: number; buffer: Buffer; headers: Headers }> {
     const cookie = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join('; ');
     const res = await fetch(this.base + path, { headers: cookie ? { Cookie: cookie } : {} });
     const buffer = Buffer.from(await res.arrayBuffer());
-    return { status: res.status, buffer };
+    return { status: res.status, buffer, headers: res.headers };
   }
 }

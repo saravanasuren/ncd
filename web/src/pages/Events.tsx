@@ -32,11 +32,12 @@ function EventTable({ title, rows }: { title: string; rows: EventRow[] }) {
 
 /** NCD events register (docs/00 §6). Initiation lives on the application page. */
 export function EventsPage() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['ncd-events'],
     queryFn: () => api.get<{ rollovers: EventRow[]; transfers: EventRow[]; transformations: EventRow[] }>('/api/ncd-events'),
   });
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
+  if (error) return <div className="text-danger">Failed to load NCD events.</div>;
   return (
     <div className="max-w-4xl">
       <h1 className="text-xl font-bold tracking-tight m-0">NCD Events</h1>

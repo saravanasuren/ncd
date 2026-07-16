@@ -8,14 +8,15 @@ function baseDir(): string {
   return process.env.FILE_STORAGE_DIR || resolve(process.cwd(), 'data', 'uploads');
 }
 
-/** Save a base64 payload under subdir; returns the relative stored path. */
-export function saveBase64(subdir: string, originalName: string, base64: string): { path: string } {
+/** Save a validated buffer under subdir; returns the relative stored path.
+ * Callers must run lib/uploads.ts validateUpload() first — this only stores. */
+export function saveBuffer(subdir: string, originalName: string, buffer: Buffer): { path: string } {
   const dir = join(baseDir(), subdir);
   mkdirSync(dir, { recursive: true });
   const safe = originalName.replace(/[^\w.-]/g, '_').slice(-60);
   const name = `${randomBytes(8).toString('hex')}-${safe}`;
   const full = join(dir, name);
-  writeFileSync(full, Buffer.from(base64, 'base64'));
+  writeFileSync(full, buffer);
   return { path: join(subdir, name) };
 }
 

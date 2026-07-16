@@ -110,11 +110,16 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
     await wrap(api.put(`/api/customers/${customerId}/joint-holders`, { holders: [...existing, { full_name: name }] }));
   }
   async function uploadDoc() {
-    const inp = document.createElement('input'); inp.type = 'file';
-    inp.onchange = async () => {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*,.pdf';
+    inp.onchange = () => {
       const file = inp.files?.[0]; if (!file) return;
-      const b64 = btoa(String.fromCharCode(...new Uint8Array(await file.arrayBuffer())));
-      await wrap(api.post(`/api/customers/${customerId}/documents`, { doc_type: 'KYC', filename: file.name, mime: file.type || 'application/octet-stream', data_base64: b64 }));
+      if (file.size > 4 * 1024 * 1024) { setMsg('Document must be under 4 MB.'); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const data_base64 = String(reader.result).split(',')[1] ?? '';
+        void wrap(api.post(`/api/customers/${customerId}/documents`, { doc_type: 'KYC', filename: file.name, mime: file.type || 'application/octet-stream', data_base64 }));
+      };
+      reader.readAsDataURL(file);
     };
     inp.click();
   }

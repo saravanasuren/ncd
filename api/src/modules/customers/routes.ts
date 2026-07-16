@@ -5,6 +5,7 @@ import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
 import * as s from './service.js';
+import { serveHeaders } from '../../lib/uploads.js';
 
 export const customersRouter = Router();
 
@@ -72,12 +73,13 @@ customersRouter.post('/:id/handover-request', requirePermission('customers:hando
 // Relations
 customersRouter.put('/:id/joint-holders', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
-    const { holders } = z.object({ holders: z.array(z.object({ full_name: z.string().min(1), pan: z.string().optional(), phone: z.string().optional(), relationship: z.string().optional() })) }).parse(req.body);
+    // nullish (not optional): the UI round-trips existing rows whose blank fields come back as NULL.
+    const { holders } = z.object({ holders: z.array(z.object({ full_name: z.string().min(1), pan: z.string().nullish(), phone: z.string().nullish(), relationship: z.string().nullish() })) }).parse(req.body);
     res.json(await s.setJointHolders(getDb(), req.user!, Number(req.params.id), holders));
   }));
 customersRouter.put('/:id/nominees', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
-    const { nominees } = z.object({ nominees: z.array(z.object({ full_name: z.string().min(1), relationship: z.string().optional(), share_pct: z.number().optional(), dob: z.string().optional() })) }).parse(req.body);
+    const { nominees } = z.object({ nominees: z.array(z.object({ full_name: z.string().min(1), relationship: z.string().nullish(), share_pct: z.number().nullish(), dob: z.string().nullish() })) }).parse(req.body);
     res.json(await s.setNominees(getDb(), req.user!, Number(req.params.id), nominees));
   }));
 customersRouter.put('/:id/demat', requirePermission('customers:update'),
@@ -103,8 +105,9 @@ customersRouter.get('/:id/documents/:docId', requirePermission('customers:read')
   asyncHandler(async (req, res) => {
     const d = await s.getDocument(getDb(), req.user!, Number(req.params.id), Number(req.params.docId));
     if (!d) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No document' } }); return; }
-    res.setHeader('Content-Type', d.mime);
-    res.setHeader('Content-Disposition', `inline; filename="${d.filename}"`);
+    const h = serveHeaders(d.mime, d.filename, 'document');
+    res.setHeader('Content-Type', h.type);
+    res.setHeader('Content-Disposition', h.disposition);
     res.end(d.buffer);
   }));
 

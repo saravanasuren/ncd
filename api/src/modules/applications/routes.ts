@@ -5,6 +5,7 @@ import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
 import * as s from './service.js';
+import { serveHeaders } from '../../lib/uploads.js';
 
 export const applicationsRouter = Router();
 
@@ -40,8 +41,9 @@ applicationsRouter.get('/:id/receipt', requirePermission('customers:read', 'appr
   asyncHandler(async (req, res) => {
     const r = await s.getReceipt(getDb(), Number(req.params.id));
     if (!r) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No receipt' } }); return; }
-    res.setHeader('Content-Type', r.mime);
-    res.setHeader('Content-Disposition', `inline; filename="${r.filename}"`);
+    const h = serveHeaders(r.mime, r.filename, 'receipt');
+    res.setHeader('Content-Type', h.type);
+    res.setHeader('Content-Disposition', h.disposition);
     res.end(r.buffer);
   }));
 

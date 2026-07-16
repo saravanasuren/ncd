@@ -53,6 +53,9 @@ export function createApp(): Express {
     })
   );
   app.use(compression());
+  // Upload routes carry base64 file payloads (~37% inflation on a 5 MB cap),
+  // so they get a larger parser; everything else keeps the tight default.
+  app.use(['/api/applications', '/api/customers', '/api/integration', '/api/portal'], express.json({ limit: '8mb' }));
   app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
   if (config.NODE_ENV !== 'test') app.use(morgan('tiny'));

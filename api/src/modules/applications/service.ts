@@ -143,9 +143,11 @@ export async function confirmCollection(db: Db, actor: AuthUser, appId: number, 
   });
 }
 
-export async function uploadReceipt(db: Db, actor: AuthUser, appId: number, filename: string, mime: string, dataBase64: string) {
-  const { saveBase64 } = await import('../../lib/storage.js');
-  const { path } = saveBase64('receipts', filename, dataBase64);
+export async function uploadReceipt(db: Db, actor: AuthUser, appId: number, filename: string, _clientMime: string, dataBase64: string) {
+  const { validateUpload } = await import('../../lib/uploads.js');
+  const { buffer, mime } = validateUpload(dataBase64); // sniffed mime — client's is ignored
+  const { saveBuffer } = await import('../../lib/storage.js');
+  const { path } = saveBuffer('receipts', filename, buffer);
   const upd = await db.query('UPDATE applications SET receipt_file_path = $1, receipt_original_filename = $2, receipt_mime = $3, receipt_uploaded_at = now() WHERE id = $4',
     [path, filename, mime, appId]);
   if (!upd.rowCount) throw errors.notFound('Application not found');

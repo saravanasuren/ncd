@@ -174,7 +174,7 @@ registerOnFinalApprove('customer_creation', async (tx, req) => {
 });
 
 // ── Joint holders ─────────────────────────────────────────────────────
-export async function setJointHolders(db: Db, actor: AuthUser, customerId: number, holders: Array<{ full_name: string; pan?: string; phone?: string; relationship?: string }>) {
+export async function setJointHolders(db: Db, actor: AuthUser, customerId: number, holders: Array<{ full_name: string; pan?: string | null; phone?: string | null; relationship?: string | null }>) {
   await assertVisible(db, actor, customerId);
   const settings = await getSettingsMap(db);
   const max = Number(settings['customers.max_joint_holders'] ?? 2);
@@ -191,7 +191,7 @@ export async function setJointHolders(db: Db, actor: AuthUser, customerId: numbe
 }
 
 // ── Nominees ──────────────────────────────────────────────────────────
-export async function setNominees(db: Db, actor: AuthUser, customerId: number, nominees: Array<{ full_name: string; relationship?: string; share_pct?: number; dob?: string }>) {
+export async function setNominees(db: Db, actor: AuthUser, customerId: number, nominees: Array<{ full_name: string; relationship?: string | null; share_pct?: number | null; dob?: string | null }>) {
   await assertVisible(db, actor, customerId);
   const total = nominees.reduce((s, n) => s + (n.share_pct ?? 0), 0);
   if (nominees.length && total > 100.01) throw errors.badRequest('Nominee shares exceed 100%');
@@ -222,10 +222,12 @@ export async function markDeceased(db: Db, actor: AuthUser, customerId: number, 
 }
 
 // ── KYC documents ─────────────────────────────────────────────────────
-export async function addDocument(db: Db, actor: AuthUser, customerId: number, docType: string, filename: string, mime: string, dataBase64: string, origin = 'staff') {
+export async function addDocument(db: Db, actor: AuthUser, customerId: number, docType: string, filename: string, _clientMime: string, dataBase64: string, origin = 'staff') {
   await assertVisible(db, actor, customerId);
-  const { saveBase64 } = await import('../../lib/storage.js');
-  const { path } = saveBase64('kyc-docs', filename, dataBase64);
+  const { validateUpload } = await import('../../lib/uploads.js');
+  const { buffer, mime } = validateUpload(dataBase64); // sniffed mime — client's is ignored
+  const { saveBuffer } = await import('../../lib/storage.js');
+  const { path } = saveBuffer('kyc-docs', filename, buffer);
   const { rows } = await db.query<{ id: string }>(
     `INSERT INTO customer_documents (customer_id, doc_type, file_path, original_filename, mime, origin, uploaded_by_user_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [customerId, docType, path, filename, mime, origin, actor.id]);

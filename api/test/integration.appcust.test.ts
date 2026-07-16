@@ -17,7 +17,9 @@ afterAll(async () => { await ctx.close(); });
 
 async function as(email: string, password = 'Demo_1234') { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; }
 const admin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
-const B64 = Buffer.from('hello-receipt').toString('base64');
+// Uploads are magic-byte validated (lib/uploads) — fixtures must be real PDF bytes.
+const PDF_BODY = '%PDF-1.4 hello-receipt';
+const B64 = Buffer.from(PDF_BODY).toString('base64');
 
 async function newCustomer(a: Client, name: string, phone: string) {
   const cust = await a.post('/api/customers', { full_name: name, phone });
@@ -45,11 +47,15 @@ describe('applications — receipt upload', () => {
     const a = await admin();
     const cid = await newCustomer(a, 'Receipt Cust', '9500000002');
     const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
-    const up = await a.post(`/api/applications/${app.json.id}/receipt`, { filename: 'r.txt', mime: 'text/plain', data_base64: B64 });
+    const up = await a.post(`/api/applications/${app.json.id}/receipt`, { filename: 'r.pdf', mime: 'text/plain', data_base64: B64 });
     expect(up.status).toBe(201);
     const dl = await a.raw(`/api/applications/${app.json.id}/receipt`);
     expect(dl.status).toBe(200);
-    expect(dl.buffer.toString()).toBe('hello-receipt');
+    expect(dl.buffer.toString()).toBe(PDF_BODY);
+    expect(dl.headers.get('content-type')).toContain('application/pdf'); // sniffed, not the client's text/plain
+    // active-content masquerade is refused outright
+    const bad = await a.post(`/api/applications/${app.json.id}/receipt`, { filename: 'x.png', mime: 'image/png', data_base64: Buffer.from('<script>alert(1)</script>').toString('base64') });
+    expect(bad.status).toBe(400);
   });
 });
 
@@ -107,6 +113,12 @@ describe('customers — relations, deceased, KYC docs', () => {
     expect((await a.put(`/api/customers/${cid}/nominees`, { nominees: [{ full_name: 'Nom', share_pct: 60 }, { full_name: 'Nom2', share_pct: 50 }] })).status).toBe(400);
     expect((await a.put(`/api/customers/${cid}/nominees`, { nominees: [{ full_name: 'Nom', share_pct: 100 }] })).status).toBe(200);
     const detail = await a.get(`/api/customers/${cid}`);
+    // Regression: the UI round-trips existing rows whose blank fields come back
+    // as NULL — a second add must not 400 (schemas are nullish, not optional).
+    const rt = detail.json.nominees.map((n: any) => ({ full_name: n.full_name, relationship: n.relationship, share_pct: n.share_pct != null ? Number(n.share_pct) : null }));
+    expect((await a.put(`/api/customers/${cid}/nominees`, { nominees: rt })).status).toBe(200);
+    const jh = detail.json.jointHolders.map((h: any) => ({ full_name: h.full_name, relationship: h.relationship, pan: h.pan, phone: h.phone }));
+    expect((await a.put(`/api/customers/${cid}/joint-holders`, { holders: [...jh, { full_name: 'JH Two' }] })).status).toBe(200);
     expect(detail.json.jointHolders.length).toBe(1);
     expect(detail.json.nominees.length).toBe(1);
   });
@@ -114,13 +126,13 @@ describe('customers — relations, deceased, KYC docs', () => {
   it('uploads a KYC doc and streams it back; mirror from the app tags origin', async () => {
     const a = await admin();
     const cid = await newCustomer(a, 'Doc Cust', '9500000006');
-    const up = await a.post(`/api/customers/${cid}/documents`, { doc_type: 'PAN', filename: 'pan.txt', mime: 'text/plain', data_base64: B64 });
+    const up = await a.post(`/api/customers/${cid}/documents`, { doc_type: 'PAN', filename: 'pan.pdf', mime: 'text/plain', data_base64: B64 });
     const dl = await a.raw(`/api/customers/${cid}/documents/${up.json.id}`);
-    expect(dl.buffer.toString()).toBe('hello-receipt');
+    expect(dl.buffer.toString()).toBe(PDF_BODY);
     // integration mirror
     const mirror = await fetch(ctx.base + `/api/integration/customers/${cid}/kyc-docs`, {
       method: 'POST', headers: { 'X-Integration-Key': 'dev-integration-key', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ doc_type: 'Aadhaar', filename: 'aad.txt', mime: 'text/plain', data_base64: B64 }),
+      body: JSON.stringify({ doc_type: 'Aadhaar', filename: 'aad.pdf', mime: 'text/plain', data_base64: B64 }),
     });
     expect(mirror.status).toBe(201);
     const docs = (await ctx.db.query("SELECT origin FROM customer_documents WHERE customer_id = $1 AND origin = 'dhanamfin'", [cid])).rows;

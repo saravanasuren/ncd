@@ -189,7 +189,16 @@ export function ApplicationDetailPage() {
                   <td className="px-4 py-1.5 text-right mono">{formatINR(r.gross_amount)}</td>
                   <td className="px-4 py-1.5 text-right mono text-text-muted">{formatINR(r.tds_amount)}</td>
                   <td className="px-4 py-1.5 text-right mono">{formatINR(r.net_amount)}</td>
-                  <td className={`px-4 py-1.5 text-xs ${rowPill[r.status] ?? ''}`}>{r.status}</td>
+                  <td className={`px-4 py-1.5 text-xs ${rowPill[r.status] ?? ''}`}>
+                    {r.status}
+                    {can('payouts:mark-paid-manual') && r.status === 'Scheduled' && (
+                      <button className="ml-2 text-danger hover:underline" title="Mark this row failed (e.g. NEFT bounce)"
+                        onClick={() => {
+                          const reason = window.prompt('Reason for marking this payout row failed:');
+                          if (reason && reason.trim().length >= 2) run(api.post(`/api/payouts/rows/${r.id}/mark-failed`, { reason: reason.trim() }));
+                        }}>mark failed</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

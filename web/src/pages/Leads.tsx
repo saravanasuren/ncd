@@ -9,19 +9,78 @@ interface Lead {
   id: number;
   full_name: string;
   phone: string | null;
+  place: string | null;
   district: string | null;
+  category: string | null;
   source: string | null;
+  referred_by_text: string | null;
+  interested_scheme: string | null;
   status: string;
   expected_amount: string | null;
+  follow_up_date: string | null;
+  notes: string | null;
+}
+
+interface LeadNote {
+  id: number;
+  note: string;
+  created_at: string;
+  author: string | null;
+}
+
+const EMPTY_FORM = {
+  full_name: '', phone: '', place: '', district: '', category: '', source: '',
+  referred_by_text: '', interested_scheme: '', expected_amount: '', follow_up_date: '', notes: '',
+};
+
+const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
+
+/** Follow-up notes for one lead: history + add box. */
+function NotesPanel({ leadId, canUpdate }: { leadId: number; canUpdate: boolean }) {
+  const qc = useQueryClient();
+  const [note, setNote] = useState('');
+  const { data, isLoading } = useQuery({
+    queryKey: ['lead-notes', leadId],
+    queryFn: () => api.get<{ rows: LeadNote[] }>(`/api/leads/${leadId}/notes`),
+  });
+  const add = useMutation({
+    mutationFn: () => api.post(`/api/leads/${leadId}/notes`, { note: note.trim() }),
+    onSuccess: () => { setNote(''); qc.invalidateQueries({ queryKey: ['lead-notes', leadId] }); },
+  });
+  return (
+    <div className="bg-bg rounded p-3 mx-4 mb-3 text-xs">
+      {canUpdate && (
+        <div className="flex gap-2 mb-2">
+          <input className={`${inp} flex-1 text-xs`} placeholder="Add a follow-up note…" value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && note.trim()) add.mutate(); }} autoFocus />
+          <button disabled={!note.trim() || add.isPending} onClick={() => add.mutate()}
+            className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Add</button>
+        </div>
+      )}
+      {isLoading ? 'Loading…' : (data?.rows ?? []).length === 0 ? <span className="text-text-muted">No notes yet.</span> : (
+        <ul className="m-0 p-0 list-none space-y-1.5">
+          {data!.rows.map((n) => (
+            <li key={n.id}>
+              <span className="text-text-muted font-mono">{String(n.created_at).slice(0, 10)}</span>
+              {n.author && <span className="text-text-muted"> · {n.author}</span>} — {n.note}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 export function LeadsPage() {
   const qc = useQueryClient();
   const nav = useNavigate();
   const { can } = useAuth();
-  const [form, setForm] = useState({ full_name: '', phone: '', district: '', source: '' });
+  const [form, setForm] = useState(EMPTY_FORM);
   const [err, setErr] = useState('');
   const [converting, setConverting] = useState<{ id: number; amount: string; seriesId: string } | null>(null);
+  const [notesFor, setNotesFor] = useState<number | null>(null);
+  const [edit, setEdit] = useState<{ id: number; status: string; follow_up_date: string; expected_amount: string } | null>(null);
 
   const { data, isLoading } = useQuery({ queryKey: ['leads'], queryFn: () => api.get<{ rows: Lead[] }>('/api/leads') });
   const series = useQuery({
@@ -31,9 +90,48 @@ export function LeadsPage() {
   });
   const openSeries = (series.data?.rows ?? []).filter((s) => s.status === 'Open');
 
+  // Configurable vocabularies (docs/07 — no hardcoded business values).
+  const uiConfig = useQuery({
+    queryKey: ['ui-config'],
+    queryFn: () => api.get<{ values: Record<string, string[] | null> }>('/api/settings/ui-config'),
+  });
+  const SOURCES = uiConfig.data?.values['customers.lead_sources'] ?? [];
+  const STATUSES = uiConfig.data?.values['customers.lead_statuses'] ?? [];
+
+  // Duplicate-phone check while typing a new lead's phone.
+  const phone = form.phone.trim();
+  const dup = useQuery({
+    queryKey: ['lead-dup', phone],
+    queryFn: () => api.get<{ duplicate: boolean; customer?: { id: number; customer_code: string; full_name: string } }>(`/api/leads/duplicate-check?phone=${encodeURIComponent(phone)}`),
+    enabled: phone.length >= 10,
+  });
+
   const create = useMutation({
-    mutationFn: () => api.post('/api/leads', { ...form, phone: form.phone || undefined }),
-    onSuccess: () => { setForm({ full_name: '', phone: '', district: '', source: '' }); qc.invalidateQueries({ queryKey: ['leads'] }); },
+    mutationFn: () => api.post('/api/leads', {
+      full_name: form.full_name,
+      ...(form.phone ? { phone: form.phone } : {}),
+      ...(form.place ? { place: form.place } : {}),
+      ...(form.district ? { district: form.district } : {}),
+      ...(form.category ? { category: form.category } : {}),
+      ...(form.source ? { source: form.source } : {}),
+      ...(form.referred_by_text ? { referred_by_text: form.referred_by_text } : {}),
+      ...(form.interested_scheme ? { interested_scheme: form.interested_scheme } : {}),
+      ...(form.expected_amount ? { expected_amount: Number(form.expected_amount) } : {}),
+      ...(form.follow_up_date ? { follow_up_date: form.follow_up_date } : {}),
+      ...(form.notes ? { notes: form.notes } : {}),
+    }),
+    onSuccess: () => { setForm(EMPTY_FORM); qc.invalidateQueries({ queryKey: ['leads'] }); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
+
+  const update = useMutation({
+    mutationFn: (e: { id: number; status: string; follow_up_date: string; expected_amount: string }) =>
+      api.put(`/api/leads/${e.id}`, {
+        status: e.status,
+        ...(e.follow_up_date ? { follow_up_date: e.follow_up_date } : {}),
+        ...(e.expected_amount ? { expected_amount: Number(e.expected_amount) } : {}),
+      }),
+    onSuccess: () => { setEdit(null); qc.invalidateQueries({ queryKey: ['leads'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
 
@@ -47,23 +145,36 @@ export function LeadsPage() {
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
 
-  const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
-
   return (
-    <div className="max-w-4xl">
+    <div className="max-w-5xl">
       <h1 className="text-xl font-bold tracking-tight m-0">Leads</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Prospective investors you're following up.</p>
 
       {can('leads:create') && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5">
-          <div className="flex flex-wrap gap-2 items-end">
-            <input className={inp} placeholder="Full name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
-            <input className={inp} placeholder="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-            <input className={inp} placeholder="District" value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} />
-            <input className={inp} placeholder="Source" value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })} />
+          <div className="flex flex-wrap gap-2">
+            <input className={inp} placeholder="Full name *" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
+            <input className={`${inp} w-36`} placeholder="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+            <input className={`${inp} w-32`} placeholder="Place" value={form.place} onChange={(e) => setForm({ ...form, place: e.target.value })} />
+            <input className={`${inp} w-32`} placeholder="District" value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} />
+            <input className={`${inp} w-32`} placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
+            <select className={inp} value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}>
+              <option value="">Source…</option>
+              {SOURCES.map((s) => <option key={s}>{s}</option>)}
+            </select>
+            <input className={inp} placeholder="Referred by" value={form.referred_by_text} onChange={(e) => setForm({ ...form, referred_by_text: e.target.value })} />
+            <input className={inp} placeholder="Interested scheme" value={form.interested_scheme} onChange={(e) => setForm({ ...form, interested_scheme: e.target.value })} />
+            <input className={`${inp} w-36`} type="number" placeholder="Expected ₹" value={form.expected_amount} onChange={(e) => setForm({ ...form, expected_amount: e.target.value })} />
+            <input className={inp} type="date" title="Follow-up date" value={form.follow_up_date} onChange={(e) => setForm({ ...form, follow_up_date: e.target.value })} />
+            <input className={`${inp} w-64`} placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
             <button disabled={!form.full_name || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
               className="bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-4 py-1.5 text-sm font-semibold">+ Add lead</button>
           </div>
+          {dup.data?.duplicate && (
+            <div className="text-xs text-warn mt-2">
+              ⚠ This phone belongs to existing customer <button className="font-mono underline" onClick={() => nav(`/app/customers/${dup.data!.customer!.id}`)}>{dup.data.customer!.customer_code}</button> ({dup.data.customer!.full_name}) — consider a handover request instead of a new lead.
+            </div>
+          )}
         </div>
       )}
       {err && <div className="text-xs text-danger mb-3">{err}</div>}
@@ -76,30 +187,68 @@ export function LeadsPage() {
           { key: 'source', header: 'Source', value: (l) => l.source ?? '', render: (l) => l.source ?? '—' },
           { key: 'expected_amount', header: 'Expected', align: 'right', value: (l) => Number(l.expected_amount ?? 0),
             render: (l) => l.expected_amount ? <span className="mono">₹{Number(l.expected_amount).toLocaleString('en-IN')}</span> : '—' },
-          { key: 'status', header: 'Status', render: (l) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.status}</span> },
-          { key: 'actions', header: '', sortable: false, filterable: false, align: 'right',
-            render: (l) => can('leads:convert') && l.status !== 'Converted' ? (
-              converting?.id === l.id ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <input className={`${inp} w-28`} type="number" placeholder="Amount ₹" autoFocus
-                    value={converting.amount} onChange={(e) => setConverting({ ...converting, amount: e.target.value })} />
-                  <select className={inp} value={converting.seriesId}
-                    onChange={(e) => setConverting({ ...converting, seriesId: e.target.value })}>
-                    <option value="">Series…</option>
-                    {openSeries.map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
-                  </select>
-                  <button disabled={!converting.amount || Number(converting.amount) <= 0 || !converting.seriesId || convert.isPending}
-                    onClick={() => { setErr(''); convert.mutate(converting); }}
-                    className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Confirm</button>
-                  <button onClick={() => setConverting(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
+          { key: 'follow_up_date', header: 'Follow-up', value: (l) => l.follow_up_date ?? '',
+            render: (l) => l.follow_up_date ? <span className="mono text-xs">{String(l.follow_up_date).slice(0, 10)}</span> : '—' },
+          { key: 'status', header: 'Status',
+            render: (l) => edit?.id === l.id ? (
+              <select className={`${inp} text-xs`} value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}>
+                {[...new Set([l.status, ...STATUSES])].map((s) => <option key={s}>{s}</option>)}
+              </select>
+            ) : <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.status}</span> },
+          { key: 'actions', header: '', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
+            render: (l) => {
+              if (edit?.id === l.id) {
+                return (
+                  <span className="inline-flex items-center gap-1.5">
+                    <input className={`${inp} text-xs`} type="date" title="Follow-up date" value={edit.follow_up_date} onChange={(e) => setEdit({ ...edit, follow_up_date: e.target.value })} />
+                    <input className={`${inp} text-xs w-24`} type="number" placeholder="Expected ₹" value={edit.expected_amount} onChange={(e) => setEdit({ ...edit, expected_amount: e.target.value })} />
+                    <button disabled={update.isPending} onClick={() => { setErr(''); update.mutate(edit); }}
+                      className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Save</button>
+                    <button onClick={() => setEdit(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
+                  </span>
+                );
+              }
+              if (converting?.id === l.id) {
+                return (
+                  <span className="inline-flex items-center gap-1.5">
+                    <input className={`${inp} w-28`} type="number" placeholder="Amount ₹" autoFocus
+                      value={converting.amount} onChange={(e) => setConverting({ ...converting, amount: e.target.value })} />
+                    <select className={inp} value={converting.seriesId}
+                      onChange={(e) => setConverting({ ...converting, seriesId: e.target.value })}>
+                      <option value="">Series…</option>
+                      {openSeries.map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
+                    </select>
+                    <button disabled={!converting.amount || Number(converting.amount) <= 0 || !converting.seriesId || convert.isPending}
+                      onClick={() => { setErr(''); convert.mutate(converting); }}
+                      className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Confirm</button>
+                    <button onClick={() => setConverting(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
+                  </span>
+                );
+              }
+              return (
+                <span className="inline-flex items-center gap-2.5">
+                  <button onClick={() => setNotesFor(notesFor === l.id ? null : l.id)} className="text-xs text-primary hover:underline">Notes</button>
+                  {can('leads:update') && l.status !== 'Converted' && (
+                    <button onClick={() => { setErr(''); setConverting(null); setEdit({ id: l.id, status: l.status, follow_up_date: l.follow_up_date ? String(l.follow_up_date).slice(0, 10) : '', expected_amount: l.expected_amount ?? '' }); }}
+                      className="text-xs text-primary hover:underline">Edit</button>
+                  )}
+                  {can('leads:convert') && l.status !== 'Converted' && (
+                    <button onClick={() => { setErr(''); setEdit(null); setConverting({ id: l.id, amount: l.expected_amount ?? '', seriesId: '' }); }}
+                      className="text-xs text-primary hover:underline">Convert →</button>
+                  )}
                 </span>
-              ) : (
-                <button onClick={() => { setErr(''); setConverting({ id: l.id, amount: l.expected_amount ?? '', seriesId: '' }); }}
-                  className="text-xs text-primary hover:underline">Convert →</button>
-              )
-            ) : null },
+              );
+            } },
         ];
-        return <DataTable columns={columns} rows={data!.rows} rowKey={(l) => l.id} empty="No leads yet." />;
+        return (
+          <DataTable
+            columns={columns}
+            rows={data!.rows}
+            rowKey={(l) => l.id}
+            empty="No leads yet."
+            renderExpanded={(l) => (notesFor === l.id ? <NotesPanel leadId={l.id} canUpdate={can('leads:update')} /> : null)}
+          />
+        );
       })()}
     </div>
   );

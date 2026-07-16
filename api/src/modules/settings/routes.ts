@@ -3,10 +3,25 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
-import { requirePermission } from '../../middleware/auth.js';
+import { requireAuth, requirePermission } from '../../middleware/auth.js';
 import * as service from './service.js';
 
 export const settingsRouter = Router();
+
+// Safe, non-secret vocabularies the staff UI needs (lead form dropdowns etc.).
+// Any authed user may read these; the full registry stays admin-gated below.
+const UI_CONFIG_KEYS = ['customers.lead_sources', 'customers.lead_statuses', 'customers.collection_methods'] as const;
+settingsRouter.get(
+  '/ui-config',
+  requireAuth,
+  asyncHandler(async (_req, res) => {
+    const all = await service.listSettings(getDb());
+    const flat = Object.values(all).flat();
+    const values: Record<string, unknown> = {};
+    for (const k of UI_CONFIG_KEYS) values[k] = flat.find((s) => s.key === k)?.value ?? null;
+    res.json({ values });
+  })
+);
 
 // Read requires either full settings management or workflow-config rights.
 settingsRouter.get(

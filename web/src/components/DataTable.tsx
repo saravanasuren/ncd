@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useMemo, useState, type ReactNode } from 'react';
 
 /**
  * One reusable table for the whole app. Every column is sortable (click the
@@ -29,6 +29,8 @@ export interface DataTableProps<T> {
   empty?: string;
   /** Extra classes for the wrapping card. */
   className?: string;
+  /** Optional full-width content under a row (e.g. a notes panel). Return null to collapse. */
+  renderExpanded?: (row: T) => ReactNode;
 }
 
 const rawValue = <T,>(col: Column<T>, row: T): string | number | null | undefined =>
@@ -43,7 +45,7 @@ function asNumber(v: unknown): number | null {
   return Number(s);
 }
 
-export function DataTable<T>({ columns, rows, rowKey, defaultSort, empty, className }: DataTableProps<T>) {
+export function DataTable<T>({ columns, rows, rowKey, defaultSort, empty, className, renderExpanded }: DataTableProps<T>) {
   const [sortKey, setSortKey] = useState<string | null>(defaultSort?.key ?? null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>(defaultSort?.dir ?? 'asc');
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -162,15 +164,25 @@ export function DataTable<T>({ columns, rows, rowKey, defaultSort, empty, classN
             )}
           </thead>
           <tbody className="divide-y divide-border">
-            {view.map((row) => (
-              <tr key={rowKey(row)} className="hover:bg-bg">
-                {columns.map((col) => (
-                  <td key={col.key} className={`px-4 py-2.5 ${alignCls(col.align)} ${col.tdClassName ?? ''}`}>
-                    {col.render ? col.render(row) : String(rawValue(col, row) ?? '')}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {view.map((row) => {
+              const expanded = renderExpanded ? renderExpanded(row) : null;
+              return (
+                <Fragment key={rowKey(row)}>
+                  <tr className="hover:bg-bg">
+                    {columns.map((col) => (
+                      <td key={col.key} className={`px-4 py-2.5 ${alignCls(col.align)} ${col.tdClassName ?? ''}`}>
+                        {col.render ? col.render(row) : String(rawValue(col, row) ?? '')}
+                      </td>
+                    ))}
+                  </tr>
+                  {expanded != null && (
+                    <tr>
+                      <td colSpan={columns.length} className="p-0">{expanded}</td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
             {view.length === 0 && (
               <tr>
                 <td colSpan={columns.length} className="px-4 py-6 text-center text-text-muted">

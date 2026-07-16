@@ -65,6 +65,13 @@ export async function updateLead(db: Db, actor: AuthUser, id: number, input: Par
   });
 }
 
+export async function listNotes(db: Db, leadId: number) {
+  return (await db.query(
+    `SELECT n.id, n.note, n.created_at, u.full_name AS author
+     FROM lead_notes n LEFT JOIN users u ON u.id = n.created_by_user_id
+     WHERE n.lead_id = $1 ORDER BY n.id DESC`, [leadId])).rows;
+}
+
 export async function addNote(db: Db, actor: AuthUser, leadId: number, note: string) {
   await db.query('INSERT INTO lead_notes (lead_id, note, created_by_user_id) VALUES ($1,$2,$3)', [leadId, note, actor.id]);
 }

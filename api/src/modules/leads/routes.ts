@@ -35,6 +35,9 @@ leadsRouter.put('/:id', requirePermission('leads:update'),
 leadsRouter.post('/:id/notes', requirePermission('leads:update'),
   asyncHandler(async (req, res) => { const { note } = z.object({ note: z.string().min(1) }).parse(req.body); await s.addNote(getDb(), req.user!, Number(req.params.id), note); res.status(201).json({ ok: true }); }));
 
+leadsRouter.get('/:id/notes', requirePermission('leads:read'),
+  asyncHandler(async (req, res) => res.json({ rows: await s.listNotes(getDb(), Number(req.params.id)) })));
+
 leadsRouter.get('/duplicate-check', requirePermission('leads:read'),
   asyncHandler(async (req, res) => res.json(await s.duplicateCheck(getDb(), String(req.query.phone ?? '')))));
 

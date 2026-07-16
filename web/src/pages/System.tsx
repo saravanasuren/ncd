@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '../api/client.js';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 
 /** Admin → System: audit trail, notification queue, cron runs (docs/05 §23). */
@@ -68,8 +68,24 @@ function Audit() {
   return <Table head={['When', 'Actor', 'Action', 'Entity']} defaultSort={{ col: 0, dir: 'desc' }} rows={(data?.rows ?? []).map((r) => [String(r.created_at).slice(0, 19).replace('T', ' '), r.actor_name ?? '—', r.action, `${r.entity_type} ${r.entity_id ?? ''}`])} />;
 }
 function Notifications() {
+  const qc = useQueryClient();
+  const [msg, setMsg] = useState('');
   const { data } = useQuery({ queryKey: ['sys-notif'], queryFn: () => api.get<{ rows: any[] }>('/api/system/notifications') });
-  return <Table head={['Channel', 'Template', 'To', 'Status']} rows={(data?.rows ?? []).map((r) => [r.channel, r.template, r.to_address, r.status])} />;
+  const drain = useMutation({
+    mutationFn: () => api.post<{ sent: number; failed: number }>('/api/system/notifications/drain', {}),
+    onSuccess: (r) => { setMsg(`Drained: ${r.sent ?? 0} sent, ${r.failed ?? 0} failed.`); qc.invalidateQueries({ queryKey: ['sys-notif'] }); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  return (
+    <div>
+      <div className="flex items-center gap-3 mb-3">
+        <button onClick={() => { setMsg(''); drain.mutate(); }} disabled={drain.isPending}
+          className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40">Drain queue now</button>
+        {msg && <span className="text-xs text-primary">{msg}</span>}
+      </div>
+      <Table head={['Channel', 'Template', 'To', 'Status']} rows={(data?.rows ?? []).map((r) => [r.channel, r.template, r.to_address, r.status])} />
+    </div>
+  );
 }
 function Jobs() {
   const { data } = useQuery({ queryKey: ['sys-jobs'], queryFn: () => api.get<{ rows: any[] }>('/api/system/jobs') });

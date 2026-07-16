@@ -13,6 +13,7 @@ export function PayoutsPage() {
 
   const preview = useQuery({ queryKey: ['payout-preview', date], queryFn: () => api.get<any>(`/api/payouts/preview?date=${date}`) });
   const batches = useQuery({ queryKey: ['payout-batches'], queryFn: () => api.get<{ rows: any[] }>('/api/payouts') });
+  const statements = useQuery({ queryKey: ['bank-statements'], queryFn: () => api.get<{ rows: any[] }>('/api/bank-statements') });
 
   const create = useMutation({ mutationFn: () => api.post('/api/payouts', { payout_date: date }), onSuccess: () => { setMsg('Batch created — needs checker approval, then mark paid.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); qc.invalidateQueries({ queryKey: ['payout-preview', date] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
   const markPaid = useMutation({ mutationFn: (batchId: number) => api.post(`/api/payouts/${batchId}/mark-paid`, {}), onSuccess: () => { setMsg('Marked paid.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
@@ -27,7 +28,7 @@ export function PayoutsPage() {
       const up = await api.post<{ statement_id: number }>('/api/bank-statements', { source_bank: 'Federal', lines });
       return api.post<{ matched: number; unmatched: number }>(`/api/bank-statements/${up.statement_id}/run-match`, {});
     },
-    onSuccess: (r) => { setMsg(`Statement matched: ${r.matched} paid, ${r.unmatched} unmatched.`); setStmt(''); qc.invalidateQueries({ queryKey: ['payout-batches'] }); },
+    onSuccess: (r) => { setMsg(`Statement matched: ${r.matched} paid, ${r.unmatched} unmatched.`); setStmt(''); qc.invalidateQueries({ queryKey: ['payout-batches'] }); qc.invalidateQueries({ queryKey: ['bank-statements'] }); },
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
 
@@ -77,6 +78,19 @@ export function PayoutsPage() {
         <button disabled={!stmt.trim() || matchStmt.isPending} onClick={() => { setMsg(''); matchStmt.mutate(); }}
           className="mt-2 text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Upload & match</button>
       </div>
+
+      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mt-6 mb-2">Uploaded statements</h2>
+      {(() => {
+        const cols: Column<any>[] = [
+          { key: 'id', header: '#', tdClassName: 'font-mono text-xs' },
+          { key: 'source_bank', header: 'Bank' },
+          { key: 'line_count', header: 'Lines', align: 'right' },
+          { key: 'matched_count', header: 'Matched', align: 'right',
+            render: (s) => <span className={Number(s.matched_count) === Number(s.line_count) ? 'text-success' : ''}>{s.matched_count}</span> },
+          { key: 'created_at', header: 'Uploaded', render: (s) => <span className="mono text-xs">{String(s.created_at).slice(0, 16).replace('T', ' ')}</span> },
+        ];
+        return <DataTable columns={cols} rows={statements.data?.rows ?? []} rowKey={(s) => s.id} defaultSort={{ key: 'id', dir: 'desc' }} empty="No statements uploaded yet." />;
+      })()}
     </div>
   );
 }

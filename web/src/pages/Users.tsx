@@ -19,7 +19,7 @@ interface BranchRow {
   name: string;
 }
 
-const EMPTY_FORM = { full_name: '', email: '', password: '', role: '', branch_id: '' };
+const EMPTY_FORM = { full_name: '', email: '', password: '', role: '', branch_id: '', reports_to_user_id: '' };
 
 interface EditState {
   id: number;
@@ -57,6 +57,7 @@ export function UsersPage() {
         password: form.password,
         role: form.role,
         branch_id: form.branch_id ? Number(form.branch_id) : null,
+        reports_to_user_id: form.reports_to_user_id ? Number(form.reports_to_user_id) : null,
       }),
     onSuccess: () => { setForm(EMPTY_FORM); qc.invalidateQueries({ queryKey: ['users'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to create user'),
@@ -73,6 +74,12 @@ export function UsersPage() {
       }),
     onSuccess: () => { setEdit(null); qc.invalidateQueries({ queryKey: ['users'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to update user'),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: number) => api.del(`/api/users/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to delete user'),
   });
 
   if (isLoading) return <div className="text-text-muted">Loading users…</div>;
@@ -103,6 +110,10 @@ export function UsersPage() {
             <select className={inp} value={form.branch_id} onChange={(e) => setForm({ ...form, branch_id: e.target.value })}>
               <option value="">No branch</option>
               {branches?.rows.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+            <select className={inp} title="Reports to" value={form.reports_to_user_id} onChange={(e) => setForm({ ...form, reports_to_user_id: e.target.value })}>
+              <option value="">Reports to…</option>
+              {data?.rows.filter((u) => u.is_active).map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
             </select>
             <button disabled={!ready || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
               className="bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-4 py-1.5 text-sm font-semibold">
@@ -174,11 +185,19 @@ export function UsersPage() {
                       {u.is_active ? 'Active' : 'Disabled'}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 text-right">
+                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
                     {can('users:manage') && (
                       <button
                         onClick={() => { setErr(''); setEdit({ id: u.id, full_name: u.full_name, role: u.role, branch_id: u.branch_id != null ? String(u.branch_id) : '', is_active: u.is_active, password: '' }); }}
                         className="text-xs text-primary hover:underline">Edit</button>
+                    )}
+                    {can('users:delete') && u.id !== me?.id && (
+                      <button
+                        onClick={() => {
+                          setErr('');
+                          if (window.confirm(`Permanently delete ${u.full_name} (${u.email})? Prefer disabling unless the account was created in error.`)) remove.mutate(u.id);
+                        }}
+                        className="text-xs text-danger hover:underline ml-2.5">Delete</button>
                     )}
                   </td>
                 </tr>

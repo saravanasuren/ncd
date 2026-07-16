@@ -35,14 +35,16 @@
   transformation are initiated from the application page's lifecycle actions.
 - [x] Redemption initiation — CLOSED 2026-07-16: premature (reason + optional date)
   and maturity initiation live in the application page's lifecycle actions.
-- [~] Users: edit/deactivate/password-reset UI added 2026-07-16 (`PUT /users/:id`
-  wired). Still no UI for: delete, multi-branch (`PUT /users/:id/branches`),
-  reports-to.
+- [~] Users: edit/deactivate/password-reset UI added 2026-07-16; delete
+  (users:delete, confirm-gated) + reports-to in create form added later same day.
+  Still no UI for: multi-branch (`PUT /users/:id/branches`), reports-to on edit.
 - [~] Customers — MOSTLY CLOSED 2026-07-16: direct enrolment form + server-backed
   search box on Customers page; KYC reject (with reason) on the customer page.
   Still API-only: correction-request, handover-request.
-- [ ] Leads: edit, notes/follow-up history, duplicate-phone check all API-only; create
-  form missing place/category/referred-by/scheme/expected-amount/follow-up fields.
+- [x] Leads — CLOSED 2026-07-16: full create form (all API fields; source/status
+  vocab from the settings registry via new authed GET /api/settings/ui-config),
+  duplicate-phone warning while typing, per-lead notes history (new GET
+  /api/leads/:id/notes), inline edit of status/follow-up/expected.
 - [~] Applications — receipt upload CLOSED 2026-07-16 (upload/replace button on the
   application page, ≤4 MB; body-parser raised to 8 MB on upload routes so the cap
   is actually reachable). Approvals detail view + reject-with-reason CLOSED
@@ -55,13 +57,15 @@
   (client-controlled mime served inline with CSP off).
 - [x] Nominee/joint-holder second-add 400 — FIXED 2026-07-16 (found in re-audit):
   route schemas now nullish, so UI round-trips of NULL fields validate.
-- [ ] Payouts/statements/incentives: mark-row-failed, statements list, and *agent*
-  eligibility grant/revoke — API-only. (Payee balances and *referrer* eligibility
-  ARE wired via the Incentives page — corrected 2026-07-16 re-audit.)
+- [~] Payouts/statements — CLOSED 2026-07-16: uploaded-statements list on the
+  Payouts page; "mark failed" on Scheduled schedule rows (application page,
+  payouts:mark-paid-manual). Still API-only: *agent* eligibility grant/revoke.
+  (Payee balances and *referrer* eligibility were already wired — 2026-07-16.)
 - [ ] Portal: service-requests endpoints unused; documents list has no real download
   links (only the SOA PDF generator exists — bond certificate / allotment letter /
   acknowledgment PDFs not built).
-- [ ] Admin: `POST /api/system/notifications/drain` (manual drain button) unused.
+- [x] Admin: manual "Drain queue now" button on System → Notifications — CLOSED
+  2026-07-16.
 
 ## P2 — reports & dashboard deltas vs docs/00
 

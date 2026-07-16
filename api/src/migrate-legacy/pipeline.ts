@@ -60,13 +60,53 @@ const num = (v: any): number => (v == null || v === '' ? 0 : Number(v));
 const d = (v: any): string | null => toISODate(v);
 const round2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 
-/** Insert one object as a parameterised row; returns true on success. */
+/** Insert one object as a parameterised row. */
 async function insertRow(tx: Db, table: string, obj: Record<string, any>): Promise<void> {
   const cols = Object.keys(obj);
   const vals = cols.map((c) => obj[c]);
   const ph = cols.map((_, i) => `$${i + 1}`).join(', ');
   await tx.query(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${ph})`, vals);
 }
+
+/** Insert many objects (same column set) in one multi-row INSERT. */
+async function insertMulti(tx: Db, table: string, objs: Record<string, any>[]): Promise<void> {
+  if (!objs.length) return;
+  const cols = Object.keys(objs[0]!);
+  const params: any[] = [];
+  const tuples = objs.map((o) => `(${cols.map((c) => `$${params.push(o[c])}`).join(',')})`);
+  await tx.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES ${tuples.join(',')}`, params);
+}
+
+/**
+ * Batch-insert with per-row fallback: try a chunk in one statement (fast); if the
+ * chunk fails (a bad row), retry that chunk row-by-row to isolate the offender as
+ * an anomaly while keeping the good rows. Keeps the load fast AND diagnostic.
+ */
+async function insertBatch(
+  tx: Db,
+  table: string,
+  objs: Record<string, any>[],
+  onAnomaly: (obj: Record<string, any>, err: Error) => void
+): Promise<{ loaded: number; failed: number }> {
+  let loaded = 0, failed = 0;
+  const CHUNK = 400;
+  for (let i = 0; i < objs.length; i += CHUNK) {
+    const chunk = objs.slice(i, i + CHUNK);
+    try {
+      await insertMulti(tx, table, chunk);
+      loaded += chunk.length;
+    } catch {
+      for (const o of chunk) {
+        try { await insertRow(tx, table, o); loaded++; }
+        catch (e: any) { failed++; onAnomaly(o, e); }
+      }
+    }
+  }
+  return { loaded, failed };
+}
+
+/** Progress to stderr so stdout stays a clean report. */
+const progress = (m: string) => process.stderr.write(`[migrate-legacy] ${m}\n`);
 
 export async function runMigration(
   source: LegacySource,
@@ -89,7 +129,8 @@ export async function runMigration(
     anomalies,
   };
 
-  // Read everything up-front (deterministic; the old book is small enough).
+  // Read everything up-front (deterministic).
+  progress('reading legacy tables…');
   const [
     oldRoles, oldBranches, oldUsers, oldAgents, oldBanks, oldTds, oldHolidays,
     oldCompany, oldSchemes, oldSeries, oldSeriesSchemes, oldLeads, oldCustomers,
@@ -103,6 +144,10 @@ export async function runMigration(
     source.applications(), source.applicationLines(), source.schedule(),
     source.redemptions(), source.incentiveAccruals(),
   ]);
+  progress(
+    `read: ${oldCustomers.length} customers, ${oldApps.length} applications, ` +
+    `${oldLines.length} lines, ${oldSchedule.length} schedule rows`
+  );
 
   const holidayISO = oldHolidays.map((h) => d(h.holiday_date)).filter(Boolean) as string[];
 
@@ -127,31 +172,30 @@ export async function runMigration(
       return newRoleId.get(newName) ?? newRoleId.get('agent')!;
     };
 
-    // helper to load a table with per-row isolation + stat tracking
+    // helper: map rows → batch-insert (fast) with per-row fallback isolation
     const load = async (
       table: string,
       rows: Row[],
       map: (r: Row) => Record<string, any> | null
     ): Promise<TableStat> => {
-      let loaded = 0, failed = 0;
+      let failed = 0;
+      const objs: Record<string, any>[] = [];
       for (const r of rows) {
         let obj: Record<string, any> | null;
         try {
           obj = map(r);
         } catch (e: any) {
-          failed++; anomalies.push(`${table} id=${r.id}: map error ${e.message}`); continue;
+          failed++; if (anomalies.length < 200) anomalies.push(`${table} id=${r.id}: map error ${e.message}`); continue;
         }
-        if (!obj) continue; // deliberately skipped
-        try {
-          await insertRow(tx, table, obj);
-          loaded++;
-        } catch (e: any) {
-          failed++;
-          if (anomalies.length < 200) anomalies.push(`${table} id=${r.id}: ${e.message}`);
-        }
+        if (obj) objs.push(obj);
       }
-      const stat = { table, source: rows.length, loaded, failed };
+      const res = await insertBatch(tx, table, objs, (o, e) => {
+        if (anomalies.length < 200) anomalies.push(`${table} id=${o.id ?? '?'}: ${e.message}`);
+      });
+      failed += res.failed;
+      const stat = { table, source: rows.length, loaded: res.loaded, failed };
       tables.push(stat);
+      progress(`${table}: ${res.loaded}/${rows.length}${failed ? ` (${failed} failed)` : ''}`);
       return stat;
     };
 
@@ -339,8 +383,13 @@ export async function runMigration(
       if ((s.status ?? '') === 'Paid') report.interest.oldPaidRows++;
     }
 
-    let schedLoaded = 0, schedFailed = 0;
-    // pick a sample: first Active app with a maturity in the future
+    // Build every schedule row (freeze + recompute) into one array, then bulk
+    // insert. On a real book this is tens of thousands of rows — batching turns
+    // that from many minutes of one-at-a-time inserts into seconds.
+    progress(`schedule: building rows for ${oldLines.length} lines…`);
+    const schedRows: Record<string, any>[] = [];
+    let regenPushed = 0;
+    let schedMapFailed = 0;
     let samplePicked = false;
 
     for (const line of oldLines) {
@@ -356,32 +405,23 @@ export async function runMigration(
         d(line.maturity_date) !== null &&
         d(line.maturity_date)! > anchor;
 
-      // 1) FREEZE: old rows on/before the anchor always kept verbatim.
-      //    If NOT recomputing, keep ALL old rows verbatim.
+      // 1) FREEZE: old rows on/before the anchor kept verbatim. If NOT
+      //    recomputing (matured/redeemed), keep ALL old rows verbatim.
       for (const s of oldRows) {
         const due = d(s.due_date);
-        if (!due) { schedFailed++; continue; }
+        if (!due) { schedMapFailed++; continue; }
         const keep = recompute ? due <= anchor : true;
         if (!keep) continue;
         const gross = num(s.gross_amount);
         const tds = num(s.tds_amount);
-        const status = SCHEDULE_STATUS_MAP[s.status] ?? 'Scheduled';
-        try {
-          await insertRow(tx, 'disbursement_schedule', {
-            line_id: line.id, application_id: appId, due_date: due,
-            due_type: DUE_TYPE_MAP[s.due_type] ?? 'Interest',
-            gross_amount: gross, tds_amount: tds, net_amount: round2(gross - tds),
-            status, paid_at: d(s.paid_at), utr: s.utr ?? null,
-            payee_account: s.account_number_snapshot ?? null, payee_ifsc: s.ifsc_snapshot ?? null,
-            failure_reason: s.failure_reason ?? null,
-          });
-          schedLoaded++;
-          if (due <= anchor) report.interest.frozenRows++;
-          if (status === 'Paid') report.interest.loadedPaidRows++;
-        } catch (e: any) {
-          schedFailed++;
-          if (anomalies.length < 200) anomalies.push(`schedule line=${line.id} due=${due}: ${e.message}`);
-        }
+        schedRows.push({
+          line_id: line.id, application_id: appId, due_date: due,
+          due_type: DUE_TYPE_MAP[s.due_type] ?? 'Interest',
+          gross_amount: gross, tds_amount: tds, net_amount: round2(gross - tds),
+          status: SCHEDULE_STATUS_MAP[s.status] ?? 'Scheduled', paid_at: d(s.paid_at), utr: s.utr ?? null,
+          payee_account: s.account_number_snapshot ?? null, payee_ifsc: s.ifsc_snapshot ?? null,
+          failure_reason: s.failure_reason ?? null,
+        });
       }
 
       // 2) RECOMPUTE: future interest for live lines, engine-driven.
@@ -400,7 +440,7 @@ export async function runMigration(
           { interestStartDate: anchor, seriesDeemedDate: seriesDeemed, holidays: holidayISO, payoutDay: 28 }
         );
       } catch (e: any) {
-        anomalies.push(`recompute line=${line.id}: ${e.message}`);
+        if (anomalies.length < 200) anomalies.push(`recompute line=${line.id}: ${e.message}`);
         continue;
       }
       const future = rows.filter((rw) => rw.due_date > anchor);
@@ -412,20 +452,14 @@ export async function runMigration(
           { payout_frequency: line.payout_frequency, amount: num(line.amount), tds_applicable: line.tds_applicable ?? null },
           { due_type: rw.due_type, gross_amount: rw.gross_amount, due_date: rw.due_date }
         );
-        try {
-          await insertRow(tx, 'disbursement_schedule', {
-            line_id: line.id, application_id: appId, due_date: rw.due_date,
-            due_type: rw.due_type, gross_amount: rw.gross_amount, tds_amount: tdsAmt,
-            net_amount: round2(rw.gross_amount - tdsAmt), status: 'Scheduled',
-            paid_at: null, utr: null, payee_account: null, payee_ifsc: null, failure_reason: null,
-          });
-          schedLoaded++;
-          report.interest.regeneratedRows++;
-          newFutureForSample.push({ due_date: rw.due_date, due_type: rw.due_type, gross: rw.gross_amount, period_days: rw.period_days });
-        } catch (e: any) {
-          schedFailed++;
-          if (anomalies.length < 200) anomalies.push(`regen line=${line.id} due=${rw.due_date}: ${e.message}`);
-        }
+        schedRows.push({
+          line_id: line.id, application_id: appId, due_date: rw.due_date,
+          due_type: rw.due_type, gross_amount: rw.gross_amount, tds_amount: tdsAmt,
+          net_amount: round2(rw.gross_amount - tdsAmt), status: 'Scheduled',
+          paid_at: null, utr: null, payee_account: null, payee_ifsc: null, failure_reason: null,
+        });
+        regenPushed++;
+        newFutureForSample.push({ due_date: rw.due_date, due_type: rw.due_type, gross: rw.gross_amount, period_days: rw.period_days });
       }
 
       // capture the first good sample (an app that actually regenerated rows)
@@ -433,15 +467,23 @@ export async function runMigration(
         const oldFuture = oldRows
           .filter((s) => (d(s.due_date) ?? '') > anchor)
           .map((s) => ({ due_date: d(s.due_date)!, due_type: s.due_type, gross: num(s.gross_amount), status: s.status }));
-        report.sample = {
-          applicationNo: app.application_no,
-          oldFuture,
-          newFuture: newFutureForSample,
-        };
+        report.sample = { applicationNo: app.application_no, oldFuture, newFuture: newFutureForSample };
         samplePicked = true;
       }
     }
-    tables.push({ table: 'disbursement_schedule', source: oldSchedule.length, loaded: schedLoaded, failed: schedFailed });
+
+    progress(`schedule: inserting ${schedRows.length} rows…`);
+    const schedRes = await insertBatch(tx, 'disbursement_schedule', schedRows, (o, e) => {
+      if (anomalies.length < 200) anomalies.push(`schedule line=${o.line_id} due=${o.due_date}: ${e.message}`);
+    });
+    tables.push({ table: 'disbursement_schedule', source: oldSchedule.length, loaded: schedRes.loaded, failed: schedRes.failed + schedMapFailed });
+    report.interest.regeneratedRows = regenPushed;
+    // frozen / paid counts straight from what actually landed (accurate even if a row failed)
+    const frozenR = await tx.query<{ n: string }>('SELECT COUNT(*) AS n FROM disbursement_schedule WHERE due_date <= $1', [anchor]);
+    report.interest.frozenRows = Number(frozenR.rows[0]?.n ?? 0);
+    const paidR = await tx.query<{ n: string }>("SELECT COUNT(*) AS n FROM disbursement_schedule WHERE status='Paid'");
+    report.interest.loadedPaidRows = Number(paidR.rows[0]?.n ?? 0);
+    progress(`schedule: ${schedRes.loaded}/${schedRows.length} loaded, ${regenPushed} regenerated`);
 
     // ── redemptions ─────────────────────────────────────────────────────
     await load('redemptions', oldRedemptions, (r, ) => {

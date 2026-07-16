@@ -62,17 +62,15 @@ describe('customer redemption request (portal)', () => {
     expect(item).toBeTruthy();
     expect(item.requested_by_customer).toBe(true);
 
-    // staff submits → 2-level approval
+    // staff submits → single CXO approval (old-app parity)
     const submit = await ncd.post(`/api/redemptions/${item.id}/submit-for-approval`);
     expect(submit.status).toBe(201);
     const reqId = submit.json.request.id;
 
-    // L1 admin (≠ maker ncd), L2 cxo
-    const a = await admin();
-    expect((await a.post(`/api/approvals/${reqId}/approve`)).json.request.status).toBe('Pending');
     const cxo = await as('cxo@demo.local');
     expect((await cxo.post(`/api/approvals/${reqId}/approve`)).json.request.status).toBe('Approved');
 
+    const a = await admin();
     const detail = await a.get(`/api/applications/${inv.appId}`);
     expect(detail.json.application.status).toBe('Redeemed');
   });
@@ -116,16 +114,14 @@ describe('rollover / transfer / transformation', () => {
     expect(Number((sched.rows[0] as any).n)).toBeGreaterThan(0);
   });
 
-  it('transfer moves ownership on a 2-level approval (two distinct checkers)', async () => {
+  it('transfer moves ownership on a single-checker approval (old-app parity)', async () => {
     const inv = await activeInvestment('Transfer From', '9700000005');
     const to = await activeInvestment('Transfer To', '9700000006');
     const ncd = await as('ncd@demo.local'); // maker
     const t = await ncd.post('/api/ncd-events/transfer', { application_id: inv.appId, to_customer_id: to.customerId, reason: 'Gift' });
     const reqId = t.json.request.id;
-    const superA = await admin();          // L1 (super_admin)
-    const demoAdmin = await as('admin@demo.local'); // L2 (admin) — different person
-    expect((await superA.post(`/api/approvals/${reqId}/approve`)).json.request.status).toBe('Pending');
-    expect((await demoAdmin.post(`/api/approvals/${reqId}/approve`)).json.request.status).toBe('Approved');
+    const superA = await admin(); // single checker (≠ maker ncd)
+    expect((await superA.post(`/api/approvals/${reqId}/approve`)).json.request.status).toBe('Approved');
     const owner = (await ctx.db.query('SELECT customer_id FROM applications WHERE id = $1', [inv.appId])).rows[0] as any;
     expect(Number(owner.customer_id)).toBe(to.customerId);
   });
@@ -136,10 +132,8 @@ describe('rollover / transfer / transformation', () => {
     const ncd = await as('ncd@demo.local'); // maker
     const tr = await ncd.post('/api/ncd-events/transformation', { application_id: inv.appId, nominee_name: 'Nominee Cust', nominee_customer_id: nominee.customerId });
     const reqId = tr.json.request.id;
-    const superA = await admin();
-    const demoAdmin = await as('admin@demo.local');
-    await superA.post(`/api/approvals/${reqId}/approve`);           // L1
-    expect((await demoAdmin.post(`/api/approvals/${reqId}/approve`)).json.request.status).toBe('Approved'); // L2
+    const superA = await admin(); // single checker
+    expect((await superA.post(`/api/approvals/${reqId}/approve`)).json.request.status).toBe('Approved');
     const dec = (await ctx.db.query('SELECT is_deceased FROM customers WHERE id = $1', [inv.customerId])).rows[0] as any;
     expect(dec.is_deceased).toBe(true);
     const owner = (await ctx.db.query('SELECT customer_id FROM applications WHERE id = $1', [inv.appId])).rows[0] as any;

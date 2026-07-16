@@ -90,17 +90,27 @@ permissions to the catalog, never ad-hoc role checks in route code.)
 - Chains are config (doc 07): per request-type → number of levels + eligible checker
   roles per level. Defaults, mirroring today's live behaviour:
 
-| Request type | Levels | Checkers (default) |
+**Old-app parity (2026-07-16): every approval is maker → a SINGLE checker** —
+the old app uses a flat maker+one-checker model for every type, and the new app
+matches it (no 2-checker chains). "Checker actions" below = number of approvals.
+
+| Request type | Checker actions | Checker(s) |
 |---|---|---|
-| Subscription (application approval) | 1 | NCD Manager, Admin |
+| Subscription (application-creation gate — optional, off by default) | 1 | NCD Manager, Admin |
 | Allotment batch | 1 | Admin, Super Admin |
-| Premature redemption | 2 | **L1 NCD Manager → L2 CXO** — confirmed by owner 2026-07-16. This is CXO's single action power: they get the Approvals screen filtered to premature redemptions only (with the date re-confirm + verify-checkbox flow), and permission `approvals:check-premature`. Admin is fallback checker if no active CXO exists. |
+| Premature redemption | 1 | **CXO** (`approvals:check-premature`; Admin fallback). CXO's single action power. |
+| Maturity redemption | 1 | NCD Manager, Admin |
 | Interest / payroll NEFT batch | 1 | Admin |
 | Commission / incentive / referrer eligibility | 1 | Admin |
-| Customer correction / profile change | 1 | NCD Manager, Admin |
+| Customer creation / correction / profile change | 1 | NCD Manager, Admin |
 | Customer handover | 1 | requester's reports-to, else NCD Manager/Admin |
 | Agent registration (DhanamFin signup) | 1 | NCD Manager, Admin |
-| NCD transfer / transformation | 2 | NCD Manager → Admin |
+| NCD transfer / transformation | 1 | NCD Manager, Admin |
+
+The application-creation gate is a setting (`approvals.subscription_maker_checker`,
+off by default). When on, a new application waits in `PendingApproval` until the
+subscription approval clears, then advances to `PendingFundVerification` (the
+post-approval, pre-eSign collection state — named to match the old app).
 
 - Branch Staff/Agent submissions (completed applications) appear in the **NCD
   Manager queue** — this is the owner's explicit handoff requirement.

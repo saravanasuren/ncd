@@ -12,7 +12,7 @@ const pill: Record<string, string> = {
   Active: 'bg-[color:var(--success-bg)] text-success',
   Redeemed: 'bg-bg text-text-muted',
   PendingAllotment: 'bg-[color:var(--warn-bg)] text-warn',
-  PendingCollection: 'bg-[color:var(--warn-bg)] text-warn',
+  PendingFundVerification: 'bg-[color:var(--warn-bg)] text-warn',
   PendingEsign: 'bg-[color:var(--warn-bg)] text-warn',
 };
 

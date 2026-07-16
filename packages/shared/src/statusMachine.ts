@@ -6,7 +6,7 @@
  * SQL CHECK constraints mirror the vocabularies for DB-level integrity.
  *
  * Vocabulary follows the NEW data model (docs/02 §4): the application
- * collection state is `PendingCollection` (old app called it
+ * collection state is `PendingFundVerification` (old app called it
  * PendingFundVerification).
  */
 
@@ -20,13 +20,13 @@ export type StatusMap = Record<string, StatusNode>;
 
 export const STATUS_MACHINES = {
   application: {
-    Draft: { label: 'Draft', next: ['PendingApproval', 'PendingCollection', 'Cancelled'] },
+    Draft: { label: 'Draft', next: ['PendingApproval', 'PendingFundVerification', 'Cancelled'] },
     PendingApproval: {
       label: 'Pending Approval',
-      next: ['PendingCollection', 'PendingEsign', 'PendingAllotment', 'Cancelled', 'Rejected'],
+      next: ['PendingFundVerification', 'PendingEsign', 'PendingAllotment', 'Cancelled', 'Rejected'],
     },
-    PendingCollection: {
-      label: 'Pending Collection',
+    PendingFundVerification: {
+      label: 'Pending Fund Verification',
       next: ['PendingEsign', 'PendingAllotment', 'Cancelled', 'Rejected'],
     },
     PendingEsign: { label: 'Awaiting eSign', next: ['PendingAllotment', 'Cancelled'] },

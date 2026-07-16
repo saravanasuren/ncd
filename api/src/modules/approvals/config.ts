@@ -37,13 +37,17 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Interest NEFT Batch',
     levels: [{ level: 1, checkerPermission: check, label: 'Admin' }],
   },
+  // Old-app parity: maker → single CXO checker (not a 2-checker chain).
   premature_redemption: {
     type: 'premature_redemption',
     label: 'Premature Redemption',
-    levels: [
-      { level: 1, checkerPermission: check, label: 'NCD Manager' },
-      { level: 2, checkerPermission: checkPremature, label: 'CXO' },
-    ],
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'CXO' }],
+  },
+  // Maturity redemption — maker → single checker (old-app parity).
+  redemption: {
+    type: 'redemption',
+    label: 'Maturity Redemption',
+    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
   customer_creation: {
     type: 'customer_creation',
@@ -70,21 +74,16 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'NCD Rollover',
     levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
+  // Old-app parity: single checker (maker → checker), not a 2-checker chain.
   ncd_transfer: {
     type: 'ncd_transfer',
     label: 'NCD Transfer',
-    levels: [
-      { level: 1, checkerPermission: check, label: 'NCD Manager' },
-      { level: 2, checkerPermission: check, label: 'Admin' },
-    ],
+    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
   ncd_transformation: {
     type: 'ncd_transformation',
     label: 'NCD Transformation (Nominee)',
-    levels: [
-      { level: 1, checkerPermission: check, label: 'NCD Manager' },
-      { level: 2, checkerPermission: check, label: 'Admin' },
-    ],
+    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
   commission_eligibility: {
     type: 'commission_eligibility',

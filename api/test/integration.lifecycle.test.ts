@@ -110,26 +110,21 @@ describe('incentives accrued at allotment', () => {
 });
 
 describe('premature redemption closes the application (docs/17 regression)', () => {
-  it('2-level chain (NCD Manager → CXO), then the app is Redeemed', async () => {
+  it('maker → single CXO approval (old-app parity), then the app is Redeemed', async () => {
     const ncd = await as('ncd@demo.local');
     const init = await ncd.post('/api/redemptions/premature', { application_id: appId, redemption_date: '2027-01-15', reason: 'Customer request' });
     expect(init.status).toBe(201);
     expect(Number(init.json.netPayment)).toBe(495000); // 5L − 1% penalty
     const reqId = init.json.request.id;
 
-    // Level 1 — NCD Manager (a different person than the maker; here maker is ncd,
-    // so use admin for L1, CXO for L2 to satisfy no-self-approve).
-    const a = await admin();
-    const l1 = await a.post(`/api/approvals/${reqId}/approve`);
-    expect(l1.status).toBe(200);
-    expect(l1.json.request.status).toBe('Pending'); // advanced to level 2
-
+    // Single CXO approval (maker is ncd; CXO ≠ maker).
     const cxo = await as('cxo@demo.local');
-    const l2 = await cxo.post(`/api/approvals/${reqId}/approve`);
-    expect(l2.status).toBe(200);
-    expect(l2.json.request.status).toBe('Approved');
+    const appr = await cxo.post(`/api/approvals/${reqId}/approve`);
+    expect(appr.status).toBe(200);
+    expect(appr.json.request.status).toBe('Approved');
 
     // THE FIX: application is reliably closed.
+    const a = await admin();
     const detail = await a.get(`/api/applications/${appId}`);
     expect(detail.json.application.status).toBe('Redeemed');
     expect(detail.json.lines[0].status).toBe('PrematureWithdrawn');

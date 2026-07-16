@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS applications (
   application_no            TEXT UNIQUE NOT NULL,
   customer_id               BIGINT NOT NULL REFERENCES customers(id),
   series_id                 BIGINT NOT NULL REFERENCES series(id),
-  status                    TEXT NOT NULL DEFAULT 'PendingCollection',
+  status                    TEXT NOT NULL DEFAULT 'PendingFundVerification',
   total_amount              NUMERIC(14,2) NOT NULL DEFAULT 0,
   amount_received           NUMERIC(14,2),
   date_money_received       DATE,

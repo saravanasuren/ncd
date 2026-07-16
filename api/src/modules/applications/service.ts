@@ -1,6 +1,6 @@
 /**
  * Applications module (docs/04 §2). Lifecycle:
- *   create → PendingCollection → (confirm) PendingEsign → (eSign) PendingAllotment
+ *   create → PendingFundVerification → (confirm) PendingEsign → (eSign) PendingAllotment
  *   → (batch allot) Active → Redeemed/Matured…
  * State changes go through the shared state machine.
  */
@@ -13,6 +13,7 @@ import { assertTransition } from '../../lib/statusMachine.js';
 import { toISODate } from '../../lib/dates.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
 import { getSettingsMap } from '../settings/service.js';
+import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
 
 const SCOPE_COLS = {
   userCol: 'a.enrolled_by_user_id',
@@ -49,7 +50,7 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
         'SELECT id, status, series_id, total_amount FROM applications WHERE id = $1', [input.club_with_application_id])).rows[0];
       if (!target) throw errors.notFound('Clubbing target not found');
       if (Number(target.series_id) !== input.series_id) throw errors.badRequest('Can only club within the same series');
-      if (!['PendingCollection', 'PendingEsign', 'PendingApproval'].includes(target.status)) throw errors.conflict('Target application is no longer in-flight');
+      if (!['PendingFundVerification', 'PendingEsign', 'PendingApproval'].includes(target.status)) throw errors.conflict('Target application is no longer in-flight');
       await addLine(tx, Number(target.id), scheme, input.amount);
       await tx.query('UPDATE applications SET total_amount = total_amount + $1, updated_at = now() WHERE id = $2', [input.amount, Number(target.id)]);
       await writeAudit(tx, { actorId: actor.id, action: 'application.club', entityType: 'applications', entityId: Number(target.id), after: { added: input.amount } });
@@ -62,24 +63,44 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
     const priorCount = Number((await tx.query<{ n: string }>('SELECT count(*)::int AS n FROM applications WHERE customer_id = $1', [input.customer_id])).rows[0]!.n);
     const isNew = priorCount === 0;
     const appNo = await nextCode(tx, 'application', appFmt);
+
+    // Optional subscription approval gate (old-app parity, off by default).
+    const subGate = settings['approvals.subscription_maker_checker'] === true;
+    const initialStatus = subGate ? 'PendingApproval' : 'PendingFundVerification';
+
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, receipt_file_path, receipt_original_filename, receipt_mime)
-       VALUES ($1,$2,$3,'PendingCollection',$4,$5,$6,'staff',$7,$8,$9,$10,$11) RETURNING id`,
-      [appNo, input.customer_id, input.series_id, input.amount, isNew, customer.referred_by_text ?? null, actor.id, actor.agentId,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'staff',$8,$9,$10,$11,$12) RETURNING id`,
+      [appNo, input.customer_id, input.series_id, initialStatus, input.amount, isNew, customer.referred_by_text ?? null, actor.id, actor.agentId,
        input.receipt?.file_path ?? null, input.receipt?.original_filename ?? null, input.receipt?.mime ?? null]
     );
     const appId = Number(rows[0]!.id);
     await addLine(tx, appId, scheme, input.amount);
-    await writeAudit(tx, { actorId: actor.id, action: 'application.create', entityType: 'applications', entityId: appId, after: { appNo, amount: input.amount, isNew } });
-    return { id: appId, application_no: appNo, clubbed: false };
+    let subscriptionRequest;
+    if (subGate) {
+      subscriptionRequest = await createApprovalRequest(tx, { type: 'subscription', entityType: 'applications', entityId: appId, makerUserId: actor.id, metadata: { application_no: appNo } });
+    }
+    await writeAudit(tx, { actorId: actor.id, action: 'application.create', entityType: 'applications', entityId: appId, after: { appNo, amount: input.amount, isNew, gated: subGate } });
+    return { id: appId, application_no: appNo, clubbed: false, ...(subscriptionRequest ? { subscription_request: subscriptionRequest } : {}) };
   });
 }
+
+// Subscription approval (only used when the gate setting is on) → advances the
+// application from PendingApproval to PendingFundVerification.
+registerOnFinalApprove('subscription', async (tx, req) => {
+  if (!req.entity_id) return;
+  const appId = Number(req.entity_id);
+  const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [appId])).rows[0];
+  if (app?.status === 'PendingApproval') {
+    await tx.query("UPDATE applications SET status = 'PendingFundVerification', updated_at = now() WHERE id = $1", [appId]);
+  }
+});
 
 /** Clubbing candidates — in-flight apps in a series for a customer. */
 export async function clubbingCandidates(db: Db, customerId: number, seriesId: number) {
   return (await db.query(
     `SELECT id, application_no, total_amount, status FROM applications
-     WHERE customer_id = $1 AND series_id = $2 AND status IN ('PendingCollection','PendingEsign','PendingApproval') ORDER BY id`,
+     WHERE customer_id = $1 AND series_id = $2 AND status IN ('PendingFundVerification','PendingEsign','PendingApproval') ORDER BY id`,
     [customerId, seriesId])).rows;
 }
 

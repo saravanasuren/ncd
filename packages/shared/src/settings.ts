@@ -196,11 +196,20 @@ export const SETTINGS_CATALOG: SettingDef[] = [
   {
     key: 'approvals.premature_l2_role',
     group: 'Approvals',
-    label: 'Premature redemption L2 approver',
-    description: 'Role that approves premature redemptions at level 2 (owner: CXO).',
+    label: 'Premature redemption approver',
+    description: 'Role that approves premature redemptions (owner: CXO).',
     type: 'enum',
     options: ['cxo', 'admin'],
     default: 'cxo',
+    editableBy: 'super_admin',
+  },
+  {
+    key: 'approvals.subscription_maker_checker',
+    group: 'Approvals',
+    label: 'Require approval at application creation',
+    description: 'When on, a new application needs a subscription approval before collection (old-app optional gate). Off by default — the allotment approval is the gate.',
+    type: 'boolean',
+    default: false,
     editableBy: 'super_admin',
   },
 

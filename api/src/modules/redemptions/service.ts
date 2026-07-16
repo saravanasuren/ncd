@@ -89,23 +89,41 @@ export async function initiatePremature(db: Db, actor: AuthUser, input: { applic
   return { redemption_id: rec.id, redemption_no: rec.redemption_no, request: req, principal: rec.principal, penalty: rec.penalty, netPayment: rec.netPayment, brokenInterest: rec.brokenInterest };
 }
 
-/** Maturity redemption — close a Matured application at par. */
-export async function redeemAtMaturity(db: Db, actor: AuthUser, applicationId: number) {
+/** Maturity redemption — maker→checker approval gate (old-app parity: it does
+ * NOT close immediately; a checker must approve). */
+export async function initiateMaturity(db: Db, actor: AuthUser, applicationId: number) {
   return db.withTx(async (tx) => {
     const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [applicationId])).rows[0];
     if (!app) throw errors.notFound('Application not found');
     if (app.status !== 'Matured' && app.status !== 'Active') throw errors.unprocessable('Only Matured/Active applications can be redeemed at maturity');
+    const dupe = await tx.query("SELECT 1 FROM redemptions WHERE application_id = $1 AND status IN ('Requested','Approved')", [applicationId]);
+    if (dupe.rowCount) throw errors.conflict('A redemption is already in progress for this investment');
     const rec = await createRequest(tx, { applicationId, type: 'maturity', reason: 'Maturity redemption', source: 'staff', byCustomer: false, createdBy: actor.id });
-    // Maturity redemption closes immediately (no penalty, principal already scheduled).
-    assertTransition('application', app.status, app.status === 'Active' ? 'Matured' : 'Redeemed');
-    if (app.status === 'Active') await tx.query("UPDATE applications SET status = 'Matured' WHERE id = $1", [applicationId]);
-    await tx.query("UPDATE applications SET status = 'Redeemed', redemption_date = now(), updated_at = now() WHERE id = $1", [applicationId]);
-    await tx.query("UPDATE application_lines SET status = 'Matured' WHERE application_id = $1 AND status = 'Active'", [applicationId]);
-    await tx.query("UPDATE redemptions SET status = 'Approved' WHERE id = $1", [rec.id]);
-    await writeAudit(tx, { actorId: actor.id, action: 'redemption.maturity', entityType: 'redemptions', entityId: rec.id });
-    return rec;
+    const req = await createApprovalRequest(tx, {
+      type: 'redemption', entityType: 'redemptions', entityId: rec.id, makerUserId: actor.id,
+      metadata: { application_id: applicationId, redemption_id: rec.id },
+    });
+    await tx.query('UPDATE redemptions SET approval_request_id = $1 WHERE id = $2', [req.id, rec.id]);
+    await writeAudit(tx, { actorId: actor.id, action: 'redemption.maturity.initiate', entityType: 'redemptions', entityId: rec.id });
+    return { redemption_id: rec.id, redemption_no: rec.redemption_no, request: req };
   });
 }
+
+/** On maturity-redemption approval: close the application at par. */
+registerOnFinalApprove('redemption', async (tx, req) => {
+  const appId = Number(req.metadata.application_id);
+  const redId = Number(req.metadata.redemption_id);
+  const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [appId])).rows[0];
+  if (!app) return;
+  if (app.status === 'Active') {
+    assertTransition('application', 'Active', 'Matured');
+    await tx.query("UPDATE applications SET status = 'Matured' WHERE id = $1", [appId]);
+  }
+  assertTransition('application', 'Matured', 'Redeemed');
+  await tx.query("UPDATE applications SET status = 'Redeemed', redemption_date = now(), updated_at = now() WHERE id = $1", [appId]);
+  await tx.query("UPDATE application_lines SET status = 'Matured' WHERE application_id = $1 AND status = 'Active'", [appId]);
+  await tx.query("UPDATE redemptions SET status = 'Approved' WHERE id = $1", [redId]);
+});
 
 registerOnFinalApprove('premature_redemption', async (tx, req) => {
   const appId = Number(req.metadata.application_id);

@@ -49,7 +49,7 @@ export function ApplicationDetailPage() {
       {msg && <div className="text-xs text-danger mt-2">{msg}</div>}
 
       <div className="flex gap-2 mt-3 items-center flex-wrap">
-        {can('applications:confirm-collection') && a.status === 'PendingCollection' && (
+        {can('applications:confirm-collection') && a.status === 'PendingFundVerification' && (
           <button onClick={() => confirm.mutate()} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Confirm collection</button>
         )}
         {can('applications:mark-esigned') && a.status === 'PendingEsign' && (

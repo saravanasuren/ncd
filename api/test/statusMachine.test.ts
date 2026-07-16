@@ -6,8 +6,8 @@ import { AppError } from '../src/lib/errors.js';
 
 describe('application lifecycle transitions', () => {
   it('allows the legal happy path', () => {
-    expect(canTransition('application', 'Draft', 'PendingCollection')).toBe(true);
-    expect(canTransition('application', 'PendingCollection', 'PendingEsign')).toBe(true);
+    expect(canTransition('application', 'Draft', 'PendingFundVerification')).toBe(true);
+    expect(canTransition('application', 'PendingFundVerification', 'PendingEsign')).toBe(true);
     expect(canTransition('application', 'PendingEsign', 'PendingAllotment')).toBe(true);
     expect(canTransition('application', 'PendingAllotment', 'Active')).toBe(true);
     expect(canTransition('application', 'Active', 'Redeemed')).toBe(true);

@@ -24,7 +24,7 @@ redemptionsRouter.post('/:id/submit-for-approval', requirePermission('redemption
 redemptionsRouter.post('/maturity', requirePermission('redemptions:initiate'),
   asyncHandler(async (req, res) => {
     const { application_id } = z.object({ application_id: z.number() }).parse(req.body);
-    res.json(await s.redeemAtMaturity(getDb(), req.user!, application_id));
+    res.status(201).json(await s.initiateMaturity(getDb(), req.user!, application_id));
   }));
 
 redemptionsRouter.get('/neft.xlsx', requirePermission('redemptions:initiate'),

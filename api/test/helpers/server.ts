@@ -64,4 +64,12 @@ export class Client {
   post(p: string, b?: unknown) { return this.req('POST', p, b ?? {}); }
   put(p: string, b?: unknown) { return this.req('PUT', p, b ?? {}); }
   del(p: string) { return this.req('DELETE', p); }
+
+  /** Fetch raw bytes (for binary downloads like xlsx). */
+  async raw(path: string): Promise<{ status: number; buffer: Buffer }> {
+    const cookie = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+    const res = await fetch(this.base + path, { headers: cookie ? { Cookie: cookie } : {} });
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return { status: res.status, buffer };
+  }
 }

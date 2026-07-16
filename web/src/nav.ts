@@ -14,6 +14,7 @@ export interface NavItem {
 
 export const NAV: NavItem[] = [
   { to: '/app/dashboard', label: 'Dashboard', anyOf: ['dashboard:view'], group: 'Overview' },
+  { to: '/app/segments', label: 'Segments', anyOf: ['reports:download', 'dashboard:drilldown'], group: 'Overview' },
   { to: '/app/leads', label: 'Leads', anyOf: ['leads:read'], group: 'Daily' },
   { to: '/app/customers', label: 'Customers', anyOf: ['customers:read'], group: 'Daily' },
   { to: '/app/applications', label: 'Applications', anyOf: ['customers:read'], group: 'Daily' },

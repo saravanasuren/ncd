@@ -25,6 +25,8 @@ import { allotmentsRouter } from './modules/allotments/routes.js';
 import { payoutsRouter } from './modules/payouts/routes.js';
 import { redemptionsRouter } from './modules/redemptions/routes.js';
 import { incentivesRouter } from './modules/incentives/routes.js';
+import { dashboardRouter } from './modules/dashboard/routes.js';
+import { reportsRouter } from './modules/reports/routes.js';
 
 export function createApp(): Express {
   const app = express();
@@ -62,6 +64,8 @@ export function createApp(): Express {
   app.use('/api/payouts', payoutsRouter);
   app.use('/api/redemptions', redemptionsRouter);
   app.use('/api/incentives', incentivesRouter);
+  app.use('/api/dashboard', dashboardRouter);
+  app.use('/api/reports', reportsRouter);
   app.use('/api', productsRouter); // mounts /schemes, /series, /tds-rules, /banks, /holidays, /company-profile
 
   app.use(notFoundHandler);

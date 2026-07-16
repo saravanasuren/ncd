@@ -2,7 +2,8 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext.js';
 import { LoginPage } from './pages/Login.js';
 import { AppShell } from './layouts/AppShell.js';
-import { DashboardPlaceholder } from './pages/DashboardPlaceholder.js';
+import { Dashboard } from './pages/Dashboard.js';
+import { SegmentsPage } from './pages/Segments.js';
 import { SettingsPage } from './pages/Settings.js';
 import { UsersPage } from './pages/Users.js';
 import { LeadsPage } from './pages/Leads.js';
@@ -37,7 +38,8 @@ export function App() {
           }
         >
           <Route index element={<Navigate to="/app/dashboard" replace />} />
-          <Route path="dashboard" element={<DashboardPlaceholder />} />
+          <Route path="dashboard" element={<Dashboard />} />
+          <Route path="segments" element={<SegmentsPage />} />
           <Route path="leads" element={<LeadsPage />} />
           <Route path="customers" element={<CustomersPage />} />
           <Route path="customers/:id" element={<CustomerDetailPage />} />

@@ -127,29 +127,46 @@ cd api && LEGACY_DATABASE_URL=postgres://localhost/dhanam_wealth_restore npm run
 
 **COMMIT (only after the dry-run report is all-green)** — loads into the real new DB.
 
-The migration keeps every row's ORIGINAL id. The freshly-seeded target already
-contains ONE user — the seeded admin (`tech@dhanam.finance`) — which collides with
-the old admin of the same email. So clear the seeded users first and let the OLD
-users (incl. the old admin, with their original password) load cleanly. Config
-(roles / permissions / settings / company_profile) is kept.
+The migration keeps every row's ORIGINAL id, so the target must not already contain
+rows at those ids. A fresh `seed` creates baseline **users, branches, banks, and
+tds_rules** (ids 1..N) — all of which the migration ALSO provides — so those must be
+cleared first, or they collide (and the seeded defaults would mask the real branch
+names, breaking branch-wise reports). Config that the migration does NOT provide
+(roles / permissions / app_settings / company_profile) is kept.
+
+**Two footguns learned the hard way (both baked in below):**
+1. **Build the DB from `template0`.** `CREATE DATABASE … TEMPLATE template0` guarantees
+   a pristine DB. The default (`template1`) can carry inherited objects.
+2. **`unset DATABASE_URL` and pin every node command with `DATABASE_URL="$DBURL"`.**
+   A stale exported `DATABASE_URL` (e.g. left over pointing at the OLD `dhanam_wealth`)
+   is picked up by `migrate`/`seed`/`--commit` and silently targets the wrong database.
 
 ```bash
 # on the box — no real users yet, brief downtime is fine
 sudo systemctl stop dhanam-newwealth
+unset DATABASE_URL                                    # drop any stale export (footgun #2)
 DBURL=$(aws ssm get-parameter --name /dhanam/newwealth/DATABASE_URL --with-decryption \
   --region ap-south-1 --query Parameter.Value --output text)
-pg_dump "$DBURL" > ~/newwealth-preload-$(date +%Y%m%d-%H%M).sql        # insurance
 
-# clear seeded users (null the settings FK first), keep config
-psql "$DBURL" -c "UPDATE app_settings SET updated_by=NULL; DELETE FROM users;"
+# fresh, pristine DB (footgun #1)
+sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='dhanam_newwealth' AND pid <> pg_backend_pid();"
+sudo -u postgres psql -c "DROP DATABASE IF EXISTS dhanam_newwealth;"
+sudo -u postgres psql -c "CREATE DATABASE dhanam_newwealth OWNER dhanam_newwealth TEMPLATE template0;"
+
+# schema + baseline config (DATABASE_URL pinned on EVERY node command)
+cd ~/ncd/api
+DATABASE_URL="$DBURL" SSM_PARAMETERS_PATH=/dhanam/newwealth/ SSM_REGION=ap-south-1 NODE_ENV=production npm run migrate
+DATABASE_URL="$DBURL" SSM_PARAMETERS_PATH=/dhanam/newwealth/ SSM_REGION=ap-south-1 NODE_ENV=production npm run seed
+
+# clear EVERY seeded row the migration also provides (users + branches + banks + tds_rules)
+psql "$DBURL" -c "UPDATE app_settings SET updated_by=NULL; DELETE FROM users; DELETE FROM branches; DELETE FROM banks; DELETE FROM tds_rules;"
 
 # COMMIT the migration
-cd ~/ncd/api
 LEGACY_DATABASE_URL=$(aws ssm get-parameter --name /dhanam/wealth/DATABASE_URL --with-decryption \
   --region ap-south-1 --query Parameter.Value --output text) \
 DATABASE_URL="$DBURL" npm run migrate:legacy -- --commit
 
-# verify counts match the dry-run, then bring the app back up
+# verify + bring the app back up
 psql "$DBURL" -c "SELECT (SELECT count(*) FROM customers) customers,
   (SELECT count(*) FROM applications) apps,
   (SELECT count(*) FROM disbursement_schedule) sched,
@@ -158,10 +175,12 @@ sudo systemctl start dhanam-newwealth
 curl -sI https://ncd.dhanamfinance.com/api/health
 ```
 - Migration runs in ONE transaction — any error rolls the whole load back, nothing partial.
+- Expected anomalies: only the benign `uq_cba_dedup` bank-account duplicates (same
+  account listed twice in the old data → correctly kept once).
 - Login after commit: the **old admin credentials** (`tech@dhanam.finance` + the OLD
   app's password), since the old admin user migrates with its original hash.
 - Fully reversible while the app has no real usage: `DROP DATABASE dhanam_newwealth`,
-  recreate, `npm run migrate && npm run seed`, retry.
+  recreate from template0, `migrate` + `seed`, retry.
 
 The report **flags for owner confirmation**: any role that fell to the fallback
 mapping, any AUM mismatch, any change in the paid-row count, and every per-row anomaly.

@@ -48,6 +48,14 @@ export const ROLE_MAP: Record<string, string> = {
 /** Fallback new-role when an old role name isn't in ROLE_MAP. Flagged in report. */
 export const ROLE_FALLBACK = 'branch_staff';
 
+/**
+ * Old roles to DROP entirely (owner decision 2026-07-16): users holding these
+ * are NOT migrated, and any "enrolled by / created by" reference to such a user
+ * is set to NULL so the referencing customer/application still migrates (the
+ * count of dropped users + nulled links is reported for confirmation).
+ */
+export const DROP_ROLES = new Set(['enroller', 'cncd_admin']);
+
 /** Old agents.commission_eligibility_status → new agents.commission_status. */
 export const AGENT_COMMISSION_STATUS_MAP: Record<string, string> = {
   NotEligible: 'None',

@@ -65,6 +65,12 @@ export function formatReport(r: MigrationReport): string {
     line('');
   }
 
+  if (r.notes.length) {
+    line('  MIGRATION NOTES');
+    for (const n of r.notes) line('  • ' + n);
+    line('');
+  }
+
   if (r.anomalies.length) {
     line(`  ANOMALIES (${r.anomalies.length}) — first 20`);
     for (const a of r.anomalies.slice(0, 20)) line('  ⚠ ' + a);

@@ -117,4 +117,32 @@ describe('legacy migration — dry-run reconciliation', () => {
     // AUM still reconciles for what loaded
     expect(report.aum.activeLoaded).toBeGreaterThan(0);
   });
+
+  it('drops users with a DROP_ROLES role and nulls their enrolled-by links', async () => {
+    // Reassign BE user #2 to an 'enroller' role (which is dropped). Customers/apps
+    // enrolled by #2 must still migrate, with enrolled_by_user_id set NULL.
+    class DropRoleSource extends SyntheticLegacySource {
+      async roles() {
+        const r = await super.roles();
+        return [...r, { id: 9, name: 'enroller' }];
+      }
+      async users() {
+        const u = await super.users();
+        u[1]!.role_id = 9; // BE Test → enroller (dropped)
+        return u;
+      }
+    }
+    const report = await runMigration(new DropRoleSource(), db, { dryRun: false });
+    // user #2 not migrated
+    const u = await db.query('SELECT COUNT(*)::int AS n FROM users WHERE id = 2');
+    expect((u.rows[0] as any).n).toBe(0);
+    // customers enrolled by #2 still migrated, but unassigned
+    const c = await db.query('SELECT COUNT(*)::int AS n FROM customers');
+    expect((c.rows[0] as any).n).toBe(3);
+    const linked = await db.query('SELECT COUNT(*)::int AS n FROM customers WHERE enrolled_by_user_id = 2');
+    expect((linked.rows[0] as any).n).toBe(0);
+    // reported as a note, and the role shows as dropped
+    expect(report.notes.some((n) => n.includes('Dropped'))).toBe(true);
+    expect(report.roleMapping.find((m) => m.oldRole === 'enroller')?.newRole).toContain('dropped');
+  });
 });

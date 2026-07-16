@@ -20,6 +20,7 @@ import {
   INTEREST_ANCHOR,
   ROLE_MAP,
   ROLE_FALLBACK,
+  DROP_ROLES,
   AGENT_COMMISSION_STATUS_MAP,
   RECOMPUTE_APP_STATUSES,
   DUE_TYPE_MAP,
@@ -53,6 +54,7 @@ export interface MigrationReport {
     oldFuture: { due_date: string; due_type: string; gross: number; status: string }[];
     newFuture: { due_date: string; due_type: string; gross: number; period_days: number }[];
   };
+  notes: string[];
   anomalies: string[];
 }
 
@@ -149,6 +151,7 @@ export async function runMigration(
     roleMapping: [],
     aum: { activeSource: 0, activeLoaded: 0 },
     interest: { frozenRows: 0, regeneratedRows: 0, oldPaidRows: 0, loadedPaidRows: 0 },
+    notes: [],
     anomalies,
   };
 
@@ -186,6 +189,10 @@ export async function runMigration(
     for (const oldName of oldRoleName.values()) {
       if (seenRoles.has(oldName)) continue;
       seenRoles.add(oldName);
+      if (DROP_ROLES.has(oldName)) {
+        report.roleMapping.push({ oldRole: oldName, newRole: '(dropped — not migrated)', mapped: true });
+        continue;
+      }
       const mapped = ROLE_MAP[oldName];
       report.roleMapping.push({ oldRole: oldName, newRole: mapped ?? ROLE_FALLBACK, mapped: !!mapped });
     }
@@ -193,6 +200,19 @@ export async function runMigration(
       const oldName = oldRoleName.get(oldRoleId) ?? 'agent';
       const newName = ROLE_MAP[oldName] ?? ROLE_FALLBACK;
       return newRoleId.get(newName) ?? newRoleId.get('agent')!;
+    };
+
+    // users holding a DROP_ROLES role are NOT migrated; any enrolled/created-by
+    // reference to them is nulled so the referencing row still loads.
+    const droppedUserIds = new Set<any>();
+    for (const u of oldUsers) {
+      const rn = oldRoleName.get(u.role_id);
+      if (rn && DROP_ROLES.has(rn)) droppedUserIds.add(u.id);
+    }
+    let nulledUserRefs = 0;
+    const refUser = (id: any): any => {
+      if (id != null && droppedUserIds.has(id)) { nulledUserRefs++; return null; }
+      return id ?? null;
     };
 
     // helper: map rows → batch-insert (fast) with per-row fallback isolation
@@ -229,12 +249,16 @@ export async function runMigration(
       is_active: r.is_active ?? true,
     }));
 
-    await load('users', oldUsers, (r) => ({
-      id: r.id, email: r.email, password_hash: r.password_hash,
-      full_name: r.full_name, phone: r.phone, role_id: resolveRole(r.role_id),
-      branch_id: r.branch_id ?? null, reports_to_user_id: r.reports_to_user_id ?? null,
-      is_active: r.is_active ?? true,
-    }));
+    await load('users', oldUsers, (r) => {
+      const rn = oldRoleName.get(r.role_id);
+      if (rn && DROP_ROLES.has(rn)) return null; // dropped role → not migrated
+      return {
+        id: r.id, email: r.email, password_hash: r.password_hash,
+        full_name: r.full_name, phone: r.phone, role_id: resolveRole(r.role_id),
+        branch_id: r.branch_id ?? null, reports_to_user_id: refUser(r.reports_to_user_id),
+        is_active: r.is_active ?? true,
+      };
+    });
 
     await load('agents', oldAgents, (r) => ({
       id: r.id, user_id: null, agent_code: r.agent_code, full_name: r.full_name,
@@ -311,7 +335,7 @@ export async function runMigration(
       referred_by_text: r.referred_by ?? null, interested_scheme: r.interested_scheme ?? null,
       expected_amount: r.expected_amount ?? null, follow_up_date: d(r.follow_up_date),
       status: r.lead_status ?? 'New', notes: r.notes ?? null,
-      admin_only: r.admin_only ?? false, created_by_user_id: r.created_by_user_id ?? null,
+      admin_only: r.admin_only ?? false, created_by_user_id: refUser(r.created_by_user_id),
       created_by_agent_id: r.assigned_to_agent_id ?? r.referred_by_agent_id ?? null,
       branch_id: null, converted_customer_id: r.converted_customer_id ?? null,
       lockerhub_application_no: r.lockerhub_application_no ?? null,
@@ -331,7 +355,7 @@ export async function runMigration(
       tax_form_expires_on: d(r.tax_form_expires_on),
       tds_applicable: r.tds_applicable ?? true, referred_by_text: r.referred_by_free_text ?? null,
       kyc_status: r.kyc_status ?? 'Pending', creation_status: r.creation_status ?? 'Approved',
-      enrolled_by_user_id: r.enrolled_by_user_id ?? null,
+      enrolled_by_user_id: refUser(r.enrolled_by_user_id),
       enrolled_by_agent_id: r.enrolled_by_agent_id ?? null, branch_id: r.branch_id ?? null,
       is_active: r.is_active ?? true, is_deceased: r.is_deceased ?? false,
       deceased_date: d(r.deceased_date), portal_user_id: null,
@@ -385,7 +409,7 @@ export async function runMigration(
         is_locker_deposit: r.is_locker_deposit ?? false,
         referred_by_text: r.referred_by_free_text ?? null,
         source: r.lockerhub_intent_no ? 'lockerhub' : 'staff',
-        enrolled_by_user_id: r.enrolled_by_user_id ?? null,
+        enrolled_by_user_id: refUser(r.enrolled_by_user_id),
         enrolled_by_agent_id: r.enrolled_by_agent_id ?? null,
       };
     });
@@ -521,7 +545,7 @@ export async function runMigration(
         net_payment: num(r.net_payment_amount), broken_interest: num(r.broken_period_interest),
         requested_date: d(r.created_at), redemption_date: d(r.redemption_date),
         reason: r.reason ?? null, approval_request_id: null, utr: r.utr ?? null,
-        status: mapRedemptionStatus(r.status), created_by_user_id: r.created_by_user_id ?? null,
+        status: mapRedemptionStatus(r.status), created_by_user_id: refUser(r.created_by_user_id),
       };
     });
 
@@ -546,6 +570,8 @@ export async function runMigration(
       let payeeId: any = null;
       if (r._payee_type === 'referrer') payeeId = refByNorm.get(r._payee_ref);
       else payeeId = r._payee_ref;
+      // staff payee on a dropped user → no valid payee, skip the accrual
+      if (r._payee_type === 'staff' && droppedUserIds.has(payeeId)) return null;
       if (!payeeId || !r.application_id) return null;
       const rate = num(r.applied_pct ?? r.rate_pct);
       return {
@@ -555,6 +581,14 @@ export async function runMigration(
         paid_at: r.paid_at ?? null,
       };
     });
+
+    // ── notes: dropped roles / nulled references ────────────────────────
+    if (droppedUserIds.size || nulledUserRefs) {
+      report.notes.push(
+        `Dropped ${droppedUserIds.size} user(s) with roles {${[...DROP_ROLES].join(', ')}} (owner decision); ` +
+        `nulled ${nulledUserRefs} enrolled/created-by link(s) to them — those customers/leads/apps still migrate, unassigned.`
+      );
+    }
 
     // ── money reconciliation on the loaded side ─────────────────────────
     const aumR = await tx.query<{ s: string }>(

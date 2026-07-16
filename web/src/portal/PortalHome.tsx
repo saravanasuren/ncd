@@ -1,16 +1,25 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { formatINR } from '@new-wealth/shared';
-import { api } from '../api/client.js';
+import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 
 /** Investor portal home — holdings, payouts, documents (docs/06 §5). */
 export function PortalHome() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
+  const qc = useQueryClient();
+  const [msg, setMsg] = useState('');
   const holdings = useQuery({ queryKey: ['p-holdings'], queryFn: () => api.get<any>('/api/portal/holdings') });
   const payouts = useQuery({ queryKey: ['p-payouts'], queryFn: () => api.get<any>('/api/portal/payouts') });
   const docs = useQuery({ queryKey: ['p-docs'], queryFn: () => api.get<any>('/api/portal/documents') });
+
+  const requestRedemption = useMutation({
+    mutationFn: (applicationNo: string) => api.post('/api/portal/redemption-request', { application_no: applicationNo, reason: 'Requested via portal' }),
+    onSuccess: () => { setMsg('Redemption requested — our team will process it shortly.'); qc.invalidateQueries({ queryKey: ['p-holdings'] }); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Could not request redemption'),
+  });
 
   return (
     <div className="min-h-screen bg-bg">
@@ -30,8 +39,32 @@ export function PortalHome() {
         </div>
 
         <Card title="Holdings">
-          <Rows head={['Application', 'Series', 'Amount', 'Maturity']}
-            rows={(holdings.data?.holdings ?? []).map((h: any) => [h.application_no, h.series_code, formatINR(h.total_amount), h.maturity_date ?? '—'])} money={[2]} />
+          {msg && <div className="px-4 py-2 text-xs text-primary border-b border-border">{msg}</div>}
+          {(holdings.data?.holdings ?? []).length === 0 ? (
+            <div className="p-5 text-center text-text-muted text-sm">No active investments.</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">
+                <th className="px-4 py-2">Application</th><th className="px-4 py-2">Series</th>
+                <th className="px-4 py-2 text-right">Amount</th><th className="px-4 py-2">Maturity</th><th className="px-4 py-2"></th></tr></thead>
+              <tbody className="divide-y divide-border">
+                {(holdings.data?.holdings ?? []).map((h: any) => (
+                  <tr key={h.application_no}>
+                    <td className="px-4 py-1.5 font-mono text-xs">{h.application_no}</td>
+                    <td className="px-4 py-1.5">{h.series_code}</td>
+                    <td className="px-4 py-1.5 text-right mono">{formatINR(h.total_amount)}</td>
+                    <td className="px-4 py-1.5">{h.maturity_date ?? '—'}</td>
+                    <td className="px-4 py-1.5 text-right">
+                      {h.status === 'Active' && (
+                        <button disabled={requestRedemption.isPending} onClick={() => { setMsg(''); requestRedemption.mutate(h.application_no); }}
+                          className="text-xs text-primary hover:underline disabled:opacity-50">Request redemption</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </Card>
 
         <Card title="Recent payouts">

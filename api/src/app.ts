@@ -29,6 +29,7 @@ import { dashboardRouter } from './modules/dashboard/routes.js';
 import { reportsRouter } from './modules/reports/routes.js';
 import { portalRouter } from './modules/portal/routes.js';
 import { integrationRouter } from './modules/integration/routes.js';
+import { eventsRouter } from './modules/events/routes.js';
 
 export function createApp(): Express {
   const app = express();
@@ -69,6 +70,7 @@ export function createApp(): Express {
   app.use('/api/allotments', allotmentsRouter);
   app.use('/api/payouts', payoutsRouter);
   app.use('/api/redemptions', redemptionsRouter);
+  app.use('/api/ncd-events', eventsRouter);
   app.use('/api/incentives', incentivesRouter);
   app.use('/api/dashboard', dashboardRouter);
   app.use('/api/reports', reportsRouter);

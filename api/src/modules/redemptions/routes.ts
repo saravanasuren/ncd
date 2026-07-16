@@ -9,10 +9,20 @@ import * as s from './service.js';
 export const redemptionsRouter = Router();
 
 redemptionsRouter.get('/', requirePermission('redemptions:initiate', 'dashboard:view'),
-  asyncHandler(async (_req, res) => res.json({ rows: await s.listRedemptions(getDb()) })));
+  asyncHandler(async (req, res) => res.json({ rows: await s.listRedemptions(getDb(), req.query.filter === 'requests' ? 'requests' : 'all') })));
 
 redemptionsRouter.post('/premature', requirePermission('redemptions:initiate'),
   asyncHandler(async (req, res) => {
     const input = z.object({ application_id: z.number(), redemption_date: z.string().optional(), reason: z.string().min(2) }).parse(req.body);
     res.status(201).json(await s.initiatePremature(getDb(), req.user!, input));
+  }));
+
+// Staff picks up a customer/app request and starts the 2-level approval.
+redemptionsRouter.post('/:id/submit-for-approval', requirePermission('redemptions:initiate'),
+  asyncHandler(async (req, res) => res.status(201).json({ request: await s.submitForApproval(getDb(), req.user!, Number(req.params.id)) })));
+
+redemptionsRouter.post('/maturity', requirePermission('redemptions:initiate'),
+  asyncHandler(async (req, res) => {
+    const { application_id } = z.object({ application_id: z.number() }).parse(req.body);
+    res.json(await s.redeemAtMaturity(getDb(), req.user!, application_id));
   }));

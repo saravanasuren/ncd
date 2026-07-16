@@ -112,6 +112,16 @@ integrationRouter.post('/agents/from-lockerhub', asyncHandler(async (req, res) =
   res.status(201).json(out);
 }));
 
+/** Redemption request from the app — lands in the staff queue (no self-approve). */
+integrationRouter.post('/redemption-request', asyncHandler(async (req, res) => {
+  const b = z.object({ application_no: z.string(), reason: z.string().default('App request') }).parse(req.body);
+  const app = (await getDb().query<{ id: string }>("SELECT id FROM applications WHERE application_no = $1 AND status = 'Active'", [b.application_no])).rows[0];
+  if (!app) throw errors.notFound('Investment not found or not redeemable');
+  const { requestRedemption } = await import('../redemptions/service.js');
+  const r = await requestRedemption(getDb(), { applicationId: Number(app.id), reason: b.reason, source: 'lockerhub' });
+  res.status(201).json({ redemption_no: r.redemption_no, net_payment: r.netPayment, status: 'Requested' });
+}));
+
 /** Email-check — route existing agents to Sign-In not Sign-Up (read-only). */
 integrationRouter.get('/agents/email-check', asyncHandler(async (req, res) => {
   const email = String(req.query.email ?? '');

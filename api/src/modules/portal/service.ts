@@ -118,6 +118,17 @@ export async function payouts(db: Db, actor: AuthUser) {
   return { collected_to_date: round2(Number(agg.paid)), rows: list, display_cutoff: cutoff };
 }
 
+/** Customer requests early redemption of one of their own holdings. */
+export async function requestRedemptionForCustomer(db: Db, actor: AuthUser, applicationNo: string, reason: string) {
+  const cid = requireCustomer(actor);
+  const app = (await db.query<{ id: string }>(
+    "SELECT id FROM applications WHERE application_no = $1 AND customer_id = $2 AND status = 'Active'", [applicationNo, cid])).rows[0];
+  if (!app) throw errors.notFound('Investment not found or not redeemable');
+  const { requestRedemption } = await import('../redemptions/service.js');
+  const r = await requestRedemption(db, { applicationId: Number(app.id), reason, source: 'portal', createdBy: actor.id });
+  return { redemption_no: r.redemption_no, net_payment: r.netPayment, status: 'Requested' };
+}
+
 export async function documents(db: Db, actor: AuthUser) {
   const cid = requireCustomer(actor);
   const apps = (await db.query<{ id: string; application_no: string }>("SELECT id, application_no FROM applications WHERE customer_id = $1 AND status IN ('Active','Matured','Redeemed')", [cid])).rows;

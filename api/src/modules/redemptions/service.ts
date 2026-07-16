@@ -1,9 +1,10 @@
 /**
- * Premature redemption (docs/02 §6, docs/17 old-app bug). 2-level chain
- * (NCD Manager → CXO). Net Payment = Principal − Penalty; broken interest is
- * paid separately. On final approval the application is RELIABLY closed
- * (Redeemed + line PrematureWithdrawn + future rows Skipped) — regression
- * tested, because the old app sometimes left it Active.
+ * Redemptions (docs/02 §6, docs/17). Flows:
+ *  - Customer/app REQUESTS a redemption → 'Requested' record (no approval yet).
+ *  - Staff (NCD Manager) SUBMITS a request → 2-level approval (NCD → CXO).
+ *  - Staff can initiate + submit in one step (initiatePremature).
+ *  - On final approval the application is RELIABLY closed (regression-tested).
+ *  - Maturity redemption closes a Matured application at par (no penalty).
  */
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
@@ -14,34 +15,95 @@ import { nextCode } from '../../lib/sequences.js';
 import { computeRedemption } from '../../lib/redemption.js';
 import type { RateSpec } from '../../lib/incentive.js';
 import { getSettingsMap } from '../settings/service.js';
-import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
+import { createApprovalRequest, registerOnFinalApprove, type ApprovalRow } from '../approvals/service.js';
 
-export async function initiatePremature(db: Db, actor: AuthUser, input: { application_id: number; redemption_date?: string; reason: string }) {
-  const settings = await getSettingsMap(db);
-  const penalty = (settings['redemption.premature_penalty'] as RateSpec) ?? { mode: 'pct', value: 1.0 };
+async function outstandingPrincipal(db: Db, applicationId: number): Promise<number> {
+  return Number((await db.query<{ p: string }>(
+    "SELECT COALESCE(sum(outstanding_amount),0) AS p FROM application_lines WHERE application_id = $1 AND status = 'Active'",
+    [applicationId]
+  )).rows[0]!.p);
+}
+
+async function penaltySetting(db: Db): Promise<RateSpec> {
+  const s = await getSettingsMap(db);
+  return (s['redemption.premature_penalty'] as RateSpec) ?? { mode: 'pct', value: 1.0 };
+}
+
+/** Create a 'Requested' redemption record (no approval). Shared by all callers. */
+async function createRequest(
+  tx: Db,
+  input: { applicationId: number; type: 'premature' | 'maturity'; reason: string; source: string; byCustomer: boolean; redemptionDate?: string; createdBy: number | null }
+): Promise<{ id: number; redemption_no: string; principal: number; penalty: number; netPayment: number; brokenInterest: number }> {
+  const principal = await outstandingPrincipal(tx, input.applicationId);
+  const penalty = input.type === 'maturity' ? { mode: 'flat' as const, value: 0 } : await penaltySetting(tx);
+  const calc = computeRedemption({ principal, penalty });
+  const redDate = input.redemptionDate ?? new Date().toISOString().slice(0, 10);
+  const redNo = await nextCode(tx, 'redemption', 'MCR-{yyyy}-{seq:6}');
+  const { rows } = await tx.query<{ id: string }>(
+    `INSERT INTO redemptions (redemption_no, application_id, type, principal, penalty, net_payment, broken_interest, requested_date, redemption_date, reason, status, source, requested_by_customer, created_by_user_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Requested',$11,$12,$13) RETURNING id`,
+    [redNo, input.applicationId, input.type, calc.principal, calc.penalty, calc.netPayment, calc.brokenInterest, redDate, redDate, input.reason, input.source, input.byCustomer, input.createdBy]
+  );
+  return { id: Number(rows[0]!.id), redemption_no: redNo, principal: calc.principal, penalty: calc.penalty, netPayment: calc.netPayment, brokenInterest: calc.brokenInterest };
+}
+
+/** Customer / app requests a redemption (no approval yet — lands in the staff queue). */
+export async function requestRedemption(db: Db, input: { applicationId: number; reason: string; source: 'portal' | 'lockerhub'; createdBy?: number | null }) {
   return db.withTx(async (tx) => {
-    const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [input.application_id])).rows[0];
+    const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [input.applicationId])).rows[0];
     if (!app) throw errors.notFound('Application not found');
-    if (app.status !== 'Active') throw errors.unprocessable('Only Active applications can be prematurely redeemed');
+    if (app.status !== 'Active') throw errors.unprocessable('Only Active investments can be redeemed');
+    const dupe = await tx.query("SELECT 1 FROM redemptions WHERE application_id = $1 AND status IN ('Requested','Approved')", [input.applicationId]);
+    if (dupe.rowCount) throw errors.conflict('A redemption is already in progress for this investment');
+    const r = await createRequest(tx, { applicationId: input.applicationId, type: 'premature', reason: input.reason, source: input.source, byCustomer: true, createdBy: input.createdBy ?? null });
+    await writeAudit(tx, { actorId: input.createdBy ?? null, action: 'redemption.request', entityType: 'redemptions', entityId: r.id, after: { source: input.source, net: r.netPayment } });
+    return r;
+  });
+}
 
-    const principal = Number((await tx.query<{ p: string }>("SELECT COALESCE(sum(outstanding_amount),0) AS p FROM application_lines WHERE application_id = $1 AND status = 'Active'", [input.application_id])).rows[0]!.p);
-    const calc = computeRedemption({ principal, penalty });
-    const redDate = input.redemption_date ?? new Date().toISOString().slice(0, 10);
-    const redNo = await nextCode(tx, 'redemption', 'MCR-{yyyy}-{seq:6}');
-
-    const { rows } = await tx.query<{ id: string }>(
-      `INSERT INTO redemptions (redemption_no, application_id, type, principal, penalty, net_payment, broken_interest, requested_date, redemption_date, reason, status, created_by_user_id)
-       VALUES ($1,$2,'premature',$3,$4,$5,$6,$7,$8,$9,'Requested',$10) RETURNING id`,
-      [redNo, input.application_id, calc.principal, calc.penalty, calc.netPayment, calc.brokenInterest, redDate, redDate, input.reason, actor.id]
-    );
-    const redId = Number(rows[0]!.id);
+/** Staff submits an existing 'Requested' redemption into the 2-level approval. */
+export async function submitForApproval(db: Db, staff: AuthUser, redemptionId: number): Promise<ApprovalRow> {
+  return db.withTx(async (tx) => {
+    const red = (await tx.query<{ status: string; application_id: string; redemption_date: string; net_payment: string; penalty: string; approval_request_id: string | null }>(
+      'SELECT status, application_id, redemption_date, net_payment, penalty, approval_request_id FROM redemptions WHERE id = $1', [redemptionId])).rows[0];
+    if (!red) throw errors.notFound('Redemption not found');
+    if (red.status !== 'Requested' || red.approval_request_id) throw errors.conflict('Redemption is not awaiting submission');
     const req = await createApprovalRequest(tx, {
-      type: 'premature_redemption', entityType: 'redemptions', entityId: redId, makerUserId: actor.id,
-      metadata: { application_id: input.application_id, redemption_id: redId, redemption_date: redDate, net_payment: calc.netPayment, penalty: calc.penalty },
+      type: 'premature_redemption', entityType: 'redemptions', entityId: redemptionId, makerUserId: staff.id,
+      metadata: { application_id: Number(red.application_id), redemption_id: redemptionId, redemption_date: red.redemption_date, net_payment: Number(red.net_payment), penalty: Number(red.penalty) },
     });
-    await tx.query('UPDATE redemptions SET approval_request_id = $1 WHERE id = $2', [req.id, redId]);
-    await writeAudit(tx, { actorId: actor.id, action: 'redemption.initiate', entityType: 'redemptions', entityId: redId, after: { redNo, principal, net: calc.netPayment } });
-    return { redemption_id: redId, redemption_no: redNo, request: req, ...calc };
+    await tx.query('UPDATE redemptions SET approval_request_id = $1 WHERE id = $2', [req.id, redemptionId]);
+    await writeAudit(tx, { actorId: staff.id, action: 'redemption.submit', entityType: 'redemptions', entityId: redemptionId, after: { request_no: req.request_no } });
+    return req;
+  });
+}
+
+/** Staff initiates + submits a premature redemption in one step. */
+export async function initiatePremature(db: Db, actor: AuthUser, input: { application_id: number; redemption_date?: string; reason: string }) {
+  const app = (await db.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [input.application_id])).rows[0];
+  if (!app) throw errors.notFound('Application not found');
+  if (app.status !== 'Active') throw errors.unprocessable('Only Active applications can be prematurely redeemed');
+  const rec = await db.withTx(async (tx) =>
+    createRequest(tx, { applicationId: input.application_id, type: 'premature', reason: input.reason, source: 'staff', byCustomer: false, redemptionDate: input.redemption_date, createdBy: actor.id }));
+  const req = await submitForApproval(db, actor, rec.id);
+  return { redemption_id: rec.id, redemption_no: rec.redemption_no, request: req, principal: rec.principal, penalty: rec.penalty, netPayment: rec.netPayment, brokenInterest: rec.brokenInterest };
+}
+
+/** Maturity redemption — close a Matured application at par. */
+export async function redeemAtMaturity(db: Db, actor: AuthUser, applicationId: number) {
+  return db.withTx(async (tx) => {
+    const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [applicationId])).rows[0];
+    if (!app) throw errors.notFound('Application not found');
+    if (app.status !== 'Matured' && app.status !== 'Active') throw errors.unprocessable('Only Matured/Active applications can be redeemed at maturity');
+    const rec = await createRequest(tx, { applicationId, type: 'maturity', reason: 'Maturity redemption', source: 'staff', byCustomer: false, createdBy: actor.id });
+    // Maturity redemption closes immediately (no penalty, principal already scheduled).
+    assertTransition('application', app.status, app.status === 'Active' ? 'Matured' : 'Redeemed');
+    if (app.status === 'Active') await tx.query("UPDATE applications SET status = 'Matured' WHERE id = $1", [applicationId]);
+    await tx.query("UPDATE applications SET status = 'Redeemed', redemption_date = now(), updated_at = now() WHERE id = $1", [applicationId]);
+    await tx.query("UPDATE application_lines SET status = 'Matured' WHERE application_id = $1 AND status = 'Active'", [applicationId]);
+    await tx.query("UPDATE redemptions SET status = 'Approved' WHERE id = $1", [rec.id]);
+    await writeAudit(tx, { actorId: actor.id, action: 'redemption.maturity', entityType: 'redemptions', entityId: rec.id });
+    return rec;
   });
 }
 
@@ -49,38 +111,28 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
   const appId = Number(req.metadata.application_id);
   const redId = Number(req.metadata.redemption_id);
   const redDate = String(req.metadata.redemption_date ?? new Date().toISOString().slice(0, 10));
-
   const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [appId])).rows[0];
   if (!app) return;
-
-  // CLOSE THE APPLICATION — the fix. Active → Redeemed.
   assertTransition('application', app.status, 'Redeemed');
   await tx.query("UPDATE applications SET status = 'Redeemed', redemption_date = $1, updated_at = now() WHERE id = $2", [redDate, appId]);
-
-  // Close lines.
   await tx.query("UPDATE application_lines SET status = 'PrematureWithdrawn', outstanding_amount = 0 WHERE application_id = $1 AND status = 'Active'", [appId]);
-
-  // Skip all future scheduled rows (they no longer pay out).
   await tx.query("UPDATE disbursement_schedule SET status = 'Skipped' WHERE application_id = $1 AND status = 'Scheduled'", [appId]);
-
-  // Record the premature payout row (net = principal − penalty).
-  const red = (await tx.query<{ net_payment: string; principal: string }>('SELECT net_payment, principal FROM redemptions WHERE id = $1', [redId])).rows[0]!;
+  const red = (await tx.query<{ net_payment: string }>('SELECT net_payment FROM redemptions WHERE id = $1', [redId])).rows[0]!;
   const lineId = (await tx.query<{ id: string }>('SELECT id FROM application_lines WHERE application_id = $1 ORDER BY id LIMIT 1', [appId])).rows[0]?.id;
   if (lineId) {
     await tx.query(
       `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status)
        VALUES ($1,$2,$3,'Premature',$4,0,$4,'Scheduled') ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,
-      [Number(lineId), appId, redDate, red.net_payment]
-    );
+      [Number(lineId), appId, redDate, red.net_payment]);
   }
-
   await tx.query("UPDATE redemptions SET status = 'Approved', redemption_date = $1 WHERE id = $2", [redDate, redId]);
 });
 
-export async function listRedemptions(db: Db) {
+export async function listRedemptions(db: Db, filter?: 'requests' | 'all') {
+  const where = filter === 'requests' ? "WHERE r.status = 'Requested' AND r.approval_request_id IS NULL" : '';
   return (await db.query(
-    `SELECT r.*, a.application_no, c.full_name AS customer_name
+    `SELECT r.id, r.redemption_no, r.type, r.status, r.source, r.requested_by_customer, r.principal, r.penalty, r.net_payment, r.redemption_date, r.approval_request_id,
+            a.application_no, c.full_name AS customer_name
      FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
-     ORDER BY r.created_at DESC LIMIT 200`
-  )).rows;
+     ${where} ORDER BY r.created_at DESC LIMIT 200`)).rows;
 }

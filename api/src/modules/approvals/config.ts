@@ -65,6 +65,27 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Agent Registration',
     levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
+  rollover: {
+    type: 'rollover',
+    label: 'NCD Rollover',
+    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
+  },
+  ncd_transfer: {
+    type: 'ncd_transfer',
+    label: 'NCD Transfer',
+    levels: [
+      { level: 1, checkerPermission: check, label: 'NCD Manager' },
+      { level: 2, checkerPermission: check, label: 'Admin' },
+    ],
+  },
+  ncd_transformation: {
+    type: 'ncd_transformation',
+    label: 'NCD Transformation (Nominee)',
+    levels: [
+      { level: 1, checkerPermission: check, label: 'NCD Manager' },
+      { level: 2, checkerPermission: check, label: 'Admin' },
+    ],
+  },
   commission_eligibility: {
     type: 'commission_eligibility',
     label: 'Agent Commission Eligibility',

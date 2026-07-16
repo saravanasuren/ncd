@@ -25,6 +25,10 @@ const self = requirePermission('portal:self-service');
 portalRouter.get('/holdings', self, asyncHandler(async (req, res) => res.json(await s.holdings(getDb(), req.user!))));
 portalRouter.get('/payouts', self, asyncHandler(async (req, res) => res.json(await s.payouts(getDb(), req.user!))));
 portalRouter.get('/documents', self, asyncHandler(async (req, res) => res.json(await s.documents(getDb(), req.user!))));
+portalRouter.post('/redemption-request', self, asyncHandler(async (req, res) => {
+  const { application_no, reason } = z.object({ application_no: z.string().min(3), reason: z.string().default('Customer request') }).parse(req.body);
+  res.status(201).json(await s.requestRedemptionForCustomer(getDb(), req.user!, application_no, reason));
+}));
 portalRouter.get('/service-requests', self, asyncHandler(async (req, res) => res.json({ rows: await s.listServiceRequests(getDb(), req.user!) })));
 portalRouter.post('/service-requests', self, asyncHandler(async (req, res) => {
   const { kind, details } = z.object({ kind: z.string().min(1), details: z.string().default('') }).parse(req.body);

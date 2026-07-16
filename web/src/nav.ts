@@ -20,6 +20,7 @@ export const NAV: NavItem[] = [
   { to: '/app/applications', label: 'Applications', anyOf: ['customers:read'], group: 'Daily' },
   { to: '/app/approvals', label: 'Approvals', anyOf: ['approvals:check', 'approvals:check-premature'], group: 'Daily' },
   { to: '/app/allotments', label: 'Allotments', anyOf: ['allotments:execute'], group: 'Periodic' },
+  { to: '/app/redemptions', label: 'Redemptions', anyOf: ['redemptions:initiate'], group: 'Periodic' },
   { to: '/app/payouts', label: 'Payouts', anyOf: ['payouts:generate'], group: 'Periodic' },
   { to: '/app/my-earnings', label: 'My Earnings', anyOf: ['earnings:read-own'], group: 'Periodic' },
   { to: '/app/settings', label: 'Settings', anyOf: ['settings:manage', 'settings:workflow-config'], group: 'Admin' },

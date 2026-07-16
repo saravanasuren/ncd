@@ -15,6 +15,7 @@ import { ApplicationDetailPage } from './pages/ApplicationDetail.js';
 import { AllotmentsPage } from './pages/Allotments.js';
 import { PayoutsPage } from './pages/Payouts.js';
 import { MyEarningsPage } from './pages/MyEarnings.js';
+import { RedemptionsPage } from './pages/Redemptions.js';
 import { PortalLogin } from './portal/PortalLogin.js';
 import { PortalHome } from './portal/PortalHome.js';
 import type { ReactNode } from 'react';
@@ -59,6 +60,7 @@ export function App() {
           <Route path="applications/:id" element={<ApplicationDetailPage />} />
           <Route path="approvals" element={<ApprovalsPage />} />
           <Route path="allotments" element={<AllotmentsPage />} />
+          <Route path="redemptions" element={<RedemptionsPage />} />
           <Route path="payouts" element={<PayoutsPage />} />
           <Route path="my-earnings" element={<MyEarningsPage />} />
           <Route path="settings" element={<SettingsPage />} />

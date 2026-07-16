@@ -9,6 +9,11 @@ import { LeadsPage } from './pages/Leads.js';
 import { CustomersPage } from './pages/Customers.js';
 import { CustomerDetailPage } from './pages/CustomerDetail.js';
 import { ApprovalsPage } from './pages/Approvals.js';
+import { ApplicationsPage } from './pages/Applications.js';
+import { ApplicationDetailPage } from './pages/ApplicationDetail.js';
+import { AllotmentsPage } from './pages/Allotments.js';
+import { PayoutsPage } from './pages/Payouts.js';
+import { MyEarningsPage } from './pages/MyEarnings.js';
 import type { ReactNode } from 'react';
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -36,7 +41,12 @@ export function App() {
           <Route path="leads" element={<LeadsPage />} />
           <Route path="customers" element={<CustomersPage />} />
           <Route path="customers/:id" element={<CustomerDetailPage />} />
+          <Route path="applications" element={<ApplicationsPage />} />
+          <Route path="applications/:id" element={<ApplicationDetailPage />} />
           <Route path="approvals" element={<ApprovalsPage />} />
+          <Route path="allotments" element={<AllotmentsPage />} />
+          <Route path="payouts" element={<PayoutsPage />} />
+          <Route path="my-earnings" element={<MyEarningsPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="users" element={<UsersPage />} />
         </Route>

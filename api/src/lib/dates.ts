@@ -91,3 +91,13 @@ export function round2(v: number): number {
 export function dayOfMonth(dateStr: ISODate): number {
   return new Date(dateStr + 'T00:00:00Z').getUTCDate();
 }
+
+/**
+ * Normalise a DB date value to 'YYYY-MM-DD'. node-postgres returns strings,
+ * PGlite returns Date objects — this handles both (and full ISO strings).
+ */
+export function toISODate(v: string | Date | null | undefined): ISODate | null {
+  if (v == null) return null;
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  return String(v).slice(0, 10);
+}

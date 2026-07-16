@@ -20,6 +20,11 @@ import { productsRouter } from './modules/products/routes.js';
 import { leadsRouter } from './modules/leads/routes.js';
 import { customersRouter } from './modules/customers/routes.js';
 import { approvalsRouter } from './modules/approvals/routes.js';
+import { applicationsRouter } from './modules/applications/routes.js';
+import { allotmentsRouter } from './modules/allotments/routes.js';
+import { payoutsRouter } from './modules/payouts/routes.js';
+import { redemptionsRouter } from './modules/redemptions/routes.js';
+import { incentivesRouter } from './modules/incentives/routes.js';
 
 export function createApp(): Express {
   const app = express();
@@ -52,6 +57,11 @@ export function createApp(): Express {
   app.use('/api/leads', leadsRouter);
   app.use('/api/customers', customersRouter);
   app.use('/api/approvals', approvalsRouter);
+  app.use('/api/applications', applicationsRouter);
+  app.use('/api/allotments', allotmentsRouter);
+  app.use('/api/payouts', payoutsRouter);
+  app.use('/api/redemptions', redemptionsRouter);
+  app.use('/api/incentives', incentivesRouter);
   app.use('/api', productsRouter); // mounts /schemes, /series, /tds-rules, /banks, /holidays, /company-profile
 
   app.use(notFoundHandler);

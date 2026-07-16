@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
@@ -79,6 +79,43 @@ export function CustomerDetailPage() {
           </div>
         )}
       </div>
+
+      {can('applications:create') && c.creation_status === 'Approved' && <NewInvestment customerId={Number(id)} />}
+    </div>
+  );
+}
+
+function NewInvestment({ customerId }: { customerId: number }) {
+  const nav = useNavigate();
+  const [seriesId, setSeriesId] = useState('');
+  const [schemeId, setSchemeId] = useState('');
+  const [amount, setAmount] = useState('');
+  const [err, setErr] = useState('');
+  const series = useQuery({ queryKey: ['series'], queryFn: () => api.get<{ rows: any[] }>('/api/series') });
+  const schemes = useQuery({ queryKey: ['schemes'], queryFn: () => api.get<{ rows: any[] }>('/api/schemes') });
+  const create = useMutation({
+    mutationFn: () => api.post<{ id: number }>('/api/applications', { customer_id: customerId, series_id: Number(seriesId), scheme_id: Number(schemeId), amount: Number(amount) }),
+    onSuccess: (r) => nav(`/app/applications/${r.id}`),
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const sel = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
+  return (
+    <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
+      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">New investment</h2>
+      <div className="flex flex-wrap gap-2 items-center">
+        <select className={sel} value={seriesId} onChange={(e) => setSeriesId(e.target.value)}>
+          <option value="">Series…</option>
+          {(series.data?.rows ?? []).map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
+        </select>
+        <select className={sel} value={schemeId} onChange={(e) => setSchemeId(e.target.value)}>
+          <option value="">Scheme…</option>
+          {(schemes.data?.rows ?? []).map((s) => <option key={s.id} value={s.id}>{s.code} ({s.coupon_rate_pct}%)</option>)}
+        </select>
+        <input className={sel} placeholder="Amount" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <button disabled={!seriesId || !schemeId || !amount || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
+          className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Create investment</button>
+      </div>
+      {err && <div className="text-xs text-danger mt-2">{err}</div>}
     </div>
   );
 }

@@ -77,6 +77,23 @@ export async function seed(db: Db): Promise<void> {
      ON CONFLICT DO NOTHING`
   );
 
+  // Demo scheme + series (non-prod), so the investment lifecycle is exercisable.
+  if (config.NODE_ENV !== 'production') {
+    const tdsId = (await db.query<{ id: string }>("SELECT id FROM tds_rules WHERE kind = 'standard' LIMIT 1")).rows[0]?.id ?? null;
+    await db.query(
+      `INSERT INTO schemes (code, name, tenure_months, payout_frequency, coupon_rate_pct, face_value, min_ticket, multiple_of, day_count_convention, commission_rule, tds_rule_id)
+       VALUES ('NCD-DEMO','Demo NCD 12% Monthly 36m',36,'Monthly',12,100000,100000,100000,'Actual365','OneTime',$1)
+       ON CONFLICT (code) DO NOTHING`, [tdsId]);
+    await db.query(
+      `INSERT INTO series (code, name, status, deemed_date, opened_at)
+       VALUES ('NCD DEMO','Demo Series','Open','2026-07-01', now()) ON CONFLICT (code) DO NOTHING`);
+    const schemeId = (await db.query<{ id: string }>("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]?.id;
+    const seriesId = (await db.query<{ id: string }>("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]?.id;
+    if (schemeId && seriesId) {
+      await db.query('INSERT INTO series_schemes (series_id, scheme_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [seriesId, schemeId]);
+    }
+  }
+
   // Admin user (super_admin)
   const adminHash = await bcrypt.hash(config.SEED_ADMIN_PASSWORD, 10);
   await db.query(

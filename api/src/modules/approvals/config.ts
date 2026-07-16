@@ -32,6 +32,11 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Batch Allotment',
     levels: [{ level: 1, checkerPermission: check, label: 'Admin' }],
   },
+  interest_batch: {
+    type: 'interest_batch',
+    label: 'Interest NEFT Batch',
+    levels: [{ level: 1, checkerPermission: check, label: 'Admin' }],
+  },
   premature_redemption: {
     type: 'premature_redemption',
     label: 'Premature Redemption',

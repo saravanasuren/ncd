@@ -2,11 +2,11 @@
 
 Deploys alongside the four existing apps on `3.110.0.79`. **Co-tenant rule:
 only ADD files — never edit dashboard/lockers/odpulse/wealth nginx blocks.**
-The owner runs these (they hold the SSH key + AWS admin). Placeholders:
-`<SUBDOMAIN>` = chosen host (e.g. `app.dhanamfinance.com`), port **3020**.
+The owner runs these (they hold the SSH key + AWS admin).
+Host: **ncd.dhanamfinance.com**, port **3020**, repo **github.com/saravanasuren/ncd** (private).
 
 ## 0. One-time decisions
-- Pick the subdomain and point DNS (GoDaddy) → `3.110.0.79`.
+- Point DNS (GoDaddy): `ncd.dhanamfinance.com` → `3.110.0.79` (A record, TTL 600).
 - New Postgres DB + user on the box's Postgres 16: `dhanam_newwealth`.
 
 ## 1. SSM secrets (from AWS CloudShell, admin creds)
@@ -17,7 +17,7 @@ aws ssm put-parameter $R --type SecureString --name /dhanam/newwealth/JWT_ACCESS
 aws ssm put-parameter $R --type SecureString --name /dhanam/newwealth/JWT_REFRESH_SECRET --value "$(openssl rand -hex 32)"
 aws ssm put-parameter $R --type SecureString --name /dhanam/newwealth/SEED_ADMIN_PASSWORD --value "<strong pw>"
 aws ssm put-parameter $R --type String       --name /dhanam/newwealth/SEED_ADMIN_EMAIL    --value "tech@dhanam.finance"
-aws ssm put-parameter $R --type String       --name /dhanam/newwealth/WEB_ORIGIN           --value "https://<SUBDOMAIN>"
+aws ssm put-parameter $R --type String       --name /dhanam/newwealth/WEB_ORIGIN           --value "https://ncd.dhanamfinance.com"
 aws ssm put-parameter $R --type SecureString --name /dhanam/newwealth/LOCKERHUB_INTEGRATION_KEY --value "$(openssl rand -hex 32)"
 # When live provider keys arrive: DECENTRO_*, DIGIO_*, WAPPCLOUD_*, SES/NOTIFICATIONS_*.
 ```
@@ -26,7 +26,7 @@ Extend the instance role's SSM read policy to `/dhanam/newwealth/*` (additive).
 ## 2. First deploy (on the box)
 ```bash
 # clone (own repo + read-only deploy key)
-git clone git@github.com:<owner>/new-wealth.git /home/ubuntu/new-wealth
+git clone git@github.com:saravanasuren/ncd.git /home/ubuntu/new-wealth
 cd /home/ubuntu/new-wealth
 cp ops/env.production.example api/.env       # 4 lines, no secrets
 sudo mkdir -p /var/lib/dhanam-newwealth && sudo chown ubuntu /var/lib/dhanam-newwealth
@@ -43,10 +43,10 @@ SSM_PARAMETERS_PATH=/dhanam/newwealth/ SSM_REGION=ap-south-1 node api/dist/db/se
 sudo cp ops/dhanam-newwealth.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now dhanam-newwealth
 
-# nginx (edit <SUBDOMAIN> in the file first)
+# nginx (host ncd.dhanamfinance.com is already baked into the file)
 sudo cp ops/nginx-dhanam-newwealth.conf /etc/nginx/sites-available/dhanam-newwealth
 sudo ln -s /etc/nginx/sites-available/dhanam-newwealth /etc/nginx/sites-enabled/
-sudo certbot --nginx -d <SUBDOMAIN>            # issues the cert + reloads nginx
+sudo certbot --nginx -d ncd.dhanamfinance.com            # issues the cert + reloads nginx
 sudo nginx -t && sudo systemctl reload nginx
 
 # backups
@@ -61,9 +61,9 @@ cd /home/ubuntu/new-wealth && bash ops/deploy.sh   # pull → build → migrate 
 
 ## 4. Verify (five sites still up)
 ```bash
-for s in dashboard lockers odpulse wealth <SUBDOMAIN_HOST_ONLY>; do
+for s in dashboard lockers odpulse wealth ncd; do
   echo -n "$s: "; curl -sI https://$s.dhanamfinance.com/ | head -1; done
-curl -sI https://<SUBDOMAIN>/api/health   # 200
+curl -sI https://ncd.dhanamfinance.com/api/health   # 200
 ```
 
 ## Notes

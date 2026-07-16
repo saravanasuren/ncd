@@ -5,7 +5,7 @@ set -euo pipefail
 
 REPO=/home/ubuntu/new-wealth
 SERVICE=dhanam-newwealth
-HEALTH=https://<SUBDOMAIN>/api/health
+HEALTH=https://ncd.dhanamfinance.com/api/health
 
 cd "$REPO"
 PREV=$(git rev-parse HEAD)
@@ -39,6 +39,6 @@ else
 fi
 
 # Verify all five co-tenants are still up.
-for s in dashboard lockers odpulse wealth <SUBDOMAIN_ONLY>; do
+for s in dashboard lockers odpulse wealth ncd; do
   echo -n "$s: "; curl -sI "https://$s.dhanamfinance.com/" 2>/dev/null | head -1 || echo unreachable
 done

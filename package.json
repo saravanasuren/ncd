@@ -1,0 +1,30 @@
+{
+  "name": "new-wealth",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dhanam NCD platform — rewrite (React SPA + modular-monolith API)",
+  "workspaces": [
+    "packages/shared",
+    "api",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build -w @new-wealth/shared && npm run build -w @new-wealth/api && npm run build -w @new-wealth/web",
+    "dev": "npm run dev -w @new-wealth/api & npm run dev -w @new-wealth/web",
+    "test": "npm run test -w @new-wealth/api",
+    "prebuild:shared": "npm run build -w @new-wealth/shared",
+    "typecheck": "npm run build -w @new-wealth/shared && npm run typecheck -w @new-wealth/api && npm run typecheck -w @new-wealth/web",
+    "migrate": "npm run migrate -w @new-wealth/api",
+    "lint": "eslint . --ext .ts,.tsx"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "eslint": "^8.57.1",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3"
+  }
+}

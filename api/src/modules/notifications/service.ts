@@ -29,8 +29,9 @@ export async function drainOnce(db: Db, limit = 25): Promise<{ sent: number; fai
   for (const r of rows) {
     const id = Number(r.id);
     try {
-      const { subject, body } = renderTemplate(String(r.template), (r.payload as Record<string, unknown>) ?? {});
-      const res = await providerFor(String(r.channel)).send(String(r.to_address), subject, body);
+      const payload = (r.payload as Record<string, unknown>) ?? {};
+      const { subject, body } = renderTemplate(String(r.template), payload);
+      const res = await providerFor(String(r.channel)).send(String(r.to_address), subject, body, { template: String(r.template), payload });
       if (res.ok) {
         await db.query("UPDATE notifications_queue SET status='Sent', provider_message_id=$1, sent_at=now(), attempts=attempts+1 WHERE id=$2", [res.messageId ?? null, id]);
         sent++;

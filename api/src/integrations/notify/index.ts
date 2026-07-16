@@ -1,9 +1,15 @@
 /**
- * Notification providers (docs/08 §5,§6). Stub-default; real SES/WappCloud/
- * SMS adapters flip in via config when keys land (the `_call` bodies are the
- * only thing to fill). One interface per channel.
+ * Notification providers (docs/08 §5,§6). Selection:
+ *   email    — SES when NOTIFICATIONS_PROVIDER=ses (instance-role auth),
+ *              stub otherwise.
+ *   whatsapp — WappCloud when its creds are in SSM, stub otherwise.
+ *   sms      — stub (Moplet port pending — LockerHub owns SMS today).
+ * One interface per channel; `meta` carries the raw queue template+payload
+ * for providers (WhatsApp) that send registered templates, not free text.
  */
 import { config } from '../../config.js';
+import { sesProvider } from './ses.js';
+import { wappcloudProvider, wappcloudConfigured } from './wappcloud.js';
 
 export interface SendResult {
   ok: boolean;
@@ -11,8 +17,13 @@ export interface SendResult {
   error?: string;
 }
 
+export interface SendMeta {
+  template: string;
+  payload: Record<string, unknown>;
+}
+
 export interface NotifyProvider {
-  send(to: string, subject: string, body: string): Promise<SendResult>;
+  send(to: string, subject: string, body: string, meta?: SendMeta): Promise<SendResult>;
 }
 
 // Deterministic stub — "sends" successfully and returns a synthetic id.
@@ -24,14 +35,14 @@ const stub = (channel: string): NotifyProvider => ({
 });
 
 export function emailProvider(): NotifyProvider {
-  // if (config.NOTIFICATIONS_PROVIDER === 'ses') return sesProvider();  // Phase 6b
+  if (config.NOTIFICATIONS_PROVIDER === 'ses') return sesProvider();
   return stub('email');
 }
 export function smsProvider(): NotifyProvider {
   return stub('sms');
 }
 export function whatsappProvider(): NotifyProvider {
-  // if (config keys present) return wappcloud();  // Phase 6b
+  if (wappcloudConfigured()) return wappcloudProvider();
   return stub('whatsapp');
 }
 
@@ -43,6 +54,3 @@ export function providerFor(channel: string): NotifyProvider {
     default: return emailProvider();
   }
 }
-
-// Referenced so config import isn't flagged unused before real adapters land.
-void config;

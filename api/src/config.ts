@@ -23,6 +23,28 @@ const schema = z.object({
   KYC_PRIMARY_PROVIDER: z.string().default('stub'),
   PAYMENT_PRIMARY_PROVIDER: z.string().default('stub'),
   LOCKERHUB_INTEGRATION_KEY: z.string().default('dev-integration-key'),
+
+  // ── Live provider credentials (SSM /dhanam/newwealth/*; docs/08) ──
+  // Decentro (PAN verify + BAV-v3 penny drop). All optional: the adapter
+  // falls back to the stub when creds are missing.
+  DECENTRO_CLIENT_ID: z.string().optional(),
+  DECENTRO_CLIENT_SECRET: z.string().optional(),
+  DECENTRO_BASE: z.string().optional(),
+  DECENTRO_MASTER_CONSUMER_URN: z.string().optional(),
+  DECENTRO_VBA_CONSUMER_URN: z.string().optional(),
+  DECENTRO_VBA_VALIDATION_TYPE: z.string().optional(),
+  // Notifications.
+  NOTIFICATIONS_PROVIDER: z.string().default('stub'), // 'stub' | 'ses'
+  SES_REGION: z.string().default('ap-south-1'),
+  NOTIFICATIONS_FROM_EMAIL: z.string().default('contact@dhanam.finance'),
+  NOTIFICATIONS_FROM_NAME: z.string().default('Dhanam Investment and Finance'),
+  NOTIFICATIONS_REPLY_TO: z.string().default('contact@dhanam.finance'),
+  // WappCloud WhatsApp (approved templates only).
+  WAPPCLOUD_TOKEN: z.string().optional(),
+  WAPPCLOUD_API_KEY: z.string().optional(),
+  WAPPCLOUD_ENDPOINT: z.string().optional(),
+  WAPPCLOUD_OTP_TEMPLATE: z.string().optional(),
+  WHATSAPP_TEST_PHONE: z.string().optional(), // redirects ALL WhatsApp sends while set
 });
 
 export type Config = z.infer<typeof schema>;

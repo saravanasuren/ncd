@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 interface CustomerRow {
   id: number;
@@ -19,6 +20,16 @@ const statusPill: Record<string, string> = {
   Draft: 'bg-bg text-text-muted',
 };
 
+const columns: Column<CustomerRow>[] = [
+  { key: 'customer_code', header: 'Code', tdClassName: 'font-mono text-xs' },
+  { key: 'full_name', header: 'Name', tdClassName: 'font-medium',
+    render: (c) => <Link to={`/app/customers/${c.id}`} className="text-primary hover:underline">{c.full_name}</Link> },
+  { key: 'district', header: 'District', value: (c) => c.district ?? '', render: (c) => c.district ?? '—' },
+  { key: 'kyc_status', header: 'KYC', tdClassName: 'text-text-muted' },
+  { key: 'creation_status', header: 'Status',
+    render: (c) => <span className={`text-xs rounded px-1.5 py-0.5 ${statusPill[c.creation_status] ?? 'bg-bg'}`}>{c.creation_status}</span> },
+];
+
 export function CustomersPage() {
   const { data, isLoading, error } = useQuery({ queryKey: ['customers'], queryFn: () => api.get<{ rows: CustomerRow[] }>('/api/customers') });
   if (isLoading) return <div className="text-text-muted">Loading customers…</div>;
@@ -28,25 +39,13 @@ export function CustomersPage() {
     <div className="max-w-4xl">
       <h1 className="text-xl font-bold tracking-tight m-0">Customers</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Enrolled investors in your scope.</p>
-      <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
-        <table className="w-full text-sm">
-          <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">
-            <th className="px-4 py-2.5">Code</th><th className="px-4 py-2.5">Name</th><th className="px-4 py-2.5">District</th>
-            <th className="px-4 py-2.5">KYC</th><th className="px-4 py-2.5">Status</th></tr></thead>
-          <tbody className="divide-y divide-border">
-            {data!.rows.map((c) => (
-              <tr key={c.id} className="hover:bg-bg">
-                <td className="px-4 py-2.5 font-mono text-xs">{c.customer_code}</td>
-                <td className="px-4 py-2.5 font-medium"><Link to={`/app/customers/${c.id}`} className="text-primary hover:underline">{c.full_name}</Link></td>
-                <td className="px-4 py-2.5">{c.district ?? '—'}</td>
-                <td className="px-4 py-2.5 text-text-muted">{c.kyc_status}</td>
-                <td className="px-4 py-2.5"><span className={`text-xs rounded px-1.5 py-0.5 ${statusPill[c.creation_status] ?? 'bg-bg'}`}>{c.creation_status}</span></td>
-              </tr>
-            ))}
-            {data!.rows.length === 0 && <tr><td colSpan={5} className="px-4 py-6 text-center text-text-muted">No customers yet — convert a lead to create one.</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        columns={columns}
+        rows={data!.rows}
+        rowKey={(c) => c.id}
+        defaultSort={{ key: 'customer_code', dir: 'desc' }}
+        empty="No customers yet — convert a lead to create one."
+      />
     </div>
   );
 }

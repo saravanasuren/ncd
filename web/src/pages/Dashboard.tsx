@@ -41,14 +41,18 @@ export function Dashboard() {
 
       <div className="grid md:grid-cols-2 gap-5">
         <Panel title="Series register">
-          <Table head={['Series', 'Investors', 'Outstanding']}
-            rows={(overview.data.series ?? []).map((s: any) => [s.code, String(s.investors), formatINR(s.outstanding)])} money={[2]}
-            onRow={canDrill ? (i) => { const s = overview.data.series[i]; setDrill({ title: `${s.code} — investors`, widget: 'series', param: String(s.series_id) }); } : undefined} />
+          <Table head={['Series', 'Investors', 'Outstanding']} money={[2]} defaultSort={{ col: 0, dir: 'desc' }}
+            rows={(overview.data.series ?? []).map((s: any) => ({
+              cells: [s.code, String(s.investors), formatINR(s.outstanding)],
+              onClick: canDrill ? () => setDrill({ title: `${s.code} — investors`, widget: 'series', param: String(s.series_id) }) : undefined,
+            }))} />
         </Panel>
         <Panel title="District distribution">
-          <Table head={['District', 'Investors', 'Amount']}
-            rows={(overview.data.districts ?? []).map((d: any) => [d.district, String(d.investors), formatINR(d.amount)])} money={[2]}
-            onRow={canDrill ? (i) => { const d = overview.data.districts[i]; setDrill({ title: `${d.district} — investors`, widget: 'district', param: d.district }); } : undefined} />
+          <Table head={['District', 'Investors', 'Amount']} money={[2]}
+            rows={(overview.data.districts ?? []).map((d: any) => ({
+              cells: [d.district, String(d.investors), formatINR(d.amount)],
+              onClick: canDrill ? () => setDrill({ title: `${d.district} — investors`, widget: 'district', param: d.district }) : undefined,
+            }))} />
         </Panel>
       </div>
 
@@ -56,8 +60,8 @@ export function Dashboard() {
 
       <div className="mt-5">
         <Panel title="Monthly redemptions (money out)">
-          <Table head={['Month', 'Redeemed']}
-            rows={(monthly.data?.rows ?? []).map((m: any) => [m.month, formatINR(m.total)])} money={[1]} />
+          <Table head={['Month', 'Redeemed']} money={[1]} defaultSort={{ col: 0, dir: 'desc' }}
+            rows={(monthly.data?.rows ?? []).map((m: any) => ({ cells: [m.month, formatINR(m.total)] }))} />
         </Panel>
       </div>
     </div>
@@ -80,17 +84,32 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
     </div>
   );
 }
-function Table({ head, rows, money = [], onRow }: { head: string[]; rows: string[][]; money?: number[]; onRow?: (i: number) => void }) {
+interface TableRow { cells: string[]; onClick?: () => void }
+function Table({ head, rows, money = [], defaultSort }: { head: string[]; rows: TableRow[]; money?: number[]; defaultSort?: { col: number; dir: 'asc' | 'desc' } }) {
+  const [sortCol, setSortCol] = useState<number | null>(defaultSort?.col ?? null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(defaultSort?.dir ?? 'asc');
   if (rows.length === 0) return <div className="p-5 text-center text-text-muted text-sm">No data.</div>;
+  const num = (v: string) => { const s = v.replace(/[₹,%\s]/g, ''); return s !== '' && !Number.isNaN(Number(s)) ? Number(s) : null; };
+  const sorted = sortCol == null ? rows : [...rows].sort((a, b) => {
+    const va = a.cells[sortCol] ?? '', vb = b.cells[sortCol] ?? '';
+    const na = num(va), nb = num(vb), d = sortDir === 'asc' ? 1 : -1;
+    if (na != null && nb != null) return (na - nb) * d;
+    return va.localeCompare(vb, undefined, { numeric: true }) * d;
+  });
+  const click = (i: number) => { if (sortCol === i) setSortDir((x) => (x === 'asc' ? 'desc' : 'asc')); else { setSortCol(i); setSortDir('asc'); } };
   return (
     <table className="w-full text-sm">
       <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">
-        {head.map((h, i) => <th key={i} className={`px-4 py-2 ${money.includes(i) ? 'text-right' : ''}`}>{h}</th>)}
+        {head.map((h, i) => (
+          <th key={i} onClick={() => click(i)} className={`px-4 py-2 cursor-pointer select-none hover:text-text ${money.includes(i) ? 'text-right' : ''}`}>
+            <span className="inline-flex items-center gap-1">{h}<span className={`text-[10px] ${sortCol === i ? 'text-primary' : 'text-border-strong'}`}>{sortCol === i ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span></span>
+          </th>
+        ))}
       </tr></thead>
       <tbody className="divide-y divide-border">
-        {rows.map((r, i) => (
-          <tr key={i} onClick={onRow ? () => onRow(i) : undefined} className={onRow ? 'cursor-pointer hover:bg-bg' : ''}>
-            {r.map((c, j) => <td key={j} className={`px-4 py-1.5 ${money.includes(j) ? 'text-right mono' : ''}`}>{c}</td>)}
+        {sorted.map((r, i) => (
+          <tr key={i} onClick={r.onClick} className={r.onClick ? 'cursor-pointer hover:bg-bg' : ''}>
+            {r.cells.map((c, j) => <td key={j} className={`px-4 py-1.5 ${money.includes(j) ? 'text-right mono' : ''}`}>{c}</td>)}
           </tr>
         ))}
       </tbody>

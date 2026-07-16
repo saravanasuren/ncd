@@ -3,6 +3,7 @@ import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { useState } from 'react';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 interface Redemption {
   id: number; redemption_no: string; type: string; status: string; source: string;
@@ -14,6 +15,16 @@ const pill: Record<string, string> = {
   Approved: 'bg-[color:var(--success-bg)] text-success',
   Requested: 'bg-[color:var(--warn-bg)] text-warn',
 };
+
+const columns: Column<Redemption>[] = [
+  { key: 'redemption_no', header: 'Ref', tdClassName: 'font-mono text-xs' },
+  { key: 'customer_name', header: 'Customer' },
+  { key: 'type', header: 'Type' },
+  { key: 'net_payment', header: 'Net', align: 'right',
+    value: (r) => Number(r.net_payment), render: (r) => <span className="mono">{formatINR(r.net_payment)}</span> },
+  { key: 'status', header: 'Status',
+    render: (r) => <span className={`text-xs rounded px-1.5 py-0.5 ${pill[r.status] ?? 'bg-bg'}`}>{r.status}</span> },
+];
 
 export function RedemptionsPage() {
   const qc = useQueryClient();
@@ -65,25 +76,13 @@ export function RedemptionsPage() {
       )}
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">All redemptions</h2>
-      <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
-        <table className="w-full text-sm">
-          <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">
-            <th className="px-4 py-2">Ref</th><th className="px-4 py-2">Customer</th><th className="px-4 py-2">Type</th>
-            <th className="px-4 py-2 text-right">Net</th><th className="px-4 py-2">Status</th></tr></thead>
-          <tbody className="divide-y divide-border">
-            {rest.map((r) => (
-              <tr key={r.id}>
-                <td className="px-4 py-1.5 font-mono text-xs">{r.redemption_no}</td>
-                <td className="px-4 py-1.5">{r.customer_name}</td>
-                <td className="px-4 py-1.5">{r.type}</td>
-                <td className="px-4 py-1.5 text-right mono">{formatINR(r.net_payment)}</td>
-                <td className="px-4 py-1.5"><span className={`text-xs rounded px-1.5 py-0.5 ${pill[r.status] ?? 'bg-bg'}`}>{r.status}</span></td>
-              </tr>
-            ))}
-            {rest.length === 0 && <tr><td colSpan={5} className="px-4 py-6 text-center text-text-muted">No redemptions yet.</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        columns={columns}
+        rows={rest}
+        rowKey={(r) => r.id}
+        defaultSort={{ key: 'redemption_no', dir: 'desc' }}
+        empty="No redemptions yet."
+      />
     </div>
   );
 }

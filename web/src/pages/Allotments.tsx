@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 interface SeriesRow { series_id: number; code: string; name: string; status: string; pending_count: number; pending_amount: string; }
 
@@ -23,8 +24,28 @@ export function AllotmentsPage() {
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
+
+  const columns: Column<SeriesRow>[] = [
+    { key: 'code', header: 'Series', tdClassName: 'font-semibold' },
+    { key: 'name', header: 'Name' },
+    { key: 'pending_count', header: 'Pending', align: 'right', value: (s) => s.pending_count },
+    { key: 'pending_amount', header: 'Pending amount', align: 'right',
+      value: (s) => Number(s.pending_amount), render: (s) => <span className="mono">{formatINR(s.pending_amount)}</span> },
+    { key: 'status', header: 'Status' },
+    { key: 'actions', header: 'Actions', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
+      render: (s) => (
+        <span className="inline-flex gap-2 justify-end">
+          <button disabled={s.pending_count === 0 || allot.isPending} onClick={() => { setMsg(''); allot.mutate(s.series_id); }}
+            className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Allot batch</button>
+          {can('allotments:revert') && s.status === 'Allotted' && (
+            <button onClick={() => { setMsg(''); revert.mutate(s.series_id); }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">↺ Revert</button>
+          )}
+        </span>
+      ) },
+  ];
+
   return (
-    <div className="max-w-3xl">
+    <div className="max-w-4xl">
       <h1 className="text-xl font-bold tracking-tight m-0">Allotments</h1>
       <p className="text-sm text-text-muted mt-1 mb-4">Allot a whole series at once. Submitting starts a maker-checker approval.</p>
       <div className="flex items-center gap-2 mb-4">
@@ -32,22 +53,13 @@ export function AllotmentsPage() {
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="px-2.5 py-1.5 text-sm border border-border-strong rounded" />
       </div>
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
-      <div className="bg-surface border border-border rounded-lg shadow-card divide-y divide-border">
-        {data!.rows.map((s) => (
-          <div key={s.series_id} className="p-4 flex items-center gap-4">
-            <div className="flex-1">
-              <div className="text-sm font-semibold">{s.code} — {s.name}</div>
-              <div className="text-xs text-text-muted">{s.pending_count} pending · {formatINR(s.pending_amount)} · series {s.status}</div>
-            </div>
-            <button disabled={s.pending_count === 0 || allot.isPending} onClick={() => { setMsg(''); allot.mutate(s.series_id); }}
-              className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Allot batch</button>
-            {can('allotments:revert') && s.status === 'Allotted' && (
-              <button onClick={() => { setMsg(''); revert.mutate(s.series_id); }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">↺ Revert</button>
-            )}
-          </div>
-        ))}
-        {data!.rows.length === 0 && <div className="p-6 text-center text-text-muted">No series configured.</div>}
-      </div>
+      <DataTable
+        columns={columns}
+        rows={data!.rows}
+        rowKey={(s) => s.series_id}
+        defaultSort={{ key: 'code', dir: 'desc' }}
+        empty="No series configured."
+      />
     </div>
   );
 }

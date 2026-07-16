@@ -78,9 +78,32 @@ async function insertMulti(tx: Db, table: string, objs: Record<string, any>[]): 
 }
 
 /**
- * Batch-insert with per-row fallback: try a chunk in one statement (fast); if the
- * chunk fails (a bad row), retry that chunk row-by-row to isolate the offender as
- * an anomaly while keeping the good rows. Keeps the load fast AND diagnostic.
+ * Run fn inside a SAVEPOINT so a failure rolls back ONLY fn, not the whole
+ * transaction. Essential: in Postgres one errored statement poisons the entire
+ * transaction ("current transaction is aborted") — without savepoints, a single
+ * bad row would make every subsequent insert fail. Re-throws fn's error after
+ * rolling back to the savepoint.
+ */
+let _spSeq = 0;
+async function withSavepoint<T>(tx: Db, fn: () => Promise<T>): Promise<T> {
+  const sp = `mlsp_${_spSeq++}`;
+  await tx.query(`SAVEPOINT ${sp}`);
+  try {
+    const r = await fn();
+    await tx.query(`RELEASE SAVEPOINT ${sp}`);
+    return r;
+  } catch (e) {
+    await tx.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+    await tx.query(`RELEASE SAVEPOINT ${sp}`);
+    throw e;
+  }
+}
+
+/**
+ * Batch-insert with per-row fallback, each protected by a SAVEPOINT: try a chunk
+ * in one statement (fast); if the chunk fails (a bad row), retry that chunk
+ * row-by-row to isolate the offender as an anomaly while keeping the good rows —
+ * and the transaction stays healthy for everything after it.
  */
 async function insertBatch(
   tx: Db,
@@ -93,11 +116,11 @@ async function insertBatch(
   for (let i = 0; i < objs.length; i += CHUNK) {
     const chunk = objs.slice(i, i + CHUNK);
     try {
-      await insertMulti(tx, table, chunk);
+      await withSavepoint(tx, () => insertMulti(tx, table, chunk));
       loaded += chunk.length;
     } catch {
       for (const o of chunk) {
-        try { await insertRow(tx, table, o); loaded++; }
+        try { await withSavepoint(tx, () => insertRow(tx, table, o)); loaded++; }
         catch (e: any) { failed++; onAnomaly(o, e); }
       }
     }
@@ -243,13 +266,15 @@ export async function runMigration(
     if (oldCompany[0]) {
       const c = oldCompany[0];
       try {
-        await tx.query('DELETE FROM company_profile WHERE id = 1');
-        await insertRow(tx, 'company_profile', {
-          id: 1, legal_name: c.legal_name ?? 'Dhanam Investment and Finance Private Limited',
-          former_legal_name: c.former_legal_name ?? null, short_name: c.legal_name_short ?? 'Dhanam',
-          tan: c.tan ?? null, tan_holder_name: c.tan_holder_name ?? null,
-          tan_amendment_pending: c.tan_amendment_pending ?? false,
-          signatory_name: c.signatory_name ?? null, signatory_designation: c.signatory_designation ?? null,
+        await withSavepoint(tx, async () => {
+          await tx.query('DELETE FROM company_profile WHERE id = 1');
+          await insertRow(tx, 'company_profile', {
+            id: 1, legal_name: c.legal_name ?? 'Dhanam Investment and Finance Private Limited',
+            former_legal_name: c.former_legal_name ?? null, short_name: c.legal_name_short ?? 'Dhanam',
+            tan: c.tan ?? null, tan_holder_name: c.tan_holder_name ?? null,
+            tan_amendment_pending: c.tan_amendment_pending ?? false,
+            signatory_name: c.signatory_name ?? null, signatory_designation: c.signatory_designation ?? null,
+          });
         });
         tables.push({ table: 'company_profile', source: 1, loaded: 1, failed: 0 });
       } catch (e: any) {
@@ -509,11 +534,11 @@ export async function runMigration(
         const id = refSeq++;
         refByNorm.set(inc._payee_ref, id);
         try {
-          await insertRow(tx, 'referrers', {
+          await withSavepoint(tx, () => insertRow(tx, 'referrers', {
             id, normalized_name: inc._payee_ref,
             display_name: inc.referrer_name_display ?? inc._payee_ref,
             eligibility_status: 'Approved',
-          });
+          }));
         } catch { /* dup name → ignore */ }
       }
     }

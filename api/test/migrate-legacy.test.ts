@@ -94,4 +94,27 @@ describe('legacy migration — dry-run reconciliation', () => {
     const leak = await db.query("SELECT COUNT(*)::int AS n FROM disbursement_schedule WHERE status='Scheduled' AND due_date <= $1", [INTEREST_ANCHOR]);
     expect((leak.rows[0] as any).n).toBe(0);
   });
+
+  it('one bad row (duplicate PAN) does NOT cascade — it fails alone, rest load', async () => {
+    // A source where customer #2 duplicates customer #1's PAN. In Postgres a
+    // failed insert poisons the whole transaction unless each is savepointed;
+    // this proves the savepoint guard: only the dup fails, everything else lands.
+    class DupPanSource extends SyntheticLegacySource {
+      async customers() {
+        const rows = await super.customers();
+        rows[1]!.pan = rows[0]!.pan; // Bravo now collides with Alpha's PAN
+        return rows;
+      }
+    }
+    const report = await runMigration(new DupPanSource(), db, { dryRun: true });
+    const custStat = report.tables.find((t) => t.table === 'customers')!;
+    expect(custStat.loaded).toBe(2);           // Alpha + Charlie
+    expect(custStat.failed).toBe(1);           // Bravo (dup PAN) — isolated
+    expect(report.anomalies.some((a) => a.includes('customers'))).toBe(true);
+    // downstream did NOT cascade: applications for the surviving customers still load
+    const appStat = report.tables.find((t) => t.table === 'applications')!;
+    expect(appStat.loaded).toBeGreaterThanOrEqual(2);
+    // AUM still reconciles for what loaded
+    expect(report.aum.activeLoaded).toBeGreaterThan(0);
+  });
 });

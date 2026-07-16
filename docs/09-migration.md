@@ -22,7 +22,21 @@ restore) **read-only**.
 | `agents` (+ LockerHub agent users) | `agents` + linked `users(role=agent)` | keep agent_code, lockerhub ids 🔌 |
 | `customers` + flat bank cols + `customer_bank_accounts` | `customers` + `customer_bank_accounts` | district **required** in new model — backfill from city/state where derivable; unresolved → owner review list |
 | `applications`/`application_lines`/`collections` | same names | statuses map 1:1 (state vocab unchanged); keep `customer_was_new_at_creation` verbatim — never re-derive |
-| `disbursement_schedule` | same | **row-for-row copy** incl. Paid history, TDS snapshots, UTRs, bank snapshots. Never re-materialise history. |
+| `disbursement_schedule` | same | **Paid rows through June 2026 are FROZEN** — copied row-for-row (TDS snapshots, UTRs, bank snapshots), never recomputed. **Future/unpaid rows are RE-MATERIALISED** on the new convention for ALL investments (existing + new) — see the cutover interest rule below. |
+
+**🔒 Interest cutover rule (owner-confirmed 2026-07-16).** Already-paid interest up
+to and including **June 2026 stays exactly as is** (frozen, copied). From **July 2026
+onward, every investment — existing and new — is calculated on the new Actual365/28th
+convention**, with the **July payout covering the period 29 June → 28 July 2026**, and
+each subsequent 28th thereafter. Migration therefore: (1) copies all Paid rows dated
+≤ June 2026; (2) drops any old-convention unpaid/future rows; (3) re-materialises each
+still-Active line's schedule from the 29 Jun → 28 Jul 2026 period forward, using the
+line's principal/rate/tenure and its existing `interest_start_date` only to anchor
+maturity. **Seam note:** the last old-rule paid period (30th-based) may overlap the
+29 Jun–28 Jul period by a day or two — flag any per-line overlap/gap in the
+reconciliation report for owner review; do not silently absorb it. A settings key
+`interest.cutover_from` = `2026-07-01` (⚙) marks the boundary so the re-materialiser
+and any audit query share one date.
 | `payout_batches`, accrual tables, `incentive_payouts`, `referrer_*` | doc 02 §5 tables | paid rows immutable; referrers re-normalised by the same name-normalisation rule |
 | `approval_requests` | `approval_requests` | historical chains copied as-is (metadata JSONB) for audit continuity |
 | `investor_leads`, notes | `investor_leads`, `lead_notes` | keep admin_only + source vocab |

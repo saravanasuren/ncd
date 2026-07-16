@@ -11,6 +11,12 @@ import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
 import { config } from './config.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
+import { attachUser } from './middleware/auth.js';
+import { csrfGuard } from './middleware/csrf.js';
+import { authRouter } from './modules/auth/routes.js';
+import { settingsRouter } from './modules/settings/routes.js';
+import { usersRouter } from './modules/users/routes.js';
+import { productsRouter } from './modules/products/routes.js';
 
 export function createApp(): Express {
   const app = express();
@@ -32,10 +38,15 @@ export function createApp(): Express {
     res.json({ status: 'ok', service: 'new-wealth-api', ts: new Date().toISOString() });
   });
 
-  // --- module routers mount here (Phase 2+) ---
-  // app.use('/api/auth', authRouter);
-  // app.use('/api/customers', customersRouter);
-  // ...
+  // CSRF on cookie-authed mutations, then attach the authenticated user.
+  app.use('/api', csrfGuard);
+  app.use('/api', attachUser);
+
+  // Module routers.
+  app.use('/api/auth', authRouter);
+  app.use('/api/settings', settingsRouter);
+  app.use('/api/users', usersRouter);
+  app.use('/api', productsRouter); // mounts /schemes, /series, /tds-rules, /banks, /holidays, /company-profile
 
   app.use(notFoundHandler);
   app.use(errorHandler);

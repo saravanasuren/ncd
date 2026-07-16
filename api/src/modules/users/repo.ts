@@ -1,0 +1,64 @@
+/** Users repo — SQL only (docs/01 §3). */
+import type { Db } from '../../db/types.js';
+import type { AuthUser } from '../../lib/authUser.js';
+import type { Permission, Role } from '@new-wealth/shared';
+
+interface UserRow {
+  id: string;
+  email: string;
+  password_hash: string | null;
+  full_name: string;
+  role_name: string;
+  is_active: boolean;
+}
+
+async function hydrate(db: Db, row: UserRow): Promise<AuthUser> {
+  const perms = await db.query<{ permission: string }>(
+    `SELECT rp.permission FROM role_permissions rp
+     JOIN roles r ON r.id = rp.role_id WHERE r.name = $1`,
+    [row.role_name]
+  );
+  const branches = await db.query<{ branch_id: string }>(
+    'SELECT branch_id FROM user_branches WHERE user_id = $1',
+    [row.id]
+  );
+  const agent = await db.query<{ id: string }>('SELECT id FROM agents WHERE user_id = $1', [row.id]);
+  return {
+    id: Number(row.id),
+    email: row.email,
+    fullName: row.full_name,
+    role: row.role_name as Role,
+    permissions: perms.rows.map((p) => p.permission as Permission),
+    branchIds: branches.rows.map((b) => Number(b.branch_id)),
+    agentId: agent.rows[0] ? Number(agent.rows[0].id) : null,
+    customerId: null, // set in Phase 3 when customers table exists
+  };
+}
+
+export async function findByEmailWithSecret(
+  db: Db,
+  email: string
+): Promise<{ user: AuthUser; passwordHash: string | null; isActive: boolean } | null> {
+  const { rows } = await db.query<UserRow>(
+    `SELECT u.id, u.email, u.password_hash, u.full_name, r.name AS role_name, u.is_active
+     FROM users u JOIN roles r ON r.id = u.role_id
+     WHERE lower(u.email) = lower($1)`,
+    [email]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const user = await hydrate(db, row);
+  return { user, passwordHash: row.password_hash, isActive: row.is_active };
+}
+
+export async function findAuthUserById(db: Db, id: number): Promise<AuthUser | null> {
+  const { rows } = await db.query<UserRow>(
+    `SELECT u.id, u.email, u.password_hash, u.full_name, r.name AS role_name, u.is_active
+     FROM users u JOIN roles r ON r.id = u.role_id
+     WHERE u.id = $1 AND u.is_active = TRUE`,
+    [id]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return hydrate(db, row);
+}

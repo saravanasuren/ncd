@@ -1,23 +1,33 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../auth/AuthContext.js';
+import { ApiError } from '../api/client.js';
 
-/**
- * Sign-in card — styled per the reference site (docs/05 §1). Wires to
- * POST /api/auth/login in Phase 2; for now it navigates to the shell so the
- * scaffold is demoable.
- */
+/** Sign-in card — styled per the reference site (docs/05 §1). */
 export function LoginPage() {
   const nav = useNavigate();
+  const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
-    // Phase 2: real POST /api/auth/login. Phase 0 stub → go to shell.
-    nav('/app/dashboard');
+    setBusy(true);
+    try {
+      await login(email, password);
+      nav('/app/dashboard');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Sign in failed');
+    } finally {
+      setBusy(false);
+    }
   }
+
+  const input =
+    'w-full px-2.5 py-2 text-sm border border-border-strong rounded outline-none focus:border-primary focus:ring-2 focus:ring-[color:var(--primary-ring)]';
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-bg">
@@ -28,36 +38,16 @@ export function LoginPage() {
           <label className="block text-xs font-semibold text-text-label mt-3.5 mb-1.5" htmlFor="email">
             Email
           </label>
-          <input
-            id="email"
-            type="email"
-            autoComplete="username"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoFocus
-            className="w-full px-2.5 py-2 text-sm border border-border-strong rounded outline-none focus:border-primary focus:ring-2 focus:ring-[color:var(--primary-ring)]"
-          />
-          <label
-            className="block text-xs font-semibold text-text-label mt-3.5 mb-1.5"
-            htmlFor="password"
-          >
+          <input id="email" type="email" autoComplete="username" value={email}
+            onChange={(e) => setEmail(e.target.value)} required autoFocus className={input} />
+          <label className="block text-xs font-semibold text-text-label mt-3.5 mb-1.5" htmlFor="password">
             Password
           </label>
-          <input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            className="w-full px-2.5 py-2 text-sm border border-border-strong rounded outline-none focus:border-primary focus:ring-2 focus:ring-[color:var(--primary-ring)]"
-          />
-          <button
-            type="submit"
-            className="w-full mt-5 bg-primary hover:bg-primary-hover text-white border-0 rounded py-2.5 text-sm font-semibold cursor-pointer"
-          >
-            Sign in
+          <input id="password" type="password" autoComplete="current-password" value={password}
+            onChange={(e) => setPassword(e.target.value)} required className={input} />
+          <button type="submit" disabled={busy}
+            className="w-full mt-5 bg-primary hover:bg-primary-hover disabled:opacity-60 text-white border-0 rounded py-2.5 text-sm font-semibold cursor-pointer">
+            {busy ? 'Signing in…' : 'Sign in'}
           </button>
           {error && (
             <div className="mt-3.5 px-2.5 py-2 bg-[color:var(--danger-bg)] border border-[#f2c2c2] text-danger rounded text-xs">

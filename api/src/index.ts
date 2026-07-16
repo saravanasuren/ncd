@@ -4,9 +4,27 @@
  */
 import { createApp } from './app.js';
 import { config } from './config.js';
+import { getDb } from './db/index.js';
+import { migrate } from './db/migrate.js';
+import { seed } from './db/seed.js';
+
+async function bootstrapDb(): Promise<void> {
+  const usingPglite = !process.env.DATABASE_URL || !process.env.DATABASE_URL.startsWith('postgres');
+  const db = getDb();
+  if (usingPglite && config.NODE_ENV !== 'production') {
+    // Dev without a Postgres server: in-memory PGlite — migrate + seed so the
+    // demo logins work immediately (docs/10 §4).
+    await seed(db);
+    console.log('[new-wealth-api] PGlite dev DB migrated + seeded');
+  } else {
+    const ran = await migrate(db);
+    if (ran.length) console.log(`[new-wealth-api] applied migrations: ${ran.join(', ')}`);
+  }
+}
 
 async function main(): Promise<void> {
   // In production, SSM secrets would be loaded here before config is read.
+  await bootstrapDb();
   const app = createApp();
 
   const server = app.listen(config.PORT, () => {

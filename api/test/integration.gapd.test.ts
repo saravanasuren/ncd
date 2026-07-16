@@ -1,0 +1,125 @@
+/**
+ * Gap D — search, dashboard drill, audit, system, report PDFs/exports,
+ * funded-subscription integration, backdated importer. PGlite HTTP.
+ */
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import ExcelJS from 'exceljs';
+import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+
+let ctx: TestCtx;
+let seriesId: number, schemeId: number, customerId: number, appId: number;
+
+beforeAll(async () => {
+  ctx = await startTestServer();
+  seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+  schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+  await build();
+});
+afterAll(async () => { await ctx.close(); });
+
+async function as(email: string, password = 'Demo_1234') { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; }
+const admin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+
+async function build() {
+  const a = await admin();
+  const cust = await a.post('/api/customers', { full_name: 'Searchable Investor', phone: '9400000001', email: 's@ex.com' });
+  customerId = cust.json.id;
+  const sub = await a.post(`/api/customers/${customerId}/submit-for-approval`);
+  const ncd = await as('ncd@demo.local');
+  await ncd.post(`/api/approvals/${sub.json.request.id}/approve`);
+  await a.post(`/api/customers/${customerId}/bank-accounts`, { account_number: '44440001111', ifsc: 'ICIC0001234' });
+  const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 500000 });
+  appId = app.json.id;
+  await a.post(`/api/applications/${appId}/confirm-collection`, { amount_received: 500000, date_money_received: '2026-07-12', method: 'NEFT' });
+  await a.post(`/api/applications/${appId}/mark-esigned`);
+  const batch = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
+  await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+}
+
+describe('universal search + drill', () => {
+  it('finds a customer by name (scoped)', async () => {
+    const a = await admin();
+    const r = await a.get('/api/dashboard/search?q=Searchable');
+    expect(r.status).toBe(200);
+    expect(r.json.customers.some((c: any) => c.id === customerId)).toBe(true);
+  });
+  it('drills a series into its active customers', async () => {
+    const a = await admin();
+    const r = await a.get(`/api/dashboard/drill/series?param=${seriesId}`);
+    expect(r.status).toBe(200);
+    expect(r.json.rows.some((x: any) => Number(x.total_amount) === 500000)).toBe(true);
+  });
+});
+
+describe('audit + system', () => {
+  it('audit browser lists recent actions', async () => {
+    const a = await admin();
+    const r = await a.get('/api/audit?entity_type=applications');
+    expect(r.status).toBe(200);
+    expect(r.json.rows.length).toBeGreaterThan(0);
+    expect(r.json.rows[0]).toHaveProperty('action');
+  });
+  it('system notification queue is readable', async () => {
+    const a = await admin();
+    expect((await a.get('/api/system/notifications')).status).toBe(200);
+  });
+});
+
+describe('report documents', () => {
+  it('SOA is a PDF', async () => {
+    const a = await admin();
+    const dl = await a.raw(`/api/reports/soa/${customerId}.pdf`);
+    expect(dl.status).toBe(200);
+    expect(dl.buffer.subarray(0, 4).toString()).toBe('%PDF');
+  });
+  it('TDS report is an xlsx', async () => {
+    const a = await admin();
+    const dl = await a.raw('/api/reports/tds/2026-08.xlsx');
+    expect(dl.status).toBe(200);
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(dl.buffer);
+    expect(wb.worksheets[0]!.name).toContain('TDS');
+  });
+  it('full dump has the key sheets', async () => {
+    const a = await admin();
+    const dl = await a.raw('/api/reports/dump.xlsx');
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(dl.buffer);
+    expect(wb.worksheets.map((w) => w.name)).toEqual(expect.arrayContaining(['Customers', 'Applications', 'Schedule', 'Redemptions']));
+  });
+});
+
+describe('funded subscription (integration)', () => {
+  it('creates a PendingApproval app; customer_status Active; idempotent', async () => {
+    const body = { phone: '9400000001', series_code: 'NCD DEMO', scheme_code: 'NCD-DEMO', amount: 200000, lockerhub_intent_no: 'LH-INTENT-1' };
+    const post = () => fetch(ctx.base + '/api/integration/subscription-payments/from-lockerhub', {
+      method: 'POST', headers: { 'X-Integration-Key': 'dev-integration-key', 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).then(async (r) => ({ status: r.status, json: await r.json() }));
+    const first = await post();
+    expect(first.status).toBe(201);
+    expect(first.json.customer_status).toBe('Active');
+    expect(first.json.deduped).toBe(false);
+    const again = await post();
+    expect(again.json.deduped).toBe(true);
+    const st = (await ctx.db.query('SELECT status FROM applications WHERE lockerhub_intent_no = $1', ['LH-INTENT-1'])).rows[0] as any;
+    expect(st.status).toBe('PendingApproval');
+  });
+});
+
+describe('backdated importer', () => {
+  it('imports an active investment with a schedule, and is idempotent', async () => {
+    const a = await admin();
+    const rows = [{ full_name: 'Imported Holder', pan: 'ABCDE1234F', series_code: 'NCD DEMO', scheme_code: 'NCD-DEMO', amount: 300000, allotment_date: '2025-01-01' }];
+    const first = await a.post('/api/imports/backdated', { rows });
+    expect(first.status).toBe(201);
+    expect(first.json.created).toBe(1);
+    const cust = (await ctx.db.query("SELECT id FROM customers WHERE pan = 'ABCDE1234F'")).rows[0] as any;
+    const sched = (await ctx.db.query('SELECT count(*)::int AS n FROM disbursement_schedule ds JOIN applications ap ON ap.id = ds.application_id WHERE ap.customer_id = $1', [Number(cust.id)])).rows[0] as any;
+    expect(Number(sched.n)).toBeGreaterThan(0);
+    // some historic rows are Paid
+    const paid = (await ctx.db.query("SELECT count(*)::int AS n FROM disbursement_schedule ds JOIN applications ap ON ap.id = ds.application_id WHERE ap.customer_id = $1 AND ds.status = 'Paid'", [Number(cust.id)])).rows[0] as any;
+    expect(Number(paid.n)).toBeGreaterThan(0);
+    // re-run: idempotent
+    const second = await a.post('/api/imports/backdated', { rows });
+    expect(second.json.created).toBe(0);
+    expect(second.json.skipped).toBe(1);
+  });
+});

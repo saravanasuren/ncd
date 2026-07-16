@@ -41,3 +41,30 @@ reportsRouter.get('/ncd-book.xlsx', requirePermission('reports:download'),
     res.setHeader('Content-Disposition', 'attachment; filename="dhanam-ncd-book.xlsx"');
     res.end(buf);
   }));
+
+reportsRouter.get('/soa/:customerId.pdf', requirePermission('reports:download', 'customers:read'),
+  asyncHandler(async (req, res) => {
+    const { soaPdf } = await import('./documents.js');
+    const buf = await soaPdf(getDb(), Number(req.params.customerId));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="soa-${req.params.customerId}.pdf"`);
+    res.end(buf);
+  }));
+
+reportsRouter.get('/tds/:yyyymm.xlsx', requirePermission('reports:download'),
+  asyncHandler(async (req, res) => {
+    const { tdsReport } = await import('./documents.js');
+    const buf = await tdsReport(getDb(), req.params.yyyymm!);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="tds-${req.params.yyyymm}.xlsx"`);
+    res.end(buf);
+  }));
+
+reportsRouter.get('/dump.xlsx', requirePermission('imports:run', 'settings:manage'),
+  asyncHandler(async (_req, res) => {
+    const { dumpXlsx } = await import('./documents.js');
+    const buf = await dumpXlsx(getDb());
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="dhanam-dump.xlsx"');
+    res.end(buf);
+  }));

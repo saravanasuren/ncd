@@ -23,3 +23,9 @@ dashboardRouter.get('/overview', requirePermission('dashboard:view'),
 
 dashboardRouter.get('/monthly-redemptions', requirePermission('dashboard:view'),
   asyncHandler(async (req, res) => res.json({ rows: await s.monthlyRedemptions(getDb(), req.user!) })));
+
+dashboardRouter.get('/search', requirePermission('dashboard:view', 'customers:read'),
+  asyncHandler(async (req, res) => res.json(await s.search(getDb(), req.user!, String(req.query.q ?? '')))));
+
+dashboardRouter.get('/drill/:widget', requirePermission('dashboard:drilldown'),
+  asyncHandler(async (req, res) => res.json({ rows: await s.drill(getDb(), req.user!, req.params.widget!, String(req.query.param ?? '')) })));

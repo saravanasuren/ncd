@@ -31,6 +31,8 @@ import { portalRouter } from './modules/portal/routes.js';
 import { integrationRouter } from './modules/integration/routes.js';
 import { eventsRouter } from './modules/events/routes.js';
 import { statementsRouter } from './modules/statements/routes.js';
+import { auditRouter, systemRouter } from './modules/admin/routes.js';
+import { importsRouter } from './modules/imports/routes.js';
 
 export function createApp(): Express {
   const app = express();
@@ -76,6 +78,9 @@ export function createApp(): Express {
   app.use('/api/incentives', incentivesRouter);
   app.use('/api/dashboard', dashboardRouter);
   app.use('/api/reports', reportsRouter);
+  app.use('/api/audit', auditRouter);
+  app.use('/api/system', systemRouter);
+  app.use('/api/imports', importsRouter);
   app.use('/api/portal', portalRouter);
   app.use('/api', productsRouter); // mounts /schemes, /series, /tds-rules, /banks, /holidays, /company-profile
 

@@ -17,6 +17,8 @@ import { PayoutsPage } from './pages/Payouts.js';
 import { MyEarningsPage } from './pages/MyEarnings.js';
 import { RedemptionsPage } from './pages/Redemptions.js';
 import { IncentivesPage } from './pages/Incentives.js';
+import { ReportsPage } from './pages/Reports.js';
+import { SystemPage } from './pages/System.js';
 import { PortalLogin } from './portal/PortalLogin.js';
 import { PortalHome } from './portal/PortalHome.js';
 import type { ReactNode } from 'react';
@@ -54,6 +56,8 @@ export function App() {
           <Route index element={<Navigate to="/app/dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="segments" element={<SegmentsPage />} />
+          <Route path="reports" element={<ReportsPage />} />
+          <Route path="system" element={<SystemPage />} />
           <Route path="leads" element={<LeadsPage />} />
           <Route path="customers" element={<CustomersPage />} />
           <Route path="customers/:id" element={<CustomerDetailPage />} />

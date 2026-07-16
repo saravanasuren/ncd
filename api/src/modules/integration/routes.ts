@@ -112,6 +112,37 @@ integrationRouter.post('/agents/from-lockerhub', asyncHandler(async (req, res) =
   res.status(201).json(out);
 }));
 
+/** Funded subscription from the app (Easebuzz-verified) — lands in
+ * PendingApproval; one Wealth approval moves it into the eSign→allotment
+ * pipeline. Customer sees "Active" throughout. Idempotent on intent no. */
+integrationRouter.post('/subscription-payments/from-lockerhub', asyncHandler(async (req, res) => {
+  const b = z.object({ phone: z.string(), series_code: z.string(), scheme_code: z.string(), amount: z.number().positive(), lockerhub_intent_no: z.string(), is_locker_deposit: z.boolean().optional() }).parse(req.body);
+  const db = getDb();
+  const out = await db.withTx(async (tx) => {
+    const existing = await tx.query<{ id: string; application_no: string }>('SELECT id, application_no FROM applications WHERE lockerhub_intent_no = $1', [b.lockerhub_intent_no]);
+    if (existing.rows[0]) return { id: Number(existing.rows[0].id), application_no: existing.rows[0].application_no, deduped: true };
+    const customer = (await tx.query<{ id: string; referred_by_text: string | null }>('SELECT id, referred_by_text FROM customers WHERE phone = $1 AND is_active = TRUE LIMIT 1', [b.phone])).rows[0];
+    if (!customer) throw errors.notFound('Customer not found');
+    const series = (await tx.query<{ id: string }>('SELECT id FROM series WHERE code = $1', [b.series_code])).rows[0];
+    const scheme = (await tx.query<Record<string, unknown>>('SELECT * FROM schemes WHERE code = $1', [b.scheme_code])).rows[0];
+    if (!series || !scheme) throw errors.badRequest('Unknown series/scheme');
+    const { nextCode } = await import('../../lib/sequences.js');
+    const appNo = await nextCode(tx, 'application', 'APP-{yyyy}-{seq:6}');
+    const priorCount = Number((await tx.query<{ n: string }>('SELECT count(*)::int AS n FROM applications WHERE customer_id = $1', [customer.id])).rows[0]!.n);
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, is_locker_deposit, lockerhub_intent_no, source, date_money_received, interest_start_date)
+       VALUES ($1,$2,$3,'PendingApproval',$4,$5,$6,$7,'dhanamfin', now()::date, now()::date) RETURNING id`,
+      [appNo, customer.id, series.id, b.amount, priorCount === 0, b.is_locker_deposit ?? false, b.lockerhub_intent_no]);
+    const appId = Number(rows[0]!.id);
+    await tx.query(
+      `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active')`,
+      [appId, scheme.id, scheme.coupon_rate_pct, scheme.tenure_months, scheme.payout_frequency, scheme.day_count_convention, b.amount]);
+    return { id: appId, application_no: appNo, deduped: false };
+  });
+  res.status(201).json({ ...out, customer_status: 'Active' });
+}));
+
 /** Redemption request from the app — lands in the staff queue (no self-approve). */
 integrationRouter.post('/redemption-request', asyncHandler(async (req, res) => {
   const b = z.object({ application_no: z.string(), reason: z.string().default('App request') }).parse(req.body);

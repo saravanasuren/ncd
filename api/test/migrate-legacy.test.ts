@@ -93,6 +93,12 @@ describe('legacy migration — dry-run reconciliation', () => {
     // no future scheduled row on/before the anchor survived
     const leak = await db.query("SELECT COUNT(*)::int AS n FROM disbursement_schedule WHERE status='Scheduled' AND due_date <= $1", [INTEREST_ANCHOR]);
     expect((leak.rows[0] as any).n).toBe(0);
+
+    // id sequences advanced past migrated ids: a new customer gets max+1, no collision
+    const before = await db.query('SELECT COALESCE(MAX(id),0)::int AS m FROM customers');
+    const maxBefore = Number((before.rows[0] as any).m);
+    const ins = await db.query("INSERT INTO customers (customer_code, full_name) VALUES ('DHNNEW','New After Migration') RETURNING id");
+    expect(Number((ins.rows[0] as any).id)).toBeGreaterThan(maxBefore);
   });
 
   it('one bad row (duplicate PAN) does NOT cascade — it fails alone, rest load', async () => {

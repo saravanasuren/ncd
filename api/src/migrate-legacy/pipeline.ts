@@ -133,6 +133,32 @@ async function insertBatch(
 /** Progress to stderr so stdout stays a clean report. */
 const progress = (m: string) => process.stderr.write(`[migrate-legacy] ${m}\n`);
 
+/** Every table we insert into that has a serial `id`. After a load that keeps
+ * original ids, each of these sequences must be advanced to max(id) or the
+ * app's next insert collides on the primary key. */
+const SEQ_TABLES = [
+  'branches', 'users', 'agents', 'banks', 'tds_rules', 'schemes', 'series',
+  'investor_leads', 'customers', 'customer_bank_accounts', 'nominees',
+  'joint_holders', 'applications', 'application_lines', 'disbursement_schedule',
+  'redemptions', 'referrers', 'incentive_accruals',
+];
+
+/** setval each table's id sequence to max(id) (is_called=true), or to 1/uncalled
+ * when empty. Guarded per-table so a missing table/sequence is a no-op. */
+async function resetSequences(tx: Db): Promise<void> {
+  for (const t of SEQ_TABLES) {
+    try {
+      await withSavepoint(tx, () =>
+        tx.query(
+          `SELECT setval(pg_get_serial_sequence('${t}', 'id'),
+                         COALESCE((SELECT MAX(id) FROM ${t}), 1),
+                         (SELECT MAX(id) FROM ${t}) IS NOT NULL)`
+        )
+      );
+    } catch { /* no such table / no serial sequence → skip */ }
+  }
+}
+
 export async function runMigration(
   source: LegacySource,
   target: Db,
@@ -589,6 +615,12 @@ export async function runMigration(
         `nulled ${nulledUserRefs} enrolled/created-by link(s) to them — those customers/leads/apps still migrate, unassigned.`
       );
     }
+
+    // ── advance id sequences past the migrated max ──────────────────────
+    // We insert rows with their ORIGINAL ids, but that doesn't move each table's
+    // serial counter — so the app's next insert would reuse id 1 and collide.
+    // Bump every sequence to max(id) so new rows continue cleanly.
+    await resetSequences(tx);
 
     // ── money reconciliation on the loaded side ─────────────────────────
     const aumR = await tx.query<{ s: string }>(

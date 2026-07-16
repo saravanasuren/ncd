@@ -1,0 +1,83 @@
+# Known gaps — production readiness register
+
+> Audited 2026-07-16 against the deployed app (ncd.dhanamfinance.com, commit `4afda27`)
+> by cross-referencing docs/00-feature-inventory.md, every API route, every web page,
+> and the permission catalog. **Update this file as gaps close.**
+> Note: docs/00-feature-inventory.md has 0/80 boxes ticked — the checklist was never
+> maintained during the build; this file is the current source of truth for what's missing.
+
+## P0 — misleading or wrong in production today
+
+- [ ] **KYC is a stub in prod.** `KYC_PRIMARY_PROVIDER` defaults to `stub`: every bank
+  account (except test patterns) penny-drop-"verifies" with holder name "VERIFIED
+  HOLDER"; PAN verify is regex-only; DigiLocker returns a fake session
+  (`api/src/integrations/kyc/stub.ts`, `customers/service.ts:247`). Staff must NOT
+  trust "Verified" badges until the Decentro adapter lands + keys in SSM.
+- [ ] **All notifications are stubs.** Email/SMS/WhatsApp providers return success
+  without sending (`api/src/integrations/notify/index.ts`). This includes the
+  **customer-portal OTP** — portal login is effectively unusable until SES/WappCloud
+  adapters + keys land.
+- [ ] **Lead → convert posts hardcoded values** — `web/src/pages/Leads.tsx:33` sends
+  `confirmed_amount: 100000, confirmed_series_id: 1` with no input form. Converting
+  any real lead writes wrong data. Fix before staff use Leads.
+- [ ] **No password reset/change anywhere.** No forgot-password route (a rate limiter
+  is registered for `/api/auth/forgot-password` in `app.ts:68` but the handler was
+  never written), no change-password endpoint, and no user-edit UI to set a new one.
+  The only path today is `PUT /api/users/:id` via curl.
+
+## P1 — backend exists, no UI (feature unreachable; same pattern as the create-user gap fixed 2026-07-16)
+
+- [ ] Products/masters admin: schemes, series (+status/ISIN), TDS rules, banks,
+  holidays, company profile — full CRUD API (`modules/products/routes.ts`), **no
+  screen at all** (`products:manage` unused). Creating a new NCD series currently
+  requires curl.
+- [ ] NCD events: rollover / holder transfer / transformation on death —
+  `/api/ncd-events/*` complete, no page, no nav entry.
+- [ ] Redemption initiation: `POST /api/redemptions/premature` and `/maturity` have no
+  maker UI (Redemptions page only lists + sends existing requests for approval).
+- [ ] Users: edit / deactivate / delete / multi-branch / reports-to
+  (`PUT /users/:id`, `PUT /users/:id/branches`, `DELETE /users/:id` unused; create
+  form lacks reports-to).
+- [ ] Customers: direct enrolment (`POST /api/customers` unused — only lead-convert
+  path), no search box on Customers page (API supports `?q=`), KYC **reject**,
+  correction-request, handover-request all API-only.
+- [ ] Leads: edit, notes/follow-up history, duplicate-phone check all API-only; create
+  form missing place/category/referred-by/scheme/expected-amount/follow-up fields.
+- [ ] Applications: receipt upload (`POST /:id/receipt`), clubbing candidates —
+  API-only. Approval queue has no detail view (`GET /approvals/:id` unused) and
+  reject reason is hardcoded "Rejected from queue".
+- [ ] Payouts/statements/incentives: mark-row-failed, statements list, agent
+  eligibility grant/revoke, payee balance — API-only.
+- [ ] Portal: service-requests endpoints unused; documents list has no real download
+  links (only the SOA PDF generator exists — bond certificate / allotment letter /
+  acknowledgment PDFs not built).
+- [ ] Admin: `POST /api/system/notifications/drain` (manual drain button) unused.
+
+## P2 — reports & dashboard deltas vs docs/00
+
+- [ ] Series-wise rollup XLSX; 26Q 17-column TDS filing layout (current TDS register
+  is 7 columns); report filter UI (backend `BookFilters` plumbed, no controls).
+- [ ] Dashboard: lead KPI funnel, ALM tiles (net due/overdue/paid FY), cost-of-funds
+  rate mix, "today's book" additions/deletions.
+
+## P3 — ops & integrations
+
+- [ ] Live provider keys not in SSM: DECENTRO_*, DIGIO_*, WAPPCLOUD_*, SES/
+  NOTIFICATIONS_* (blocked on owner obtaining keys).
+- [ ] Digio eSign: only manual mark-esigned exists; no webhook/poller.
+- [ ] Payment adapters (Cashfree/Easebuzz): nothing behind the stub default.
+- [ ] Crons from docs/00 §12: daily book-summary email, backup-check email, LockerHub
+  reconciliation, crash alerts — none exist (only the notification drain cron).
+- [ ] Backup offsite: local nightly pg_dump IS live (ops/backup.sh, verified
+  2026-07-16); SharePoint offsite upload still pending.
+- [ ] ops/deploy.sh co-tenant check still curls dashboard.dhanamfinance.com, which has
+  no DNS record (pre-existing) — noise on every deploy.
+- [ ] LockerHub/DhanamFin cutover: integration façade is live behind
+  `LOCKERHUB_INTEGRATION_KEY`, but the LockerHub app still points at the old wealth
+  app; byte-compat of L1–L10/LA1–LA4 unverified against doc 08.
+
+## Verified working (deployed + exercised 2026-07-16)
+
+Login/RBAC/CSRF, user create (+branches endpoint), migrations, seed (after the
+SSM-ordering fix), nightly local backup, TLS + auto-renew, health check + rollback in
+deploy.sh, all co-tenant apps unaffected.

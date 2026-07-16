@@ -8,7 +8,7 @@ import { z } from 'zod';
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  PORT: z.coerce.number().default(3020),
+  PORT: z.coerce.number().default(3030),
   DATABASE_URL: z.string().min(1).optional(),
   JWT_ACCESS_SECRET: z.string().min(16).default('dev_access_secret_change_me_16chars'),
   JWT_REFRESH_SECRET: z.string().min(16).default('dev_refresh_secret_change_me_16chars'),

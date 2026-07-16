@@ -3,7 +3,7 @@
 Deploys alongside the four existing apps on `3.110.0.79`. **Co-tenant rule:
 only ADD files — never edit dashboard/lockers/odpulse/wealth nginx blocks.**
 The owner runs these (they hold the SSH key + AWS admin).
-Host: **ncd.dhanamfinance.com**, port **3020**, repo **github.com/saravanasuren/ncd** (private).
+Host: **ncd.dhanamfinance.com**, port **3030** (3020 was taken by the `reports` app in Jul 2026), repo **github.com/saravanasuren/ncd** (private).
 
 ## 0. One-time decisions
 - Point DNS (GoDaddy): `ncd.dhanamfinance.com` → `3.110.0.79` (A record, TTL 600).

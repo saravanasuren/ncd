@@ -18,10 +18,10 @@ any infra change, curl all five subdomains.
 | Item | Value |
 |---|---|
 | Subdomain | **`ncd.dhanamfinance.com`** (chosen 2026-07-16) — point DNS (GoDaddy) → `3.110.0.79` |
-| Port | **3020** (3010 = old wealth; 8080/3001/3000-range in use by co-tenants) |
+| Port | **3030** (3010 = old wealth/cb; 3020 = reports; 8080/3001 in use by co-tenants) |
 | Repo clone | `/home/ubuntu/ncd/` (own GitHub repo + read-only deploy key — create repo at build start) |
 | Process | `systemd dhanam-newwealth.service` (User=ubuntu, `node api/dist/index.js`, MemoryMax=512M, Restart=always, `ReadWritePaths=/var/lib/dhanam-newwealth /tmp`) |
-| Static SPA | `web/dist/` served **directly by nginx** (immutable hashed assets, `index.html` no-cache); `/api/*` proxied to 127.0.0.1:3020 |
+| Static SPA | `web/dist/` served **directly by nginx** (immutable hashed assets, `index.html` no-cache); `/api/*` proxied to 127.0.0.1:3030 |
 | DB | `dhanam_newwealth` (own PG user) on the box's Postgres 16 |
 | Secrets | SSM `/dhanam/newwealth/*`, instance-role read policy extended (additive); `.env` on box = 4 lines only (NODE_ENV, PORT, SSM path, region) |
 | Files | `/var/lib/dhanam-newwealth/` (kyc-docs, receipts) |
@@ -53,7 +53,7 @@ any infra change, curl all five subdomains.
 ## 4. Local development
 
 - `docker compose up db` (Postgres 16) — or the box-less PGlite path for tests.
-- `npm run dev` = Vite dev server (proxy `/api` → localhost:3020) + tsx-watch API.
+- `npm run dev` = Vite dev server (proxy `/api` → localhost:3030) + tsx-watch API.
 - `.env` for dev only (JWT secret, DB url, all providers stubbed); SSM unused
   locally.
 - Seed script: 8 roles, permission matrix, settings catalog defaults, synthetic

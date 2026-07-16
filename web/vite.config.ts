@@ -6,8 +6,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // API runs on :3020 in dev; SPA calls /api/* same-origin.
-      '/api': { target: 'http://localhost:3020', changeOrigin: true },
+      // API runs on :3030 in dev; SPA calls /api/* same-origin.
+      '/api': { target: 'http://localhost:3030', changeOrigin: true },
     },
   },
   build: { outDir: 'dist', sourcemap: true },

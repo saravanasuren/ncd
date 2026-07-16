@@ -33,11 +33,19 @@ import { eventsRouter } from './modules/events/routes.js';
 import { statementsRouter } from './modules/statements/routes.js';
 import { auditRouter, systemRouter } from './modules/admin/routes.js';
 import { importsRouter } from './modules/imports/routes.js';
+import { authLimiter, otpLimiter, writeLimiter, integrationLimiter } from './middleware/rateLimit.js';
+import { isProd } from './config.js';
 
 export function createApp(): Express {
   const app = express();
 
-  app.use(helmet());
+  // Behind nginx in production → trust the first proxy hop so req.ip is real.
+  if (isProd) app.set('trust proxy', 1);
+
+  app.use(helmet({
+    hsts: isProd ? { maxAge: 15552000, includeSubDomains: true } : false,
+    contentSecurityPolicy: false, // the SPA is served by nginx, not Express
+  }));
   app.use(
     cors({
       origin: config.WEB_ORIGIN,
@@ -53,6 +61,14 @@ export function createApp(): Express {
   app.get('/api/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', service: 'new-wealth-api', ts: new Date().toISOString() });
   });
+
+  // Rate limits (docs/10 §3). Strict on credentials, looser on writes.
+  app.use('/api/auth/login', authLimiter);
+  app.use('/api/auth/refresh', authLimiter);
+  app.use('/api/auth/forgot-password', authLimiter);
+  app.use('/api/portal/otp', otpLimiter);
+  app.use('/api/integration', integrationLimiter);
+  app.use('/api', writeLimiter);
 
   // Integration façade: own key auth, no cookie/CSRF (LockerHub / DhanamFin).
   // Mounted BEFORE the CSRF guard so app clients don't need the browser header.

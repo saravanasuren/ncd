@@ -1,5 +1,13 @@
 # 10 — Deployment & Operations
 
+> **Ops artifacts are built and live in `ops/`** (Phase 7): `DEPLOY.md`
+> (step-by-step runbook with exact owner commands), `dhanam-newwealth.service`
+> (systemd unit), `nginx-dhanam-newwealth.conf`, `deploy.sh` (pull→build→
+> migrate→restart→health+rollback), `backup.sh`, `env.production.example`.
+> Hardening in place: rate limits (auth/OTP/writes/integration), HSTS + trust
+> proxy in prod, SSM secrets loader (`/dhanam/newwealth/*`), graceful shutdown.
+> **Follow `ops/DEPLOY.md` for the actual deploy.**
+
 Locked decision: **same EC2 box** as the current app (`3.110.0.79`, ap-south-1),
 co-tenant #5, own subdomain + port + database + systemd unit. The co-tenant rule
 applies unchanged: **only ADD files; never edit the other apps' nginx blocks**; after

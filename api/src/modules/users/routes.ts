@@ -16,6 +16,14 @@ usersRouter.get(
   })
 );
 
+usersRouter.get(
+  '/branches',
+  requirePermission('users:manage'),
+  asyncHandler(async (_req, res) => {
+    res.json({ rows: await service.listBranches(getDb()) });
+  })
+);
+
 const createSchema = z.object({
   email: z.string().email(),
   full_name: z.string().min(1),

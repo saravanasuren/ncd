@@ -23,6 +23,17 @@ export async function listUsers(db: Db): Promise<UserListRow[]> {
   return rows.map((r) => ({ ...r, id: Number(r.id), branch_id: r.branch_id != null ? Number(r.branch_id) : null }));
 }
 
+export interface BranchRow {
+  id: number;
+  code: string;
+  name: string;
+}
+
+export async function listBranches(db: Db): Promise<BranchRow[]> {
+  const { rows } = await db.query<BranchRow>('SELECT id, code, name FROM branches ORDER BY name');
+  return rows.map((b) => ({ ...b, id: Number(b.id) }));
+}
+
 async function roleId(db: Db, role: Role): Promise<number> {
   const { rows } = await db.query<{ id: string }>('SELECT id FROM roles WHERE name = $1', [role]);
   if (!rows[0]) throw errors.badRequest('Unknown role');

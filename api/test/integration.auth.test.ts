@@ -132,4 +132,15 @@ describe('masters — a series can be configured end to end', () => {
     });
     expect(r.status).toBe(201);
   });
+
+  it('users:manage lists branches for the create-user form; others cannot', async () => {
+    const c = await admin();
+    const r = await c.get('/api/users/branches');
+    expect(r.status).toBe(200);
+    expect(r.json.rows.some((b: { code: string }) => b.code === 'HO')).toBe(true);
+
+    const staff = new Client(ctx.base);
+    await staff.post('/api/auth/login', { email: 'staff@demo.local', password: 'Demo_1234' });
+    expect((await staff.get('/api/users/branches')).status).toBe(403);
+  });
 });

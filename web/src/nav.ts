@@ -15,8 +15,6 @@ export interface NavItem {
 export const NAV: NavItem[] = [
   { to: '/app/dashboard', label: 'Dashboard', anyOf: ['dashboard:view'], group: 'Overview' },
   { to: '/app/segments', label: 'Segments', anyOf: ['reports:download', 'dashboard:drilldown'], group: 'Overview' },
-  { to: '/app/reports', label: 'Reports', anyOf: ['reports:download'], group: 'Periodic' },
-  { to: '/app/system', label: 'System', anyOf: ['audit:read', 'notifications:admin'], group: 'Admin' },
   { to: '/app/leads', label: 'Leads', anyOf: ['leads:read'], group: 'Daily' },
   { to: '/app/customers', label: 'Customers', anyOf: ['customers:read'], group: 'Daily' },
   { to: '/app/applications', label: 'Applications', anyOf: ['customers:read'], group: 'Daily' },
@@ -26,6 +24,8 @@ export const NAV: NavItem[] = [
   { to: '/app/payouts', label: 'Payouts', anyOf: ['payouts:generate'], group: 'Periodic' },
   { to: '/app/incentives', label: 'Incentives', anyOf: ['incentives:manage-eligibility'], group: 'Periodic' },
   { to: '/app/my-earnings', label: 'My Earnings', anyOf: ['earnings:read-own'], group: 'Periodic' },
+  { to: '/app/reports', label: 'Reports', anyOf: ['reports:download'], group: 'Periodic' },
+  { to: '/app/system', label: 'System', anyOf: ['audit:read', 'notifications:admin'], group: 'Admin' },
   { to: '/app/settings', label: 'Settings', anyOf: ['settings:manage', 'settings:workflow-config'], group: 'Admin' },
   { to: '/app/users', label: 'Users', anyOf: ['users:manage'], group: 'Admin' },
 ];

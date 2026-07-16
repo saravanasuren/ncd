@@ -68,3 +68,48 @@ customersRouter.post('/:id/handover-request', requirePermission('customers:hando
     const { toUserId, reason } = z.object({ toUserId: z.number(), reason: z.string().min(2) }).parse(req.body);
     res.status(201).json({ request: await s.requestHandover(getDb(), req.user!, Number(req.params.id), toUserId, reason) });
   }));
+
+// Relations
+customersRouter.put('/:id/joint-holders', requirePermission('customers:update'),
+  asyncHandler(async (req, res) => {
+    const { holders } = z.object({ holders: z.array(z.object({ full_name: z.string().min(1), pan: z.string().optional(), phone: z.string().optional(), relationship: z.string().optional() })) }).parse(req.body);
+    res.json(await s.setJointHolders(getDb(), req.user!, Number(req.params.id), holders));
+  }));
+customersRouter.put('/:id/nominees', requirePermission('customers:update'),
+  asyncHandler(async (req, res) => {
+    const { nominees } = z.object({ nominees: z.array(z.object({ full_name: z.string().min(1), relationship: z.string().optional(), share_pct: z.number().optional(), dob: z.string().optional() })) }).parse(req.body);
+    res.json(await s.setNominees(getDb(), req.user!, Number(req.params.id), nominees));
+  }));
+customersRouter.put('/:id/demat', requirePermission('customers:update'),
+  asyncHandler(async (req, res) => {
+    const { dp_id, client_id } = z.object({ dp_id: z.string(), client_id: z.string() }).parse(req.body);
+    res.json(await s.setDemat(getDb(), req.user!, Number(req.params.id), dp_id, client_id));
+  }));
+
+// Deceased flag (delete/destructive-ish → Super Admin/Admin via customers:deactivate)
+customersRouter.post('/:id/deceased', requirePermission('customers:deactivate'),
+  asyncHandler(async (req, res) => {
+    const { deceased_date } = z.object({ deceased_date: z.string() }).parse(req.body);
+    res.json(await s.markDeceased(getDb(), req.user!, Number(req.params.id), deceased_date));
+  }));
+
+// KYC documents
+customersRouter.post('/:id/documents', requirePermission('customers:update', 'kyc:verify'),
+  asyncHandler(async (req, res) => {
+    const b = z.object({ doc_type: z.string(), filename: z.string(), mime: z.string(), data_base64: z.string().min(1) }).parse(req.body);
+    res.status(201).json(await s.addDocument(getDb(), req.user!, Number(req.params.id), b.doc_type, b.filename, b.mime, b.data_base64));
+  }));
+customersRouter.get('/:id/documents/:docId', requirePermission('customers:read'),
+  asyncHandler(async (req, res) => {
+    const d = await s.getDocument(getDb(), req.user!, Number(req.params.id), Number(req.params.docId));
+    if (!d) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No document' } }); return; }
+    res.setHeader('Content-Type', d.mime);
+    res.setHeader('Content-Disposition', `inline; filename="${d.filename}"`);
+    res.end(d.buffer);
+  }));
+
+// DigiLocker/Aadhaar KYC (stub)
+customersRouter.post('/:id/kyc/digilocker/start', requirePermission('kyc:verify'),
+  asyncHandler(async (req, res) => res.json(await s.startDigilocker(getDb(), req.user!, Number(req.params.id)))));
+customersRouter.post('/:id/kyc/digilocker/complete', requirePermission('kyc:verify'),
+  asyncHandler(async (req, res) => res.json(await s.completeDigilocker(getDb(), req.user!, Number(req.params.id)))));

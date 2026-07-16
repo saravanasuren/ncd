@@ -2,17 +2,24 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
+import { useAuth } from '../auth/AuthContext.js';
 
 interface SeriesRow { series_id: number; code: string; name: string; status: string; pending_count: number; pending_amount: string; }
 
 export function AllotmentsPage() {
   const qc = useQueryClient();
+  const { can } = useAuth();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [msg, setMsg] = useState('');
   const { data, isLoading } = useQuery({ queryKey: ['allot-series'], queryFn: () => api.get<{ rows: SeriesRow[] }>('/api/allotments/series') });
   const allot = useMutation({
     mutationFn: (seriesId: number) => api.post(`/api/allotments/series/${seriesId}`, { allotment_date: date }),
     onSuccess: () => { setMsg('Batch submitted — a second checker must approve it on the Approvals page.'); qc.invalidateQueries({ queryKey: ['allot-series'] }); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const revert = useMutation({
+    mutationFn: (seriesId: number) => api.post(`/api/allotments/series/${seriesId}/revert`, { reason: window.prompt('Reason for revert') ?? 'Revert' }),
+    onSuccess: () => { setMsg('Allotment reverted.'); qc.invalidateQueries({ queryKey: ['allot-series'] }); },
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
@@ -34,6 +41,9 @@ export function AllotmentsPage() {
             </div>
             <button disabled={s.pending_count === 0 || allot.isPending} onClick={() => { setMsg(''); allot.mutate(s.series_id); }}
               className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Allot batch</button>
+            {can('allotments:revert') && s.status === 'Allotted' && (
+              <button onClick={() => { setMsg(''); revert.mutate(s.series_id); }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">↺ Revert</button>
+            )}
           </div>
         ))}
         {data!.rows.length === 0 && <div className="p-6 text-center text-text-muted">No series configured.</div>}

@@ -74,6 +74,35 @@ export async function setReferrerEligibility(db: Db, actor: AuthUser, referrerId
   return { ok: true };
 }
 
+/** Staff/agent incentive statement PDF (docs/00 §7). */
+export async function statementPdf(db: Db, payeeType: string, payeeId: number): Promise<Buffer> {
+  const bal = await payeeBalance(db, payeeType, payeeId);
+  const name = payeeType === 'agent'
+    ? (await db.query<{ full_name: string }>('SELECT full_name FROM agents WHERE id = $1', [payeeId])).rows[0]?.full_name
+    : (await db.query<{ full_name: string }>('SELECT full_name FROM users WHERE id = $1', [payeeId])).rows[0]?.full_name;
+  const accruals = (await db.query<Record<string, unknown>>(
+    `SELECT ia.accrual_date, ia.amount, ia.rate_mode, ia.rate_value, a.application_no
+     FROM incentive_accruals ia JOIN applications a ON a.id = ia.application_id
+     WHERE ia.payee_type = $1 AND ia.payee_id = $2 ORDER BY ia.accrual_date`, [payeeType, payeeId])).rows;
+  const payouts = (await db.query<Record<string, unknown>>('SELECT paid_at, amount, reference FROM incentive_payouts WHERE payee_type = $1 AND payee_id = $2 ORDER BY paid_at', [payeeType, payeeId])).rows;
+
+  const { renderPdf, letterhead } = await import('../../lib/pdf.js');
+  const { formatINR } = await import('@new-wealth/shared');
+  return renderPdf((doc) => {
+    letterhead(doc, 'Incentive Statement', `${name ?? `${payeeType} #${payeeId}`}`);
+    doc.fontSize(10).font('Helvetica');
+    doc.text(`Accrued: ${formatINR(bal.accrued)}     Paid: ${formatINR(bal.paid)}     Balance: ${formatINR(bal.balance)}`);
+    doc.moveDown(0.8);
+    doc.font('Helvetica-Bold').text('Accruals'); doc.font('Helvetica').fontSize(9);
+    for (const r of accruals) doc.text(`${r.accrual_date}   ${r.application_no}   ${r.rate_value}${r.rate_mode === 'pct' ? '%' : ' flat'}   ${formatINR(Number(r.amount))}`);
+    if (!accruals.length) doc.fillColor('#6b7380').text('None').fillColor('#1a1d23');
+    doc.moveDown(0.8).fontSize(10);
+    doc.font('Helvetica-Bold').text('Payouts'); doc.font('Helvetica').fontSize(9);
+    for (const p of payouts) doc.text(`${String(p.paid_at).slice(0, 10)}   ${p.reference ?? ''}   ${formatINR(Number(p.amount))}`);
+    if (!payouts.length) doc.fillColor('#6b7380').text('None');
+  });
+}
+
 /** Overview for managers: every staff/agent/referrer with a nonzero balance. */
 export async function overview(db: Db) {
   const { rows } = await db.query(

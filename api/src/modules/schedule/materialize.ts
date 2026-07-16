@@ -29,11 +29,12 @@ export async function materializeForApplication(tx: Db, applicationId: number): 
   const holidays = (await tx.query<{ d: string }>('SELECT d FROM holidays')).rows.map((h) => h.d);
   const customer = (await tx.query<Record<string, unknown>>('SELECT * FROM customers WHERE id = $1', [app.customer_id])).rows[0] ?? {};
 
-  // Active payee bank account (snapshotted per row).
-  const bank = (await tx.query<{ account_number: string; ifsc: string }>(
-    'SELECT account_number, ifsc FROM customer_bank_accounts WHERE customer_id = $1 AND is_active = TRUE LIMIT 1',
-    [app.customer_id]
-  )).rows[0];
+  // Payee bank: the application's chosen payout account if set, else the
+  // customer's active account (snapshotted per row).
+  const bank = app.payout_bank_account_id
+    ? (await tx.query<{ account_number: string; ifsc: string }>('SELECT account_number, ifsc FROM customer_bank_accounts WHERE id = $1', [app.payout_bank_account_id])).rows[0]
+    : (await tx.query<{ account_number: string; ifsc: string }>(
+        'SELECT account_number, ifsc FROM customer_bank_accounts WHERE customer_id = $1 AND is_active = TRUE LIMIT 1', [app.customer_id])).rows[0];
 
   const lines = (await tx.query<Record<string, unknown>>('SELECT * FROM application_lines WHERE application_id = $1', [applicationId])).rows;
   let count = 0;

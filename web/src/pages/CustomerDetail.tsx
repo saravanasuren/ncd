@@ -80,7 +80,61 @@ export function CustomerDetailPage() {
         )}
       </div>
 
+      <RelationsKyc customerId={Number(id)} data={data} onChange={invalidate} can={can} />
+
       {can('applications:create') && c.creation_status === 'Approved' && <NewInvestment customerId={Number(id)} />}
+    </div>
+  );
+}
+
+function RelationsKyc({ customerId, data, onChange, can }: { customerId: number; data: any; onChange: () => void; can: (...p: any[]) => boolean }) {
+  const [msg, setMsg] = useState('');
+  const wrap = (p: Promise<unknown>) => p.then(() => { setMsg(''); onChange(); }).catch((e) => setMsg(e instanceof ApiError ? e.message : 'Failed'));
+  const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
+
+  async function addNominee() {
+    const name = window.prompt('Nominee full name'); if (!name) return;
+    const share = Number(window.prompt('Share % (e.g. 100)') ?? '0');
+    const existing = (data.nominees ?? []).map((n: any) => ({ full_name: n.full_name, relationship: n.relationship, share_pct: Number(n.share_pct) }));
+    await wrap(api.put(`/api/customers/${customerId}/nominees`, { nominees: [...existing, { full_name: name, share_pct: share }] }));
+  }
+  async function addJoint() {
+    const name = window.prompt('Joint holder full name'); if (!name) return;
+    const existing = (data.jointHolders ?? []).map((h: any) => ({ full_name: h.full_name, relationship: h.relationship, pan: h.pan, phone: h.phone }));
+    await wrap(api.put(`/api/customers/${customerId}/joint-holders`, { holders: [...existing, { full_name: name }] }));
+  }
+  async function uploadDoc() {
+    const inp = document.createElement('input'); inp.type = 'file';
+    inp.onchange = async () => {
+      const file = inp.files?.[0]; if (!file) return;
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(await file.arrayBuffer())));
+      await wrap(api.post(`/api/customers/${customerId}/documents`, { doc_type: 'KYC', filename: file.name, mime: file.type || 'application/octet-stream', data_base64: b64 }));
+    };
+    inp.click();
+  }
+
+  return (
+    <div className={card}>
+      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Relations & KYC</h2>
+      {msg && <div className="text-xs text-danger mb-2">{msg}</div>}
+      <div className="grid grid-cols-2 gap-4 text-sm">
+        <div>
+          <div className="flex items-center justify-between"><span className="font-semibold">Nominees</span>{can('customers:update') && <button onClick={addNominee} className="text-xs text-primary hover:underline">+ Add</button>}</div>
+          <ul className="mt-1 text-text-muted">{(data.nominees ?? []).map((n: any) => <li key={n.id}>{n.full_name} — {Number(n.share_pct) || 0}%</li>)}{!(data.nominees ?? []).length && <li>None</li>}</ul>
+        </div>
+        <div>
+          <div className="flex items-center justify-between"><span className="font-semibold">Joint holders</span>{can('customers:update') && <button onClick={addJoint} className="text-xs text-primary hover:underline">+ Add</button>}</div>
+          <ul className="mt-1 text-text-muted">{(data.jointHolders ?? []).map((h: any) => <li key={h.id}>{h.full_name}</li>)}{!(data.jointHolders ?? []).length && <li>None</li>}</ul>
+        </div>
+      </div>
+      <div className="mt-3">
+        <div className="flex items-center justify-between"><span className="font-semibold text-sm">Documents</span>{can('customers:update') && <button onClick={uploadDoc} className="text-xs text-primary hover:underline">+ Upload</button>}</div>
+        <ul className="mt-1 text-text-muted text-sm">{(data.documents ?? []).map((d: any) => <li key={d.id}><a href={`/api/customers/${customerId}/documents/${d.id}`} target="_blank" rel="noreferrer" className="text-primary hover:underline">{d.doc_type} — {d.original_filename ?? d.id}</a> <span className="text-xs">({d.origin})</span></li>)}{!(data.documents ?? []).length && <li>None</li>}</ul>
+      </div>
+      <div className="flex gap-2 mt-4">
+        {can('kyc:verify') && <button onClick={() => wrap(api.post(`/api/customers/${customerId}/kyc/digilocker/start`).then(() => api.post(`/api/customers/${customerId}/kyc/digilocker/complete`)))} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">DigiLocker verify</button>}
+        {can('customers:deactivate') && !data.customer.is_deceased && <button onClick={() => { const d = window.prompt('Deceased date (YYYY-MM-DD)'); if (d) wrap(api.post(`/api/customers/${customerId}/deceased`, { deceased_date: d })); }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg text-danger">Mark deceased</button>}
+      </div>
     </div>
   );
 }

@@ -73,12 +73,15 @@ function PayRow({ p, canPay, onPay }: { p: Payee; canPay: boolean; onPay: (amoun
       <td className="px-4 py-2 text-right mono text-text-muted">{formatINR(p.paid)}</td>
       <td className="px-4 py-2 text-right mono font-semibold">{formatINR(p.balance)}</td>
       <td className="px-4 py-2 text-right">
-        {canPay && Number(p.balance) > 0 && (
-          <div className="flex gap-1 justify-end">
-            <input className="w-24 px-2 py-1 text-xs border border-border-strong rounded" placeholder="₹" value={amt} onChange={(e) => setAmt(e.target.value)} />
-            <button disabled={!amt} onClick={() => { onPay(Number(amt)); setAmt(''); }} className="text-xs bg-primary text-white rounded px-2 py-1 disabled:opacity-40">Pay</button>
-          </div>
-        )}
+        <div className="flex gap-1 justify-end items-center">
+          <a href={`/api/incentives/payees/${p.payee_type}/${p.payee_id}/statement.pdf`} target="_blank" rel="noreferrer" className="text-xs text-text-muted hover:text-primary">PDF</a>
+          {canPay && Number(p.balance) > 0 && (
+            <>
+              <input className="w-24 px-2 py-1 text-xs border border-border-strong rounded" placeholder="₹" value={amt} onChange={(e) => setAmt(e.target.value)} />
+              <button disabled={!amt} onClick={() => { onPay(Number(amt)); setAmt(''); }} className="text-xs bg-primary text-white rounded px-2 py-1 disabled:opacity-40">Pay</button>
+            </>
+          )}
+        </div>
       </td>
     </tr>
   );

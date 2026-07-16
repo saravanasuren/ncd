@@ -9,6 +9,19 @@ const rowPill: Record<string, string> = {
   Paid: 'text-success', Scheduled: 'text-text-muted', Skipped: 'text-warn', Failed: 'text-danger',
 };
 
+function PayoutAccount({ appId, customerId, onChange }: { appId: number; customerId: number; onChange: () => void }) {
+  const { data } = useQuery({ queryKey: ['cust-banks', customerId], queryFn: () => api.get<any>(`/api/customers/${customerId}`) });
+  const set = useMutation({ mutationFn: (bankId: number) => api.post(`/api/applications/${appId}/payout-account`, { bank_account_id: bankId }), onSuccess: onChange });
+  const verified = (data?.bankAccounts ?? []).filter((b: any) => b.penny_drop_status === 'Verified');
+  if (verified.length < 2) return null;
+  return (
+    <select className="text-xs border border-border-strong rounded px-2 py-1" defaultValue="" onChange={(e) => e.target.value && set.mutate(Number(e.target.value))}>
+      <option value="">Interest account…</option>
+      {verified.map((b: any) => <option key={b.id} value={b.id}>{b.account_number}</option>)}
+    </select>
+  );
+}
+
 export function ApplicationDetailPage() {
   const { id } = useParams();
   const qc = useQueryClient();
@@ -35,13 +48,15 @@ export function ApplicationDetailPage() {
       <p className="text-sm text-text-muted mt-1">{a.customer_name} · {a.series_code} · {formatINR(a.total_amount)}</p>
       {msg && <div className="text-xs text-danger mt-2">{msg}</div>}
 
-      <div className="flex gap-2 mt-3">
+      <div className="flex gap-2 mt-3 items-center flex-wrap">
         {can('applications:confirm-collection') && a.status === 'PendingCollection' && (
           <button onClick={() => confirm.mutate()} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Confirm collection</button>
         )}
         {can('applications:mark-esigned') && a.status === 'PendingEsign' && (
           <button onClick={() => run(api.post(`/api/applications/${id}/mark-esigned`))} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Mark eSigned</button>
         )}
+        {a.receipt_file_path && <a href={`/api/applications/${id}/receipt`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">View receipt</a>}
+        {can('applications:update') && a.status === 'Active' && <PayoutAccount appId={Number(id)} customerId={a.customer_id} onChange={invalidate} />}
       </div>
 
       <div className="bg-surface border border-border rounded-lg shadow-card mt-4 overflow-hidden">

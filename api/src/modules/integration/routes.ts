@@ -122,6 +122,20 @@ integrationRouter.post('/redemption-request', asyncHandler(async (req, res) => {
   res.status(201).json({ redemption_no: r.redemption_no, net_payment: r.netPayment, status: 'Requested' });
 }));
 
+/** KYC-doc mirror — DhanamFin app pushes a captured KYC document into Wealth. */
+integrationRouter.post('/customers/:id/kyc-docs', asyncHandler(async (req, res) => {
+  const b = z.object({ doc_type: z.string(), filename: z.string(), mime: z.string(), data_base64: z.string().min(1) }).parse(req.body);
+  const db = getDb();
+  const cust = await db.query('SELECT 1 FROM customers WHERE id = $1', [Number(req.params.id)]);
+  if (!cust.rowCount) throw errors.notFound('Customer not found');
+  const { saveBase64 } = await import('../../lib/storage.js');
+  const { path } = saveBase64('kyc-docs', b.filename, b.data_base64);
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO customer_documents (customer_id, doc_type, file_path, original_filename, mime, origin) VALUES ($1,$2,$3,$4,$5,'dhanamfin') RETURNING id`,
+    [Number(req.params.id), b.doc_type, path, b.filename, b.mime]);
+  res.status(201).json({ id: Number(rows[0]!.id), origin: 'dhanamfin' });
+}));
+
 /** Email-check — route existing agents to Sign-In not Sign-Up (read-only). */
 integrationRouter.get('/agents/email-check', asyncHandler(async (req, res) => {
   const email = String(req.query.email ?? '');

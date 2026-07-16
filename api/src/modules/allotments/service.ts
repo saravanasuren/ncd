@@ -47,6 +47,31 @@ export async function createAllotmentBatch(db: Db, actor: AuthUser, input: { ser
   });
 }
 
+/** Revert a series allotment (Super Admin). Blocked once real interest/
+ * incentive money has moved. Undoes activation + schedules + accruals. */
+export async function revertSeriesAllotment(db: Db, actor: AuthUser, seriesId: number, reason: string) {
+  return db.withTx(async (tx) => {
+    const apps = (await tx.query<{ id: string }>("SELECT id FROM applications WHERE series_id = $1 AND status = 'Active'", [seriesId])).rows;
+    if (!apps.length) throw errors.unprocessable('No allotted applications in this series');
+    const appIds = apps.map((a) => Number(a.id));
+    // Block if any real payout has happened.
+    const paid = await tx.query("SELECT 1 FROM disbursement_schedule WHERE application_id = ANY($1) AND status = 'Paid' LIMIT 1", [appIds]);
+    if (paid.rowCount) throw errors.conflict('Cannot revert — interest has already been paid');
+    const paidInc = await tx.query('SELECT 1 FROM incentive_accruals WHERE application_id = ANY($1) AND paid_at IS NOT NULL LIMIT 1', [appIds]);
+    if (paidInc.rowCount) throw errors.conflict('Cannot revert — incentives have already been paid');
+
+    for (const appId of appIds) {
+      await tx.query('DELETE FROM disbursement_schedule WHERE application_id = $1', [appId]);
+      await tx.query('DELETE FROM incentive_accruals WHERE application_id = $1', [appId]);
+      await tx.query("UPDATE application_lines SET status = 'Active', maturity_date = NULL WHERE application_id = $1", [appId]);
+      await tx.query("UPDATE applications SET status = 'PendingAllotment', allotment_date = NULL, maturity_date = NULL, batch_allotment_id = NULL, updated_at = now() WHERE id = $1", [appId]);
+    }
+    await tx.query("UPDATE series SET status = 'Closing', allotted_at = NULL WHERE id = $1", [seriesId]);
+    await writeAudit(tx, { actorId: actor.id, action: 'allotment.revert', entityType: 'series', entityId: seriesId, after: { reason, apps: appIds.length } });
+    return { reverted: appIds.length };
+  });
+}
+
 registerOnFinalApprove('allotment_batch', async (tx, req) => {
   const seriesId = Number(req.metadata.series_id);
   const allotmentDate = String(req.metadata.allotment_date);

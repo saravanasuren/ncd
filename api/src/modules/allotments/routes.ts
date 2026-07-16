@@ -16,3 +16,9 @@ allotmentsRouter.post('/series/:id', requirePermission('allotments:execute'),
     const input = z.object({ allotment_date: z.string(), isin: z.string().optional(), notes: z.string().optional() }).parse(req.body);
     res.status(201).json(await s.createAllotmentBatch(getDb(), req.user!, { series_id: Number(req.params.id), ...input }));
   }));
+
+allotmentsRouter.post('/series/:id/revert', requirePermission('allotments:revert'),
+  asyncHandler(async (req, res) => {
+    const { reason } = z.object({ reason: z.string().min(3) }).parse(req.body);
+    res.json(await s.revertSeriesAllotment(getDb(), req.user!, Number(req.params.id), reason));
+  }));

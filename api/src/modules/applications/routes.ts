@@ -11,13 +11,38 @@ export const applicationsRouter = Router();
 applicationsRouter.get('/', requirePermission('customers:read'),
   asyncHandler(async (req, res) => res.json({ rows: await s.listApplications(getDb(), req.user!, { status: req.query.status as string, series_id: req.query.series_id ? Number(req.query.series_id) : undefined }) })));
 
+// Specific paths BEFORE '/:id' so they aren't captured by the param route.
+applicationsRouter.get('/clubbing-candidates', requirePermission('applications:create'),
+  asyncHandler(async (req, res) => res.json({ rows: await s.clubbingCandidates(getDb(), Number(req.query.customer_id), Number(req.query.series_id)) })));
+
 applicationsRouter.get('/:id', requirePermission('customers:read'),
   asyncHandler(async (req, res) => res.json(await s.getApplicationDetail(getDb(), req.user!, Number(req.params.id)))));
 
 applicationsRouter.post('/', requirePermission('applications:create'),
   asyncHandler(async (req, res) => {
-    const input = z.object({ customer_id: z.number(), series_id: z.number(), scheme_id: z.number(), amount: z.number().positive() }).parse(req.body);
+    const input = z.object({ customer_id: z.number(), series_id: z.number(), scheme_id: z.number(), amount: z.number().positive(), club_with_application_id: z.number().optional() }).parse(req.body);
     res.status(201).json(await s.createApplication(getDb(), req.user!, input));
+  }));
+
+applicationsRouter.post('/:id/payout-account', requirePermission('applications:update'),
+  asyncHandler(async (req, res) => {
+    const { bank_account_id } = z.object({ bank_account_id: z.number() }).parse(req.body);
+    res.json(await s.setPayoutAccount(getDb(), req.user!, Number(req.params.id), bank_account_id));
+  }));
+
+applicationsRouter.post('/:id/receipt', requirePermission('applications:create', 'applications:update'),
+  asyncHandler(async (req, res) => {
+    const b = z.object({ filename: z.string(), mime: z.string(), data_base64: z.string().min(1) }).parse(req.body);
+    res.status(201).json(await s.uploadReceipt(getDb(), req.user!, Number(req.params.id), b.filename, b.mime, b.data_base64));
+  }));
+
+applicationsRouter.get('/:id/receipt', requirePermission('customers:read', 'approvals:check'),
+  asyncHandler(async (req, res) => {
+    const r = await s.getReceipt(getDb(), Number(req.params.id));
+    if (!r) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No receipt' } }); return; }
+    res.setHeader('Content-Type', r.mime);
+    res.setHeader('Content-Disposition', `inline; filename="${r.filename}"`);
+    res.end(r.buffer);
   }));
 
 applicationsRouter.post('/:id/confirm-collection', requirePermission('applications:confirm-collection'),

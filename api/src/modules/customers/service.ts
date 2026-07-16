@@ -173,6 +173,88 @@ registerOnFinalApprove('customer_creation', async (tx, req) => {
   }
 });
 
+// ── Joint holders ─────────────────────────────────────────────────────
+export async function setJointHolders(db: Db, actor: AuthUser, customerId: number, holders: Array<{ full_name: string; pan?: string; phone?: string; relationship?: string }>) {
+  await assertVisible(db, actor, customerId);
+  const settings = await getSettingsMap(db);
+  const max = Number(settings['customers.max_joint_holders'] ?? 2);
+  if (holders.length > max) throw errors.badRequest(`At most ${max} joint holders allowed`);
+  await db.withTx(async (tx) => {
+    await tx.query('DELETE FROM joint_holders WHERE customer_id = $1', [customerId]);
+    for (const h of holders) {
+      await tx.query('INSERT INTO joint_holders (customer_id, full_name, pan, phone, relationship) VALUES ($1,$2,$3,$4,$5)',
+        [customerId, h.full_name, h.pan ?? null, h.phone ?? null, h.relationship ?? null]);
+    }
+    await writeAudit(tx, { actorId: actor.id, action: 'customer.joint-holders', entityType: 'customers', entityId: customerId, after: { count: holders.length } });
+  });
+  return { ok: true };
+}
+
+// ── Nominees ──────────────────────────────────────────────────────────
+export async function setNominees(db: Db, actor: AuthUser, customerId: number, nominees: Array<{ full_name: string; relationship?: string; share_pct?: number; dob?: string }>) {
+  await assertVisible(db, actor, customerId);
+  const total = nominees.reduce((s, n) => s + (n.share_pct ?? 0), 0);
+  if (nominees.length && total > 100.01) throw errors.badRequest('Nominee shares exceed 100%');
+  await db.withTx(async (tx) => {
+    await tx.query('DELETE FROM nominees WHERE customer_id = $1', [customerId]);
+    for (const n of nominees) {
+      await tx.query('INSERT INTO nominees (customer_id, full_name, relationship, share_pct, dob) VALUES ($1,$2,$3,$4,$5)',
+        [customerId, n.full_name, n.relationship ?? null, n.share_pct ?? null, n.dob ?? null]);
+    }
+    await writeAudit(tx, { actorId: actor.id, action: 'customer.nominees', entityType: 'customers', entityId: customerId, after: { count: nominees.length } });
+  });
+  return { ok: true };
+}
+
+// ── Demat ─────────────────────────────────────────────────────────────
+export async function setDemat(db: Db, actor: AuthUser, customerId: number, dpId: string, clientId: string) {
+  await assertVisible(db, actor, customerId);
+  await db.query('UPDATE customers SET demat_dp_id = $1, demat_client_id = $2, updated_at = now() WHERE id = $3', [dpId, clientId, customerId]);
+  await writeAudit(db, { actorId: actor.id, action: 'customer.demat', entityType: 'customers', entityId: customerId, after: { dpId, clientId } });
+  return { ok: true };
+}
+
+// ── Deceased flag ─────────────────────────────────────────────────────
+export async function markDeceased(db: Db, actor: AuthUser, customerId: number, deceasedDate: string) {
+  await db.query('UPDATE customers SET is_deceased = TRUE, deceased_date = $1, updated_at = now() WHERE id = $2', [deceasedDate, customerId]);
+  await writeAudit(db, { actorId: actor.id, action: 'customer.deceased', entityType: 'customers', entityId: customerId, after: { deceasedDate } });
+  return { ok: true };
+}
+
+// ── KYC documents ─────────────────────────────────────────────────────
+export async function addDocument(db: Db, actor: AuthUser, customerId: number, docType: string, filename: string, mime: string, dataBase64: string, origin = 'staff') {
+  await assertVisible(db, actor, customerId);
+  const { saveBase64 } = await import('../../lib/storage.js');
+  const { path } = saveBase64('kyc-docs', filename, dataBase64);
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO customer_documents (customer_id, doc_type, file_path, original_filename, mime, origin, uploaded_by_user_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [customerId, docType, path, filename, mime, origin, actor.id]);
+  await writeAudit(db, { actorId: actor.id, action: 'customer.doc.add', entityType: 'customer_documents', entityId: Number(rows[0]!.id), after: { docType, origin } });
+  return { id: Number(rows[0]!.id) };
+}
+
+export async function getDocument(db: Db, actor: AuthUser, customerId: number, docId: number): Promise<{ buffer: Buffer; mime: string; filename: string } | null> {
+  await assertVisible(db, actor, customerId);
+  const doc = (await db.query<{ file_path: string; mime: string | null; original_filename: string | null }>(
+    'SELECT file_path, mime, original_filename FROM customer_documents WHERE id = $1 AND customer_id = $2', [docId, customerId])).rows[0];
+  if (!doc) return null;
+  const { readStored } = await import('../../lib/storage.js');
+  const buffer = readStored(doc.file_path);
+  if (!buffer) return null;
+  return { buffer, mime: doc.mime ?? 'application/octet-stream', filename: doc.original_filename ?? 'document' };
+}
+
+/** DigiLocker/Aadhaar KYC (stub provider — real flow flips in via config). */
+export async function startDigilocker(db: Db, actor: AuthUser, customerId: number) {
+  await assertVisible(db, actor, customerId);
+  // Stub returns a pseudo session/redirect; a real adapter would call Decentro.
+  return { session_id: `stub-dl-${customerId}-${Date.now().toString(36)}`, redirect_url: `https://stub.digilocker/authorize?c=${customerId}` };
+}
+export async function completeDigilocker(db: Db, actor: AuthUser, customerId: number) {
+  await setKyc(db, actor, customerId, 'Verified');
+  return { kyc_status: 'Verified' };
+}
+
 /** Correction request → approval; applies the diff on final approve. */
 export async function requestCorrection(db: Db, actor: AuthUser, customerId: number, changes: Record<string, unknown>, reason: string): Promise<ApprovalRow> {
   await assertVisible(db, actor, customerId);

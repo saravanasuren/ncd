@@ -14,6 +14,14 @@ incentivesRouter.get('/overview', requirePermission('incentives:manage-eligibili
 incentivesRouter.get('/my-earnings', requirePermission('earnings:read-own'),
   asyncHandler(async (req, res) => res.json(await s.myEarnings(getDb(), req.user!))));
 
+incentivesRouter.get('/payees/:type/:id/statement.pdf', requirePermission('incentives:manage-eligibility', 'earnings:read-own'),
+  asyncHandler(async (req, res) => {
+    const buf = await s.statementPdf(getDb(), req.params.type!, Number(req.params.id));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="incentive-statement.pdf"`);
+    res.end(buf);
+  }));
+
 incentivesRouter.get('/payees/:type/:id/balance', requirePermission('incentives:manage-eligibility'),
   asyncHandler(async (req, res) => res.json(await s.payeeBalance(getDb(), req.params.type!, Number(req.params.id)))));
 

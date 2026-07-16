@@ -19,6 +19,8 @@ import { RedemptionsPage } from './pages/Redemptions.js';
 import { IncentivesPage } from './pages/Incentives.js';
 import { ReportsPage } from './pages/Reports.js';
 import { SystemPage } from './pages/System.js';
+import { MastersPage } from './pages/Masters.js';
+import { EventsPage } from './pages/Events.js';
 import { PortalLogin } from './portal/PortalLogin.js';
 import { PortalHome } from './portal/PortalHome.js';
 import type { ReactNode } from 'react';
@@ -66,6 +68,8 @@ export function App() {
           <Route path="approvals" element={<ApprovalsPage />} />
           <Route path="allotments" element={<AllotmentsPage />} />
           <Route path="redemptions" element={<RedemptionsPage />} />
+          <Route path="ncd-events" element={<EventsPage />} />
+          <Route path="masters" element={<MastersPage />} />
           <Route path="payouts" element={<PayoutsPage />} />
           <Route path="incentives" element={<IncentivesPage />} />
           <Route path="my-earnings" element={<MyEarningsPage />} />

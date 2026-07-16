@@ -47,7 +47,7 @@ export function RedemptionsPage() {
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-xl font-bold tracking-tight m-0">Redemptions</h1>
-          <p className="text-sm text-text-muted mt-1">Customer/app requests waiting to be processed, plus recent redemptions.</p>
+          <p className="text-sm text-text-muted mt-1">Customer/app requests waiting to be processed, plus recent redemptions. To initiate a premature or maturity redemption, open the investment under Applications and use its lifecycle actions.</p>
         </div>
         <div className="flex gap-2">
           <a href="/api/redemptions/neft.xlsx" className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ NEFT sheet</a>

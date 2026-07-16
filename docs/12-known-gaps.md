@@ -28,14 +28,13 @@
 
 ## P1 — backend exists, no UI (feature unreachable; same pattern as the create-user gap fixed 2026-07-16)
 
-- [ ] Products/masters admin: schemes, series (+status/ISIN), TDS rules, banks,
-  holidays, company profile — full CRUD API (`modules/products/routes.ts`), **no
-  screen at all** (`products:manage` unused). Creating a new NCD series currently
-  requires curl.
-- [ ] NCD events: rollover / holder transfer / transformation on death —
-  `/api/ncd-events/*` complete, no page, no nav entry.
-- [ ] Redemption initiation: `POST /api/redemptions/premature` and `/maturity` have no
-  maker UI (Redemptions page only lists + sends existing requests for approval).
+- [x] Products/masters admin — CLOSED 2026-07-16: Masters page (Admin nav, gated
+  `products:manage`) covers schemes, series (create/status/ISIN), TDS rules, banks,
+  holidays, company profile.
+- [x] NCD events — CLOSED 2026-07-16: NCD Events register page; rollover/transfer/
+  transformation are initiated from the application page's lifecycle actions.
+- [x] Redemption initiation — CLOSED 2026-07-16: premature (reason + optional date)
+  and maturity initiation live in the application page's lifecycle actions.
 - [~] Users: edit/deactivate/password-reset UI added 2026-07-16 (`PUT /users/:id`
   wired). Still no UI for: delete, multi-branch (`PUT /users/:id/branches`),
   reports-to.

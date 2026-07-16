@@ -125,15 +125,46 @@ pg_restore -d dhanam_wealth_restore /path/to/dhanam_wealth-YYYYMMDD.dump   # or 
 cd api && LEGACY_DATABASE_URL=postgres://localhost/dhanam_wealth_restore npm run migrate:legacy:dev
 ```
 
-**COMMIT (only after the report is right)** — loads into the real new DB:
-```bash
-LEGACY_DATABASE_URL=<old db url> \
-DATABASE_URL=<new db url, already migrated+seeded> \
-npm run migrate:legacy -- --commit
-```
-The report **flags for owner confirmation**: any role that fell to the fallback
-mapping, any AUM mismatch, any change in the paid-row count, and every per-row
-anomaly. Nothing about the old data's meaning is assumed silently.
+**COMMIT (only after the dry-run report is all-green)** — loads into the real new DB.
 
-**Still owner-gated before a real load:** confirm the role map (`config.ts ROLE_MAP`),
-provide the dump, and confirm the anchor month if cutover slips past July.
+The migration keeps every row's ORIGINAL id. The freshly-seeded target already
+contains ONE user — the seeded admin (`tech@dhanam.finance`) — which collides with
+the old admin of the same email. So clear the seeded users first and let the OLD
+users (incl. the old admin, with their original password) load cleanly. Config
+(roles / permissions / settings / company_profile) is kept.
+
+```bash
+# on the box — no real users yet, brief downtime is fine
+sudo systemctl stop dhanam-newwealth
+DBURL=$(aws ssm get-parameter --name /dhanam/newwealth/DATABASE_URL --with-decryption \
+  --region ap-south-1 --query Parameter.Value --output text)
+pg_dump "$DBURL" > ~/newwealth-preload-$(date +%Y%m%d-%H%M).sql        # insurance
+
+# clear seeded users (null the settings FK first), keep config
+psql "$DBURL" -c "UPDATE app_settings SET updated_by=NULL; DELETE FROM users;"
+
+# COMMIT the migration
+cd ~/ncd/api
+LEGACY_DATABASE_URL=$(aws ssm get-parameter --name /dhanam/wealth/DATABASE_URL --with-decryption \
+  --region ap-south-1 --query Parameter.Value --output text) \
+DATABASE_URL="$DBURL" npm run migrate:legacy -- --commit
+
+# verify counts match the dry-run, then bring the app back up
+psql "$DBURL" -c "SELECT (SELECT count(*) FROM customers) customers,
+  (SELECT count(*) FROM applications) apps,
+  (SELECT count(*) FROM disbursement_schedule) sched,
+  (SELECT count(*) FROM users) users;"
+sudo systemctl start dhanam-newwealth
+curl -sI https://ncd.dhanamfinance.com/api/health
+```
+- Migration runs in ONE transaction — any error rolls the whole load back, nothing partial.
+- Login after commit: the **old admin credentials** (`tech@dhanam.finance` + the OLD
+  app's password), since the old admin user migrates with its original hash.
+- Fully reversible while the app has no real usage: `DROP DATABASE dhanam_newwealth`,
+  recreate, `npm run migrate && npm run seed`, retry.
+
+The report **flags for owner confirmation**: any role that fell to the fallback
+mapping, any AUM mismatch, any change in the paid-row count, and every per-row anomaly.
+
+**Owner-gated before a real load:** confirm the role map (`config.ts` ROLE_MAP /
+DROP_ROLES), and the anchor month if cutover slips past July.

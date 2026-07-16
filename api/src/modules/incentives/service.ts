@@ -34,6 +34,46 @@ export async function myEarnings(db: Db, actor: AuthUser) {
   return { ...bal, accruals, payouts };
 }
 
+// ── Agent commission eligibility (maker-checker) ──
+import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
+import { getSettingsMap } from '../settings/service.js';
+
+export async function requestAgentEligibility(db: Db, actor: AuthUser, agentId: number, input: { rate_pct: number; payout_mode?: string; bank_name?: string; account_number?: string; ifsc?: string }) {
+  const settings = await getSettingsMap(db);
+  const cap = Number(settings['incentive.agent_commission_cap_pct'] ?? 2.0);
+  if (input.rate_pct <= 0 || input.rate_pct > cap) throw errors.badRequest(`Rate must be between 0 and ${cap}%`);
+  return db.withTx(async (tx) => {
+    const agent = (await tx.query<{ id: string }>('SELECT id FROM agents WHERE id = $1', [agentId])).rows[0];
+    if (!agent) throw errors.notFound('Agent not found');
+    await tx.query("UPDATE agents SET commission_status = 'PendingApproval', payout_mode = $1, bank_name = $2, account_number = $3, ifsc = $4 WHERE id = $5",
+      [input.payout_mode ?? null, input.bank_name ?? null, input.account_number ?? null, input.ifsc ?? null, agentId]);
+    const req = await createApprovalRequest(tx, { type: 'commission_eligibility', entityType: 'agents', entityId: agentId, makerUserId: actor.id, metadata: { agent_id: agentId, rate_pct: input.rate_pct, payout_mode: input.payout_mode ?? null } });
+    await writeAudit(tx, { actorId: actor.id, action: 'commission.eligibility.request', entityType: 'agents', entityId: agentId, after: { rate_pct: input.rate_pct } });
+    return req;
+  });
+}
+
+registerOnFinalApprove('commission_eligibility', async (tx, req) => {
+  const agentId = Number(req.metadata.agent_id);
+  await tx.query("UPDATE agents SET commission_status = 'Approved', commission_rate_pct = $1 WHERE id = $2", [Number(req.metadata.rate_pct), agentId]);
+});
+
+export async function revokeAgentEligibility(db: Db, actor: AuthUser, agentId: number) {
+  await db.query("UPDATE agents SET commission_status = 'Revoked' WHERE id = $1", [agentId]);
+  await writeAudit(db, { actorId: actor.id, action: 'commission.eligibility.revoke', entityType: 'agents', entityId: agentId });
+}
+
+// ── Referrer eligibility (direct approve by CXO+) ──
+export async function listReferrers(db: Db) {
+  return (await db.query('SELECT id, display_name, eligibility_status FROM referrers ORDER BY display_name')).rows;
+}
+export async function setReferrerEligibility(db: Db, actor: AuthUser, referrerId: number, status: 'Approved' | 'Revoked') {
+  const upd = await db.query('UPDATE referrers SET eligibility_status = $1 WHERE id = $2', [status, referrerId]);
+  if (!upd.rowCount) throw errors.notFound('Referrer not found');
+  await writeAudit(db, { actorId: actor.id, action: 'referrer.eligibility', entityType: 'referrers', entityId: referrerId, after: { status } });
+  return { ok: true };
+}
+
 /** Overview for managers: every staff/agent/referrer with a nonzero balance. */
 export async function overview(db: Db) {
   const { rows } = await db.query(

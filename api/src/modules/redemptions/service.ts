@@ -128,6 +128,41 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
   await tx.query("UPDATE redemptions SET status = 'Approved', redemption_date = $1 WHERE id = $2", [redDate, redId]);
 });
 
+/** Federal Bank NEFT sheet for approved (unpaid) redemptions. */
+export async function redemptionNeft(db: Db): Promise<Buffer> {
+  const debit = (await db.query<{ account_number: string }>("SELECT account_number FROM banks WHERE is_disbursement_account = TRUE AND is_active = TRUE ORDER BY id LIMIT 1")).rows[0];
+  const rows = (await db.query<Record<string, unknown>>(
+    `SELECT r.redemption_no, r.net_payment, r.redemption_date, c.full_name AS name, c.email,
+            cba.account_number AS payee_account, cba.ifsc AS payee_ifsc
+     FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
+     LEFT JOIN customer_bank_accounts cba ON cba.customer_id = c.id AND cba.is_active = TRUE
+     WHERE r.status = 'Approved' AND r.utr IS NULL ORDER BY c.full_name`)).rows;
+  const { buildNeftSheet } = await import('../../lib/neft.js');
+  return buildNeftSheet(
+    { debitAccount: debit?.account_number ?? 'DISBURSEMENT-ACCT', sheetName: 'Redemptions' },
+    rows.map((r) => ({
+      amount: Number(r.net_payment), valueDate: String(r.redemption_date ?? new Date().toISOString().slice(0, 10)),
+      beneAccount: String(r.payee_account ?? ''), beneName: String(r.name), ifsc: String(r.payee_ifsc ?? ''),
+      email: (r.email as string) ?? '', creditRemark: `NCD redemption ${r.redemption_no}`, reference: String(r.redemption_no),
+    }))
+  );
+}
+
+/** Redemption report (all redemptions) as xlsx. */
+export async function redemptionReport(db: Db): Promise<Buffer> {
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Redemptions');
+  ws.addRow(['Ref', 'Customer', 'Application', 'Type', 'Principal', 'Penalty', 'Net', 'Status', 'Date']).eachCell((c) => { c.font = { bold: true }; });
+  const rows = (await db.query<Record<string, unknown>>(
+    `SELECT r.redemption_no, c.full_name, a.application_no, r.type, r.principal, r.penalty, r.net_payment, r.status, r.redemption_date
+     FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id ORDER BY r.created_at DESC`)).rows;
+  for (const r of rows) ws.addRow([r.redemption_no, r.full_name, r.application_no, r.type, Number(r.principal), Number(r.penalty), Number(r.net_payment), r.status, r.redemption_date]);
+  [5, 6, 7].forEach((i) => { ws.getColumn(i).numFmt = '#,##,##0.00'; });
+  ws.columns.forEach((c) => { c.width = 16; });
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
 export async function listRedemptions(db: Db, filter?: 'requests' | 'all') {
   const where = filter === 'requests' ? "WHERE r.status = 'Requested' AND r.approval_request_id IS NULL" : '';
   return (await db.query(

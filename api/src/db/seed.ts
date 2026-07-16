@@ -77,6 +77,13 @@ export async function seed(db: Db): Promise<void> {
      ON CONFLICT DO NOTHING`
   );
 
+  // Company disbursement account (for NEFT sheets).
+  await db.query(
+    `INSERT INTO banks (account_label, bank_name, account_number, ifsc, is_collection_account, is_disbursement_account)
+     SELECT 'Federal Disbursement', 'Federal Bank', '19820200007409', 'FDRL0001982', TRUE, TRUE
+     WHERE NOT EXISTS (SELECT 1 FROM banks WHERE is_disbursement_account = TRUE)`
+  );
+
   // Demo scheme + series (non-prod), so the investment lifecycle is exercisable.
   if (config.NODE_ENV !== 'production') {
     const tdsId = (await db.query<{ id: string }>("SELECT id FROM tds_rules WHERE kind = 'standard' LIMIT 1")).rows[0]?.id ?? null;

@@ -22,6 +22,7 @@ export const NAV: NavItem[] = [
   { to: '/app/allotments', label: 'Allotments', anyOf: ['allotments:execute'], group: 'Periodic' },
   { to: '/app/redemptions', label: 'Redemptions', anyOf: ['redemptions:initiate'], group: 'Periodic' },
   { to: '/app/payouts', label: 'Payouts', anyOf: ['payouts:generate'], group: 'Periodic' },
+  { to: '/app/incentives', label: 'Incentives', anyOf: ['incentives:manage-eligibility'], group: 'Periodic' },
   { to: '/app/my-earnings', label: 'My Earnings', anyOf: ['earnings:read-own'], group: 'Periodic' },
   { to: '/app/settings', label: 'Settings', anyOf: ['settings:manage', 'settings:workflow-config'], group: 'Admin' },
   { to: '/app/users', label: 'Users', anyOf: ['users:manage'], group: 'Admin' },

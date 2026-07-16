@@ -79,3 +79,34 @@ export async function markBatchPaid(db: Db, actor: AuthUser, batchId: number, ut
 export async function listBatches(db: Db) {
   return (await db.query('SELECT * FROM payout_batches ORDER BY created_at DESC LIMIT 200')).rows;
 }
+
+/** Federal Bank NEFT sheet for an approved interest batch. */
+export async function neftForBatch(db: Db, batchId: number): Promise<{ buffer: Buffer; batchNo: string }> {
+  const batch = (await db.query<{ batch_no: string; status: string; payout_date: string }>('SELECT batch_no, status, payout_date FROM payout_batches WHERE id = $1', [batchId])).rows[0];
+  if (!batch) throw errors.notFound('Batch not found');
+  if (!['Approved', 'Downloaded', 'Reconciled'].includes(batch.status)) throw errors.conflict('Batch must be approved before download');
+  const debit = (await db.query<{ account_number: string }>("SELECT account_number FROM banks WHERE is_disbursement_account = TRUE AND is_active = TRUE ORDER BY id LIMIT 1")).rows[0];
+  const rows = (await db.query<Record<string, unknown>>(
+    `SELECT ds.net_amount, ds.due_date, ds.payee_account, ds.payee_ifsc, c.full_name AS name, c.email, a.application_no
+     FROM disbursement_schedule ds JOIN applications a ON a.id = ds.application_id JOIN customers c ON c.id = a.customer_id
+     WHERE ds.batch_id = $1 AND ds.status = 'Scheduled' ORDER BY c.full_name`, [batchId])).rows;
+  const { buildNeftSheet } = await import('../../lib/neft.js');
+  const buffer = await buildNeftSheet(
+    { debitAccount: debit?.account_number ?? 'DISBURSEMENT-ACCT', sheetName: 'Interest' },
+    rows.map((r) => ({
+      amount: Number(r.net_amount), valueDate: String(r.due_date),
+      beneAccount: String(r.payee_account ?? ''), beneName: String(r.name), ifsc: String(r.payee_ifsc ?? ''),
+      email: (r.email as string) ?? '', creditRemark: `NCD interest ${r.application_no}`, reference: batch.batch_no,
+    }))
+  );
+  if (batch.status === 'Approved') await db.query("UPDATE payout_batches SET status = 'Downloaded' WHERE id = $1", [batchId]);
+  return { buffer, batchNo: batch.batch_no };
+}
+
+/** Mark a single schedule row failed (e.g. NEFT bounced). */
+export async function markRowFailed(db: Db, actor: AuthUser, scheduleId: number, reason: string) {
+  const upd = await db.query("UPDATE disbursement_schedule SET status = 'Failed', failure_reason = $1 WHERE id = $2 AND status = 'Scheduled'", [reason, scheduleId]);
+  if (!upd.rowCount) throw errors.conflict('Row is not in a failable state');
+  await writeAudit(db, { actorId: actor.id, action: 'payout.row.failed', entityType: 'disbursement_schedule', entityId: scheduleId, after: { reason } });
+  return { ok: true };
+}

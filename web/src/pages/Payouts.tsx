@@ -40,6 +40,9 @@ export function PayoutsPage() {
             <span className="text-text-muted">{b.payout_date}</span>
             <span className="mono">{formatINR(b.total_net)}</span>
             <span className="text-xs rounded px-1.5 py-0.5 bg-bg ml-auto">{b.status}</span>
+            {['Approved', 'Downloaded', 'Reconciled'].includes(b.status) && (
+              <a href={`/api/payouts/${b.id}/download.xlsx`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ NEFT sheet</a>
+            )}
             {can('payouts:mark-paid-manual') && b.status === 'Approved' && (
               <button onClick={() => markPaid.mutate(b.id)} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Mark paid</button>
             )}

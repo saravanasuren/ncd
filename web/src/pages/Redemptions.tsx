@@ -33,8 +33,16 @@ export function RedemptionsPage() {
 
   return (
     <div className="max-w-4xl">
-      <h1 className="text-xl font-bold tracking-tight m-0">Redemptions</h1>
-      <p className="text-sm text-text-muted mt-1 mb-5">Customer/app requests waiting to be processed, plus recent redemptions.</p>
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight m-0">Redemptions</h1>
+          <p className="text-sm text-text-muted mt-1">Customer/app requests waiting to be processed, plus recent redemptions.</p>
+        </div>
+        <div className="flex gap-2">
+          <a href="/api/redemptions/neft.xlsx" className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ NEFT sheet</a>
+          <a href="/api/redemptions/report.xlsx" className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ Report</a>
+        </div>
+      </div>
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
 
       {requests.length > 0 && (

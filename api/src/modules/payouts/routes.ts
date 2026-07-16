@@ -25,3 +25,17 @@ payoutsRouter.post('/:id/mark-paid', requirePermission('payouts:mark-paid-manual
     const { utr } = z.object({ utr: z.string().optional() }).parse(req.body);
     res.json(await s.markBatchPaid(getDb(), req.user!, Number(req.params.id), utr));
   }));
+
+payoutsRouter.get('/:id/download.xlsx', requirePermission('payouts:generate'),
+  asyncHandler(async (req, res) => {
+    const { buffer, batchNo } = await s.neftForBatch(getDb(), Number(req.params.id));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="neft-${batchNo}.xlsx"`);
+    res.end(buffer);
+  }));
+
+payoutsRouter.post('/rows/:scheduleId/mark-failed', requirePermission('payouts:mark-paid-manual'),
+  asyncHandler(async (req, res) => {
+    const { reason } = z.object({ reason: z.string().min(2) }).parse(req.body);
+    res.json(await s.markRowFailed(getDb(), req.user!, Number(req.params.scheduleId), reason));
+  }));

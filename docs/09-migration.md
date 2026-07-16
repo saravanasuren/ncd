@@ -106,25 +106,30 @@ the interest engine + Db layer, so it lives with the API).
   `maturity − tenure` so maturity is preserved exactly). Non-Active apps
   (Matured/Redeemed) keep their whole schedule frozen.
 
-**How the owner runs the real dry-run (local machine, restore of the dump — never prod):**
+**DRY-RUN is self-contained** — it builds its own throwaway in-memory target, so
+the ONLY input is a read-only pointer at the old DB. It writes to no real database.
+
+*Option A — on the box (recommended; data never leaves it):*
 ```bash
-# 1. restore the latest prod dump into a LOCAL Postgres
+cd ~/ncd/api
+git -C ~/ncd pull && (cd ~/ncd && npm run build)     # ensure latest ETL is built
+LEGACY_DATABASE_URL=$(aws ssm get-parameter --name /dhanam/wealth/DATABASE_URL \
+  --with-decryption --region ap-south-1 --query Parameter.Value --output text) \
+  npm run migrate:legacy
+```
+
+*Option B — on a Mac, against a restore of the dump (never prod):*
+```bash
 createdb dhanam_wealth_restore
-pg_restore -d dhanam_wealth_restore /path/to/dhanam_wealth-YYYYMMDD.dump   # or: psql < the .sql.gz
+pg_restore -d dhanam_wealth_restore /path/to/dhanam_wealth-YYYYMMDD.dump   # or psql < the .sql.gz
+cd api && LEGACY_DATABASE_URL=postgres://localhost/dhanam_wealth_restore npm run migrate:legacy:dev
+```
 
-# 2. create + migrate + seed a fresh new DB
-createdb dhanam_newwealth
-cd api && DATABASE_URL=postgres://localhost/dhanam_newwealth npm run migrate && npm run seed
-
-# 3. DRY-RUN (reads old, loads into a transaction, prints the report, rolls back — writes nothing)
-LEGACY_DATABASE_URL=postgres://localhost/dhanam_wealth_restore \
-DATABASE_URL=postgres://localhost/dhanam_newwealth \
-npm run migrate:legacy:dev
-
-# 4. review the reconciliation report (table counts, AUM parity, paid-rows-preserved,
-#    role mapping to confirm, sample freeze/recompute proof, anomalies). When it looks
-#    right, re-run with --commit to persist:
-#    ... npm run migrate:legacy:dev -- --commit
+**COMMIT (only after the report is right)** — loads into the real new DB:
+```bash
+LEGACY_DATABASE_URL=<old db url> \
+DATABASE_URL=<new db url, already migrated+seeded> \
+npm run migrate:legacy -- --commit
 ```
 The report **flags for owner confirmation**: any role that fell to the fallback
 mapping, any AUM mismatch, any change in the paid-row count, and every per-row

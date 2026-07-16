@@ -5,6 +5,10 @@ import { AppShell } from './layouts/AppShell.js';
 import { DashboardPlaceholder } from './pages/DashboardPlaceholder.js';
 import { SettingsPage } from './pages/Settings.js';
 import { UsersPage } from './pages/Users.js';
+import { LeadsPage } from './pages/Leads.js';
+import { CustomersPage } from './pages/Customers.js';
+import { CustomerDetailPage } from './pages/CustomerDetail.js';
+import { ApprovalsPage } from './pages/Approvals.js';
 import type { ReactNode } from 'react';
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -29,6 +33,10 @@ export function App() {
         >
           <Route index element={<Navigate to="/app/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPlaceholder />} />
+          <Route path="leads" element={<LeadsPage />} />
+          <Route path="customers" element={<CustomersPage />} />
+          <Route path="customers/:id" element={<CustomerDetailPage />} />
+          <Route path="approvals" element={<ApprovalsPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="users" element={<UsersPage />} />
         </Route>

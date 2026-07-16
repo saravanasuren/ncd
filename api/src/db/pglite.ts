@@ -15,7 +15,9 @@ export class PgliteDb implements Db {
 
   async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<QueryResult<T>> {
     const r = await this.pg.query<T>(sql, params as unknown[]);
-    return { rows: r.rows, rowCount: r.affectedRows ?? r.rows.length };
+    // PGlite reports affectedRows=0 for SELECT, so prefer rows.length when
+    // rows are present (matches node-postgres rowCount semantics).
+    return { rows: r.rows, rowCount: r.rows.length > 0 ? r.rows.length : (r.affectedRows ?? 0) };
   }
 
   async exec(sql: string): Promise<void> {
@@ -27,7 +29,7 @@ export class PgliteDb implements Db {
       const txDb: Db = {
         query: async <U = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
           const r = await tx.query<U>(sql, params as unknown[]);
-          return { rows: r.rows, rowCount: r.affectedRows ?? r.rows.length };
+          return { rows: r.rows, rowCount: r.rows.length > 0 ? r.rows.length : (r.affectedRows ?? 0) };
         },
         exec: async (sql: string) => { await tx.exec(sql); },
         withTx: (nested) => nested(txDb),

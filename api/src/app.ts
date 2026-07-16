@@ -17,6 +17,9 @@ import { authRouter } from './modules/auth/routes.js';
 import { settingsRouter } from './modules/settings/routes.js';
 import { usersRouter } from './modules/users/routes.js';
 import { productsRouter } from './modules/products/routes.js';
+import { leadsRouter } from './modules/leads/routes.js';
+import { customersRouter } from './modules/customers/routes.js';
+import { approvalsRouter } from './modules/approvals/routes.js';
 
 export function createApp(): Express {
   const app = express();
@@ -46,6 +49,9 @@ export function createApp(): Express {
   app.use('/api/auth', authRouter);
   app.use('/api/settings', settingsRouter);
   app.use('/api/users', usersRouter);
+  app.use('/api/leads', leadsRouter);
+  app.use('/api/customers', customersRouter);
+  app.use('/api/approvals', approvalsRouter);
   app.use('/api', productsRouter); // mounts /schemes, /series, /tds-rules, /banks, /holidays, /company-profile
 
   app.use(notFoundHandler);

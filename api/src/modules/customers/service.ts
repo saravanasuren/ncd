@@ -1,0 +1,231 @@
+/**
+ * Customers module (docs/04 §2, docs/03 scoping). Enrolment, list (scoped),
+ * 360 detail, bank accounts (penny-drop stub), KYC, submit-for-approval
+ * (hands off to the NCD Manager queue), correction + handover workflows.
+ */
+import type { Db } from '../../db/types.js';
+import type { AuthUser } from '../../lib/authUser.js';
+import { errors } from '../../lib/errors.js';
+import { writeAudit } from '../../lib/audit.js';
+import { nextCode } from '../../lib/sequences.js';
+import { scopeFor, scopeWhere } from '../../lib/scope.js';
+import { getSettingsMap } from '../settings/service.js';
+import { kycProvider } from '../../integrations/kyc/index.js';
+import {
+  createApprovalRequest,
+  registerOnFinalApprove,
+  type ApprovalRow,
+} from '../approvals/service.js';
+
+const SCOPE_COLS = {
+  userCol: 'c.enrolled_by_user_id',
+  agentCol: 'c.enrolled_by_agent_id',
+  branchCol: 'c.branch_id',
+  selfIdCol: 'c.id',
+};
+
+export interface CreateCustomerInput {
+  full_name: string;
+  pan?: string;
+  dob?: string;
+  gender?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  city?: string;
+  district?: string;
+  state?: string;
+  is_nri?: boolean;
+  referred_by_text?: string;
+}
+
+export async function createCustomer(db: Db, actor: AuthUser, input: CreateCustomerInput): Promise<{ id: number; customer_code: string }> {
+  const settings = await getSettingsMap(db);
+  const codeFmt = String(settings['numbering.customer_format'] ?? 'DHN{seq:6}');
+  return db.withTx(async (tx) => {
+    if (input.pan) {
+      const dup = await tx.query('SELECT 1 FROM customers WHERE pan = $1', [input.pan]);
+      if (dup.rowCount) throw errors.conflict('A customer with this PAN already exists');
+    }
+    const code = await nextCode(tx, 'customer', codeFmt);
+    const branchId = actor.branchIds[0] ?? null;
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO customers (customer_code, full_name, pan, dob, gender, phone, email, address, city, district, state, is_nri, referred_by_text,
+        creation_status, enrolled_by_user_id, enrolled_by_agent_id, branch_id, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'Draft',$14,$15,$16,FALSE) RETURNING id`,
+      [code, input.full_name, input.pan ?? null, input.dob ?? null, input.gender ?? null, input.phone ?? null,
+       input.email ?? null, input.address ?? null, input.city ?? null, input.district ?? null, input.state ?? null,
+       input.is_nri ?? false, input.referred_by_text ?? null, actor.id, actor.agentId, branchId]
+    );
+    const id = Number(rows[0]!.id);
+    await writeAudit(tx, { actorId: actor.id, action: 'customer.create', entityType: 'customers', entityId: id, after: { code, name: input.full_name } });
+    return { id, customer_code: code };
+  });
+}
+
+export interface CustomerFilters {
+  status?: string;
+  district?: string;
+  q?: string;
+}
+
+export async function listCustomers(db: Db, actor: AuthUser, filters: CustomerFilters = {}) {
+  const scope = scopeFor(actor);
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  const sc = scopeWhere(scope, SCOPE_COLS, params.length);
+  conds.push(sc.sql);
+  params.push(...sc.params);
+  if (filters.district) { params.push(filters.district); conds.push(`c.district = $${params.length}`); }
+  if (filters.q) { params.push(`%${filters.q}%`); conds.push(`(c.full_name ILIKE $${params.length} OR c.customer_code ILIKE $${params.length} OR c.phone ILIKE $${params.length})`); }
+  const { rows } = await db.query(
+    `SELECT c.id, c.customer_code, c.full_name, c.phone, c.district, c.kyc_status, c.creation_status, c.is_active
+     FROM customers c WHERE ${conds.join(' AND ')} ORDER BY c.created_at DESC LIMIT 500`,
+    params
+  );
+  return rows;
+}
+
+async function assertVisible(db: Db, actor: AuthUser, customerId: number): Promise<void> {
+  const scope = scopeFor(actor);
+  const sc = scopeWhere(scope, SCOPE_COLS, 1);
+  const { rowCount } = await db.query(
+    `SELECT 1 FROM customers c WHERE c.id = $1 AND ${sc.sql}`,
+    [customerId, ...sc.params]
+  );
+  if (!rowCount) throw errors.notFound('Customer not found');
+}
+
+export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
+  await assertVisible(db, actor, id);
+  const c = (await db.query('SELECT * FROM customers WHERE id = $1', [id])).rows[0];
+  const bankAccounts = (await db.query('SELECT * FROM customer_bank_accounts WHERE customer_id = $1 ORDER BY is_active DESC, id', [id])).rows;
+  const nominees = (await db.query('SELECT * FROM nominees WHERE customer_id = $1', [id])).rows;
+  const jointHolders = (await db.query('SELECT * FROM joint_holders WHERE customer_id = $1', [id])).rows;
+  const documents = (await db.query('SELECT id, doc_type, original_filename, origin, uploaded_at FROM customer_documents WHERE customer_id = $1', [id])).rows;
+  return { customer: c, bankAccounts, nominees, jointHolders, documents };
+}
+
+export async function addBankAccount(db: Db, actor: AuthUser, customerId: number, input: { account_number: string; ifsc: string; bank_name?: string; holder_name?: string }) {
+  await assertVisible(db, actor, customerId);
+  const pd = await kycProvider().pennyDrop(input.account_number, input.ifsc);
+  return db.withTx(async (tx) => {
+    const dup = await tx.query('SELECT 1 FROM customer_bank_accounts WHERE customer_id = $1 AND account_number = $2 AND ifsc = $3', [customerId, input.account_number, input.ifsc]);
+    if (dup.rowCount) throw errors.conflict('This bank account is already on file');
+    const anyActive = await tx.query('SELECT 1 FROM customer_bank_accounts WHERE customer_id = $1 AND is_active = TRUE', [customerId]);
+    const makeActive = anyActive.rowCount === 0 && pd.status === 'Verified';
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO customer_bank_accounts (customer_id, account_number, ifsc, bank_name, holder_name, penny_drop_status, penny_drop_detail, is_active, verified_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [customerId, input.account_number, input.ifsc, input.bank_name ?? null, input.holder_name ?? pd.holderName ?? null,
+       pd.status, pd.detail, makeActive, pd.status === 'Verified' ? new Date().toISOString() : null]
+    );
+    await writeAudit(tx, { actorId: actor.id, action: 'customer.bank.add', entityType: 'customer_bank_accounts', entityId: Number(rows[0]!.id), after: { customerId, pennyDrop: pd.status } });
+    return { id: Number(rows[0]!.id), pennyDrop: pd };
+  });
+}
+
+export async function setActiveBank(db: Db, actor: AuthUser, customerId: number, bankId: number) {
+  await assertVisible(db, actor, customerId);
+  await db.withTx(async (tx) => {
+    const chk = await tx.query<{ penny_drop_status: string }>('SELECT penny_drop_status FROM customer_bank_accounts WHERE id = $1 AND customer_id = $2', [bankId, customerId]);
+    if (!chk.rows[0]) throw errors.notFound('Bank account not found');
+    if (chk.rows[0].penny_drop_status !== 'Verified') throw errors.unprocessable('Cannot activate an unverified account');
+    await tx.query('UPDATE customer_bank_accounts SET is_active = FALSE WHERE customer_id = $1', [customerId]);
+    await tx.query('UPDATE customer_bank_accounts SET is_active = TRUE WHERE id = $1', [bankId]);
+    await writeAudit(tx, { actorId: actor.id, action: 'customer.bank.set-active', entityType: 'customer_bank_accounts', entityId: bankId, after: { customerId } });
+  });
+}
+
+export async function setKyc(db: Db, actor: AuthUser, customerId: number, to: 'Verified' | 'Rejected', reason?: string) {
+  await assertVisible(db, actor, customerId);
+  await db.withTx(async (tx) => {
+    const cur = (await tx.query<{ kyc_status: string }>('SELECT kyc_status FROM customers WHERE id = $1', [customerId])).rows[0];
+    await tx.query('UPDATE customers SET kyc_status = $1, updated_at = now() WHERE id = $2', [to, customerId]);
+    await writeAudit(tx, { actorId: actor.id, action: 'customer.kyc', entityType: 'customers', entityId: customerId, before: cur, after: { kyc_status: to, reason } });
+  });
+}
+
+/** Staff finishes the customer and hands off to the NCD Manager queue. */
+export async function submitForApproval(db: Db, actor: AuthUser, customerId: number): Promise<ApprovalRow> {
+  await assertVisible(db, actor, customerId);
+  return db.withTx(async (tx) => {
+    const cur = (await tx.query<{ creation_status: string; full_name: string }>('SELECT creation_status, full_name FROM customers WHERE id = $1', [customerId])).rows[0];
+    if (!cur) throw errors.notFound('Customer not found');
+    if (cur.creation_status !== 'Draft') throw errors.conflict('Customer is not in Draft');
+    await tx.query("UPDATE customers SET creation_status = 'PendingApproval', updated_at = now() WHERE id = $1", [customerId]);
+    const req = await createApprovalRequest(tx, {
+      type: 'customer_creation',
+      entityType: 'customers',
+      entityId: customerId,
+      makerUserId: actor.id,
+      metadata: { customerName: cur.full_name },
+    });
+    await writeAudit(tx, { actorId: actor.id, action: 'customer.submit', entityType: 'customers', entityId: customerId, after: { request_no: req.request_no } });
+    return req;
+  });
+}
+
+/** Register the approval callback that finalises a customer on approval. */
+registerOnFinalApprove('customer_creation', async (tx, req) => {
+  if (req.entity_id) {
+    await tx.query("UPDATE customers SET creation_status = 'Approved', is_active = TRUE, updated_at = now() WHERE id = $1", [Number(req.entity_id)]);
+  }
+});
+
+/** Correction request → approval; applies the diff on final approve. */
+export async function requestCorrection(db: Db, actor: AuthUser, customerId: number, changes: Record<string, unknown>, reason: string): Promise<ApprovalRow> {
+  await assertVisible(db, actor, customerId);
+  return db.withTx(async (tx) => {
+    const req = await createApprovalRequest(tx, {
+      type: 'customer_correction',
+      entityType: 'customers',
+      entityId: customerId,
+      makerUserId: actor.id,
+      metadata: { changes, reason },
+    });
+    await tx.query('INSERT INTO customer_change_requests (customer_id, changes, reason, source, approval_request_id, created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6)',
+      [customerId, JSON.stringify(changes), reason, 'staff', req.id, actor.id]);
+    return req;
+  });
+}
+
+const CORRECTABLE = new Set(['full_name', 'phone', 'email', 'address', 'city', 'district', 'state']);
+registerOnFinalApprove('customer_correction', async (tx, req) => {
+  const changes = (req.metadata.changes ?? {}) as Record<string, unknown>;
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let p = 0;
+  for (const [k, v] of Object.entries(changes)) {
+    if (CORRECTABLE.has(k)) { sets.push(`${k} = $${++p}`); params.push(v); }
+  }
+  if (sets.length && req.entity_id) {
+    params.push(Number(req.entity_id));
+    await tx.query(`UPDATE customers SET ${sets.join(', ')}, updated_at = now() WHERE id = $${++p}`, params);
+  }
+});
+
+/** Handover request → approval; moves ownership on final approve. */
+export async function requestHandover(db: Db, actor: AuthUser, customerId: number, toUserId: number, reason: string): Promise<ApprovalRow> {
+  return db.withTx(async (tx) => {
+    const cur = (await tx.query<{ enrolled_by_user_id: string | null }>('SELECT enrolled_by_user_id FROM customers WHERE id = $1', [customerId])).rows[0];
+    if (!cur) throw errors.notFound('Customer not found');
+    const req = await createApprovalRequest(tx, {
+      type: 'customer_reassignment',
+      entityType: 'customers',
+      entityId: customerId,
+      makerUserId: actor.id,
+      metadata: { toUserId, reason, fromUserId: cur.enrolled_by_user_id ? Number(cur.enrolled_by_user_id) : null },
+    });
+    await tx.query('INSERT INTO customer_reassignments (customer_id, from_user_id, to_user_id, reason, approval_request_id, created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6)',
+      [customerId, cur.enrolled_by_user_id, toUserId, reason, req.id, actor.id]);
+    return req;
+  });
+}
+
+registerOnFinalApprove('customer_reassignment', async (tx, req) => {
+  const toUserId = req.metadata.toUserId as number | undefined;
+  if (toUserId && req.entity_id) {
+    await tx.query('UPDATE customers SET enrolled_by_user_id = $1, updated_at = now() WHERE id = $2', [toUserId, Number(req.entity_id)]);
+  }
+});

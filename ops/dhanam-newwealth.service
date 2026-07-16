@@ -5,14 +5,14 @@ After=network.target postgresql.service
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/home/ubuntu/new-wealth/api
+WorkingDirectory=/home/ubuntu/ncd/api
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=3
 MemoryMax=512M
 Environment=NODE_ENV=production
 Environment=FILE_STORAGE_DIR=/var/lib/dhanam-newwealth
-EnvironmentFile=/home/ubuntu/new-wealth/api/.env
+EnvironmentFile=/home/ubuntu/ncd/api/.env
 # systemd hardening — the app only writes to its upload dir + tmp.
 ReadWritePaths=/var/lib/dhanam-newwealth /tmp
 NoNewPrivileges=true

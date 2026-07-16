@@ -26,8 +26,8 @@ Extend the instance role's SSM read policy to `/dhanam/newwealth/*` (additive).
 ## 2. First deploy (on the box)
 ```bash
 # clone (own repo + read-only deploy key)
-git clone git@github.com:saravanasuren/ncd.git /home/ubuntu/new-wealth
-cd /home/ubuntu/new-wealth
+git clone git@github.com:saravanasuren/ncd.git /home/ubuntu/ncd
+cd /home/ubuntu/ncd
 cp ops/env.production.example api/.env       # 4 lines, no secrets
 sudo mkdir -p /var/lib/dhanam-newwealth && sudo chown ubuntu /var/lib/dhanam-newwealth
 
@@ -56,7 +56,7 @@ sudo cp ops/backup.sh /usr/local/bin/dhanam-newwealth-backup.sh && sudo chmod +x
 
 ## 3. Subsequent deploys
 ```bash
-cd /home/ubuntu/new-wealth && bash ops/deploy.sh   # pull → build → migrate → restart → health + rollback
+cd /home/ubuntu/ncd && bash ops/deploy.sh   # pull → build → migrate → restart → health + rollback
 ```
 
 ## 4. Verify (five sites still up)

@@ -19,7 +19,7 @@ any infra change, curl all five subdomains.
 |---|---|
 | Subdomain | **`ncd.dhanamfinance.com`** (chosen 2026-07-16) — point DNS (GoDaddy) → `3.110.0.79` |
 | Port | **3020** (3010 = old wealth; 8080/3001/3000-range in use by co-tenants) |
-| Repo clone | `/home/ubuntu/new-wealth/` (own GitHub repo + read-only deploy key — create repo at build start) |
+| Repo clone | `/home/ubuntu/ncd/` (own GitHub repo + read-only deploy key — create repo at build start) |
 | Process | `systemd dhanam-newwealth.service` (User=ubuntu, `node api/dist/index.js`, MemoryMax=512M, Restart=always, `ReadWritePaths=/var/lib/dhanam-newwealth /tmp`) |
 | Static SPA | `web/dist/` served **directly by nginx** (immutable hashed assets, `index.html` no-cache); `/api/*` proxied to 127.0.0.1:3020 |
 | DB | `dhanam_newwealth` (own PG user) on the box's Postgres 16 |

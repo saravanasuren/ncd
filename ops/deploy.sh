@@ -3,7 +3,7 @@
 # Loop: git pull → build → migrate → restart → health-check (auto-rollback).
 set -euo pipefail
 
-REPO=/home/ubuntu/new-wealth
+REPO=/home/ubuntu/ncd
 SERVICE=dhanam-newwealth
 HEALTH=https://ncd.dhanamfinance.com/api/health
 

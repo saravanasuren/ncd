@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 interface Lead {
   id: number;
@@ -67,48 +68,39 @@ export function LeadsPage() {
       )}
       {err && <div className="text-xs text-danger mb-3">{err}</div>}
 
-      {isLoading ? <div className="text-text-muted">Loading…</div> : (
-        <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
-          <table className="w-full text-sm">
-            <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">
-              <th className="px-4 py-2.5">Name</th><th className="px-4 py-2.5">Phone</th><th className="px-4 py-2.5">District</th>
-              <th className="px-4 py-2.5">Status</th><th className="px-4 py-2.5"></th></tr></thead>
-            <tbody className="divide-y divide-border">
-              {data!.rows.map((l) => (
-                <tr key={l.id}>
-                  <td className="px-4 py-2.5 font-medium">{l.full_name}</td>
-                  <td className="px-4 py-2.5 text-text-muted">{l.phone ?? '—'}</td>
-                  <td className="px-4 py-2.5">{l.district ?? '—'}</td>
-                  <td className="px-4 py-2.5"><span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.status}</span></td>
-                  <td className="px-4 py-2.5 text-right">
-                    {can('leads:convert') && l.status !== 'Converted' && (
-                      converting?.id === l.id ? (
-                        <span className="inline-flex items-center gap-1.5">
-                          <input className={`${inp} w-28`} type="number" placeholder="Amount ₹" autoFocus
-                            value={converting.amount} onChange={(e) => setConverting({ ...converting, amount: e.target.value })} />
-                          <select className={inp} value={converting.seriesId}
-                            onChange={(e) => setConverting({ ...converting, seriesId: e.target.value })}>
-                            <option value="">Series…</option>
-                            {openSeries.map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
-                          </select>
-                          <button disabled={!converting.amount || Number(converting.amount) <= 0 || !converting.seriesId || convert.isPending}
-                            onClick={() => { setErr(''); convert.mutate(converting); }}
-                            className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Confirm</button>
-                          <button onClick={() => setConverting(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
-                        </span>
-                      ) : (
-                        <button onClick={() => { setErr(''); setConverting({ id: l.id, amount: l.expected_amount ?? '', seriesId: '' }); }}
-                          className="text-xs text-primary hover:underline">Convert →</button>
-                      )
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {data!.rows.length === 0 && <tr><td colSpan={5} className="px-4 py-6 text-center text-text-muted">No leads yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {isLoading ? <div className="text-text-muted">Loading…</div> : (() => {
+        const columns: Column<Lead>[] = [
+          { key: 'full_name', header: 'Name', tdClassName: 'font-medium' },
+          { key: 'phone', header: 'Phone', tdClassName: 'text-text-muted', value: (l) => l.phone ?? '', render: (l) => l.phone ?? '—' },
+          { key: 'district', header: 'District', value: (l) => l.district ?? '', render: (l) => l.district ?? '—' },
+          { key: 'source', header: 'Source', value: (l) => l.source ?? '', render: (l) => l.source ?? '—' },
+          { key: 'expected_amount', header: 'Expected', align: 'right', value: (l) => Number(l.expected_amount ?? 0),
+            render: (l) => l.expected_amount ? <span className="mono">₹{Number(l.expected_amount).toLocaleString('en-IN')}</span> : '—' },
+          { key: 'status', header: 'Status', render: (l) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.status}</span> },
+          { key: 'actions', header: '', sortable: false, filterable: false, align: 'right',
+            render: (l) => can('leads:convert') && l.status !== 'Converted' ? (
+              converting?.id === l.id ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <input className={`${inp} w-28`} type="number" placeholder="Amount ₹" autoFocus
+                    value={converting.amount} onChange={(e) => setConverting({ ...converting, amount: e.target.value })} />
+                  <select className={inp} value={converting.seriesId}
+                    onChange={(e) => setConverting({ ...converting, seriesId: e.target.value })}>
+                    <option value="">Series…</option>
+                    {openSeries.map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
+                  </select>
+                  <button disabled={!converting.amount || Number(converting.amount) <= 0 || !converting.seriesId || convert.isPending}
+                    onClick={() => { setErr(''); convert.mutate(converting); }}
+                    className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Confirm</button>
+                  <button onClick={() => setConverting(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
+                </span>
+              ) : (
+                <button onClick={() => { setErr(''); setConverting({ id: l.id, amount: l.expected_amount ?? '', seriesId: '' }); }}
+                  className="text-xs text-primary hover:underline">Convert →</button>
+              )
+            ) : null },
+        ];
+        return <DataTable columns={columns} rows={data!.rows} rowKey={(l) => l.id} empty="No leads yet." />;
+      })()}
     </div>
   );
 }

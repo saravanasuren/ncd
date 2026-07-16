@@ -34,13 +34,28 @@ export function SystemPage() {
   );
 }
 
-function Table({ head, rows }: { head: string[]; rows: (string | number)[][] }) {
+function Table({ head, rows, defaultSort }: { head: string[]; rows: (string | number)[][]; defaultSort?: { col: number; dir: 'asc' | 'desc' } }) {
+  const [sortCol, setSortCol] = useState<number | null>(defaultSort?.col ?? null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(defaultSort?.dir ?? 'asc');
+  const num = (v: string | number) => { const s = String(v).replace(/[₹,%\s]/g, ''); return s !== '' && !Number.isNaN(Number(s)) ? Number(s) : null; };
+  const sorted = sortCol == null ? rows : [...rows].sort((a, b) => {
+    const va = a[sortCol] ?? '', vb = b[sortCol] ?? '', na = num(va), nb = num(vb), d = sortDir === 'asc' ? 1 : -1;
+    if (na != null && nb != null) return (na - nb) * d;
+    return String(va).localeCompare(String(vb), undefined, { numeric: true }) * d;
+  });
+  const click = (i: number) => { if (sortCol === i) setSortDir((x) => (x === 'asc' ? 'desc' : 'asc')); else { setSortCol(i); setSortDir('asc'); } };
   return (
     <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
       <table className="w-full text-sm">
-        <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">{head.map((h) => <th key={h} className="px-4 py-2">{h}</th>)}</tr></thead>
+        <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">
+          {head.map((h, i) => (
+            <th key={h} onClick={() => click(i)} className="px-4 py-2 cursor-pointer select-none hover:text-text">
+              <span className="inline-flex items-center gap-1">{h}<span className={`text-[10px] ${sortCol === i ? 'text-primary' : 'text-border-strong'}`}>{sortCol === i ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span></span>
+            </th>
+          ))}
+        </tr></thead>
         <tbody className="divide-y divide-border">
-          {rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className="px-4 py-1.5">{c}</td>)}</tr>)}
+          {sorted.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className="px-4 py-1.5">{c}</td>)}</tr>)}
           {rows.length === 0 && <tr><td colSpan={head.length} className="px-4 py-6 text-center text-text-muted">Nothing yet.</td></tr>}
         </tbody>
       </table>
@@ -50,7 +65,7 @@ function Table({ head, rows }: { head: string[]; rows: (string | number)[][] }) 
 
 function Audit() {
   const { data } = useQuery({ queryKey: ['audit'], queryFn: () => api.get<{ rows: any[] }>('/api/audit') });
-  return <Table head={['When', 'Actor', 'Action', 'Entity']} rows={(data?.rows ?? []).map((r) => [String(r.created_at).slice(0, 19).replace('T', ' '), r.actor_name ?? '—', r.action, `${r.entity_type} ${r.entity_id ?? ''}`])} />;
+  return <Table head={['When', 'Actor', 'Action', 'Entity']} defaultSort={{ col: 0, dir: 'desc' }} rows={(data?.rows ?? []).map((r) => [String(r.created_at).slice(0, 19).replace('T', ' '), r.actor_name ?? '—', r.action, `${r.entity_type} ${r.entity_id ?? ''}`])} />;
 }
 function Notifications() {
   const { data } = useQuery({ queryKey: ['sys-notif'], queryFn: () => api.get<{ rows: any[] }>('/api/system/notifications') });

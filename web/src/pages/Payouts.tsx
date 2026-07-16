@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 export function PayoutsPage() {
   const qc = useQueryClient();
@@ -47,23 +48,26 @@ export function PayoutsPage() {
         </div>
       )}
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Recent batches</h2>
-      <div className="bg-surface border border-border rounded-lg shadow-card divide-y divide-border">
-        {(batches.data?.rows ?? []).map((b) => (
-          <div key={b.id} className="p-4 flex items-center gap-4 text-sm">
-            <span className="font-mono text-xs">{b.batch_no}</span>
-            <span className="text-text-muted">{b.payout_date}</span>
-            <span className="mono">{formatINR(b.total_net)}</span>
-            <span className="text-xs rounded px-1.5 py-0.5 bg-bg ml-auto">{b.status}</span>
-            {['Approved', 'Downloaded', 'Reconciled'].includes(b.status) && (
-              <a href={`/api/payouts/${b.id}/download.xlsx`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ NEFT sheet</a>
-            )}
-            {can('payouts:mark-paid-manual') && b.status === 'Approved' && (
-              <button onClick={() => markPaid.mutate(b.id)} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Mark paid</button>
-            )}
-          </div>
-        ))}
-        {(batches.data?.rows ?? []).length === 0 && <div className="p-6 text-center text-text-muted">No batches yet.</div>}
-      </div>
+      {(() => {
+        const columns: Column<any>[] = [
+          { key: 'batch_no', header: 'Batch', tdClassName: 'font-mono text-xs' },
+          { key: 'payout_date', header: 'Date', tdClassName: 'text-text-muted' },
+          { key: 'total_net', header: 'Net', align: 'right', value: (b) => Number(b.total_net), render: (b) => <span className="mono">{formatINR(b.total_net)}</span> },
+          { key: 'status', header: 'Status', render: (b) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{b.status}</span> },
+          { key: 'actions', header: '', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
+            render: (b) => (
+              <span className="inline-flex gap-2 justify-end">
+                {['Approved', 'Downloaded', 'Reconciled'].includes(b.status) && (
+                  <a href={`/api/payouts/${b.id}/download.xlsx`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ NEFT sheet</a>
+                )}
+                {can('payouts:mark-paid-manual') && b.status === 'Approved' && (
+                  <button onClick={() => markPaid.mutate(b.id)} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Mark paid</button>
+                )}
+              </span>
+            ) },
+        ];
+        return <DataTable columns={columns} rows={batches.data?.rows ?? []} rowKey={(b) => b.id} defaultSort={{ key: 'batch_no', dir: 'desc' }} empty="No batches yet." />;
+      })()}
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mt-6 mb-2">Reconcile a bank statement</h2>
       <div className="bg-surface border border-border rounded-lg shadow-card p-4">

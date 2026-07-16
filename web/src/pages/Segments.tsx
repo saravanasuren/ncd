@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 type Seg = 'customer' | 'district' | 'agent' | 'staff';
 const TABS: { key: Seg; label: string }[] = [
@@ -41,18 +42,21 @@ function SegTable({ seg, rows }: { seg: Seg; rows: any[] }) {
     staff: { head: ['Staff', 'Customer', 'Amount'], cells: (r) => [r.staff, r.customer, formatINR(r.amount)], money: [2] },
   };
   const c = cfg[seg];
+  const columns: Column<any>[] = c.head.map((h, i) => ({
+    key: String(i),
+    header: h,
+    align: c.money.includes(i) ? 'right' : 'left',
+    value: (r) => c.cells(r)[i] ?? '',
+    render: (r) => c.money.includes(i) ? <span className="mono">{c.cells(r)[i]}</span> : c.cells(r)[i],
+  }));
+  const moneyCol = c.money[c.money.length - 1];
   return (
-    <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
-      <table className="w-full text-sm">
-        <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">
-          {c.head.map((h, i) => <th key={i} className={`px-4 py-2 ${c.money.includes(i) ? 'text-right' : ''}`}>{h}</th>)}
-        </tr></thead>
-        <tbody className="divide-y divide-border">
-          {rows.map((r, i) => (
-            <tr key={i}>{c.cells(r).map((cell, j) => <td key={j} className={`px-4 py-1.5 ${c.money.includes(j) ? 'text-right mono' : ''}`}>{cell}</td>)}</tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      columns={columns}
+      rows={rows}
+      rowKey={(r) => c.cells(r).join('|')}
+      defaultSort={moneyCol != null ? { key: String(moneyCol), dir: 'desc' } : undefined}
+      empty="No data."
+    />
   );
 }

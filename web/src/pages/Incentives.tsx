@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 interface Payee { payee_type: string; payee_id: number; accrued: string; paid: string; balance: string; }
 interface Referrer { id: number; display_name: string; eligibility_status: string; }
@@ -32,16 +33,21 @@ export function IncentivesPage() {
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Balances</h2>
-      <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden mb-6">
-        <table className="w-full text-sm">
-          <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">
-            <th className="px-4 py-2">Payee</th><th className="px-4 py-2 text-right">Accrued</th><th className="px-4 py-2 text-right">Paid</th>
-            <th className="px-4 py-2 text-right">Balance</th><th className="px-4 py-2"></th></tr></thead>
-          <tbody className="divide-y divide-border">
-            {(overview.data?.rows ?? []).map((p) => <PayRow key={`${p.payee_type}-${p.payee_id}`} p={p} canPay={can('incentives:pay')} onPay={(amount) => { setMsg(''); pay.mutate({ type: p.payee_type, id: p.payee_id, amount }); }} />)}
-            {(overview.data?.rows ?? []).length === 0 && <tr><td colSpan={5} className="px-4 py-6 text-center text-text-muted">No accruals yet.</td></tr>}
-          </tbody>
-        </table>
+      <div className="mb-6">
+        <DataTable
+          columns={[
+            { key: 'payee', header: 'Payee', value: (p) => `${p.payee_type} #${p.payee_id}`, render: (p) => `${p.payee_type} #${p.payee_id}` },
+            { key: 'accrued', header: 'Accrued', align: 'right', value: (p) => Number(p.accrued), render: (p) => <span className="mono">{formatINR(p.accrued)}</span> },
+            { key: 'paid', header: 'Paid', align: 'right', value: (p) => Number(p.paid), render: (p) => <span className="mono text-text-muted">{formatINR(p.paid)}</span> },
+            { key: 'balance', header: 'Balance', align: 'right', value: (p) => Number(p.balance), render: (p) => <span className="mono font-semibold">{formatINR(p.balance)}</span> },
+            { key: 'actions', header: '', sortable: false, filterable: false, align: 'right',
+              render: (p) => <PayActions p={p} canPay={can('incentives:pay')} onPay={(amount) => { setMsg(''); pay.mutate({ type: p.payee_type, id: p.payee_id, amount }); }} /> },
+          ] as Column<Payee>[]}
+          rows={overview.data?.rows ?? []}
+          rowKey={(p) => `${p.payee_type}-${p.payee_id}`}
+          defaultSort={{ key: 'balance', dir: 'desc' }}
+          empty="No accruals yet."
+        />
       </div>
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Referrers</h2>
@@ -64,25 +70,17 @@ export function IncentivesPage() {
   );
 }
 
-function PayRow({ p, canPay, onPay }: { p: Payee; canPay: boolean; onPay: (amount: number) => void }) {
+function PayActions({ p, canPay, onPay }: { p: Payee; canPay: boolean; onPay: (amount: number) => void }) {
   const [amt, setAmt] = useState('');
   return (
-    <tr>
-      <td className="px-4 py-2">{p.payee_type} #{p.payee_id}</td>
-      <td className="px-4 py-2 text-right mono">{formatINR(p.accrued)}</td>
-      <td className="px-4 py-2 text-right mono text-text-muted">{formatINR(p.paid)}</td>
-      <td className="px-4 py-2 text-right mono font-semibold">{formatINR(p.balance)}</td>
-      <td className="px-4 py-2 text-right">
-        <div className="flex gap-1 justify-end items-center">
-          <a href={`/api/incentives/payees/${p.payee_type}/${p.payee_id}/statement.pdf`} target="_blank" rel="noreferrer" className="text-xs text-text-muted hover:text-primary">PDF</a>
-          {canPay && Number(p.balance) > 0 && (
-            <>
-              <input className="w-24 px-2 py-1 text-xs border border-border-strong rounded" placeholder="₹" value={amt} onChange={(e) => setAmt(e.target.value)} />
-              <button disabled={!amt} onClick={() => { onPay(Number(amt)); setAmt(''); }} className="text-xs bg-primary text-white rounded px-2 py-1 disabled:opacity-40">Pay</button>
-            </>
-          )}
-        </div>
-      </td>
-    </tr>
+    <div className="flex gap-1 justify-end items-center">
+      <a href={`/api/incentives/payees/${p.payee_type}/${p.payee_id}/statement.pdf`} target="_blank" rel="noreferrer" className="text-xs text-text-muted hover:text-primary">PDF</a>
+      {canPay && Number(p.balance) > 0 && (
+        <>
+          <input className="w-24 px-2 py-1 text-xs border border-border-strong rounded" placeholder="₹" value={amt} onChange={(e) => setAmt(e.target.value)} />
+          <button disabled={!amt} onClick={() => { onPay(Number(amt)); setAmt(''); }} className="text-xs bg-primary text-white rounded px-2 py-1 disabled:opacity-40">Pay</button>
+        </>
+      )}
+    </div>
   );
 }

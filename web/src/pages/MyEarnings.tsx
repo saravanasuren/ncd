@@ -1,6 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
+import { DataTable, type Column } from '../components/DataTable.js';
+
+interface Accrual { application_no: string; accrual_date: string; amount: string; paid_at: string | null }
+const accrualColumns: Column<Accrual>[] = [
+  { key: 'application_no', header: 'Application', tdClassName: 'font-mono text-xs' },
+  { key: 'accrual_date', header: 'Date', tdClassName: 'mono' },
+  { key: 'amount', header: 'Amount', align: 'right', value: (r) => Number(r.amount), render: (r) => <span className="mono">{formatINR(r.amount)}</span> },
+  { key: 'status', header: 'Status', value: (r) => (r.paid_at ? 'Paid' : 'Unpaid'), render: (r) => <span className="text-xs">{r.paid_at ? 'Paid' : 'Unpaid'}</span> },
+];
 
 export function MyEarningsPage() {
   const { data, isLoading, error } = useQuery({ queryKey: ['my-earnings'], queryFn: () => api.get<any>('/api/incentives/my-earnings') });
@@ -16,19 +25,13 @@ export function MyEarningsPage() {
         <Stat label="Balance" value={data.balance} highlight />
       </div>
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Accruals</h2>
-      <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
-        <table className="w-full text-sm">
-          <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">
-            <th className="px-4 py-2">Application</th><th className="px-4 py-2">Date</th><th className="px-4 py-2 text-right">Amount</th><th className="px-4 py-2">Status</th></tr></thead>
-          <tbody className="divide-y divide-border">
-            {data.accruals.map((r: any, i: number) => (
-              <tr key={i}><td className="px-4 py-1.5 font-mono text-xs">{r.application_no}</td><td className="px-4 py-1.5 mono">{r.accrual_date}</td>
-                <td className="px-4 py-1.5 text-right mono">{formatINR(r.amount)}</td><td className="px-4 py-1.5 text-xs">{r.paid_at ? 'Paid' : 'Unpaid'}</td></tr>
-            ))}
-            {data.accruals.length === 0 && <tr><td colSpan={4} className="px-4 py-6 text-center text-text-muted">No accruals yet.</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        columns={accrualColumns}
+        rows={data.accruals as Accrual[]}
+        rowKey={(r) => `${r.application_no}-${r.accrual_date}`}
+        defaultSort={{ key: 'accrual_date', dir: 'desc' }}
+        empty="No accruals yet."
+      />
     </div>
   );
 }

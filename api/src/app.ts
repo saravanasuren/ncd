@@ -27,6 +27,8 @@ import { redemptionsRouter } from './modules/redemptions/routes.js';
 import { incentivesRouter } from './modules/incentives/routes.js';
 import { dashboardRouter } from './modules/dashboard/routes.js';
 import { reportsRouter } from './modules/reports/routes.js';
+import { portalRouter } from './modules/portal/routes.js';
+import { integrationRouter } from './modules/integration/routes.js';
 
 export function createApp(): Express {
   const app = express();
@@ -48,6 +50,10 @@ export function createApp(): Express {
     res.json({ status: 'ok', service: 'new-wealth-api', ts: new Date().toISOString() });
   });
 
+  // Integration façade: own key auth, no cookie/CSRF (LockerHub / DhanamFin).
+  // Mounted BEFORE the CSRF guard so app clients don't need the browser header.
+  app.use('/api/integration', integrationRouter);
+
   // CSRF on cookie-authed mutations, then attach the authenticated user.
   app.use('/api', csrfGuard);
   app.use('/api', attachUser);
@@ -66,6 +72,7 @@ export function createApp(): Express {
   app.use('/api/incentives', incentivesRouter);
   app.use('/api/dashboard', dashboardRouter);
   app.use('/api/reports', reportsRouter);
+  app.use('/api/portal', portalRouter);
   app.use('/api', productsRouter); // mounts /schemes, /series, /tds-rules, /banks, /holidays, /company-profile
 
   app.use(notFoundHandler);

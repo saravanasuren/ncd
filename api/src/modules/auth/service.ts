@@ -11,7 +11,7 @@ export interface Tokens {
   refreshRaw: string;
 }
 
-async function issueSession(
+export async function issueSession(
   db: Db,
   user: AuthUser,
   meta: { ua?: string; ip?: string }

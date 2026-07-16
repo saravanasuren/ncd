@@ -15,12 +15,22 @@ import { ApplicationDetailPage } from './pages/ApplicationDetail.js';
 import { AllotmentsPage } from './pages/Allotments.js';
 import { PayoutsPage } from './pages/Payouts.js';
 import { MyEarningsPage } from './pages/MyEarnings.js';
+import { PortalLogin } from './portal/PortalLogin.js';
+import { PortalHome } from './portal/PortalHome.js';
 import type { ReactNode } from 'react';
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="p-8 text-text-muted">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
+  if (user.role === 'customer') return <Navigate to="/portal/home" replace />;
+  return <>{children}</>;
+}
+
+function RequirePortal({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="p-8 text-text-muted">Loading…</div>;
+  if (!user) return <Navigate to="/portal" replace />;
   return <>{children}</>;
 }
 
@@ -29,6 +39,8 @@ export function App() {
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/portal" element={<PortalLogin />} />
+        <Route path="/portal/home" element={<RequirePortal><PortalHome /></RequirePortal>} />
         <Route
           path="/app"
           element={

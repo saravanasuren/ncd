@@ -17,6 +17,7 @@ const schema = z.object({
   SEED_ADMIN_PASSWORD: z.string().default('ChangeMe_Dev_123'),
   KYC_PRIMARY_PROVIDER: z.string().default('stub'),
   PAYMENT_PRIMARY_PROVIDER: z.string().default('stub'),
+  LOCKERHUB_INTEGRATION_KEY: z.string().default('dev-integration-key'),
 });
 
 export type Config = z.infer<typeof schema>;

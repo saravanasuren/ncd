@@ -22,10 +22,20 @@ async function bootstrapDb(): Promise<void> {
   }
 }
 
+async function startCrons(): Promise<void> {
+  const { getDb } = await import('./db/index.js');
+  const { drainOnce } = await import('./modules/notifications/service.js');
+  // Notification queue drain (docs/12). Production only.
+  setInterval(() => {
+    void drainOnce(getDb(), 25).catch((e) => console.warn('[cron] notify drain:', (e as Error).message));
+  }, 60_000).unref();
+}
+
 async function main(): Promise<void> {
   // In production, SSM secrets would be loaded here before config is read.
   await bootstrapDb();
   const app = createApp();
+  if (config.NODE_ENV === 'production') await startCrons();
 
   const server = app.listen(config.PORT, () => {
     console.log(`[new-wealth-api] listening on :${config.PORT} (${config.NODE_ENV})`);

@@ -61,7 +61,7 @@ export interface CreateApprovalInput {
   type: string;
   entityType?: string;
   entityId?: string | number;
-  makerUserId: number;
+  makerUserId: number | null; // null for system/app-originated requests
   metadata?: Record<string, unknown>;
 }
 

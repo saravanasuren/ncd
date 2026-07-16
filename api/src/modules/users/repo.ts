@@ -23,6 +23,14 @@ async function hydrate(db: Db, row: UserRow): Promise<AuthUser> {
     [row.id]
   );
   const agent = await db.query<{ id: string }>('SELECT id FROM agents WHERE user_id = $1', [row.id]);
+  // Portal customers link back via customers.portal_user_id.
+  let customerId: number | null = null;
+  try {
+    const cust = await db.query<{ id: string }>('SELECT id FROM customers WHERE portal_user_id = $1 LIMIT 1', [row.id]);
+    customerId = cust.rows[0] ? Number(cust.rows[0].id) : null;
+  } catch {
+    customerId = null; // customers table may not exist yet (early migrations)
+  }
   return {
     id: Number(row.id),
     email: row.email,
@@ -31,7 +39,7 @@ async function hydrate(db: Db, row: UserRow): Promise<AuthUser> {
     permissions: perms.rows.map((p) => p.permission as Permission),
     branchIds: branches.rows.map((b) => Number(b.branch_id)),
     agentId: agent.rows[0] ? Number(agent.rows[0].id) : null,
-    customerId: null, // set in Phase 3 when customers table exists
+    customerId,
   };
 }
 

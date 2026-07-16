@@ -38,14 +38,14 @@
 - [~] Users: edit/deactivate/password-reset UI added 2026-07-16 (`PUT /users/:id`
   wired). Still no UI for: delete, multi-branch (`PUT /users/:id/branches`),
   reports-to.
-- [ ] Customers: direct enrolment (`POST /api/customers` unused — only lead-convert
-  path), no search box on Customers page (API supports `?q=`), KYC **reject**,
-  correction-request, handover-request all API-only.
+- [~] Customers — MOSTLY CLOSED 2026-07-16: direct enrolment form + server-backed
+  search box on Customers page; KYC reject (with reason) on the customer page.
+  Still API-only: correction-request, handover-request.
 - [ ] Leads: edit, notes/follow-up history, duplicate-phone check all API-only; create
   form missing place/category/referred-by/scheme/expected-amount/follow-up fields.
-- [ ] Applications: receipt upload (`POST /:id/receipt`), clubbing candidates —
-  API-only. Approval queue has no detail view (`GET /approvals/:id` unused) and
-  reject reason is hardcoded "Rejected from queue".
+- [~] Applications — receipt upload CLOSED 2026-07-16 (upload/replace button on the
+  application page, ≤4 MB). Approvals detail view + reject-with-reason CLOSED
+  2026-07-16. Still API-only: clubbing candidates.
 - [ ] Payouts/statements/incentives: mark-row-failed, statements list, agent
   eligibility grant/revoke, payee balance — API-only.
 - [ ] Portal: service-requests endpoints unused; documents list has no real download

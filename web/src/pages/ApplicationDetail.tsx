@@ -145,6 +145,23 @@ export function ApplicationDetailPage() {
           <button onClick={() => run(api.post(`/api/applications/${id}/mark-esigned`))} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Mark eSigned</button>
         )}
         {a.receipt_file_path && <a href={`/api/applications/${id}/receipt`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">View receipt</a>}
+        {can('applications:update') && (
+          <label className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg cursor-pointer">
+            {a.receipt_file_path ? 'Replace receipt…' : 'Upload receipt…'}
+            <input type="file" accept="image/*,.pdf" className="hidden" onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (!file) return;
+              if (file.size > 4 * 1024 * 1024) { setNote(''); setMsg('Receipt must be under 4 MB.'); return; }
+              const reader = new FileReader();
+              reader.onload = () => {
+                const data_base64 = String(reader.result).split(',')[1] ?? '';
+                run(api.post(`/api/applications/${id}/receipt`, { filename: file.name, mime: file.type || 'application/octet-stream', data_base64 }));
+              };
+              reader.readAsDataURL(file);
+            }} />
+          </label>
+        )}
         {can('applications:update') && a.status === 'Active' && <PayoutAccount appId={Number(id)} customerId={a.customer_id} onChange={invalidate} />}
       </div>
 

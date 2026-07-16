@@ -48,6 +48,12 @@ export function CustomerDetailPage() {
           {can('kyc:verify') && c.kyc_status !== 'Verified' && (
             <button onClick={() => wrap(api.post(`/api/customers/${id}/kyc/verify`))} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">✓ Verify KYC</button>
           )}
+          {can('kyc:reject') && c.kyc_status !== 'Rejected' && (
+            <button onClick={() => {
+              const reason = window.prompt('Reason for rejecting KYC:');
+              if (reason && reason.trim().length >= 2) wrap(api.post(`/api/customers/${id}/kyc/reject`, { reason: reason.trim() }));
+            }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">✗ Reject KYC</button>
+          )}
           {can('customers:create') && c.creation_status === 'Draft' && (
             <button onClick={() => wrap(api.post(`/api/customers/${id}/submit-for-approval`))} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Submit for approval →</button>
           )}

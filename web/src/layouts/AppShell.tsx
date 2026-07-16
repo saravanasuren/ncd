@@ -12,8 +12,8 @@ export function AppShell() {
   return (
     <div className="min-h-screen grid grid-cols-[220px_1fr]">
       <aside className="bg-surface border-r border-border flex flex-col">
-        <div className="px-5 py-4 border-b border-border">
-          <span className="text-base font-bold text-primary tracking-tight">Dhanam NCD</span>
+        <div className="px-4 py-4 border-b border-border flex items-center justify-center">
+          <img src="/dhanam-logo.png" alt="Dhanam Investment and Finance" className="w-36 h-auto" />
         </div>
         <nav className="p-2 flex flex-col gap-0.5">
           {items.map((item) => (

@@ -32,8 +32,10 @@ export function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-bg">
       <div className="w-full max-w-[340px] bg-surface border border-border rounded-lg shadow-card p-7 m-4">
-        <h1 className="text-lg font-bold text-primary tracking-tight m-0">Dhanam NCD</h1>
-        <p className="text-xs text-text-muted mt-1 mb-5">Sign in to the NCD platform.</p>
+        <div className="flex flex-col items-center text-center mb-5">
+          <img src="/dhanam-logo.png" alt="Dhanam Investment and Finance" className="w-40 h-auto" />
+          <p className="text-xs text-text-muted mt-3">Sign in to the NCD platform.</p>
+        </div>
         <form onSubmit={onSubmit}>
           <label className="block text-xs font-semibold text-text-label mt-3.5 mb-1.5" htmlFor="email">
             Email

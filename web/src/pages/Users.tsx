@@ -21,11 +21,21 @@ interface BranchRow {
 
 const EMPTY_FORM = { full_name: '', email: '', password: '', role: '', branch_id: '' };
 
+interface EditState {
+  id: number;
+  full_name: string;
+  role: string;
+  branch_id: string;
+  is_active: boolean;
+  password: string; // blank = keep current
+}
+
 /** Admin → Users (docs/05 §21). */
 export function UsersPage() {
   const qc = useQueryClient();
-  const { can } = useAuth();
+  const { can, user: me } = useAuth();
   const [form, setForm] = useState(EMPTY_FORM);
+  const [edit, setEdit] = useState<EditState | null>(null);
   const [err, setErr] = useState('');
 
   const { data, isLoading, error } = useQuery({
@@ -50,6 +60,19 @@ export function UsersPage() {
       }),
     onSuccess: () => { setForm(EMPTY_FORM); qc.invalidateQueries({ queryKey: ['users'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to create user'),
+  });
+
+  const update = useMutation({
+    mutationFn: (e: EditState) =>
+      api.put(`/api/users/${e.id}`, {
+        full_name: e.full_name,
+        role: e.role,
+        branch_id: e.branch_id ? Number(e.branch_id) : null,
+        is_active: e.is_active,
+        ...(e.password ? { password: e.password } : {}),
+      }),
+    onSuccess: () => { setEdit(null); qc.invalidateQueries({ queryKey: ['users'] }); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to update user'),
   });
 
   if (isLoading) return <div className="text-text-muted">Loading users…</div>;
@@ -99,24 +122,70 @@ export function UsersPage() {
               <th className="px-4 py-2.5">Role</th>
               <th className="px-4 py-2.5">Branch</th>
               <th className="px-4 py-2.5">Status</th>
+              <th className="px-4 py-2.5"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {data!.rows.map((u) => (
-              <tr key={u.id}>
-                <td className="px-4 py-2.5 font-medium">{u.full_name}</td>
-                <td className="px-4 py-2.5 text-text-muted">{u.email}</td>
-                <td className="px-4 py-2.5">{isRole(u.role) ? ROLE_LABELS[u.role] : u.role}</td>
-                <td className="px-4 py-2.5 text-text-muted">{branchLabel(u.branch_id)}</td>
-                <td className="px-4 py-2.5">
-                  <span className={`text-xs rounded px-1.5 py-0.5 ${u.is_active ? 'bg-[color:var(--success-bg)] text-success' : 'bg-[color:var(--danger-bg)] text-danger'}`}>
-                    {u.is_active ? 'Active' : 'Disabled'}
-                  </span>
-                </td>
-              </tr>
-            ))}
+            {data!.rows.map((u) =>
+              edit?.id === u.id ? (
+                <tr key={u.id} className="bg-bg">
+                  <td className="px-4 py-2.5">
+                    <input className={inp} value={edit.full_name} onChange={(e) => setEdit({ ...edit, full_name: e.target.value })} />
+                  </td>
+                  <td className="px-4 py-2.5 text-text-muted">{u.email}</td>
+                  <td className="px-4 py-2.5">
+                    <select className={inp} value={edit.role} onChange={(e) => setEdit({ ...edit, role: e.target.value })}>
+                      {STAFF_ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <select className={inp} value={edit.branch_id} onChange={(e) => setEdit({ ...edit, branch_id: e.target.value })}>
+                      <option value="">No branch</option>
+                      {branches?.rows.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <label className="flex items-center gap-1.5 text-xs">
+                      <input type="checkbox" checked={edit.is_active} disabled={u.id === me?.id}
+                        onChange={(e) => setEdit({ ...edit, is_active: e.target.checked })} />
+                      Active
+                    </label>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span className="inline-flex items-center gap-1.5">
+                      <input className={`${inp} w-36`} type="password" placeholder="New password" autoComplete="new-password"
+                        value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} />
+                      <button
+                        disabled={!edit.full_name || (edit.password !== '' && edit.password.length < 8) || update.isPending}
+                        onClick={() => { setErr(''); update.mutate(edit); }}
+                        className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Save</button>
+                      <button onClick={() => setEdit(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
+                    </span>
+                  </td>
+                </tr>
+              ) : (
+                <tr key={u.id}>
+                  <td className="px-4 py-2.5 font-medium">{u.full_name}</td>
+                  <td className="px-4 py-2.5 text-text-muted">{u.email}</td>
+                  <td className="px-4 py-2.5">{isRole(u.role) ? ROLE_LABELS[u.role] : u.role}</td>
+                  <td className="px-4 py-2.5 text-text-muted">{branchLabel(u.branch_id)}</td>
+                  <td className="px-4 py-2.5">
+                    <span className={`text-xs rounded px-1.5 py-0.5 ${u.is_active ? 'bg-[color:var(--success-bg)] text-success' : 'bg-[color:var(--danger-bg)] text-danger'}`}>
+                      {u.is_active ? 'Active' : 'Disabled'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    {can('users:manage') && (
+                      <button
+                        onClick={() => { setErr(''); setEdit({ id: u.id, full_name: u.full_name, role: u.role, branch_id: u.branch_id != null ? String(u.branch_id) : '', is_active: u.is_active, password: '' }); }}
+                        className="text-xs text-primary hover:underline">Edit</button>
+                    )}
+                  </td>
+                </tr>
+              )
+            )}
             {data!.rows.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-6 text-center text-text-muted">No users yet.</td></tr>
+              <tr><td colSpan={6} className="px-4 py-6 text-center text-text-muted">No users yet.</td></tr>
             )}
           </tbody>
         </table>

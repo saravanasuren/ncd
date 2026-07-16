@@ -17,13 +17,14 @@
   without sending (`api/src/integrations/notify/index.ts`). This includes the
   **customer-portal OTP** — portal login is effectively unusable until SES/WappCloud
   adapters + keys land.
-- [ ] **Lead → convert posts hardcoded values** — `web/src/pages/Leads.tsx:33` sends
-  `confirmed_amount: 100000, confirmed_series_id: 1` with no input form. Converting
-  any real lead writes wrong data. Fix before staff use Leads.
-- [ ] **No password reset/change anywhere.** No forgot-password route (a rate limiter
-  is registered for `/api/auth/forgot-password` in `app.ts:68` but the handler was
-  never written), no change-password endpoint, and no user-edit UI to set a new one.
-  The only path today is `PUT /api/users/:id` via curl.
+- [x] **Lead → convert posts hardcoded values** — FIXED 2026-07-16: inline convert
+  form (amount prefilled from expected_amount + Open-series picker) replaces the
+  hardcoded `100000 / series 1`.
+- [~] **No password reset/change anywhere.** PARTLY CLOSED 2026-07-16: admins can now
+  set a new password (and edit role/branch/name/active) from the Users screen.
+  Still missing: self-service forgot/change password (the `/api/auth/forgot-password`
+  rate limiter in `app.ts:68` still has no route handler; blocked on real email
+  sending anyway — see notifications stub above).
 
 ## P1 — backend exists, no UI (feature unreachable; same pattern as the create-user gap fixed 2026-07-16)
 
@@ -35,9 +36,9 @@
   `/api/ncd-events/*` complete, no page, no nav entry.
 - [ ] Redemption initiation: `POST /api/redemptions/premature` and `/maturity` have no
   maker UI (Redemptions page only lists + sends existing requests for approval).
-- [ ] Users: edit / deactivate / delete / multi-branch / reports-to
-  (`PUT /users/:id`, `PUT /users/:id/branches`, `DELETE /users/:id` unused; create
-  form lacks reports-to).
+- [~] Users: edit/deactivate/password-reset UI added 2026-07-16 (`PUT /users/:id`
+  wired). Still no UI for: delete, multi-branch (`PUT /users/:id/branches`),
+  reports-to.
 - [ ] Customers: direct enrolment (`POST /api/customers` unused — only lead-convert
   path), no search box on Customers page (API supports `?q=`), KYC **reject**,
   correction-request, handover-request all API-only.

@@ -20,8 +20,15 @@ export function LeadsPage() {
   const { can } = useAuth();
   const [form, setForm] = useState({ full_name: '', phone: '', district: '', source: '' });
   const [err, setErr] = useState('');
+  const [converting, setConverting] = useState<{ id: number; amount: string; seriesId: string } | null>(null);
 
   const { data, isLoading } = useQuery({ queryKey: ['leads'], queryFn: () => api.get<{ rows: Lead[] }>('/api/leads') });
+  const series = useQuery({
+    queryKey: ['series'],
+    queryFn: () => api.get<{ rows: { id: number; code: string; status: string }[] }>('/api/series'),
+    enabled: can('leads:convert'),
+  });
+  const openSeries = (series.data?.rows ?? []).filter((s) => s.status === 'Open');
 
   const create = useMutation({
     mutationFn: () => api.post('/api/leads', { ...form, phone: form.phone || undefined }),
@@ -30,8 +37,12 @@ export function LeadsPage() {
   });
 
   const convert = useMutation({
-    mutationFn: (id: number) => api.post<{ customerId: number }>(`/api/leads/${id}/convert`, { confirmed_amount: 100000, confirmed_series_id: 1 }),
-    onSuccess: (r) => { qc.invalidateQueries({ queryKey: ['leads'] }); nav(`/app/customers/${r.customerId}`); },
+    mutationFn: (c: { id: number; amount: string; seriesId: string }) =>
+      api.post<{ customerId: number }>(`/api/leads/${c.id}/convert`, {
+        confirmed_amount: Number(c.amount),
+        confirmed_series_id: Number(c.seriesId),
+      }),
+    onSuccess: (r) => { setConverting(null); qc.invalidateQueries({ queryKey: ['leads'] }); nav(`/app/customers/${r.customerId}`); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
 
@@ -52,9 +63,9 @@ export function LeadsPage() {
             <button disabled={!form.full_name || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
               className="bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-4 py-1.5 text-sm font-semibold">+ Add lead</button>
           </div>
-          {err && <div className="text-xs text-danger mt-2">{err}</div>}
         </div>
       )}
+      {err && <div className="text-xs text-danger mb-3">{err}</div>}
 
       {isLoading ? <div className="text-text-muted">Loading…</div> : (
         <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
@@ -71,7 +82,24 @@ export function LeadsPage() {
                   <td className="px-4 py-2.5"><span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.status}</span></td>
                   <td className="px-4 py-2.5 text-right">
                     {can('leads:convert') && l.status !== 'Converted' && (
-                      <button onClick={() => { setErr(''); convert.mutate(l.id); }} className="text-xs text-primary hover:underline">Convert →</button>
+                      converting?.id === l.id ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <input className={`${inp} w-28`} type="number" placeholder="Amount ₹" autoFocus
+                            value={converting.amount} onChange={(e) => setConverting({ ...converting, amount: e.target.value })} />
+                          <select className={inp} value={converting.seriesId}
+                            onChange={(e) => setConverting({ ...converting, seriesId: e.target.value })}>
+                            <option value="">Series…</option>
+                            {openSeries.map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
+                          </select>
+                          <button disabled={!converting.amount || Number(converting.amount) <= 0 || !converting.seriesId || convert.isPending}
+                            onClick={() => { setErr(''); convert.mutate(converting); }}
+                            className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Confirm</button>
+                          <button onClick={() => setConverting(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
+                        </span>
+                      ) : (
+                        <button onClick={() => { setErr(''); setConverting({ id: l.id, amount: l.expected_amount ?? '', seriesId: '' }); }}
+                          className="text-xs text-primary hover:underline">Convert →</button>
+                      )
                     )}
                   </td>
                 </tr>

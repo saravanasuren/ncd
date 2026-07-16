@@ -68,3 +68,67 @@ and any audit query share one date.
    2-week parallel-verify window, then decommission decision.
 6. Rollback plan: LockerHub flips base URL back; old app un-freezes. (New-app
    writes during the window would be lost — keep the window short and verified.)
+
+---
+
+## 5. AS-BUILT (2026-07-16) — the ETL tool that exists
+
+Built in Phase 8 and proven end-to-end against a synthetic book (no real data);
+118→**121 tests** green. The real dry-run runs the *identical* code against a
+local restore of the prod dump on the owner's machine.
+
+**Location:** `api/src/migrate-legacy/` (not `ops/` as the plan sketched — it needs
+the interest engine + Db layer, so it lives with the API).
+
+| File | Role |
+|---|---|
+| `config.ts` | Every judgement-call knob: `INTEREST_ANCHOR='2026-06-28'`, `ROLE_MAP`, agent/status/due-type coercions. Change one place to re-anchor. |
+| `source.ts` | `LegacySource` contract + `PgLegacySource` (reads the old DB over `LEGACY_DATABASE_URL`, `SELECT *` per table, tolerant of the 77-migration column sprawl). |
+| `synthetic.ts` | Fake old-app book (invented names/PANs/amounts) that proves the pipeline with zero real data. |
+| `pipeline.ts` | Transform + load + freeze/recompute. |
+| `report.ts` | Console reconciliation sheet. |
+| `run.ts` | CLI: dry-run default, `--commit` to persist. |
+
+**Decisions that differ from the §1–2 sketch (and why):**
+- **Old integer PKs are preserved as the new BIGINT PKs** (not surrogate + `legacy_id`).
+  The old and new schemas are close enough that keeping ids makes every FK line up
+  with no remap table, and traceability is 1:1 by construction. (If a future need
+  for `legacy_id` appears, add it as a nullable column — nothing here blocks it.)
+- **Money copies rupees→rupees 1:1.** Both schemas persist rupees (`NUMERIC`);
+  paise is internal to the math layer only. No scaling.
+- **Per-row isolation:** a bad row is recorded as an anomaly and the run continues,
+  so one dry-run surfaces *all* data problems instead of aborting on the first.
+- **Freeze/recompute mechanism:** for each still-Active line, old rows dated
+  `≤ 2026-06-28` are copied verbatim; unpaid rows after it are dropped; the new
+  engine regenerates from `interestStartDate = 2026-06-28` so the first payout is
+  `2026-07-28` over exactly `daysBetween(Jun28,Jul28) = 30` days — i.e. the owner's
+  "29 Jun → 28 Jul" period — through maturity (deemed re-derived as
+  `maturity − tenure` so maturity is preserved exactly). Non-Active apps
+  (Matured/Redeemed) keep their whole schedule frozen.
+
+**How the owner runs the real dry-run (local machine, restore of the dump — never prod):**
+```bash
+# 1. restore the latest prod dump into a LOCAL Postgres
+createdb dhanam_wealth_restore
+pg_restore -d dhanam_wealth_restore /path/to/dhanam_wealth-YYYYMMDD.dump   # or: psql < the .sql.gz
+
+# 2. create + migrate + seed a fresh new DB
+createdb dhanam_newwealth
+cd api && DATABASE_URL=postgres://localhost/dhanam_newwealth npm run migrate && npm run seed
+
+# 3. DRY-RUN (reads old, loads into a transaction, prints the report, rolls back — writes nothing)
+LEGACY_DATABASE_URL=postgres://localhost/dhanam_wealth_restore \
+DATABASE_URL=postgres://localhost/dhanam_newwealth \
+npm run migrate:legacy:dev
+
+# 4. review the reconciliation report (table counts, AUM parity, paid-rows-preserved,
+#    role mapping to confirm, sample freeze/recompute proof, anomalies). When it looks
+#    right, re-run with --commit to persist:
+#    ... npm run migrate:legacy:dev -- --commit
+```
+The report **flags for owner confirmation**: any role that fell to the fallback
+mapping, any AUM mismatch, any change in the paid-row count, and every per-row
+anomaly. Nothing about the old data's meaning is assumed silently.
+
+**Still owner-gated before a real load:** confirm the role map (`config.ts ROLE_MAP`),
+provide the dump, and confirm the anchor month if cutover slips past July.

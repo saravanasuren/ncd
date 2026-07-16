@@ -14,7 +14,9 @@
     "migrate": "node dist/db/migrate-cli.js",
     "migrate:dev": "tsx src/db/migrate-cli.ts",
     "seed": "node dist/db/seed-cli.js",
-    "seed:dev": "tsx src/db/seed-cli.ts"
+    "seed:dev": "tsx src/db/seed-cli.ts",
+    "migrate:legacy": "node dist/migrate-legacy/run.js",
+    "migrate:legacy:dev": "tsx src/migrate-legacy/run.ts"
   },
   "dependencies": {
     "@aws-sdk/client-ssm": "^3.1088.0",

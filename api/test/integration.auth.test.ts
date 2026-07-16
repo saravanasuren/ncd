@@ -133,6 +133,27 @@ describe('masters — a series can be configured end to end', () => {
     expect(r.status).toBe(201);
   });
 
+  it('admin can edit a user and reset their password; the new password works', async () => {
+    const c = await admin();
+    const created = await c.post('/api/users', {
+      email: 'editme@demo.local',
+      full_name: 'Edit Me',
+      role: 'branch_staff',
+      password: 'FirstPw_123',
+    });
+    expect(created.status).toBe(201);
+    const id = created.json.id;
+
+    const upd = await c.put(`/api/users/${id}`, { full_name: 'Edited Name', password: 'SecondPw_456' });
+    expect(upd.status).toBe(200);
+
+    const fresh = new Client(ctx.base);
+    expect((await fresh.post('/api/auth/login', { email: 'editme@demo.local', password: 'FirstPw_123' })).status).toBe(401);
+    const ok = await fresh.post('/api/auth/login', { email: 'editme@demo.local', password: 'SecondPw_456' });
+    expect(ok.status).toBe(200);
+    expect(ok.json.user.fullName).toBe('Edited Name');
+  });
+
   it('users:manage lists branches for the create-user form; others cannot', async () => {
     const c = await admin();
     const r = await c.get('/api/users/branches');

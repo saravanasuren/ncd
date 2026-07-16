@@ -11,3 +11,6 @@ coverage/
 web/dist/
 api/dist/
 packages/*/dist/
+
+# runtime upload dir (tests write here in dev)
+api/data/

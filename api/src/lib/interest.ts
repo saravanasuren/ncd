@@ -1,14 +1,25 @@
 /**
  * Interest schedule engine (option-b, receipt-date driven).
  *
- * Ported behaviour-for-behaviour from the old app's `schedule.js`
- * `generateSchedule`. The locked worked example (Ramesh ₹5L @10%) is
- * asserted in `test/interest.test.ts` — DO NOT change the math without
- * owner sign-off (docs/02 §6).
+ * 🔒 CONVENTION — owner-confirmed 2026-07-16 (docs/02 §6):
+ *   • Interest is PAID on the 28th of each month.
+ *   • Each period runs 29th-of-previous-month → 28th-of-this-month, i.e. the
+ *     ACTUAL calendar days between consecutive 28ths.
+ *   • Interest = principal × rate/100 × actual_days / 365 for EVERY period
+ *     (full months vary: 30, 31 or 28 days — NOT flat).
+ *   • First (broken) period = actual days from the money-received date to
+ *     the next 28th, ÷ 365.
+ *   • Maturity = deemed date + tenure; principal returns as a Redemption row
+ *     on maturity_date; the last part-period (last 28th → maturity) is a
+ *     separate BrokenInterest row on the first 28th after maturity.
  *
- * Defaults: payout day = 30, convention = Thirty360 (denom 360). Both are
- * overridable per-scheme / per-settings — no value is hardcoded into a
- * decision, only supplied as a default here.
+ * The default convention is therefore `Actual365` (actual days every period).
+ * `Thirty360` (flat 30/360) remains available per-scheme for back-compat.
+ * Payout day and denominator are config-driven (settings) — no value is
+ * hardcoded into a decision, only supplied as a default here.
+ *
+ * Locked worked example asserted in `test/interest.test.ts` — DO NOT change
+ * the math without owner sign-off.
  */
 import {
   addMonths,
@@ -57,7 +68,7 @@ export interface ScheduleOpts {
   /** Anchors maturity (deemed + tenure). */
   seriesDeemedDate: ISODate;
   holidays?: string[];
-  /** Config-driven (settings `interest.payout_day_of_month`, default 30). */
+  /** Config-driven (settings `interest.payout_day_of_month`, default 28). */
   payoutDay?: number;
 }
 
@@ -104,12 +115,12 @@ function payoutDatesFor(
 }
 
 export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): ScheduleRow[] {
-  const { interestStartDate, seriesDeemedDate, holidays, payoutDay = 30 } = opts;
+  const { interestStartDate, seriesDeemedDate, holidays, payoutDay = 28 } = opts;
   if (!interestStartDate || !seriesDeemedDate) {
     throw new Error('generateSchedule requires interestStartDate and seriesDeemedDate');
   }
   const holidaySet = new Set(Array.isArray(holidays) ? holidays : []);
-  const convention: DayCountConvention = line.day_count_convention || 'Thirty360';
+  const convention: DayCountConvention = line.day_count_convention || 'Actual365';
 
   const out: ScheduleRow[] = [];
   const amount = Number(line.amount);
@@ -133,6 +144,7 @@ export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): Schedu
       let periodDays: number;
       let isBroken: boolean;
       if (convention === 'Thirty360') {
+        // Back-compat opt-in: flat 30-day months, broken first = (30 − invest_day).
         if (i === 0 && investDay > 1) {
           periodDays = m * 30 - investDay;
           isBroken = true;
@@ -140,12 +152,11 @@ export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): Schedu
           periodDays = m * 30;
           isBroken = false;
         }
-      } else if (convention === 'ActualActual') {
+      } else {
+        // Actual365 (default) / Actual360 / ActualActual: every period is the
+        // ACTUAL calendar days between boundaries (owner-confirmed rule).
         periodDays = actualDays;
         isBroken = i === 0 && actualDays < periodDaysNormal;
-      } else {
-        isBroken = i === 0 && actualDays < periodDaysNormal;
-        periodDays = isBroken ? actualDays : periodDaysNormal;
       }
       const denom = denominatorFor(convention, prev);
       const interest = round2((amount * rate) / 100 * periodDays / denom);

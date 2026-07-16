@@ -33,10 +33,11 @@ export interface RedemptionResult {
 
 function denom(convention: DayCountConvention | undefined): number {
   switch (convention) {
-    case 'Actual365':
-      return 365;
+    case 'Thirty360':
+    case 'Actual360':
+      return 360;
     default:
-      return 360; // Thirty360 / Actual360 default
+      return 365; // Actual365 (owner-confirmed default) / ActualActual
   }
 }
 

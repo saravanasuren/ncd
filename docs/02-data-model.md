@@ -71,23 +71,28 @@ shared constants.
 
 ## 6. 🔒 Domain formulas — CONTRACT, port verbatim, lock with tests
 
-1. **Interest (option-b, receipt-date driven).** `interest_start_date =
-   max(latest collection date, series deemed date)`. Payouts on day ⚙**(30)** of each
-   month (Feb → last day; holiday-adjusted backward to previous working day).
-   **Default day-count convention ⚙ = `Thirty360` (denominator 360).** First
-   (broken) period = `(30 − invest_day)` days: `principal × rate/100 × brokenDays/360`.
-   Subsequent regular periods = flat `m×30` days (m = months per frequency):
-   `principal × rate/100 × (m×30)/360`. Maturity = deemed date + tenure_months;
-   principal returns as a `Redemption` row **on** maturity_date; any gap from the last
-   regular 30th to maturity is paid as a separate `BrokenInterest` row on the first
-   30th strictly after maturity. Other conventions supported per-scheme:
-   `Actual365` (first row actual_days/365, rest 30/365), `Actual360`, `ActualActual`
-   (leap-year-aware). **🔒 Locked worked example (from old `test/schedule.test.js`,
-   these exact values must pass):** ₹5,00,000 @ 10% monthly, 36 months, invest
-   Apr 15 2026, deemed Apr 1 2026 → first row = 15 broken days = **₹2,083.33**;
-   regular months = 30 days = **₹4,166.67**; Redemption ₹5,00,000 on **2029-04-01**;
-   maturity BrokenInterest = 2 days (Mar 30 → Apr 1) = **₹277.78**. Quarterly check:
-   ₹1,00,000 @ 12%, invest on the 1st → full 90-day quarters = **₹3,000.00** each.
+1. **Interest (option-b, receipt-date driven) — 🔒 owner-confirmed 2026-07-16.**
+   `interest_start_date = max(latest collection date, series deemed date)`. Interest
+   is **paid on the 28th ⚙** of each month. Each period runs **29th-of-previous-month
+   → 28th-of-this-month**, i.e. the **actual calendar days between consecutive 28ths**;
+   `interest = principal × rate/100 × actual_days / 365 ⚙` for **every** period (full
+   months therefore vary — 30, 31 or 28 days, and a leap Feb→Mar span is 29 days,
+   captured naturally with the denominator fixed at 365). The **first (broken) period**
+   = actual days from the money-received date to the next 28th, ÷ 365. Maturity =
+   deemed date + tenure_months; principal returns as a `Redemption` row **on**
+   maturity_date; the last part-period (last 28th → maturity) is a separate
+   `BrokenInterest` row on the first 28th after maturity. This is the default
+   convention **`Actual365`** (actual days every period). `Thirty360` (flat 30/360)
+   remains available per-scheme for back-compat. **Locked worked example (must pass
+   in `test/interest.test.ts`):** ₹5,00,000 @ 12% monthly, 36 months, invest Apr 15
+   2026, deemed Apr 1 2026 → first row (13 days, Apr 28) = **₹2,136.99**; a 30-day
+   month = **₹4,931.51**; a 31-day month = **₹5,095.89**; a non-leap Feb→Mar (28d) =
+   **₹4,602.74**; leap Feb→Mar 2028 (29d) = **₹4,767.12**; Redemption ₹5,00,000 on
+   **2029-04-01**; maturity BrokenInterest (Mar 28 → Apr 1 = 4 days) = **₹657.53** on
+   **2029-04-28**. **⚠ Note vs old app:** the old production code drifted to paying on
+   the 30th with flat 30-day months; the new app uses the owner's true rule (28th,
+   actual days/365). Migration copies existing schedules row-for-row (docs/09) —
+   only NEW investments use this rule, so no historical payout is rewritten.
 2. **TDS.** Rule resolved per scheme/customer (standard ⚙10% / 15G / 15H / custom /
    LDC window). Rate **snapshotted onto each schedule row at materialisation** —
    never auto-recomputed when rules change later.

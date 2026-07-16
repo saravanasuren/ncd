@@ -44,9 +44,9 @@ type SettingDef<T> = {
 
 | Group | Key | Default | Notes |
 |---|---|---|---|
-| Interest engine | `interest.payout_day_of_month` | **30** | Feb → last day; production value (not 28) |
-| | `interest.day_count_convention` | **'Thirty360'** | denom 360; enum: Thirty360 \| Actual365 \| Actual360 \| ActualActual. Overridable per-scheme via `schemes.day_count_convention` |
-| | `interest.broken_first_period` | '(30−invest_day)' | derived from convention; documented |
+| Interest engine | `interest.payout_day_of_month` | **28** | owner-confirmed 2026-07-16; holiday-adjusted backward |
+| | `interest.day_count_convention` | **'Actual365'** | actual days/365 every period (29th→28th); enum: Actual365 \| Thirty360 \| Actual360 \| ActualActual. Overridable per-scheme via `schemes.day_count_convention` |
+| | `interest.broken_first_period` | 'actual-days receipt→28th' | first partial period from money-received date to next 28th ÷ 365 |
 | Incentives | `incentive.staff_new_no_referrer` | {pct, 2.0} | matrix cell 1 |
 | | `incentive.referrer_new_with_referrer` | {pct, 2.0} | cell 2 |
 | | `incentive.staff_existing_no_referrer` | {pct, 2.0} | cell 3 |

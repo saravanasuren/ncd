@@ -31,7 +31,7 @@ export function addMonths(dateStr: ISODate, months: number): ISODate {
 export function payoutDayOfMonth(
   anchorDate: ISODate,
   monthsOffset: number,
-  payoutDay = 30
+  payoutDay = 28
 ): ISODate {
   const d = new Date(anchorDate + 'T00:00:00Z');
   d.setUTCDate(1);
@@ -46,7 +46,7 @@ export function payoutDayOfMonth(
  * broken-interest rule. If the current month's payout day hasn't passed,
  * use it; otherwise roll to next month.
  */
-export function nextPayoutAfter(dateStr: ISODate, payoutDay = 30): ISODate {
+export function nextPayoutAfter(dateStr: ISODate, payoutDay = 28): ISODate {
   const d = new Date(dateStr + 'T00:00:00Z');
   const day = d.getUTCDate();
   const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();

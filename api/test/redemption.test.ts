@@ -13,14 +13,15 @@ describe('computeRedemption', () => {
     expect(r.penalty).toBe(2500);
     expect(r.netPayment).toBe(497500);
   });
-  it('broken interest is computed separately, not folded into netPayment', () => {
+  it('broken interest is computed separately (÷365 default), not folded into netPayment', () => {
     const r = computeRedemption({
       principal: 500000,
       couponRatePct: 10,
-      lastRegularPayoutDate: '2027-03-30',
-      redemptionDate: '2027-04-01', // 2 days
+      lastRegularPayoutDate: '2027-03-28',
+      redemptionDate: '2027-03-30', // 2 days
     });
-    expect(r.brokenInterest).toBeCloseTo(277.78, 2);
+    // 5L × 10% × 2/365 = ₹273.97
+    expect(r.brokenInterest).toBeCloseTo(273.97, 2);
     // netPayment must NOT include broken interest
     expect(r.netPayment).toBe(495000);
   });

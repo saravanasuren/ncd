@@ -3,6 +3,12 @@
 # Loop: git pull → build → migrate → restart → health-check (auto-rollback).
 set -euo pipefail
 
+# docs/09 footgun #2: a stale `export DATABASE_URL` in the operator's shell
+# (e.g. left over from querying the old wealth DB) silently retargets the
+# migrate step at the WRONG database. On the box, SSM is the only source of
+# truth — drop any inherited value before anything runs.
+unset DATABASE_URL LEGACY_DATABASE_URL
+
 REPO=/home/ubuntu/ncd
 SERVICE=dhanam-newwealth
 HEALTH=https://ncd.dhanamfinance.com/api/health

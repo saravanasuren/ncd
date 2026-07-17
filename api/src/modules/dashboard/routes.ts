@@ -28,4 +28,4 @@ dashboardRouter.get('/search', requirePermission('dashboard:view', 'customers:re
   asyncHandler(async (req, res) => res.json(await s.search(getDb(), req.user!, String(req.query.q ?? '')))));
 
 dashboardRouter.get('/drill/:widget', requirePermission('dashboard:drilldown'),
-  asyncHandler(async (req, res) => res.json({ rows: await s.drill(getDb(), req.user!, req.params.widget!, String(req.query.param ?? '')) })));
+  asyncHandler(async (req, res) => res.json(await s.drill(getDb(), req.user!, req.params.widget!, filtersFromQuery(req.query), String(req.query.param ?? '')))));

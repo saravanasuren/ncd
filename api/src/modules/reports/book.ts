@@ -33,6 +33,9 @@ function appWhere(actor: AuthUser, filters: BookFilters, extra: string[] = []): 
   else if (filters.status === 'redeemed') conds.push("a.status = 'Redeemed'");
   if (filters.seriesIds?.length) { params.push(filters.seriesIds); conds.push(`a.series_id = ANY($${params.length})`); }
   if (filters.districts?.length) { params.push(filters.districts); conds.push(`c.district = ANY($${params.length})`); }
+  // Optional money-in date window (flow metrics). Snapshot callers pass no dates.
+  if (filters.from) { params.push(filters.from); conds.push(`a.date_money_received >= $${params.length}`); }
+  if (filters.to) { params.push(filters.to); conds.push(`a.date_money_received <= $${params.length}`); }
   conds.push(...extra);
   return { sql: conds.join(' AND '), params };
 }
@@ -240,6 +243,110 @@ export async function redemptions(db: Db, actor: AuthUser, filters: BookFilters 
      JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
      WHERE r.status = 'Approved' AND ${w.sql}${dateCond}
      ORDER BY r.redemption_date`, params);
+  return rows;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Flow metrics (dashboard tiles). "Money in" = new investments whose
+// date_money_received falls in the selected window (filters.from/to). All
+// respect scope + series filter. Snapshot tiles (outstanding, active series)
+// use the plain queries above with no dates.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** New-money totals for the window, split by funding channel. */
+export async function moneyInByChannel(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+  const w = appWhere(actor, { ...filters, status: 'active' });
+  const { rows } = await db.query<{ total: string; locker: string; app: string; n: string }>(
+    `SELECT COALESCE(sum(a.total_amount),0) AS total,
+            COALESCE(sum(a.total_amount) FILTER (WHERE a.is_locker_deposit),0) AS locker,
+            COALESCE(sum(a.total_amount) FILTER (WHERE a.source IN ('dhanamfin','lockerhub')),0) AS app,
+            count(a.id)::int AS n
+     ${FROM} WHERE ${w.sql} AND a.date_money_received IS NOT NULL`, w.params);
+  const r = rows[0]!;
+  return { total: round2(Number(r.total)), locker: round2(Number(r.locker)), app: round2(Number(r.app)), count: Number(r.n) };
+}
+
+/** New-investment list for the window; optional channel = 'locker' | 'app'. */
+export async function newInvestmentsList(db: Db, actor: AuthUser, filters: BookFilters = {}, channel?: 'locker' | 'app') {
+  const extra = ['a.date_money_received IS NOT NULL'];
+  if (channel === 'locker') extra.push('a.is_locker_deposit');
+  if (channel === 'app') extra.push(`a.source IN ('dhanamfin','lockerhub')`);
+  const w = appWhere(actor, { ...filters, status: 'active' }, extra);
+  const { rows } = await db.query(
+    `SELECT a.application_no, c.full_name AS customer, c.customer_code, s.code AS series_code,
+            a.total_amount AS amount, a.date_money_received, a.is_locker_deposit, a.source, a.status
+     ${FROM} WHERE ${w.sql} ORDER BY a.date_money_received DESC, a.application_no`, w.params);
+  return rows;
+}
+
+/** Interest whose payout date lands in the window (net). Total + rows. */
+function interestWhere(actor: AuthUser, filters: BookFilters): { sql: string; params: unknown[] } {
+  // Scope + optional series, but the date window applies to ds.due_date (added by caller).
+  const scope = appWhere(actor, { seriesIds: filters.seriesIds });
+  return scope;
+}
+export async function interestInRange(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+  const scope = interestWhere(actor, filters);
+  const params = [...scope.params];
+  let dcond = '';
+  if (filters.from) { params.push(filters.from); dcond += ` AND ds.due_date >= $${params.length}`; }
+  if (filters.to) { params.push(filters.to); dcond += ` AND ds.due_date <= $${params.length}`; }
+  const { rows } = await db.query<{ total: string; n: string; paid: string }>(
+    `SELECT COALESCE(sum(ds.net_amount),0) AS total, count(*)::int AS n,
+            COALESCE(sum(ds.net_amount) FILTER (WHERE ds.status = 'Paid'),0) AS paid
+     FROM disbursement_schedule ds
+     WHERE ds.due_type IN ('Interest','BrokenInterest')
+       AND ds.application_id IN (SELECT a.id ${FROM} WHERE ${scope.sql})${dcond}`, params);
+  const r = rows[0]!;
+  return { total: round2(Number(r.total)), paid: round2(Number(r.paid)), count: Number(r.n) };
+}
+export async function interestListInRange(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+  const scope = interestWhere(actor, filters);
+  const params = [...scope.params];
+  let dcond = '';
+  if (filters.from) { params.push(filters.from); dcond += ` AND ds.due_date >= $${params.length}`; }
+  if (filters.to) { params.push(filters.to); dcond += ` AND ds.due_date <= $${params.length}`; }
+  const { rows } = await db.query(
+    `SELECT ds.due_date, a.application_no, c.full_name AS customer, s.code AS series_code,
+            ds.due_type, ds.net_amount AS amount, ds.status
+     FROM disbursement_schedule ds
+     JOIN applications a ON a.id = ds.application_id
+     JOIN customers c ON c.id = a.customer_id
+     JOIN series s ON s.id = a.series_id
+     WHERE ds.due_type IN ('Interest','BrokenInterest')
+       AND ds.application_id IN (SELECT a.id ${FROM} WHERE ${scope.sql})${dcond}
+     ORDER BY ds.due_date DESC, a.application_no`, params);
+  return rows;
+}
+
+/** Interest accrued (since the last payout anchor up to asOf) across the live book.
+ * accrued = Σ outstanding × coupon% ÷ 365 × days(anchor→asOf), never before interest_start_date. */
+export async function interestAccrued(db: Db, actor: AuthUser, filters: BookFilters, anchor: string, asOf: string) {
+  const w = appWhere(actor, { seriesIds: filters.seriesIds, status: 'active' });
+  const p = [...w.params, anchor, asOf];
+  const ai = p.length - 1, oi = p.length; // anchor=$ai, asOf=$oi
+  const { rows } = await db.query<{ total: string }>(
+    `SELECT COALESCE(SUM(
+        l.outstanding_amount * (l.coupon_rate_pct/100.0)
+        * GREATEST(0, ($${oi}::date - GREATEST($${ai}::date, a.interest_start_date))) / 365.0
+     ),0) AS total
+     ${FROM} JOIN application_lines l ON l.application_id = a.id
+     WHERE ${w.sql} AND l.status = 'Active' AND a.interest_start_date IS NOT NULL`, p);
+  return { total: round2(Number(rows[0]!.total)) };
+}
+export async function accruedList(db: Db, actor: AuthUser, filters: BookFilters, anchor: string, asOf: string) {
+  const w = appWhere(actor, { seriesIds: filters.seriesIds, status: 'active' });
+  const p = [...w.params, anchor, asOf];
+  const ai = p.length - 1, oi = p.length;
+  const { rows } = await db.query(
+    `SELECT a.application_no, c.full_name AS customer, s.code AS series_code,
+            l.outstanding_amount AS principal, l.coupon_rate_pct,
+            GREATEST(0, ($${oi}::date - GREATEST($${ai}::date, a.interest_start_date)))::int AS days,
+            round(l.outstanding_amount * (l.coupon_rate_pct/100.0)
+              * GREATEST(0, ($${oi}::date - GREATEST($${ai}::date, a.interest_start_date))) / 365.0, 2) AS amount
+     ${FROM} JOIN application_lines l ON l.application_id = a.id
+     WHERE ${w.sql} AND l.status = 'Active' AND a.interest_start_date IS NOT NULL
+     ORDER BY amount DESC, a.application_no`, p);
   return rows;
 }
 

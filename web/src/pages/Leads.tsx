@@ -203,9 +203,6 @@ export function LeadsPage() {
               <Field label="Full name" required>
                 <input className={`${inp} w-full`} value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} autoFocus />
               </Field>
-              <Field label="Place">
-                <input className={`${inp} w-full`} value={form.place} onChange={(e) => setForm({ ...form, place: e.target.value })} />
-              </Field>
               <Field label="District">
                 <input className={`${inp} w-full`} value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} />
               </Field>

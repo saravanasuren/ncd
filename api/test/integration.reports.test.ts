@@ -136,3 +136,39 @@ describe('segments', () => {
     expect(Array.isArray(r.json.groups)).toBe(true);
   });
 });
+
+describe('dashboard tiles + drill (range-aware)', () => {
+  const JULY = 'from=2026-07-01&to=2026-07-31';
+  it('overview returns flow tiles for the window (money-in received in July = ₹8L)', async () => {
+    const a = await admin();
+    const ov = await a.get(`/api/dashboard/overview?${JULY}`);
+    expect(ov.status).toBe(200);
+    expect(ov.json).toHaveProperty('active_series');
+    expect(Number(ov.json.flow.money_in)).toBe(800000);
+    expect(ov.json.flow.new_investments).toBe(2);
+    expect(Number(ov.json.flow.interest_accrued)).toBeGreaterThanOrEqual(0);
+    expect(ov.json.range.anchor).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('new-investments drill lists the funded apps in the window; totals reconcile', async () => {
+    const a = await admin();
+    const dl = await a.get(`/api/dashboard/drill/new-investments?${JULY}`);
+    expect(dl.json.kind).toBe('rows');
+    expect(dl.json.rows.length).toBe(2);
+    expect(dl.json.rows.reduce((s: number, r: any) => s + Number(r.amount), 0)).toBe(800000);
+  });
+
+  it('staff drill returns expandable groups', async () => {
+    const a = await admin();
+    const dl = await a.get(`/api/dashboard/drill/staff?${JULY}`);
+    expect(dl.json.kind).toBe('groups');
+    expect(Array.isArray(dl.json.groups)).toBe(true);
+  });
+
+  it('a window with no money-in reports zero new investments (range is honoured)', async () => {
+    const a = await admin();
+    const ov = await a.get('/api/dashboard/overview?from=2020-01-01&to=2020-01-31');
+    expect(Number(ov.json.flow.money_in)).toBe(0);
+    expect(ov.json.flow.new_investments).toBe(0);
+  });
+});

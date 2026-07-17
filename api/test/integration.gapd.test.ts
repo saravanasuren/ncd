@@ -47,7 +47,10 @@ describe('universal search + drill', () => {
     const a = await admin();
     const r = await a.get(`/api/dashboard/drill/series?param=${seriesId}`);
     expect(r.status).toBe(200);
-    expect(r.json.rows.some((x: any) => Number(x.total_amount) === 500000)).toBe(true);
+    // Grouped drill: series summary rows, each carrying its investments as children.
+    expect(r.json.kind).toBe('groups');
+    const children = (r.json.groups as any[]).flatMap((g) => g.children);
+    expect(children.some((x: any) => Number(x.amount) === 500000)).toBe(true);
   });
 });
 

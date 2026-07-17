@@ -55,11 +55,11 @@ describe('outstanding book — open series (pre-allotment)', () => {
     const series = ov.json.series.find((s: { series_id: number }) => s.series_id === seriesId);
     expect(Number(series.outstanding)).toBe(400000);
 
-    // Drill-down reconciles with the tile.
+    // Drill-down reconciles with the tile (grouped: one summary row per series).
     const dl = await a.get(`/api/dashboard/drill/series?param=${seriesId}`);
     expect(dl.status).toBe(200);
-    const drillTotal = (dl.json.rows as Array<{ total_amount: string }>).reduce((t, r) => t + Number(r.total_amount), 0);
-    expect(drillTotal).toBe(400000);
+    const grp = (dl.json.groups as Array<{ key: string; outstanding: number }>).find((g) => g.key === series.code);
+    expect(Number(grp!.outstanding)).toBe(400000);
   });
 
   it('cancelled money drops out of the outstanding book', async () => {

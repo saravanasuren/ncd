@@ -21,6 +21,26 @@ export async function listLeads(db: Db, actor: AuthUser) {
   return (await db.query(`SELECT l.* FROM investor_leads l WHERE ${sc.sql} ORDER BY l.created_at DESC LIMIT 2000`, sc.params)).rows;
 }
 
+/**
+ * App prospects: dhanamfin/LockerHub profile syncs that no human enrolled and
+ * that hold no application — i.e. leads sitting in the `customers` table (the
+ * integration keeps them there, referenced by customer_id). This is the exact
+ * complement of the Customers-list filter, surfaced on the Leads page so the
+ * pool is workable. Enrolling one = opening the customer and adding an
+ * application; it then leaves this list and joins Customers.
+ */
+export async function listAppProspects(db: Db) {
+  return (await db.query(
+    `SELECT c.id, c.customer_code, c.full_name, c.phone, c.district, c.kyc_status, c.created_at
+     FROM customers c
+     WHERE c.enrolled_by_user_id IS NULL
+       AND c.enrolled_by_agent_id IS NULL
+       AND c.is_active = TRUE
+       AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.customer_id = c.id)
+     ORDER BY c.created_at DESC LIMIT 2000`
+  )).rows;
+}
+
 export interface CreateLeadInput {
   full_name: string;
   phone?: string;

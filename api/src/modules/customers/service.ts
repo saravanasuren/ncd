@@ -76,6 +76,12 @@ export async function listCustomers(db: Db, actor: AuthUser, filters: CustomerFi
   const sc = scopeWhere(scope, SCOPE_COLS, params.length);
   conds.push(sc.sql);
   params.push(...sc.params);
+  // A real NCD customer is someone a human enrolled (staff or agent) or who
+  // holds ≥1 application. Pure dhanamfin/LockerHub profile syncs with no
+  // application are leads, not customers — keep them off this list.
+  conds.push(`(c.enrolled_by_user_id IS NOT NULL
+    OR c.enrolled_by_agent_id IS NOT NULL
+    OR EXISTS (SELECT 1 FROM applications a WHERE a.customer_id = c.id))`);
   if (filters.district) { params.push(filters.district); conds.push(`c.district = $${params.length}`); }
   if (filters.q) { params.push(`%${filters.q}%`); conds.push(`(c.full_name ILIKE $${params.length} OR c.customer_code ILIKE $${params.length} OR c.phone ILIKE $${params.length})`); }
   const { rows } = await db.query(

@@ -29,6 +29,18 @@ interface LeadNote {
   author: string | null;
 }
 
+interface Prospect {
+  id: number;
+  customer_code: string;
+  full_name: string;
+  phone: string | null;
+  district: string | null;
+  kyc_status: string | null;
+  created_at: string;
+}
+
+const PROSPECTS_TAB = '__prospects__';
+
 const EMPTY_FORM = {
   full_name: '', phone: '', place: '', district: '', category: '', source: '',
   referred_by_text: '', interested_scheme: '', expected_amount: '', follow_up_date: '', notes: '',
@@ -85,6 +97,7 @@ export function LeadsPage() {
   const [tab, setTab] = useState<string>('all');
 
   const { data, isLoading } = useQuery({ queryKey: ['leads'], queryFn: () => api.get<{ rows: Lead[] }>('/api/leads') });
+  const prospects = useQuery({ queryKey: ['app-prospects'], queryFn: () => api.get<{ rows: Prospect[] }>('/api/leads/app-prospects') });
   const series = useQuery({
     queryKey: ['series'],
     queryFn: () => api.get<{ rows: { id: number; code: string; status: string }[] }>('/api/series'),
@@ -243,13 +256,37 @@ export function LeadsPage() {
             } },
         ];
         const leadRows = data!.rows;
-        // One tab per lead status present (statuses are config-driven), + All.
+        const prospectRows = prospects.data?.rows ?? [];
+        // One tab per lead status present (statuses are config-driven), + All,
+        // + the dhanamfin app-prospects pool.
         const statuses = [...new Set(leadRows.map((l) => l.status))].sort();
         const leadTabs: TabDef<string>[] = [
           { key: 'all', label: 'All', count: leadRows.length },
           ...statuses.map((s) => ({ key: s, label: s, count: leadRows.filter((l) => l.status === s).length })),
+          { key: PROSPECTS_TAB, label: 'App prospects', count: prospectRows.length },
         ];
         const activeTab = leadTabs.some((t) => t.key === tab) ? tab : 'all';
+
+        if (activeTab === PROSPECTS_TAB) {
+          const pcols: Column<Prospect>[] = [
+            { key: 'customer_code', header: 'Code', tdClassName: 'font-mono text-xs' },
+            { key: 'full_name', header: 'Name', tdClassName: 'font-medium' },
+            { key: 'phone', header: 'Phone', tdClassName: 'text-text-muted', value: (p) => p.phone ?? '', render: (p) => p.phone ?? '—' },
+            { key: 'district', header: 'District', value: (p) => p.district ?? '', render: (p) => p.district ?? '—' },
+            { key: 'kyc_status', header: 'KYC', render: (p) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{p.kyc_status ?? '—'}</span> },
+            { key: 'created_at', header: 'Added', value: (p) => p.created_at, render: (p) => <span className="mono text-xs">{String(p.created_at).slice(0, 10)}</span> },
+            { key: 'actions', header: '', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
+              render: (p) => <button onClick={() => nav(`/app/customers/${p.id}`)} className="text-xs text-primary hover:underline">Enrol →</button> },
+          ];
+          return (
+            <>
+              <Tabs tabs={leadTabs} active={activeTab} onChange={setTab} />
+              <p className="text-xs text-text-muted mb-3">Dhanamfin app profiles with no NCD investment yet. Open one to enrol them — once they have an application they move to Customers.</p>
+              <DataTable columns={pcols} rows={prospectRows} rowKey={(p) => p.id} defaultSort={{ key: 'created_at', dir: 'desc' }} empty="No app prospects." />
+            </>
+          );
+        }
+
         const shown = activeTab === 'all' ? leadRows : leadRows.filter((l) => l.status === activeTab);
         return (
           <>

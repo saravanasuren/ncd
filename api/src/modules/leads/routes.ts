@@ -11,6 +11,10 @@ export const leadsRouter = Router();
 leadsRouter.get('/', requirePermission('leads:read'),
   asyncHandler(async (req, res) => res.json({ rows: await s.listLeads(getDb(), req.user!) })));
 
+// Dhanamfin app prospects (profile-only customers with no application).
+leadsRouter.get('/app-prospects', requirePermission('leads:read'),
+  asyncHandler(async (_req, res) => res.json({ rows: await s.listAppProspects(getDb()) })));
+
 const createSchema = z.object({
   full_name: z.string().min(1),
   phone: z.string().optional(),

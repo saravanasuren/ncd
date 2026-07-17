@@ -58,6 +58,22 @@ describe('Customers list — leads vs customers', () => {
     expect(ids).not.toContain(leadId);     // profile-only sync → hidden
   });
 
+  it('profile-only syncs surface under Leads → app-prospects', async () => {
+    const a = await admin();
+    const staff = await a.post('/api/customers', { full_name: 'Staff Two', phone: '9822222222' });
+    const staffId = Number(staff.json.id);
+    const leadId = await syncCustomer('SYNC-LEAD-3', 'App Lead Three');
+    const convertedId = await syncCustomer('SYNC-CONV-2', 'Converted Two');
+    await addApplication(convertedId, 'APP-TEST-CONV-2');
+
+    const res = await a.get('/api/leads/app-prospects');
+    expect(res.status).toBe(200);
+    const ids = (res.json.rows as Array<{ id: number }>).map((r) => Number(r.id));
+    expect(ids).toContain(leadId);          // profile-only sync → an app prospect
+    expect(ids).not.toContain(staffId);     // staff-enrolled → not a prospect
+    expect(ids).not.toContain(convertedId); // has an application → not a prospect
+  });
+
   it('still reachable directly (search/enrol a lead is not blocked)', async () => {
     const a = await admin();
     const leadId = await syncCustomer('SYNC-LEAD-2', 'Reachable Lead');

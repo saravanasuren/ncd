@@ -84,10 +84,15 @@
   /dhanam/wealth/DIGIO_* for when the eSign webhook gets built.
 - [ ] Digio eSign: only manual mark-esigned exists; no webhook/poller.
 - [ ] Payment adapters (Cashfree/Easebuzz): nothing behind the stub default.
-- [ ] Crons from docs/00 §12: daily book-summary email, backup-check email, LockerHub
-  reconciliation, crash alerts — none exist (only the notification drain cron).
-- [ ] Backup offsite: local nightly pg_dump IS live (ops/backup.sh, verified
-  2026-07-16); SharePoint offsite upload still pending.
+- [~] Crons from docs/00 §12: backup-check email (DONE 2026-07-17) and LockerHub
+  reconciliation (DONE, cutover-gated) now exist. Still missing: daily
+  book-summary email, crash-alert emails.
+- [x] Backup offsite — CLOSED 2026-07-17: nightly pg_dump uploads to SharePoint
+  ('Dhanam Repository' site, NewWealthBackups/ folder) via Graph, reusing the
+  wealth app's Azure app (SHAREPOINT_* copied to /dhanam/newwealth/*). Daily
+  backup-check email (local + offsite freshness + Azure secret expiry reminder,
+  exp 2028-07-09) — verified live: upload succeeded, 5 admin emails sent via SES.
+  Manual run: POST /api/system/backup-check/run.
 - [ ] ops/deploy.sh co-tenant check still curls dashboard.dhanamfinance.com, which has
   no DNS record (pre-existing) — noise on every deploy.
 - [~] LockerHub/DhanamFin cutover — READY BUT NOT EXECUTED (2026-07-17): full

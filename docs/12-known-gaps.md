@@ -72,9 +72,10 @@
 - [x] Reports — CLOSED 2026-07-18: series-wise rollup (in the NCD book export),
   26Q 17-column TDS filing annexure (`/api/reports/tds-26q/:quarter.xlsx`), and
   the NCD-book filter UI (from/to/status/series) on the Reports page.
-- [ ] Dashboard: lead KPI funnel, ALM tiles (net due/overdue/paid FY), cost-of-funds
-  rate mix, "today's book" additions/deletions. (Charts dashboard exists with
-  many tiles; these specific analytics are still not surfaced — see re-audit.)
+- [x] Dashboard analytics — CLOSED 2026-07-18: lead-pipeline funnel, ALM tiles
+  (net due this month / overdue / interest paid FY), cost-of-funds rate mix
+  (weighted-avg coupon), and today's additions/deletions. Scope-aware book.ts
+  queries surfaced in /dashboard/overview + Dashboard cards.
 
 ## P3 — ops & integrations
 
@@ -113,12 +114,12 @@
   deactivated / marked deceased, never hard-deleted).
 - [x] DataTable "Filter" toggle wiping filters on collapse — FIXED 2026-07-18
   (separate Clear control; toggle only hides the row).
-- [ ] migrate-legacy report counts (`frozenRows`/`loadedPaidRows`) are table-wide,
-  not migration-scoped — over-count if ever re-run on a non-empty DB. (Belongs to
-  the migration session's domain — left untouched.)
-- [ ] Masters/Events pages use hand-rolled tables, not the shared DataTable —
-  deliberately deferred (cosmetic; those screens' inline-edit forms don't map to
-  the read-only table without regression risk).
+- [x] migrate-legacy report counts — FIXED 2026-07-18: frozenRows/loadedPaidRows
+  scoped to this run's application ids (via schedRows), not the whole table; no
+  over-count on a re-run. Reconciliation tests still green.
+- [x] Masters/Events pages — MIGRATED 2026-07-18 to the shared DataTable
+  (sortable/filterable), preserving Masters' create forms, inline ISIN edit and
+  series status transitions; Holidays/CompanyProfile unchanged.
 
 ## Verified working (deployed + exercised 2026-07-16)
 

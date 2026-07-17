@@ -88,19 +88,40 @@ describe('report documents', () => {
 });
 
 describe('funded subscription (integration)', () => {
-  it('creates a PendingApproval app; customer_status Active; idempotent', async () => {
-    const body = { phone: '9400000001', series_code: 'NCD DEMO', scheme_code: 'NCD-DEMO', amount: 200000, lockerhub_intent_no: 'LH-INTENT-1' };
+  it('creates a PendingApproval app; wealth wire shape; idempotent', async () => {
+    // The live LockerHub payload sends customer_phone + numeric series/scheme ids.
+    const body = {
+      customer_phone: '9400000001', customer_name: 'Funded Cust',
+      series_id: seriesId, scheme_id: schemeId,
+      amount: 200000, lockerhub_intent_no: 'LH-INTENT-1',
+      lockerhub_application_no: 'APP-2026-90001', provider: 'easebuzz', provider_ref: 'EZB123', verified: true,
+    };
     const post = () => fetch(ctx.base + '/api/integration/subscription-payments/from-lockerhub', {
       method: 'POST', headers: { 'X-Integration-Key': 'dev-integration-key', 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     }).then(async (r) => ({ status: r.status, json: await r.json() }));
     const first = await post();
-    expect(first.status).toBe(201);
-    expect(first.json.customer_status).toBe('Active');
-    expect(first.json.deduped).toBe(false);
+    expect(first.status).toBe(200);
+    expect(first.json.success).toBe(true);
+    expect(first.json.wealth_subscription_id).toMatch(/^APP-\d{4}-\d{6}$/);
+    expect(first.json.wealth_subscription_request_id).toBe(first.json.wealth_subscription_id);
+    expect(first.json.is_placeholder).toBe(false);
+    expect(first.json.customer_id).toBeGreaterThan(0);
     const again = await post();
-    expect(again.json.deduped).toBe(true);
+    expect(again.status).toBe(200);
+    expect(again.json.already_processed).toBe(true);
+    expect(again.json.wealth_subscription_id).toBe(first.json.wealth_subscription_id);
     const st = (await ctx.db.query('SELECT status FROM applications WHERE lockerhub_intent_no = $1', ['LH-INTENT-1'])).rows[0] as any;
     expect(st.status).toBe('PendingApproval');
+
+    // an unknown phone auto-creates a Draft stub customer (money never 404s)
+    const stubPost = await fetch(ctx.base + '/api/integration/subscription-payments/from-lockerhub', {
+      method: 'POST', headers: { 'X-Integration-Key': 'dev-integration-key', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body, customer_phone: '9400000077', lockerhub_intent_no: 'LH-INTENT-2', lockerhub_application_no: 'APP-2026-90002' }),
+    }).then(async (r) => ({ status: r.status, json: await r.json() }));
+    expect(stubPost.status).toBe(200);
+    const stub = (await ctx.db.query("SELECT creation_status, pan FROM customers WHERE phone = '9400000077'")).rows[0] as any;
+    expect(stub.creation_status).toBe('Draft');
+    expect(stub.pan).toBe('LH_9400000077');
   });
 });
 

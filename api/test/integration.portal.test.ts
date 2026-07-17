@@ -116,16 +116,27 @@ describe('integration façade — key auth', () => {
   it('penny-drop returns BAV v3 shape', async () => {
     const ok = await integ('POST', '/api/integration/penny-drop', { account_number: '12345678', ifsc: 'HDFC0001234' });
     expect(ok.json.status).toBe('Verified');
+    expect(ok.json).toHaveProperty('name_on_record');
+    expect(ok.json).toHaveProperty('ref_id');
     const bad = await integ('POST', '/api/integration/penny-drop', { account_number: '00001111', ifsc: 'HDFC0001234' });
     expect(bad.json.status).toBe('Failed');
-    expect(bad.json.error_code).toBe('BAV_FAILED');
+    expect(bad.json.failure_reason).toBeTruthy();
+    const invalid = await integ('POST', '/api/integration/penny-drop', { account_number: '12345678', ifsc: 'BAD' });
+    expect(invalid.json.status).toBe('Invalid');
+    expect(invalid.json.provider).toBe('local');
   });
 
-  it('leads dedup on lockerhub_application_no', async () => {
-    const a = await integ('POST', '/api/integration/leads', { full_name: 'App Lead', phone: '9001234567', lockerhub_application_no: 'LH-APP-1' });
-    expect(a.status).toBe(201);
-    const b = await integ('POST', '/api/integration/leads', { full_name: 'App Lead', phone: '9001234567', lockerhub_application_no: 'LH-APP-1' });
-    expect(b.json.deduped).toBe(true);
+  it('leads follow the wealth wire shape and dedup on phone', async () => {
+    const a = await integ('POST', '/api/integration/leads', { name: 'App Lead', phone: '9001234567', source: 'lockerhub_web' });
+    expect(a.status).toBe(200);
+    expect(a.json.success).toBe(true);
+    expect(a.json.reference_id).toMatch(/^LEAD-\d{6}-\d{5}$/);
+    const b = await integ('POST', '/api/integration/leads', { name: 'App Lead', phone: '9001234567' });
+    expect(b.json.success).toBe(false);
+    expect(b.json.duplicate).toBe(true);
+    expect(b.json.lead_id).toBe(a.json.lead_id);
+    const badSource = await integ('POST', '/api/integration/leads', { name: 'X Lead', phone: '9001234568', source: 'random_app' });
+    expect(badSource.status).toBe(400);
   });
 
   it('agent self-signup lands in the approval queue, then activates on approval', async () => {

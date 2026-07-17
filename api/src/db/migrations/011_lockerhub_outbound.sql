@@ -7,6 +7,14 @@
 -- on their side.
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS lockerhub_user_id BIGINT;
 
+-- 004_portal_integration shipped a placeholder agent_event_webhooks (no
+-- dispatch metadata: no dedup_key/next_attempt_at/…), which made the
+-- CREATE TABLE IF NOT EXISTS below a no-op and the partial index fail.
+-- The placeholder was never written to (dispatch is gated on SSM secrets
+-- that were never set), so rebuilding it here is safe. This migration is
+-- tracked run-once in schema_migrations, so the DROP fires exactly once.
+DROP TABLE IF EXISTS agent_event_webhooks;
+
 CREATE TABLE IF NOT EXISTS agent_event_webhooks (
   id                    BIGSERIAL PRIMARY KEY,
   event_type            TEXT NOT NULL,          -- customer_activated|incentive_accrued|incentive_paid

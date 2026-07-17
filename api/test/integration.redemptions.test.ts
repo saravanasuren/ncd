@@ -84,16 +84,34 @@ describe('customer redemption request (portal)', () => {
 });
 
 describe('app redemption request (integration)', () => {
-  it('DhanamFin app requests a redemption → staff queue', async () => {
+  const post = (body: unknown) => fetch(ctx.base + '/api/integration/redemption-request', {
+    method: 'POST', headers: { 'X-Integration-Key': 'dev-integration-key', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(async (r) => ({ status: r.status, json: await r.json() }));
+
+  it('rejects an unmatured NCD (premature needs in-person processing)', async () => {
+    const inv = await activeInvestment('Redeem App Early', '9700000013');
+    const r = await post({ customer_id: inv.customerId, application_no: inv.appNo, notes: 'App request' });
+    expect(r.status).toBe(400);
+    expect(r.json.error).toContain('maturity date');
+  });
+
+  it('DhanamFin app requests a matured redemption → staff queue (wealth wire shape)', async () => {
     const inv = await activeInvestment('Redeem App', '9700000003');
-    const r = await fetch(ctx.base + '/api/integration/redemption-request', {
-      method: 'POST', headers: { 'X-Integration-Key': 'dev-integration-key', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ application_no: inv.appNo, reason: 'App request' }),
-    });
-    expect(r.status).toBe(201);
+    // Maturity reached — the wealth contract only accepts matured NCDs here.
+    await ctx.db.query("UPDATE applications SET maturity_date = '2026-01-01' WHERE id = $1", [inv.appId]);
+    await ctx.db.query("UPDATE application_lines SET maturity_date = '2026-01-01' WHERE application_id = $1", [inv.appId]);
+    const r = await post({ customer_id: inv.customerId, application_no: inv.appNo, notes: 'App request' });
+    expect(r.status).toBe(200);
+    expect(r.json.success).toBe(true);
+    expect(r.json.reference_id).toMatch(/^LH-RDM-\d{4}-\d{6}$/);
     const ncd = await as('ncd@demo.local');
     const queue = await ncd.get('/api/redemptions?filter=requests');
     expect(queue.json.rows.some((x: any) => x.application_no === inv.appNo && x.source === 'lockerhub')).toBe(true);
+    // dedup: second request for the same application → 409 with the same ref
+    const dup = await post({ customer_id: inv.customerId, application_no: inv.appNo, notes: 'again' });
+    expect(dup.status).toBe(409);
+    expect(dup.json.reference_id).toBe(r.json.reference_id);
   });
 });
 

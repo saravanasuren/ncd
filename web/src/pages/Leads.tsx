@@ -95,6 +95,8 @@ export function LeadsPage() {
   const [notesFor, setNotesFor] = useState<number | null>(null);
   const [edit, setEdit] = useState<{ id: number; status: string; follow_up_date: string; expected_amount: string } | null>(null);
   const [tab, setTab] = useState<string>('all');
+  const [creating, setCreating] = useState(false);
+  const [q, setQ] = useState('');
 
   const { data, isLoading } = useQuery({ queryKey: ['leads'], queryFn: () => api.get<{ rows: Lead[] }>('/api/leads') });
   const prospects = useQuery({ queryKey: ['app-prospects'], queryFn: () => api.get<{ rows: Prospect[] }>('/api/leads/app-prospects') });
@@ -135,7 +137,7 @@ export function LeadsPage() {
       ...(form.follow_up_date ? { follow_up_date: form.follow_up_date } : {}),
       ...(form.notes ? { notes: form.notes } : {}),
     }),
-    onSuccess: () => { setForm(EMPTY_FORM); qc.invalidateQueries({ queryKey: ['leads'] }); },
+    onSuccess: () => { setForm(EMPTY_FORM); setCreating(false); qc.invalidateQueries({ queryKey: ['leads'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
 
@@ -162,13 +164,21 @@ export function LeadsPage() {
 
   return (
     <div className="w-full">
-      <h1 className="text-xl font-bold tracking-tight m-0">Leads</h1>
-      <p className="text-sm text-text-muted mt-1 mb-5">Prospective investors you're following up.</p>
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight m-0">Leads</h1>
+          <p className="text-sm text-text-muted mt-1">Prospective investors you're following up.</p>
+        </div>
+        {can('leads:create') && !creating && (
+          <button onClick={() => { setErr(''); setCreating(true); }} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">+ Create Lead</button>
+        )}
+      </div>
 
-      {can('leads:create') && (
+      {can('leads:create') && creating && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5">
+          <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2.5">New lead</div>
           <div className="flex flex-wrap gap-2">
-            <input className={inp} placeholder="Full name *" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
+            <input className={inp} placeholder="Full name *" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} autoFocus />
             <input className={`${inp} w-36`} placeholder="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             <input className={`${inp} w-32`} placeholder="Place" value={form.place} onChange={(e) => setForm({ ...form, place: e.target.value })} />
             <input className={`${inp} w-32`} placeholder="District" value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} />
@@ -183,7 +193,8 @@ export function LeadsPage() {
             <input className={inp} type="date" title="Follow-up date" value={form.follow_up_date} onChange={(e) => setForm({ ...form, follow_up_date: e.target.value })} />
             <input className={`${inp} w-64`} placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
             <button disabled={!form.full_name || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
-              className="bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-4 py-1.5 text-sm font-semibold">+ Add lead</button>
+              className="bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-4 py-1.5 text-sm font-semibold">Save lead</button>
+            <button onClick={() => { setErr(''); setCreating(false); }} className="text-xs text-text-muted hover:underline px-2">Cancel</button>
           </div>
           {dup.data?.duplicate && (
             <div className="text-xs text-warn mt-2">
@@ -193,6 +204,12 @@ export function LeadsPage() {
         </div>
       )}
       {err && <div className="text-xs text-danger mb-3">{err}</div>}
+
+      <input
+        className="w-full max-w-md px-3 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary mb-4"
+        placeholder="Search leads by name, phone, place, district…"
+        value={q} onChange={(e) => setQ(e.target.value)}
+      />
 
       {isLoading ? <div className="text-text-muted">Loading…</div> : (() => {
         const columns: Column<Lead>[] = [
@@ -255,8 +272,10 @@ export function LeadsPage() {
               );
             } },
         ];
-        const leadRows = data!.rows;
-        const prospectRows = prospects.data?.rows ?? [];
+        const ql = q.trim().toLowerCase();
+        const matches = (vals: (string | null | undefined)[]) => !ql || vals.some((v) => String(v ?? '').toLowerCase().includes(ql));
+        const leadRows = data!.rows.filter((l) => matches([l.full_name, l.phone, l.place, l.district, l.source, l.interested_scheme, l.category]));
+        const prospectRows = (prospects.data?.rows ?? []).filter((p) => matches([p.full_name, p.phone, p.district, p.customer_code]));
         // One tab per lead status present (statuses are config-driven), + All,
         // + the dhanamfin app-prospects pool.
         const statuses = [...new Set(leadRows.map((l) => l.status))].sort();

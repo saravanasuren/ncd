@@ -61,7 +61,7 @@ describe('dashboard', () => {
 });
 
 describe('9-tab NCD book export', () => {
-  it('produces the 9 report tabs + Applications + Interest Payouts data tabs', async () => {
+  it('produces the tabs in order with NCD Summary first and NCD by Series', async () => {
     const a = await admin();
     const dl = await a.raw('/api/reports/ncd-book.xlsx');
     expect(dl.status).toBe(200);
@@ -69,12 +69,16 @@ describe('9-tab NCD book export', () => {
     await wb.xlsx.load(dl.buffer);
     const names = wb.worksheets.map((w) => w.name);
     expect(names).toEqual([
-      'Ongoing NCD', 'NCD Summary', 'Master Client', 'Redemption', 'Depositorwise',
+      'NCD Summary', 'NCD by Series', 'Master Client', 'Redemption', 'Depositorwise',
       'Districtwise', 'Agent wise', 'Staff wise', 'Leads', 'Applications', 'Interest Payouts',
     ]);
-    // the two raw-data tabs carry their expected headers
     expect(wb.getWorksheet('Applications')!.getRow(1).getCell(1).value).toBe('App No');
     expect(wb.getWorksheet('Interest Payouts')!.getRow(1).getCell(6).value).toBe('Type');
+    // grouped sheets collapse detail rows under a summary (outline level 1, hidden)
+    const dep = wb.getWorksheet('Depositorwise')!;
+    let hasCollapsedDetail = false;
+    dep.eachRow((row) => { if (row.outlineLevel === 1 && row.hidden) hasCollapsedDetail = true; });
+    expect(hasCollapsedDetail).toBe(true);
   });
 
   it('Depositorwise grand total reconciles with the outstanding book (₹8,00,000)', async () => {
@@ -86,7 +90,7 @@ describe('9-tab NCD book export', () => {
     let grand = 0;
     ws.eachRow((row) => {
       const label = String(row.getCell(1).value ?? '');
-      if (label === 'Grand Total') grand = Number(row.getCell(2).value);
+      if (label === 'Grand Total') grand = Number(row.getCell(6).value); // Amount is col 6 now
     });
     expect(grand).toBe(800000);
   });

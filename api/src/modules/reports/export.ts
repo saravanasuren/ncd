@@ -1,14 +1,12 @@
 /**
- * The owner's NCD book export (docs/06 §3): 9 business-report tabs + 2 raw-data
- * tabs (Applications register, Interest Payouts ledger) so the workbook also
- * serves as a human-readable data snapshot. Built with exceljs from the shared
- * book queries, so tab totals reconcile with the dashboard under the same
- * filters + scope. Indian number format throughout.
- *
- * STREAMS to the response (ExcelJS.stream.xlsx.WorkbookWriter): rows are flushed
- * as they're written, so memory stays flat even for the ~tens-of-thousands-row
- * Interest Payouts ledger. (Buffering the whole workbook OOM-killed the 512M
- * service on the real book.)
+ * The owner's NCD book export (docs/06 §3). Tabs, in order:
+ *   NCD Summary · NCD by Series · Master Client · Redemption · Depositorwise ·
+ *   Districtwise · Agent wise · Staff wise · Leads · Applications · Interest Payouts
+ * The grouped sheets use Excel row-outlining: a summary row per group with its
+ * individual investments collapsed underneath (click the + in Excel's margin).
+ * STREAMS to the response so memory stays flat even for the tens-of-thousands-row
+ * Interest Payouts ledger. Built from the shared book queries, so tab totals
+ * reconcile with the dashboard under the same filters + scope.
  */
 import ExcelJS from 'exceljs';
 import type { Writable } from 'node:stream';
@@ -18,55 +16,45 @@ import * as book from './book.js';
 
 const INR = '#,##,##0.00';
 const HEADER_FILL: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B3A6F' } };
-const SUBTOTAL_FILL: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE4E7EC' } };
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 interface ColDef { header: string; width: number; money?: boolean }
-
 type WB = ExcelJS.stream.xlsx.WorkbookWriter;
 type WS = ExcelJS.Worksheet;
 
-/** New sheet with a styled, frozen header row (committed) and column widths/formats. */
+/** 'YYYY-MM-DD…' → 'Mmm DD YYYY'. */
+function fmtDate(v: unknown): string {
+  const s = String(v ?? '').slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  return m ? `${MONTHS[Number(m[2]) - 1] ?? m[2]} ${m[3]} ${m[1]}` : s;
+}
+/** Descending by the number embedded in a series code (NCD_27 → NCD_10). */
+const seriesDesc = (a: { code?: string; label?: string }, b: { code?: string; label?: string }) =>
+  String(b.code ?? b.label).localeCompare(String(a.code ?? a.label), undefined, { numeric: true });
+
 function startSheet(wb: WB, title: string, cols: ColDef[]): WS {
-  // Streaming worksheets take `views` as a creation option (the property is read-only).
   const ws = wb.addWorksheet(title, { views: [{ state: 'frozen', ySplit: 1 }] });
-  ws.columns = cols.map((c) => ({
-    header: c.header, width: c.width,
-    style: c.money ? { numFmt: INR, alignment: { horizontal: 'right' } } : {},
-  }));
+  ws.columns = cols.map((c) => ({ header: c.header, width: c.width, style: c.money ? { numFmt: INR, alignment: { horizontal: 'right' } } : {} }));
   const hdr = ws.getRow(1);
   hdr.eachCell((c) => { c.fill = HEADER_FILL; c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; });
   hdr.commit();
   return ws;
 }
-function subtotalRow(ws: WS, values: unknown[]) {
-  const r = ws.addRow(values);
-  r.eachCell((c) => { c.fill = SUBTOTAL_FILL; c.font = { bold: true }; });
-  r.commit();
-}
 function boldRow(ws: WS, values: unknown[]) {
-  const r = ws.addRow(values);
-  r.eachCell((c) => { c.font = { bold: true }; });
-  r.commit();
+  const r = ws.addRow(values); r.eachCell((c) => { c.font = { bold: true }; }); r.commit();
 }
 
-/** Grouped pivot: group → item → amount, per-group subtotals + grand total. */
-async function groupedSheet(
-  wb: WB, title: string, groupHeader: string, itemHeader: string,
-  rows: Array<{ group: string; item: string; amount: number }>, negate = false
-) {
-  const ws = startSheet(wb, title, [{ header: groupHeader, width: 28 }, { header: itemHeader, width: 34 }, { header: 'Amount', width: 16, money: true }]);
-  const byGroup = new Map<string, Array<{ item: string; amount: number }>>();
-  for (const r of rows) {
-    const a = negate ? -Math.abs(r.amount) : r.amount;
-    (byGroup.get(r.group) ?? byGroup.set(r.group, []).get(r.group)!).push({ item: r.item, amount: a });
+interface OutlineGroup { summary: unknown[]; details: unknown[][] }
+/** Grouped sheet with collapsible Excel outlining: bold summary row (level 0),
+ * detail rows collapsed underneath (level 1, hidden). Optional grand total. */
+async function outlineSheet(wb: WB, title: string, cols: ColDef[], groups: OutlineGroup[], grandTotal?: unknown[]) {
+  const ws = startSheet(wb, title, cols);
+  ws.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+  for (const g of groups) {
+    const sr = ws.addRow(g.summary); sr.eachCell((c) => { c.font = { bold: true }; }); sr.commit();
+    for (const d of g.details) { const dr = ws.addRow(d); dr.outlineLevel = 1; dr.hidden = true; dr.commit(); }
   }
-  let grand = 0;
-  for (const [group, items] of byGroup) {
-    let sub = 0;
-    for (const it of items) { ws.addRow([group, it.item, it.amount]).commit(); sub += it.amount; }
-    subtotalRow(ws, [`${group} Total`, '', sub]); grand += sub;
-  }
-  boldRow(ws, ['Grand Total', '', grand]);
+  if (grandTotal) boldRow(ws, grandTotal);
   await ws.commit();
 }
 
@@ -74,34 +62,25 @@ export async function buildNcdBook(out: Writable, db: Db, actor: AuthUser, filte
   const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: out, useStyles: true, useSharedStrings: false });
   wb.creator = 'Dhanam NCD';
 
-  // Tab 1 — Ongoing NCD: for each non-withdrawn series, agent → customer.
-  const series = await book.seriesSummary(db, actor, {}) as Array<{ series_id: number; code: string; status: string } & Record<string, unknown>>;
-  const ws1 = startSheet(wb, 'Ongoing NCD', [{ header: 'NCD Series', width: 16 }, { header: 'Agent', width: 26 }, { header: 'Customer', width: 30 }, { header: 'Amount', width: 16, money: true }]);
-  let ongGrand = 0;
-  for (const s of series) {
-    if (s.status === 'Withdrawn') continue;
-    const pivot = await book.ongoingSeriesPivot(db, actor, s.series_id) as Array<{ agent: string; customer: string; amount: string }>;
-    if (!pivot.length) continue;
-    const byAgent = new Map<string, Array<{ customer: string; amount: number }>>();
-    for (const p of pivot) (byAgent.get(p.agent) ?? byAgent.set(p.agent, []).get(p.agent)!).push({ customer: p.customer, amount: Number(p.amount) });
-    for (const [agent, items] of byAgent) {
-      let sub = 0;
-      for (const it of items) { ws1.addRow([s.code, agent, it.customer, it.amount]).commit(); sub += it.amount; }
-      subtotalRow(ws1, [s.code, `${agent} Total`, '', sub]); ongGrand += sub;
-    }
-  }
-  boldRow(ws1, ['Grand Total', '', '', ongGrand]);
-  await ws1.commit();
-
-  // Tab 2 — NCD Summary
-  const ws2 = startSheet(wb, 'NCD Summary', [{ header: 'NCD Series', width: 16 }, { header: 'Status', width: 12 }, { header: 'Investors', width: 12 }, { header: 'Issued', width: 16, money: true }, { header: 'Redeemed', width: 16, money: true }, { header: 'Outstanding', width: 16, money: true }]);
+  // Tab 1 — NCD Summary (series desc)
+  const series = (await book.seriesSummary(db, actor, {}) as Array<Record<string, unknown>>).slice().sort(seriesDesc as any);
+  const ws1 = startSheet(wb, 'NCD Summary', [{ header: 'NCD Series', width: 16 }, { header: 'Status', width: 12 }, { header: 'Investors', width: 12 }, { header: 'Issued', width: 16, money: true }, { header: 'Redeemed', width: 16, money: true }, { header: 'Outstanding', width: 16, money: true }]);
   let ti = 0, tr = 0, to = 0;
   for (const s of series) {
-    ws2.addRow([s.code, s.status, Number(s.investors), Number(s.issued), -Number(s.redeemed), Number(s.outstanding)]).commit();
+    ws1.addRow([s.code, s.status, Number(s.investors), Number(s.issued), -Number(s.redeemed), Number(s.outstanding)]).commit();
     ti += Number(s.issued); tr += Number(s.redeemed); to += Number(s.outstanding);
   }
-  boldRow(ws2, ['Grand Total', '', '', ti, -tr, to]);
-  await ws2.commit();
+  boldRow(ws1, ['Grand Total', '', '', ti, -tr, to]);
+  await ws1.commit();
+
+  // Tab 2 — NCD by Series (series desc; expand a series → its investments)
+  const bySeries = (await book.segmentGrouped(db, actor, 'series', filters)).slice().sort((a, b) => seriesDesc(a as any, b as any));
+  await outlineSheet(wb, 'NCD by Series',
+    [{ header: 'Series', width: 14 }, { header: 'Customer', width: 28 }, { header: 'App No', width: 16 }, { header: 'Status', width: 14 }, { header: 'Amount', width: 16, money: true }, { header: 'Investors', width: 10 }, { header: 'NCDs', width: 8 }],
+    bySeries.map((g) => ({
+      summary: [g.label, '', '', '', g.outstanding, g.investors, g.investments],
+      details: g.children.map((c) => ['', c.customer, c.application_no, c.status, c.amount, '', '']),
+    })));
 
   // Tab 3 — Master Client
   const ws3 = startSheet(wb, 'Master Client', [{ header: 'PAN', width: 14 }, { header: 'Sl. No', width: 8 }, { header: 'Agent Code', width: 18 }, { header: 'Name', width: 28 }, { header: 'Phone', width: 14 }, { header: 'District', width: 16 }, { header: 'Address', width: 40 }]);
@@ -109,30 +88,39 @@ export async function buildNcdBook(out: Writable, db: Db, actor: AuthUser, filte
   clients.forEach((c, i) => ws3.addRow([c.pan ?? '', i + 1, c.agent_code ?? '', c.name, c.phone ?? '', c.district ?? '', c.address ?? '']).commit());
   await ws3.commit();
 
-  // Tab 4 — Redemption (date-grouped, negative)
+  // Tab 4 — Redemption (by date desc; date only, 'Mmm DD YYYY')
   const reds = await book.redemptions(db, actor, filters) as Array<Record<string, unknown>>;
-  await groupedSheet(wb, 'Redemption', 'Date', 'Customer',
-    reds.map((r) => ({ group: String(r.redemption_date), item: `${r.series_code} · ${r.customer_name}`, amount: Number(r.net_payment) })), true);
+  const redByDate = new Map<string, Array<Record<string, unknown>>>();
+  for (const r of reds) (redByDate.get(String(r.redemption_date)) ?? redByDate.set(String(r.redemption_date), []).get(String(r.redemption_date))!).push(r);
+  const redGroups = [...redByDate.entries()].sort((a, b) => String(b[0]).localeCompare(String(a[0]))).map(([date, items]) => ({
+    summary: [fmtDate(date), '', '', '', items.reduce((s, r) => s + Number(r.net_payment), 0)],
+    details: items.map((r) => ['', r.customer_name, r.series_code, r.type, Number(r.net_payment)]),
+  }));
+  await outlineSheet(wb, 'Redemption',
+    [{ header: 'Date', width: 14 }, { header: 'Customer', width: 28 }, { header: 'Series', width: 12 }, { header: 'Type', width: 14 }, { header: 'Amount', width: 16, money: true }],
+    redGroups);
 
-  // Tab 5 — Depositorwise
-  const ws5 = startSheet(wb, 'Depositorwise', [{ header: 'Name', width: 34 }, { header: 'Amount', width: 16, money: true }]);
-  const deps = await book.depositorwise(db, actor, filters) as Array<{ name: string; amount: string }>;
-  let depGrand = 0;
-  for (const d of deps) { ws5.addRow([d.name, Number(d.amount)]).commit(); depGrand += Number(d.amount); }
-  boldRow(ws5, ['Grand Total', depGrand]);
-  await ws5.commit();
+  // Tab 5 — Depositorwise (amount desc; expand a customer → their investments)
+  const byCust = await book.segmentGrouped(db, actor, 'customer', filters); // already amount-desc
+  await outlineSheet(wb, 'Depositorwise',
+    [{ header: 'Customer', width: 28 }, { header: 'Customer ID', width: 14 }, { header: 'Series', width: 12 }, { header: 'App No', width: 16 }, { header: 'Status', width: 14 }, { header: 'Amount', width: 16, money: true }],
+    byCust.map((g) => ({
+      summary: [g.label, g.sublabel ?? '', '', '', '', g.outstanding],
+      details: g.children.map((c) => ['', '', c.series_code, c.application_no, c.status, c.amount]),
+    })),
+    ['Grand Total', '', '', '', '', byCust.reduce((s, g) => s + g.outstanding, 0)]);
 
-  // Tab 6 — Districtwise
-  const dist = await book.districtwise(db, actor, filters) as Array<{ district: string; amount: string }>;
-  await groupedSheet(wb, 'Districtwise', 'District', 'Sub', dist.map((d) => ({ group: d.district, item: '', amount: Number(d.amount) })));
-
-  // Tab 7 — Agent wise
-  const agents = await book.agentwise(db, actor, filters) as Array<{ agent: string; customer: string; amount: string }>;
-  await groupedSheet(wb, 'Agent wise', 'Agent Code', 'Name', agents.map((a) => ({ group: a.agent, item: a.customer, amount: Number(a.amount) })));
-
-  // Tab 8 — Staff wise
-  const staff = await book.staffwise(db, actor, filters) as Array<{ staff: string; customer: string; amount: string }>;
-  await groupedSheet(wb, 'Staff wise', 'Staff', 'Name', staff.map((s) => ({ group: s.staff, item: s.customer, amount: Number(s.amount) })));
+  // Tabs 6-8 — District / Agent / Staff wise (amount desc; expand → investments)
+  for (const [by, title, head] of [['district', 'Districtwise', 'District'], ['agent', 'Agent wise', 'Agent'], ['staff', 'Staff wise', 'Staff']] as const) {
+    const groups = await book.segmentGrouped(db, actor, by, filters); // amount-desc
+    await outlineSheet(wb, title,
+      [{ header: head, width: 22 }, { header: 'Customer', width: 28 }, { header: 'Series', width: 12 }, { header: 'App No', width: 16 }, { header: 'Amount', width: 16, money: true }, { header: 'Investors', width: 10 }],
+      groups.map((g) => ({
+        summary: [g.label, '', '', '', g.outstanding, g.investors],
+        details: g.children.map((c) => ['', c.customer, c.series_code, c.application_no, c.amount, '']),
+      })),
+      ['Grand Total', '', '', '', groups.reduce((s, g) => s + g.outstanding, 0), '']);
+  }
 
   // Tab 9 — Leads by status
   const ws9 = startSheet(wb, 'Leads', [{ header: 'Status', width: 14 }, { header: 'Name', width: 26 }, { header: 'Phone', width: 14 }, { header: 'Place', width: 16 }, { header: 'Source', width: 14 }, { header: 'Interested', width: 18 }, { header: 'Expected', width: 14, money: true }, { header: 'Follow-up', width: 14 }]);
@@ -142,7 +130,7 @@ export async function buildNcdBook(out: Writable, db: Db, actor: AuthUser, filte
   for (const [status, items] of byStatus) {
     let sum = 0;
     for (const l of items) { ws9.addRow([status, l.full_name, l.phone ?? '', l.place ?? '', l.source ?? '', l.interested_scheme ?? '', Number(l.expected_amount ?? 0), l.follow_up_date ?? '']).commit(); sum += Number(l.expected_amount ?? 0); }
-    subtotalRow(ws9, [`${status} Total (${items.length})`, '', '', '', '', '', sum, '']);
+    boldRow(ws9, [`${status} Total (${items.length})`, '', '', '', '', '', sum, '']);
   }
   await ws9.commit();
 

@@ -90,9 +90,13 @@
   2026-07-16); SharePoint offsite upload still pending.
 - [ ] ops/deploy.sh co-tenant check still curls dashboard.dhanamfinance.com, which has
   no DNS record (pre-existing) — noise on every deploy.
-- [ ] LockerHub/DhanamFin cutover: integration façade is live behind
-  `LOCKERHUB_INTEGRATION_KEY`, but the LockerHub app still points at the old wealth
-  app; byte-compat of L1–L10/LA1–LA4 unverified against doc 08.
+- [~] LockerHub/DhanamFin cutover — READY BUT NOT EXECUTED (2026-07-17): full
+  inbound façade (L1–L10, LA1–LA4, writes, agents, locker-deposit flow) is
+  deployed byte-compatible, 21 contract tests; outbound webhooks + daily
+  reconciliation ported and dormant (SSM-gated). LockerHub still points at
+  wealth. Flip procedure + pre-checks: ops/CUTOVER-LOCKERHUB.md — note the six
+  consumer-derived endpoints there that need LockerHub's Postman collection run
+  before cutover.
 
 ## P4 — minor / cosmetic (from 2026-07-16 re-audit)
 

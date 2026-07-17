@@ -53,8 +53,10 @@ function qs(r: Range): string {
 
 /** NCD Portfolio dashboard — quick ranges + clickable tiles → drill-down. */
 export function Dashboard() {
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const canDrill = can('dashboard:drilldown');
+  // NCD book download: CXO + Admin tier only (not every reports:download holder).
+  const canDownloadBook = !!user && ['super_admin', 'admin', 'cxo'].includes(user.role);
   const [range, setRange] = useState<Range>(defaultRange);
   const [drill, setDrill] = useState<{ widget: string; title: string; seriesOverride?: number } | null>(null);
 
@@ -78,7 +80,7 @@ export function Dashboard() {
           <h1 className="text-xl font-bold tracking-tight m-0">NCD Portfolio</h1>
           <p className="text-sm text-text-muted mt-1">Live view of the book in your scope.</p>
         </div>
-        {can('reports:download') && (
+        {canDownloadBook && (
           <a href="/api/reports/ncd-book.xlsx"
             className="text-sm bg-primary hover:bg-primary-hover text-white rounded px-4 py-2 font-semibold no-underline">
             ↓ Download NCD book (Excel)

@@ -36,10 +36,6 @@ export function ReportsPage() {
 
       <div className="grid md:grid-cols-2 gap-4">
         <div className={card}>
-          <h2 className="text-sm font-semibold mb-2">NCD book (9 tabs)</h2>
-          <a href="/api/reports/ncd-book.xlsx" className={dl}>↓ Download Excel</a>
-        </div>
-        <div className={card}>
           <h2 className="text-sm font-semibold mb-2">Statement of account (PDF)</h2>
           <div className="flex gap-2 items-center">
             <input className={inp} placeholder="Customer ID" value={cust} onChange={(e) => setCust(e.target.value)} />

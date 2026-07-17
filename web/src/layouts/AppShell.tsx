@@ -12,7 +12,7 @@ export function AppShell() {
   const { user, logout, can } = useAuth();
   const nav = useNavigate();
   const location = useLocation();
-  const items = NAV.filter((i) => can(...i.anyOf));
+  const items = NAV.filter((i) => can(...i.anyOf) && !(user && i.hideForRoles?.includes(user.role)));
   const [q, setQ] = useState('');
   const [results, setResults] = useState<{ customers: any[]; agents: any[]; staff: any[] } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);

@@ -30,3 +30,11 @@ systemRouter.post('/notifications/drain', requirePermission('notifications:admin
   const { drainOnce } = await import('../notifications/service.js');
   res.json(await drainOnce(getDb(), 25));
 }));
+
+// Manual LockerHub reconciliation run (explicit human action — works even
+// while the daily cron flag is off; read-only against LockerHub's SQLite).
+systemRouter.post('/lockerhub-reconciliation/run', requirePermission('settings:manage'), asyncHandler(async (req, res) => {
+  const { runReconciliation } = await import('../../integrations/lockerhub/reconciliation.js');
+  const date = typeof req.body?.report_date === 'string' ? req.body.report_date : undefined;
+  res.json(await runReconciliation(getDb(), date));
+}));

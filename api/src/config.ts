@@ -45,6 +45,13 @@ const schema = z.object({
   WAPPCLOUD_ENDPOINT: z.string().optional(),
   WAPPCLOUD_OTP_TEMPLATE: z.string().optional(),
   WHATSAPP_TEST_PHONE: z.string().optional(), // redirects ALL WhatsApp sends while set
+  // ── LockerHub outbound (cutover-gated; see ops/CUTOVER-LOCKERHUB.md) ──
+  // Agent-event webhooks fire ONLY when both URL + secret are set in SSM.
+  LOCKERHUB_WEBHOOK_URL: z.string().optional(),
+  LOCKERHUB_WEBHOOK_SECRET: z.string().optional(),
+  // Daily reconciliation cron runs ONLY when explicitly enabled.
+  LOCKERHUB_RECONCILIATION_ENABLED: z.string().default('false'),
+  LOCKERHUB_DB_PATH: z.string().default('/home/ubuntu/LockerHub/data/lockerhub.db'),
 });
 
 export type Config = z.infer<typeof schema>;

@@ -28,6 +28,24 @@ async function startCrons(): Promise<void> {
   setInterval(() => {
     void drainOnce(getDb(), 25).catch((e) => console.warn('[cron] notify drain:', (e as Error).message));
   }, 60_000).unref();
+
+  // LockerHub outbound — both no-op unless explicitly enabled in SSM
+  // (see ops/CUTOVER-LOCKERHUB.md). Safe to keep armed.
+  const { config } = await import('./config.js');
+  const { dispatchPending } = await import('./integrations/lockerhub/dispatcher.js');
+  setInterval(() => {
+    void dispatchPending(getDb()).catch((e) => console.warn('[cron] agent-event dispatch:', (e as Error).message));
+  }, 30_000).unref();
+
+  if (config.LOCKERHUB_RECONCILIATION_ENABLED === 'true') {
+    const { runReconciliation } = await import('./integrations/lockerhub/reconciliation.js');
+    // Once per IST day, first tick after 07:00 IST (enqueue is per-day idempotent).
+    setInterval(() => {
+      const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+      if (istNow.getUTCHours() < 7) return;
+      void runReconciliation(getDb()).catch((e) => console.warn('[cron] lockerhub recon:', (e as Error).message));
+    }, 15 * 60_000).unref();
+  }
 }
 
 async function main(): Promise<void> {

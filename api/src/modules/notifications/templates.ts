@@ -25,6 +25,19 @@ const TEMPLATES: Record<string, Renderer> = {
     subject: 'Your DhanamFin agent account is approved',
     body: `Welcome ${p.agentName}. Your agent code is ${p.agentCode}.`,
   }),
+  lockerhub_daily_reconciliation: (p) => ({
+    subject: `LockerHub reconciliation ${p.report_date} — ${Number(p.orphan_count) > 0 ? `⚠ ${p.orphan_count} orphan(s)` : 'clean'}`,
+    body: [
+      `LockerHub ↔ NCD reconciliation for ${p.report_date}`,
+      ``,
+      `LockerHub successful payments: ${p.lh_success_count} (Rs ${p.lh_total_amount})`,
+      `NCD applications (lockerhub-funded): ${p.ncd_count} (Rs ${p.ncd_total_amount}) — ${p.ncd_status_breakdown}`,
+      `Orphans (paid on LockerHub, missing here): ${p.orphan_count} (Rs ${p.orphan_total_amount})`,
+      ``,
+      `${p.orphan_details}`,
+      p.lh_error ? `\nNOTE: LockerHub DB read failed: ${p.lh_error}` : '',
+    ].join('\n'),
+  }),
 };
 
 export function renderTemplate(template: string, payload: Record<string, unknown>): { subject: string; body: string } {

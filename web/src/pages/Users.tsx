@@ -11,6 +11,8 @@ interface UserRow {
   full_name: string;
   role: string;
   branch_id: number | null;
+  branch_ids: number[];
+  reports_to_user_id: number | null;
   is_active: boolean;
 }
 
@@ -27,6 +29,7 @@ interface EditState {
   full_name: string;
   role: string;
   branch_id: string;
+  reports_to_user_id: string;
   is_active: boolean;
   password: string; // blank = keep current
 }
@@ -37,6 +40,7 @@ export function UsersPage() {
   const { can, user: me } = useAuth();
   const [form, setForm] = useState(EMPTY_FORM);
   const [edit, setEdit] = useState<EditState | null>(null);
+  const [branchModal, setBranchModal] = useState<{ id: number; name: string; ids: number[] } | null>(null);
   const [err, setErr] = useState('');
 
   const { data, isLoading, error } = useQuery({
@@ -70,11 +74,18 @@ export function UsersPage() {
         full_name: e.full_name,
         role: e.role,
         branch_id: e.branch_id ? Number(e.branch_id) : null,
+        reports_to_user_id: e.reports_to_user_id ? Number(e.reports_to_user_id) : null,
         is_active: e.is_active,
         ...(e.password ? { password: e.password } : {}),
       }),
     onSuccess: () => { setEdit(null); qc.invalidateQueries({ queryKey: ['users'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to update user'),
+  });
+
+  const saveBranches = useMutation({
+    mutationFn: (v: { id: number; branchIds: number[] }) => api.put(`/api/users/${v.id}/branches`, { branchIds: v.branchIds }),
+    onSuccess: () => { setBranchModal(null); qc.invalidateQueries({ queryKey: ['users'] }); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to set branches'),
   });
 
   const remove = useMutation({
@@ -121,8 +132,13 @@ export function UsersPage() {
           </span> },
     { key: 'actions', header: '', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
       render: (u) => edit?.id === u.id ? (
-        <span className="inline-flex items-center gap-1.5 justify-end">
-          <input className={`${inp} w-36`} type="password" placeholder="New password" autoComplete="new-password"
+        <span className="inline-flex items-center gap-1.5 justify-end flex-wrap">
+          <select className={inp} title="Reports to" value={edit.reports_to_user_id}
+            onChange={(e) => setEdit({ ...edit, reports_to_user_id: e.target.value })}>
+            <option value="">Reports to…</option>
+            {(data?.rows ?? []).filter((x) => x.is_active && x.id !== u.id).map((x) => <option key={x.id} value={x.id}>{x.full_name}</option>)}
+          </select>
+          <input className={`${inp} w-32`} type="password" placeholder="New password" autoComplete="new-password"
             value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} />
           <button
             disabled={!edit.full_name || (edit.password !== '' && edit.password.length < 8) || update.isPending}
@@ -134,8 +150,13 @@ export function UsersPage() {
         <span className="inline-flex items-center gap-2.5 justify-end">
           {can('users:manage') && (
             <button
-              onClick={() => { setErr(''); setEdit({ id: u.id, full_name: u.full_name, role: u.role, branch_id: u.branch_id != null ? String(u.branch_id) : '', is_active: u.is_active, password: '' }); }}
+              onClick={() => { setErr(''); setEdit({ id: u.id, full_name: u.full_name, role: u.role, branch_id: u.branch_id != null ? String(u.branch_id) : '', reports_to_user_id: u.reports_to_user_id != null ? String(u.reports_to_user_id) : '', is_active: u.is_active, password: '' }); }}
               className="text-xs text-primary hover:underline">Edit</button>
+          )}
+          {can('users:manage') && (
+            <button
+              onClick={() => { setErr(''); setBranchModal({ id: u.id, name: u.full_name, ids: u.branch_ids ?? [] }); }}
+              className="text-xs text-primary hover:underline">Branches</button>
           )}
           {can('users:delete') && u.id !== me?.id && (
             <button
@@ -192,6 +213,29 @@ export function UsersPage() {
         defaultSort={{ key: 'full_name', dir: 'asc' }}
         empty="No users yet."
       />
+
+      {branchModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setBranchModal(null)}>
+          <div className="bg-surface border border-border rounded-lg shadow-card p-5 w-full max-w-[360px]" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-sm font-bold mb-1">Branch access</h2>
+            <p className="text-xs text-text-muted mb-3">{branchModal.name} — branches this user can see (multi-branch scoping).</p>
+            <div className="flex flex-col gap-1.5 max-h-64 overflow-auto">
+              {(branches?.rows ?? []).map((b) => (
+                <label key={b.id} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={branchModal.ids.includes(b.id)}
+                    onChange={(e) => setBranchModal({ ...branchModal, ids: e.target.checked ? [...branchModal.ids, b.id] : branchModal.ids.filter((x) => x !== b.id) })} />
+                  {b.name} <span className="text-xs text-text-muted font-mono">{b.code}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button onClick={() => setBranchModal(null)} className="text-xs text-text-muted hover:underline px-2">Cancel</button>
+              <button onClick={() => saveBranches.mutate({ id: branchModal.id, branchIds: branchModal.ids })} disabled={saveBranches.isPending}
+                className="text-xs bg-primary text-white rounded px-4 py-2 disabled:opacity-40 hover:bg-primary-hover">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { DataTable, type Column } from '../components/DataTable.js';
 
 interface Payee { payee_type: string; payee_id: number; accrued: string; paid: string; balance: string; }
 interface Referrer { id: number; display_name: string; eligibility_status: string; }
+interface AgentRow { id: number; full_name: string; agent_code: string; commission_status: string; commission_rate_pct: number | null; }
 
 export function IncentivesPage() {
   const qc = useQueryClient();
@@ -14,6 +15,18 @@ export function IncentivesPage() {
   const [msg, setMsg] = useState('');
   const overview = useQuery({ queryKey: ['inc-overview'], queryFn: () => api.get<{ rows: Payee[] }>('/api/incentives/overview') });
   const referrers = useQuery({ queryKey: ['inc-referrers'], queryFn: () => api.get<{ rows: Referrer[] }>('/api/incentives/referrers') });
+  const agents = useQuery({ queryKey: ['inc-agents'], queryFn: () => api.get<{ rows: AgentRow[] }>('/api/incentives/agents'), enabled: can('incentives:manage-eligibility') });
+  const [rate, setRate] = useState<Record<number, string>>({});
+  const grantAgent = useMutation({
+    mutationFn: (v: { id: number; rate_pct: number }) => api.post(`/api/incentives/agents/${v.id}/eligibility`, { rate_pct: v.rate_pct }),
+    onSuccess: () => { setMsg('Agent commission sent for approval.'); qc.invalidateQueries({ queryKey: ['inc-agents'] }); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const revokeAgent = useMutation({
+    mutationFn: (id: number) => api.post(`/api/incentives/agents/${id}/eligibility/revoke`, {}),
+    onSuccess: () => { setMsg('Agent commission revoked.'); qc.invalidateQueries({ queryKey: ['inc-agents'] }); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
 
   const pay = useMutation({
     mutationFn: (v: { type: string; id: number; amount: number }) => api.post(`/api/incentives/payees/${v.type}/${v.id}/pay`, { amount: v.amount }),
@@ -49,6 +62,36 @@ export function IncentivesPage() {
           empty="No accruals yet."
         />
       </div>
+
+      {can('incentives:manage-eligibility') && (
+        <>
+          <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Agent commissions</h2>
+          <div className="bg-surface border border-border rounded-lg shadow-card divide-y divide-border mb-6">
+            {(agents.data?.rows ?? []).map((ag) => (
+              <div key={ag.id} className="p-4 flex items-center gap-3 text-sm flex-wrap">
+                <span className="font-medium">{ag.full_name}</span>
+                <span className="font-mono text-xs text-text-muted">{ag.agent_code}</span>
+                <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{ag.commission_status}{ag.commission_rate_pct != null ? ` · ${ag.commission_rate_pct}%` : ''}</span>
+                <div className="ml-auto flex gap-2 items-center">
+                  {ag.commission_status !== 'Approved' && (
+                    <>
+                      <input className="w-20 px-2 py-1 text-xs border border-border-strong rounded" placeholder="rate %"
+                        value={rate[ag.id] ?? ''} onChange={(e) => setRate((s) => ({ ...s, [ag.id]: e.target.value }))} />
+                      <button disabled={!rate[ag.id] || Number(rate[ag.id]) <= 0 || grantAgent.isPending}
+                        onClick={() => { setMsg(''); grantAgent.mutate({ id: ag.id, rate_pct: Number(rate[ag.id]) }); }}
+                        className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40">Grant</button>
+                    </>
+                  )}
+                  {ag.commission_status === 'Approved' && (
+                    <button onClick={() => { setMsg(''); revokeAgent.mutate(ag.id); }} className="text-xs border border-border text-danger rounded px-3 py-1.5">Revoke</button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {(agents.data?.rows ?? []).length === 0 && <div className="p-6 text-center text-text-muted">No agents yet.</div>}
+          </div>
+        </>
+      )}
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Referrers</h2>
       <div className="bg-surface border border-border rounded-lg shadow-card divide-y divide-border">

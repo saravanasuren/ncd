@@ -40,6 +40,11 @@ const createSchema = z.object({
 customersRouter.post('/', requirePermission('customers:create'),
   asyncHandler(async (req, res) => res.status(201).json(await s.createCustomer(getDb(), req.user!, createSchema.parse(req.body)))));
 
+// Active staff a customer can be handed over to (picker for handover-request).
+// Registered BEFORE '/:id' so the literal path isn't captured by the param route.
+customersRouter.get('/assignable-staff', requirePermission('customers:handover-request'),
+  asyncHandler(async (_req, res) => res.json({ rows: await s.listAssignableStaff(getDb()) })));
+
 customersRouter.get('/:id', requirePermission('customers:read'),
   asyncHandler(async (req, res) => res.json(await s.getCustomerDetail(getDb(), req.user!, Number(req.params.id)))));
 

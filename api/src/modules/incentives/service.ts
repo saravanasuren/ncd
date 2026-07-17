@@ -38,6 +38,12 @@ export async function myEarnings(db: Db, actor: AuthUser) {
 import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
 import { getSettingsMap } from '../settings/service.js';
 
+export async function listAgentsForEligibility(db: Db): Promise<{ id: number; full_name: string; agent_code: string; commission_status: string; commission_rate_pct: number | null }[]> {
+  const { rows } = await db.query<{ id: string; full_name: string; agent_code: string; commission_status: string; commission_rate_pct: string | null }>(
+    `SELECT id, full_name, agent_code, commission_status, commission_rate_pct FROM agents WHERE is_active = TRUE ORDER BY full_name`);
+  return rows.map((r) => ({ ...r, id: Number(r.id), commission_rate_pct: r.commission_rate_pct != null ? Number(r.commission_rate_pct) : null }));
+}
+
 export async function requestAgentEligibility(db: Db, actor: AuthUser, agentId: number, input: { rate_pct: number; payout_mode?: string; bank_name?: string; account_number?: string; ifsc?: string }) {
   const settings = await getSettingsMap(db);
   const cap = Number(settings['incentive.agent_commission_cap_pct'] ?? 2.0);

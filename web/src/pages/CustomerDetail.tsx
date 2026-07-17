@@ -11,9 +11,19 @@ export function CustomerDetailPage() {
   const { can } = useAuth();
   const [bank, setBank] = useState({ account_number: '', ifsc: '' });
   const [msg, setMsg] = useState('');
+  const [panel, setPanel] = useState<'correction' | 'handover' | null>(null);
+  const [corr, setCorr] = useState<Record<string, string>>({});
+  const [corrReason, setCorrReason] = useState('');
+  const [handoverTo, setHandoverTo] = useState('');
+  const [handoverReason, setHandoverReason] = useState('');
 
   const key = ['customer', id];
   const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<any>(`/api/customers/${id}`) });
+  const staff = useQuery({
+    queryKey: ['assignable-staff'],
+    queryFn: () => api.get<{ rows: { id: number; full_name: string; role: string }[] }>('/api/customers/assignable-staff'),
+    enabled: can('customers:handover-request'),
+  });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
   const wrap = (p: Promise<unknown>) => p.then(() => { setMsg(''); invalidate(); }).catch((e) => setMsg(e instanceof ApiError ? e.message : 'Failed'));
@@ -57,7 +67,57 @@ export function CustomerDetailPage() {
           {can('customers:create') && c.creation_status === 'Draft' && (
             <button onClick={() => wrap(api.post(`/api/customers/${id}/submit-for-approval`))} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Submit for approval →</button>
           )}
+          {can('customers:correction-request') && c.creation_status !== 'Draft' && (
+            <button onClick={() => setPanel(panel === 'correction' ? null : 'correction')} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Request correction</button>
+          )}
+          {can('customers:handover-request') && (
+            <button onClick={() => setPanel(panel === 'handover' ? null : 'handover')} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Request handover</button>
+          )}
         </div>
+
+        {panel === 'correction' && (
+          <div className="mt-4 border-t border-border pt-4">
+            <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Correction request (needs approval)</div>
+            <div className="grid grid-cols-2 gap-2 max-w-xl">
+              {(['full_name', 'phone', 'email', 'district', 'pan'] as const).map((f) => (
+                <label key={f} className="text-xs text-text-muted">
+                  {f}
+                  <input className={`${inp} w-full mt-1`} defaultValue={c[f] ?? ''}
+                    onChange={(e) => setCorr((s) => ({ ...s, [f]: e.target.value }))} />
+                </label>
+              ))}
+              <label className="text-xs text-text-muted col-span-2">
+                Reason
+                <input className={`${inp} w-full mt-1`} value={corrReason} onChange={(e) => setCorrReason(e.target.value)} placeholder="Why is this correction needed?" />
+              </label>
+            </div>
+            <button
+              disabled={corrReason.trim().length < 2}
+              onClick={() => {
+                const changes: Record<string, string> = {};
+                for (const [k, v] of Object.entries(corr)) if (v !== (c[k] ?? '')) changes[k] = v;
+                if (!Object.keys(changes).length) { setMsg('No fields changed.'); return; }
+                wrap(api.post(`/api/customers/${id}/correction-request`, { changes, reason: corrReason.trim() }).then(() => { setPanel(null); setCorr({}); setCorrReason(''); }));
+              }}
+              className="mt-3 text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Submit correction</button>
+          </div>
+        )}
+
+        {panel === 'handover' && (
+          <div className="mt-4 border-t border-border pt-4">
+            <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Handover request (needs approval)</div>
+            <div className="flex flex-wrap gap-2 items-center">
+              <select className={inp} value={handoverTo} onChange={(e) => setHandoverTo(e.target.value)}>
+                <option value="">Hand over to…</option>
+                {(staff.data?.rows ?? []).map((u) => <option key={u.id} value={u.id}>{u.full_name} ({u.role})</option>)}
+              </select>
+              <input className={`${inp} w-64`} value={handoverReason} onChange={(e) => setHandoverReason(e.target.value)} placeholder="Reason" />
+              <button disabled={!handoverTo || handoverReason.trim().length < 2}
+                onClick={() => wrap(api.post(`/api/customers/${id}/handover-request`, { toUserId: Number(handoverTo), reason: handoverReason.trim() }).then(() => { setPanel(null); setHandoverTo(''); setHandoverReason(''); }))}
+                className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Submit handover</button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className={card}>
@@ -155,20 +215,32 @@ function NewInvestment({ customerId }: { customerId: number }) {
   const [seriesId, setSeriesId] = useState('');
   const [schemeId, setSchemeId] = useState('');
   const [amount, setAmount] = useState('');
+  const [clubWith, setClubWith] = useState('');
   const [err, setErr] = useState('');
   const series = useQuery({ queryKey: ['series'], queryFn: () => api.get<{ rows: any[] }>('/api/series') });
   const schemes = useQuery({ queryKey: ['schemes'], queryFn: () => api.get<{ rows: any[] }>('/api/schemes') });
+  // In-flight applications in the chosen series this new line could club into
+  // (append to an existing pre-allotment application instead of a new one).
+  const candidates = useQuery({
+    queryKey: ['clubbing', customerId, seriesId],
+    queryFn: () => api.get<{ rows: any[] }>(`/api/applications/clubbing-candidates?customer_id=${customerId}&series_id=${seriesId}`),
+    enabled: !!seriesId,
+  });
   const create = useMutation({
-    mutationFn: () => api.post<{ id: number }>('/api/applications', { customer_id: customerId, series_id: Number(seriesId), scheme_id: Number(schemeId), amount: Number(amount) }),
+    mutationFn: () => api.post<{ id: number }>('/api/applications', {
+      customer_id: customerId, series_id: Number(seriesId), scheme_id: Number(schemeId), amount: Number(amount),
+      ...(clubWith ? { club_with_application_id: Number(clubWith) } : {}),
+    }),
     onSuccess: (r) => nav(`/app/applications/${r.id}`),
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
   const sel = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
+  const clubOptions = candidates.data?.rows ?? [];
   return (
     <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">New investment</h2>
       <div className="flex flex-wrap gap-2 items-center">
-        <select className={sel} value={seriesId} onChange={(e) => setSeriesId(e.target.value)}>
+        <select className={sel} value={seriesId} onChange={(e) => { setSeriesId(e.target.value); setClubWith(''); }}>
           <option value="">Series…</option>
           {(series.data?.rows ?? []).map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
         </select>
@@ -178,8 +250,19 @@ function NewInvestment({ customerId }: { customerId: number }) {
         </select>
         <input className={sel} placeholder="Amount" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
         <button disabled={!seriesId || !schemeId || !amount || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
-          className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Create investment</button>
+          className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
+          {clubWith ? 'Add to application' : 'Create investment'}
+        </button>
       </div>
+      {clubOptions.length > 0 && (
+        <label className="flex items-center gap-2 text-xs text-text-muted mt-3">
+          Club into an in-flight application:
+          <select className={sel} value={clubWith} onChange={(e) => setClubWith(e.target.value)}>
+            <option value="">— new application —</option>
+            {clubOptions.map((a) => <option key={a.id} value={a.id}>{a.application_no} (₹{Number(a.total_amount).toLocaleString('en-IN')}, {a.status})</option>)}
+          </select>
+        </label>
+      )}
       {err && <div className="text-xs text-danger mt-2">{err}</div>}
     </div>
   );

@@ -320,6 +320,16 @@ registerOnFinalApprove('customer_correction', async (tx, req) => {
   }
 });
 
+/** Active staff (non-customer roles) eligible to receive a customer handover. */
+export async function listAssignableStaff(db: Db): Promise<{ id: number; full_name: string; role: string }[]> {
+  const { rows } = await db.query<{ id: string; full_name: string; role: string }>(
+    `SELECT u.id, u.full_name, r.name AS role
+       FROM users u JOIN roles r ON r.id = u.role_id
+      WHERE u.is_active = TRUE AND r.name <> 'customer'
+      ORDER BY u.full_name`);
+  return rows.map((r) => ({ ...r, id: Number(r.id) }));
+}
+
 /** Handover request → approval; moves ownership on final approve. */
 export async function requestHandover(db: Db, actor: AuthUser, customerId: number, toUserId: number, reason: string): Promise<ApprovalRow> {
   return db.withTx(async (tx) => {

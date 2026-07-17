@@ -12,15 +12,27 @@ export interface UserListRow {
   full_name: string;
   role: string;
   branch_id: number | null;
+  branch_ids: number[];
+  reports_to_user_id: number | null;
   is_active: boolean;
 }
 
 export async function listUsers(db: Db): Promise<UserListRow[]> {
-  const { rows } = await db.query<UserListRow & { role_name: string }>(
-    `SELECT u.id, u.email, u.full_name, r.name AS role, u.branch_id, u.is_active
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT u.id, u.email, u.full_name, r.name AS role, u.branch_id, u.reports_to_user_id, u.is_active,
+            COALESCE((SELECT array_agg(ub.branch_id) FROM user_branches ub WHERE ub.user_id = u.id), '{}') AS branch_ids
      FROM users u JOIN roles r ON r.id = u.role_id ORDER BY u.full_name`
   );
-  return rows.map((r) => ({ ...r, id: Number(r.id), branch_id: r.branch_id != null ? Number(r.branch_id) : null }));
+  return rows.map((r) => ({
+    id: Number(r.id),
+    email: String(r.email),
+    full_name: String(r.full_name),
+    role: String(r.role),
+    branch_id: r.branch_id != null ? Number(r.branch_id) : null,
+    branch_ids: (r.branch_ids as (number | string)[]).map(Number),
+    reports_to_user_id: r.reports_to_user_id != null ? Number(r.reports_to_user_id) : null,
+    is_active: Boolean(r.is_active),
+  }));
 }
 
 export interface BranchRow {

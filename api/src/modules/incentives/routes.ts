@@ -11,6 +11,9 @@ export const incentivesRouter = Router();
 incentivesRouter.get('/overview', requirePermission('incentives:manage-eligibility'),
   asyncHandler(async (_req, res) => res.json({ rows: await s.overview(getDb()) })));
 
+incentivesRouter.get('/agents', requirePermission('incentives:manage-eligibility'),
+  asyncHandler(async (_req, res) => res.json({ rows: await s.listAgentsForEligibility(getDb()) })));
+
 incentivesRouter.get('/my-earnings', requirePermission('earnings:read-own'),
   asyncHandler(async (req, res) => res.json(await s.myEarnings(getDb(), req.user!))));
 

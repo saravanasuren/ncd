@@ -37,6 +37,16 @@ async function startCrons(): Promise<void> {
     void dispatchPending(getDb()).catch((e) => console.warn('[cron] agent-event dispatch:', (e as Error).message));
   }, 30_000).unref();
 
+  // Daily backup-check email (docs/08 §2) — once per IST day after 08:00 IST;
+  // enqueue is per-day idempotent, and it degrades to "not configured" notes
+  // until the SharePoint params land.
+  const { runBackupCheck } = await import('./integrations/backup-check.js');
+  setInterval(() => {
+    const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+    if (istNow.getUTCHours() < 8) return;
+    void runBackupCheck(getDb()).catch((e) => console.warn('[cron] backup check:', (e as Error).message));
+  }, 15 * 60_000).unref();
+
   if (config.LOCKERHUB_RECONCILIATION_ENABLED === 'true') {
     const { runReconciliation } = await import('./integrations/lockerhub/reconciliation.js');
     // Once per IST day, first tick after 07:00 IST (enqueue is per-day idempotent).

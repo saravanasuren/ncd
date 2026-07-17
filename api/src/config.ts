@@ -52,6 +52,13 @@ const schema = z.object({
   // Daily reconciliation cron runs ONLY when explicitly enabled.
   LOCKERHUB_RECONCILIATION_ENABLED: z.string().default('false'),
   LOCKERHUB_DB_PATH: z.string().default('/home/ubuntu/LockerHub/data/lockerhub.db'),
+  // ── SharePoint (Graph) — offsite backup copy (docs/08 §2) ──
+  SHAREPOINT_TENANT_ID: z.string().optional(),
+  SHAREPOINT_CLIENT_ID: z.string().optional(),
+  SHAREPOINT_CLIENT_SECRET: z.string().optional(),
+  SHAREPOINT_BACKUP_DRIVE_ID: z.string().optional(),
+  SHAREPOINT_BACKUP_FOLDER: z.string().default('NewWealthBackups'),
+  BACKUP_DIR: z.string().default('/var/backups/dhanam-newwealth'),
 });
 
 export type Config = z.infer<typeof schema>;

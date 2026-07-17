@@ -25,6 +25,16 @@ const TEMPLATES: Record<string, Renderer> = {
     subject: 'Your DhanamFin agent account is approved',
     body: `Welcome ${p.agentName}. Your agent code is ${p.agentCode}.`,
   }),
+  backup_check: (p) => ({
+    subject: `NCD backup check ${p.report_date} — ${p.ok ? 'OK' : '⚠ ATTENTION'}`,
+    body: [
+      `Nightly backup status for ${p.report_date}`,
+      ``,
+      `Local:   ${p.local}`,
+      `Offsite: ${p.offsite}`,
+      `Secret:  ${p.secret}`,
+    ].join('\n'),
+  }),
   lockerhub_daily_reconciliation: (p) => ({
     subject: `LockerHub reconciliation ${p.report_date} — ${Number(p.orphan_count) > 0 ? `⚠ ${p.orphan_count} orphan(s)` : 'clean'}`,
     body: [

@@ -31,6 +31,12 @@ systemRouter.post('/notifications/drain', requirePermission('notifications:admin
   res.json(await drainOnce(getDb(), 25));
 }));
 
+// Manual backup-check run (read-only inspection + status email).
+systemRouter.post('/backup-check/run', requirePermission('settings:manage'), asyncHandler(async (_req, res) => {
+  const { runBackupCheck } = await import('../../integrations/backup-check.js');
+  res.json(await runBackupCheck(getDb()));
+}));
+
 // Manual LockerHub reconciliation run (explicit human action — works even
 // while the daily cron flag is off; read-only against LockerHub's SQLite).
 systemRouter.post('/lockerhub-reconciliation/run', requirePermission('settings:manage'), asyncHandler(async (req, res) => {

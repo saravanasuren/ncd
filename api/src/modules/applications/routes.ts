@@ -31,6 +31,14 @@ applicationsRouter.post('/:id/payout-account', requirePermission('applications:u
     res.json(await s.setPayoutAccount(getDb(), req.user!, Number(req.params.id), bank_account_id));
   }));
 
+// Start a Digio eSign session for this application (returns the sign URL).
+// Stub/sandbox until DIGIO_* creds are in SSM; eSign is off the critical path.
+applicationsRouter.post('/:id/esign/initiate', requirePermission('applications:mark-esigned'),
+  asyncHandler(async (req, res) => {
+    const { initiateSigning } = await import('../../integrations/digio/service.js');
+    res.status(201).json(await initiateSigning(getDb(), req.user!, Number(req.params.id)));
+  }));
+
 applicationsRouter.post('/:id/receipt', requirePermission('applications:create', 'applications:update'),
   asyncHandler(async (req, res) => {
     const b = z.object({ filename: z.string(), mime: z.string(), data_base64: z.string().min(1) }).parse(req.body);

@@ -142,7 +142,15 @@ export function ApplicationDetailPage() {
           <button onClick={() => confirm.mutate()} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Confirm collection</button>
         )}
         {can('applications:mark-esigned') && !a.esigned_at && ['PendingActivation', 'PendingEsign', 'Active'].includes(a.status) && (
-          <button onClick={() => run(api.post(`/api/applications/${id}/mark-esigned`))} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Mark eSigned</button>
+          <>
+            <button onClick={() => {
+              run(api.post<{ sign_url: string | null; stub: boolean }>(`/api/applications/${id}/esign/initiate`).then((r) => {
+                if (r.sign_url && !r.stub) window.open(r.sign_url, '_blank', 'noopener');
+                else setNote(r.stub ? 'eSign is in sandbox mode (no Digio creds) — use Mark eSigned to record completion.' : 'Signing session created.');
+              }));
+            }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Send for eSign</button>
+            <button onClick={() => run(api.post(`/api/applications/${id}/mark-esigned`))} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Mark eSigned</button>
+          </>
         )}
         {a.esigned_at && <span className="text-xs text-text-muted">eSigned ✓</span>}
         {a.receipt_file_path && <a href={`/api/applications/${id}/receipt`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">View receipt</a>}

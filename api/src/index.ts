@@ -47,6 +47,15 @@ async function startCrons(): Promise<void> {
     void runBackupCheck(getDb()).catch((e) => console.warn('[cron] backup check:', (e as Error).message));
   }, 15 * 60_000).unref();
 
+  // Digio eSign poller — real mode only, gated (webhook is the primary path;
+  // this catches Digio's unreliable webhook delivery). Every 5 min.
+  if (config.DIGIO_POLLER_ENABLED === 'true') {
+    const { pollOutstanding } = await import('./integrations/digio/service.js');
+    setInterval(() => {
+      void pollOutstanding(getDb()).catch((e) => console.warn('[cron] digio poll:', (e as Error).message));
+    }, 5 * 60_000).unref();
+  }
+
   if (config.LOCKERHUB_RECONCILIATION_ENABLED === 'true') {
     const { runReconciliation } = await import('./integrations/lockerhub/reconciliation.js');
     // Once per IST day, first tick after 07:00 IST (enqueue is per-day idempotent).

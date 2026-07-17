@@ -52,6 +52,13 @@ const schema = z.object({
   // Daily reconciliation cron runs ONLY when explicitly enabled.
   LOCKERHUB_RECONCILIATION_ENABLED: z.string().default('false'),
   LOCKERHUB_DB_PATH: z.string().default('/home/ubuntu/LockerHub/data/lockerhub.db'),
+  // ── Digio eSign (docs/08 §2). eSign is off ncd's critical path (records
+  // esigned_at). All optional: stub when creds absent. ──
+  DIGIO_CLIENT_ID: z.string().optional(),
+  DIGIO_CLIENT_SECRET: z.string().optional(),
+  DIGIO_BASE: z.string().optional(),
+  DIGIO_WEBHOOK_SECRET: z.string().optional(),
+  DIGIO_POLLER_ENABLED: z.string().default('false'),
   // ── SharePoint (Graph) — offsite backup copy (docs/08 §2) ──
   SHAREPOINT_TENANT_ID: z.string().optional(),
   SHAREPOINT_CLIENT_ID: z.string().optional(),

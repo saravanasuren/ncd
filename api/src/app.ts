@@ -30,6 +30,7 @@ import { dashboardRouter } from './modules/dashboard/routes.js';
 import { reportsRouter } from './modules/reports/routes.js';
 import { portalRouter } from './modules/portal/routes.js';
 import { integrationRouter } from './modules/integration/routes.js';
+import { webhooksRouter } from './modules/webhooks/routes.js';
 import { eventsRouter } from './modules/events/routes.js';
 import { statementsRouter } from './modules/statements/routes.js';
 import { auditRouter, systemRouter } from './modules/admin/routes.js';
@@ -78,6 +79,8 @@ export function createApp(): Express {
   // Integration façade: own key auth, no cookie/CSRF (LockerHub / DhanamFin).
   // Mounted BEFORE the CSRF guard so app clients don't need the browser header.
   app.use('/api/integration', integrationRouter);
+  // Provider webhooks — own shared-secret auth, no cookie/CSRF (external callers).
+  app.use('/api/webhooks', webhooksRouter);
 
   // CSRF on cookie-authed mutations, then attach the authenticated user.
   app.use('/api', csrfGuard);

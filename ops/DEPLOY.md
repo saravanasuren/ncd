@@ -20,8 +20,20 @@ aws ssm put-parameter $R --type String       --name /dhanam/newwealth/SEED_ADMIN
 aws ssm put-parameter $R --type String       --name /dhanam/newwealth/WEB_ORIGIN           --value "https://ncd.dhanamfinance.com"
 aws ssm put-parameter $R --type SecureString --name /dhanam/newwealth/LOCKERHUB_INTEGRATION_KEY --value "$(openssl rand -hex 32)"
 # When live provider keys arrive: DECENTRO_*, DIGIO_*, WAPPCLOUD_*, SES/NOTIFICATIONS_*.
+
+# Offsite backup → SharePoint: reuse the OLD app's Azure app (shared creds). Copy the
+# four params from /dhanam/wealth/* and add a distinct folder for this app.
+for K in SHAREPOINT_TENANT_ID SHAREPOINT_CLIENT_ID SHAREPOINT_CLIENT_SECRET SHAREPOINT_BACKUP_DRIVE_ID; do
+  V=$(aws ssm get-parameter --name /dhanam/wealth/$K --with-decryption --region ap-south-1 --query Parameter.Value --output text)
+  T=String; [ "$K" = SHAREPOINT_CLIENT_SECRET ] && T=SecureString
+  aws ssm put-parameter $R --type $T --name /dhanam/newwealth/$K --value "$V"
+done
+aws ssm put-parameter $R --type String --name /dhanam/newwealth/SHAREPOINT_BACKUP_FOLDER --value "NewWealthBackups"
 ```
 Extend the instance role's SSM read policy to `/dhanam/newwealth/*` (additive).
+The offsite copy lands in the same **Dhanam Repository** SharePoint site → Documents →
+`NewWealthBackups/` (separate from the old app's `WealthBackups/`). ⚠ The shared Azure
+client secret expires **2028-07-09** — rotate it (and re-push to both SSM paths) before then.
 
 ## 2. First deploy (on the box)
 ```bash
@@ -49,8 +61,10 @@ sudo ln -s /etc/nginx/sites-available/dhanam-newwealth /etc/nginx/sites-enabled/
 sudo certbot --nginx -d ncd.dhanamfinance.com            # issues the cert + reloads nginx
 sudo nginx -t && sudo systemctl reload nginx
 
-# backups
-sudo cp ops/backup.sh /usr/local/bin/dhanam-newwealth-backup.sh && sudo chmod +x $_
+# backups (install BOTH scripts side-by-side; the offsite uploader sits next to backup.sh)
+sudo cp ops/backup.sh /usr/local/bin/dhanam-newwealth-backup.sh
+sudo cp ops/upload-sharepoint.mjs /usr/local/bin/upload-sharepoint.mjs
+sudo chmod +x /usr/local/bin/dhanam-newwealth-backup.sh
 ( sudo crontab -l 2>/dev/null; echo "0 21 * * * /usr/local/bin/dhanam-newwealth-backup.sh" ) | sudo crontab -
 ```
 

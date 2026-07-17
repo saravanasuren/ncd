@@ -67,6 +67,16 @@ reportsRouter.get('/allotment/:applicationId.pdf', requirePermission('customers:
     res.end(buf);
   }));
 
+// 26Q quarterly TDS filing annexure. :quarter = 'YYYY-Qn'.
+reportsRouter.get('/tds-26q/:quarter.xlsx', requirePermission('reports:download'),
+  asyncHandler(async (req, res) => {
+    const { tds26q } = await import('./documents.js');
+    const buf = await tds26q(getDb(), String(req.params.quarter));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="26Q-${req.params.quarter}.xlsx"`);
+    res.end(buf);
+  }));
+
 reportsRouter.get('/tds/:yyyymm.xlsx', requirePermission('reports:download'),
   asyncHandler(async (req, res) => {
     const { tdsReport } = await import('./documents.js');

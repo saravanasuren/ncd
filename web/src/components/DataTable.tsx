@@ -113,13 +113,14 @@ export function DataTable<T>({ columns, rows, rowKey, defaultSort, empty, classN
       {anyFilterable && (
         <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-bg/40">
           <span className="text-xs text-text-muted">{view.length} of {rows.length}</span>
-          <button
-            type="button"
-            onClick={() => { setShowFilters((s) => !s); if (showFilters) setFilters({}); }}
-            className="text-xs text-primary hover:underline"
-          >
-            {showFilters ? 'Clear filters' : 'Filter'}
-          </button>
+          <span className="flex items-center gap-3">
+            {Object.values(filters).some((v) => v.trim() !== '') && (
+              <button type="button" onClick={() => setFilters({})} className="text-xs text-text-muted hover:text-danger">Clear</button>
+            )}
+            <button type="button" onClick={() => setShowFilters((s) => !s)} className="text-xs text-primary hover:underline">
+              {showFilters ? 'Hide filters' : 'Filter'}
+            </button>
+          </span>
         </div>
       )}
       <div className="overflow-x-auto">

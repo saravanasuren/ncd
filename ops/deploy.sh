@@ -39,6 +39,6 @@ else
 fi
 
 # Verify all five co-tenants are still up.
-for s in dashboard lockers odpulse wealth ncd; do
+for s in lockers odpulse wealth reports cb ncd; do
   echo -n "$s: "; curl -sI "https://$s.dhanamfinance.com/" 2>/dev/null | head -1 || echo unreachable
 done

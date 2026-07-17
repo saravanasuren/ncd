@@ -104,6 +104,71 @@ export async function tdsReport(db: Db, yyyymm: string): Promise<Buffer> {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+/** Quarterly 26Q TDS filing annexure (Form 26Q deductee details, §194A —
+ * interest other than on securities). 17-column layout matching the NSDL/
+ * Protean annexure so it can be lifted into the RPU. `quarter` = 'YYYY-Qn'
+ * (financial-year quarter: Q1=Apr-Jun, Q2=Jul-Sep, Q3=Oct-Dec, Q4=Jan-Mar). */
+export async function tds26q(db: Db, quarter: string): Promise<Buffer> {
+  const m = quarter.match(/^(\d{4})-Q([1-4])$/);
+  if (!m) throw errors.badRequest("Quarter must look like '2026-Q1'");
+  const fy = Number(m[1]);
+  const q = Number(m[2]);
+  // FY quarter → calendar month range. Q1 = Apr(fy)-Jun; Q4 = Jan-Mar(fy+1).
+  const ranges: Record<number, [string, string]> = {
+    1: [`${fy}-04-01`, `${fy}-06-30`],
+    2: [`${fy}-07-01`, `${fy}-09-30`],
+    3: [`${fy}-10-01`, `${fy}-12-31`],
+    4: [`${fy + 1}-01-01`, `${fy + 1}-03-31`],
+  };
+  const [start, end] = ranges[q]!;
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(`26Q ${quarter}`);
+  const HEADERS = [
+    'Sl. No.', 'Deductee code (01-Company/02-Other)', 'PAN of deductee', 'Name of deductee',
+    'Date of payment/credit', 'Amount paid/credited', 'TDS', 'Surcharge', 'Health & Edu Cess',
+    'Total tax deducted', 'Total tax deposited', 'Date of deduction', 'Rate (%)',
+    'Reason for non/lower deduction', 'Section code', 'Date of deposit', 'Challan / BSR ref',
+  ];
+  ws.addRow(HEADERS).eachCell((c) => { c.font = { bold: true }; });
+
+  const rows = (await db.query<Record<string, unknown>>(
+    `SELECT c.full_name, c.pan, ds.due_date, ds.gross_amount, ds.tds_amount
+       FROM disbursement_schedule ds JOIN applications a ON a.id = ds.application_id JOIN customers c ON c.id = a.customer_id
+      WHERE ds.tds_amount > 0 AND ds.due_date >= $1::date AND ds.due_date <= $2::date
+      ORDER BY c.full_name, ds.due_date`, [start, end])).rows;
+
+  let sl = 0;
+  for (const r of rows) {
+    sl++;
+    const gross = Number(r.gross_amount);
+    const tds = Number(r.tds_amount);
+    const rate = gross > 0 ? Math.round((tds / gross) * 10000) / 100 : 0;
+    ws.addRow([
+      sl,
+      '02',                        // deductee code: individuals/HUF = Other
+      r.pan ?? '',
+      r.full_name,
+      r.due_date,
+      gross,
+      tds,
+      0,                           // surcharge (nil for resident 194A)
+      0,                           // health & edu cess (nil on TDS)
+      tds,                         // total tax deducted
+      tds,                         // total tax deposited
+      r.due_date,                  // date of deduction = credit date
+      rate,
+      r.pan ? '' : 'C',            // no PAN → higher rate flag 'C'
+      '194A',
+      '',                          // date of deposit (challan) — filled at filing
+      '',                          // challan/BSR — filled at filing
+    ]);
+  }
+  [6, 7, 8, 9, 10, 11].forEach((i) => { ws.getColumn(i).numFmt = '#,##,##0.00'; });
+  ws.columns.forEach((c) => { c.width = 20; });
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
 /** Full DB dump — key tables as sheets (admin). STREAMS to the response so the
  * large Schedule sheet (~tens of thousands of rows) never buffers the whole
  * workbook in memory (that OOM-killed the 512M service → nginx 502). */

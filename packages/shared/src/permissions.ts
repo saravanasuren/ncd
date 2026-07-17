@@ -22,7 +22,8 @@ export const PERMISSIONS = [
   'customers:create',
   'customers:read', // scoped
   'customers:update',
-  'customers:delete',
+  // NOTE: no 'customers:delete' — customers are deactivated / marked deceased,
+  // never hard-deleted (financial record integrity). Deliberately absent.
   'customers:deactivate',
   'customers:correction-request',
   'customers:handover-request',
@@ -103,7 +104,7 @@ const STAFF_FUNNEL: Permission[] = [
 export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   super_admin: ALL,
 
-  admin: ALL.filter((p) => p !== 'customers:delete' && p !== 'users:delete'),
+  admin: ALL.filter((p) => p !== 'users:delete'),
 
   cxo: [
     'customers:read',

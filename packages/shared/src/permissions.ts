@@ -34,6 +34,8 @@ export const PERMISSIONS = [
   'applications:update',
   'applications:confirm-collection',
   'applications:mark-esigned',
+  // activations (funded → Active, maker-checker)
+  'activations:execute',
   // allotments
   'allotments:execute',
   'allotments:revert',
@@ -128,6 +130,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'applications:update',
     'applications:confirm-collection',
     'applications:mark-esigned',
+    'activations:execute',
     'allotments:execute',
     'products:manage',
     'redemptions:initiate',

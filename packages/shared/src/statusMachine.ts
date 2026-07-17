@@ -23,13 +23,16 @@ export const STATUS_MACHINES = {
     Draft: { label: 'Draft', next: ['PendingApproval', 'PendingFundVerification', 'Cancelled'] },
     PendingApproval: {
       label: 'Pending Approval',
-      next: ['PendingFundVerification', 'PendingEsign', 'PendingAllotment', 'Cancelled', 'Rejected'],
+      next: ['PendingFundVerification', 'PendingEsign', 'PendingActivation', 'PendingAllotment', 'Cancelled', 'Rejected'],
     },
     PendingFundVerification: {
       label: 'Pending Fund Verification',
-      next: ['PendingEsign', 'PendingAllotment', 'Cancelled', 'Rejected'],
+      next: ['PendingEsign', 'PendingActivation', 'PendingAllotment', 'Cancelled', 'Rejected'],
     },
-    PendingEsign: { label: 'Awaiting eSign', next: ['PendingAllotment', 'Cancelled'] },
+    PendingEsign: { label: 'Awaiting eSign', next: ['PendingActivation', 'PendingAllotment', 'Cancelled'] },
+    // Funded, awaiting the maker-checker activation approval. Activation (not
+    // allotment) is what turns money-in-the-account into a live NCD.
+    PendingActivation: { label: 'Pending Activation', next: ['Active', 'Cancelled', 'Rejected'] },
     PendingAllotment: { label: 'Pending Allotment', next: ['Active', 'Cancelled'] },
     Active: {
       label: 'Active',
@@ -101,6 +104,29 @@ export const STATUS_MACHINES = {
 } as const satisfies Record<string, StatusMap>;
 
 export type Entity = keyof typeof STATUS_MACHINES;
+
+/**
+ * Application statuses that count as a live, outstanding NCD on the book — the
+ * "Active (net)" figure the old app reports. Byte-compatible with the legacy
+ * rule (see integration/shared.ts `customerFacingStatus`): funded money reads
+ * as outstanding from the moment it lands, wherever it currently sits in the
+ * approval/allotment pipeline, until it exits (Matured/Redeemed/RolledOver/
+ * PrematureWithdrawn/Transferred) or is killed (Cancelled/Rejected). `Draft`
+ * is pre-funding and excluded — that is the "raised minus cancelled" gap seen
+ * on an open series (e.g. NCD 27: raised ₹7.59 Cr vs active-net ₹7.58 Cr).
+ *
+ * Consequence: money subscribed to a still-Open series (pre-allotment) is part
+ * of the outstanding book, so the dashboard/export match the old app rather
+ * than showing ₹0 for an open series.
+ */
+export const OUTSTANDING_APPLICATION_STATUSES = [
+  'PendingApproval',
+  'PendingFundVerification',
+  'PendingEsign',
+  'PendingActivation',
+  'PendingAllotment',
+  'Active',
+] as const;
 
 export function canTransition(entity: Entity, from: string, to: string): boolean {
   const node = (STATUS_MACHINES[entity] as StatusMap)[from];

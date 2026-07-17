@@ -41,26 +41,30 @@ describe('build an Active investment', () => {
     appId = app.json.id;
   });
 
-  it('collection → eSign → pending allotment', async () => {
+  it('collection → pending activation (eSign is non-gating)', async () => {
     const a = await admin();
     const col = await a.post(`/api/applications/${appId}/confirm-collection`, { amount_received: 500000, date_money_received: '2026-07-15', method: 'NEFT', reference: 'UTR123' });
     expect(col.status).toBe(200);
     // interest starts from the receipt date (after deemed 2026-07-01)
     expect(col.json.interest_start_date).toBe('2026-07-15');
+    const detail = await a.get(`/api/applications/${appId}`);
+    expect(detail.json.application.status).toBe('PendingActivation');
+    // eSign records completion but does NOT change the lifecycle status
     const es = await a.post(`/api/applications/${appId}/mark-esigned`);
     expect(es.status).toBe(200);
-    const detail = await a.get(`/api/applications/${appId}`);
-    expect(detail.json.application.status).toBe('PendingAllotment');
+    const after = await a.get(`/api/applications/${appId}`);
+    expect(after.json.application.status).toBe('PendingActivation');
+    expect(after.json.application.esigned_at).toBeTruthy();
   });
 
-  it('batch allotment needs two people, then activates + builds the schedule', async () => {
+  it('batch activation needs two people, then activates + builds the schedule', async () => {
     // NCD Manager is the maker
     const ncd = await as('ncd@demo.local');
-    const batch = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
+    const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
     expect(batch.status).toBe(201);
     const reqId = batch.json.request.id;
 
-    // maker cannot approve their own allotment
+    // maker cannot approve their own activation
     const self = await ncd.post(`/api/approvals/${reqId}/approve`);
     expect(self.status).toBe(403);
 
@@ -71,10 +75,23 @@ describe('build an Active investment', () => {
 
     const detail = await a.get(`/api/applications/${appId}`);
     expect(detail.json.application.status).toBe('Active');
+    // active before allotment — allotment_date is still null
+    expect(detail.json.application.allotment_date).toBeNull();
     // schedule materialised: first row on the 28th, actual/365
     const first = detail.json.schedule[0];
     expect(first.due_date).toBe('2026-07-28');
     expect(Number(first.gross_amount)).toBeCloseTo(500000 * 0.12 * 13 / 365, 1); // 15→28 Jul = 13 days
+  });
+
+  it('allotment later just stamps allotment_date + locks the series', async () => {
+    const ncd = await as('ncd@demo.local');
+    const a = await admin();
+    const batch = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
+    expect(batch.status).toBe(201);
+    await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+    const detail = await a.get(`/api/applications/${appId}`);
+    expect(detail.json.application.status).toBe('Active');
+    expect(detail.json.application.allotment_date).toBe('2026-07-20');
   });
 });
 

@@ -54,8 +54,11 @@ beforeAll(async () => {
   const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 400000 });
   await a.post(`/api/applications/${app.json.id}/confirm-collection`, { amount_received: 400000, date_money_received: '2026-07-12', method: 'NEFT' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
-  const batch = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
+  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
   await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+  // Allot so the investment carries an allotment_date (bond certificate exists).
+  const allot = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
+  await a.post(`/api/approvals/${allot.json.request.id}/approve`);
   await ctx.db.query("UPDATE customers SET pan = 'AAAPF1111F' WHERE id = $1", [customerId]);
   // The allotment closed the demo series; re-open it so the Open-series
   // endpoints (series/active, subscription-request, locker-deposits) have a
@@ -348,7 +351,7 @@ describe('customer writes', () => {
 
     const flag = (await ctx.db.query('SELECT is_locker_deposit, status FROM applications WHERE lockerhub_intent_no = $1', ['LHPAY-DEP-1'])).rows[0] as any;
     expect(flag.is_locker_deposit).toBe(true);
-    expect(flag.status).toBe('PendingApproval');
+    expect(flag.status).toBe('PendingActivation');
 
     const missing = await integ('GET', '/api/integration/ncd/locker-deposit-status?deposit_reference=NOPE');
     expect(missing.status).toBe(404);

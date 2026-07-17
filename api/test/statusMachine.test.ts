@@ -7,9 +7,9 @@ import { AppError } from '../src/lib/errors.js';
 describe('application lifecycle transitions', () => {
   it('allows the legal happy path', () => {
     expect(canTransition('application', 'Draft', 'PendingFundVerification')).toBe(true);
-    expect(canTransition('application', 'PendingFundVerification', 'PendingEsign')).toBe(true);
-    expect(canTransition('application', 'PendingEsign', 'PendingAllotment')).toBe(true);
-    expect(canTransition('application', 'PendingAllotment', 'Active')).toBe(true);
+    // Activation path: funded → PendingActivation → Active (allotment is separate).
+    expect(canTransition('application', 'PendingFundVerification', 'PendingActivation')).toBe(true);
+    expect(canTransition('application', 'PendingActivation', 'Active')).toBe(true);
     expect(canTransition('application', 'Active', 'Redeemed')).toBe(true);
   });
   it('rejects illegal jumps', () => {

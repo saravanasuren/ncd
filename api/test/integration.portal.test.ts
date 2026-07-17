@@ -49,7 +49,7 @@ async function buildActiveCustomer() {
   await a.post(`/api/applications/${app.json.id}/confirm-collection`, { amount_received: 400000, date_money_received: '2026-07-12', method: 'NEFT' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
   const ncd = await as('ncd@demo.local');
-  const batch = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
+  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
   await a.post(`/api/approvals/${batch.json.request.id}/approve`);
 }
 

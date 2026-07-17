@@ -19,6 +19,7 @@ export const NAV: NavItem[] = [
   { to: '/app/customers', label: 'Customers', anyOf: ['customers:read'], group: 'Daily' },
   { to: '/app/applications', label: 'Applications', anyOf: ['customers:read'], group: 'Daily' },
   { to: '/app/approvals', label: 'Approvals', anyOf: ['approvals:check', 'approvals:check-premature'], group: 'Daily' },
+  { to: '/app/activations', label: 'Activations', anyOf: ['activations:execute'], group: 'Periodic' },
   { to: '/app/allotments', label: 'Allotments', anyOf: ['allotments:execute'], group: 'Periodic' },
   { to: '/app/redemptions', label: 'Redemptions', anyOf: ['redemptions:initiate'], group: 'Periodic' },
   { to: '/app/ncd-events', label: 'NCD Events', anyOf: ['redemptions:initiate'], group: 'Periodic' },

@@ -710,7 +710,7 @@ async function landFundedApplication(db: Db, b: LandInput): Promise<{ appId: num
       `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, amount_received,
                                  date_money_received, interest_start_date, collection_method, collection_reference,
                                  customer_was_new_at_creation, is_locker_deposit, lockerhub_intent_no, referred_by_text, source)
-       VALUES ($1,$2,$3,'PendingApproval',$4,$4,$5::date,$5::date,'Other',$6,$7,$8,$9,$10,'dhanamfin') RETURNING id`,
+       VALUES ($1,$2,$3,'PendingActivation',$4,$4,$5::date,$5::date,'Other',$6,$7,$8,$9,$10,'dhanamfin') RETURNING id`,
       [appNo, customerId, series.id, b.amount, b.paidAt, b.collectionReference, priorCount === 0,
        b.isLockerDeposit, b.intentNo, b.referredBy]
     );

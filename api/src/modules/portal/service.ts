@@ -97,7 +97,7 @@ export async function holdings(db: Db, actor: AuthUser) {
   const { rows } = await db.query(
     `SELECT a.application_no, s.code AS series_code, a.total_amount, a.status, a.allotment_date, a.maturity_date
      FROM applications a JOIN series s ON s.id = a.series_id
-     WHERE a.customer_id = $1 AND a.status IN ('Active','Matured') ORDER BY a.allotment_date DESC`, [cid]);
+     WHERE a.customer_id = $1 AND a.status IN ('Active','Matured') ORDER BY a.allotment_date DESC NULLS LAST, a.application_no DESC`, [cid]);
   const total = round2(rows.reduce((s, r) => s + Number((r as { total_amount: string }).total_amount), 0));
   return { holdings: rows, total_invested: total };
 }
@@ -131,9 +131,11 @@ export async function requestRedemptionForCustomer(db: Db, actor: AuthUser, appl
 
 export async function documents(db: Db, actor: AuthUser) {
   const cid = requireCustomer(actor);
-  const apps = (await db.query<{ id: string; application_no: string }>("SELECT id, application_no FROM applications WHERE customer_id = $1 AND status IN ('Active','Matured','Redeemed')", [cid])).rows;
+  const apps = (await db.query<{ id: string; application_no: string; allotment_date: string | null }>("SELECT id, application_no, allotment_date FROM applications WHERE customer_id = $1 AND status IN ('Active','Matured','Redeemed')", [cid])).rows;
   const docs: Array<{ id: string; label: string }> = [];
   for (const a of apps) {
+    // Bond certificate / allotment letter only exist once the series is allotted.
+    if (!a.allotment_date) continue;
     docs.push({ id: `BOND-${a.id}`, label: `Bond certificate — ${a.application_no}` });
     docs.push({ id: `ALLOT-${a.id}`, label: `Allotment letter — ${a.application_no}` });
   }

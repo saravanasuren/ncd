@@ -8,6 +8,10 @@ import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
 import { round2 } from '../../lib/dates.js';
+import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
+
+/** SQL list literal for the outstanding-book status set, e.g. 'Active','PendingAllotment',… */
+const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((s) => `'${s}'`).join(',');
 
 export interface BookFilters {
   from?: string;
@@ -25,7 +29,7 @@ function appWhere(actor: AuthUser, filters: BookFilters, extra: string[] = []): 
   const params: unknown[] = [];
   const sc = scopeWhere(scopeFor(actor), APP_SCOPE, 0);
   conds.push(sc.sql); params.push(...sc.params);
-  if (filters.status === 'active') conds.push("a.status = 'Active'");
+  if (filters.status === 'active') conds.push(`a.status IN (${OUTSTANDING_SQL_LIST})`);
   else if (filters.status === 'redeemed') conds.push("a.status = 'Redeemed'");
   if (filters.seriesIds?.length) { params.push(filters.seriesIds); conds.push(`a.series_id = ANY($${params.length})`); }
   if (filters.districts?.length) { params.push(filters.districts); conds.push(`c.district = ANY($${params.length})`); }
@@ -65,7 +69,7 @@ export async function seriesSummary(db: Db, actor: AuthUser, filters: BookFilter
     `SELECT s.id AS series_id, s.code, s.status,
             count(a.id)::int AS investments,
             count(DISTINCT a.customer_id)::int AS investors,
-            COALESCE(sum(a.total_amount) FILTER (WHERE a.status = 'Active'),0) AS outstanding,
+            COALESCE(sum(a.total_amount) FILTER (WHERE a.status IN (${OUTSTANDING_SQL_LIST})),0) AS outstanding,
             COALESCE(sum(a.total_amount) FILTER (WHERE a.status = 'Redeemed'),0) AS redeemed,
             COALESCE(sum(a.total_amount),0) AS issued
      ${FROM} WHERE ${w.sql} GROUP BY s.id, s.code, s.status ORDER BY s.code`, w.params);

@@ -39,9 +39,9 @@ async function buildActiveBook() {
   const a = await admin();
   await makeActiveApp(a, 'Investor One', 500000);
   await makeActiveApp(a, 'Investor Two', 300000);
-  // allot the series: NCD Manager maker, admin checker (two people)
+  // activate the funded apps: NCD Manager maker, admin checker (two people)
   const ncd = await as('ncd@demo.local');
-  const batch = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
+  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
   await a.post(`/api/approvals/${batch.json.request.id}/approve`);
 }
 

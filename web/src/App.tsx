@@ -1,8 +1,11 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext.js';
 import { LoginPage } from './pages/Login.js';
 import { AppShell } from './layouts/AppShell.js';
-import { Dashboard } from './pages/Dashboard.js';
+// Lazy-loaded: the dashboard pulls in the (heavy) charting library, so it
+// code-splits into its own chunk and keeps the initial bundle light.
+const Dashboard = lazy(() => import('./pages/Dashboard.js').then((m) => ({ default: m.Dashboard })));
 import { SegmentsPage } from './pages/Segments.js';
 import { SettingsPage } from './pages/Settings.js';
 import { UsersPage } from './pages/Users.js';
@@ -56,7 +59,7 @@ export function App() {
           }
         >
           <Route index element={<Navigate to="/app/dashboard" replace />} />
-          <Route path="dashboard" element={<Dashboard />} />
+          <Route path="dashboard" element={<Suspense fallback={<div className="text-text-muted">Loading dashboard…</div>}><Dashboard /></Suspense>} />
           <Route path="segments" element={<SegmentsPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="system" element={<SystemPage />} />

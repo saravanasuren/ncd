@@ -20,18 +20,16 @@ function filtersFromQuery(q: Record<string, unknown>): BookFilters {
   };
 }
 
-const SEGMENTS = {
-  customer: book.customerwise,
-  district: book.districtwise,
-  agent: book.agentwise,
-  staff: book.staffwise,
-} as const;
+const SEGMENT_BYS = new Set<book.SegmentBy>(['series', 'customer', 'district', 'agent', 'staff']);
 
+// Grouped explorer: one summary row per dimension value, each expandable to its
+// individual investments (see book.segmentGrouped). The flat book.* functions
+// stay in use by the Excel export.
 reportsRouter.get('/segments/:by', requirePermission('reports:download', 'dashboard:drilldown'),
   asyncHandler(async (req, res) => {
-    const fn = SEGMENTS[req.params.by as keyof typeof SEGMENTS];
-    if (!fn) throw errors.badRequest('Unknown segment');
-    res.json({ rows: await fn(getDb(), req.user!, filtersFromQuery(req.query)) });
+    const by = req.params.by as book.SegmentBy;
+    if (!SEGMENT_BYS.has(by)) throw errors.badRequest('Unknown segment');
+    res.json({ by, groups: await book.segmentGrouped(getDb(), req.user!, by, filtersFromQuery(req.query)) });
   }));
 
 reportsRouter.get('/ncd-book.xlsx', requirePermission('reports:download'),

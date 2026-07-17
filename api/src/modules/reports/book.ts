@@ -118,6 +118,82 @@ export async function customerwise(db: Db, actor: AuthUser, filters: BookFilters
   return rows;
 }
 
+export type SegmentBy = 'series' | 'customer' | 'district' | 'agent' | 'staff';
+
+export interface SegmentChild {
+  application_no: string;
+  customer: string;
+  customer_code: string;
+  series_code: string;
+  amount: number;
+  status: string;
+  allotment_date: string | null;
+}
+export interface SegmentGroup {
+  key: string;
+  label: string;
+  sublabel: string | null;
+  district: string | null;
+  sourced_by: string | null;
+  investors: number;
+  investments: number;
+  outstanding: number;
+  children: SegmentChild[];
+}
+
+/**
+ * Grouped view for the Segments explorer: one summary row per dimension value,
+ * each carrying its individual NCD investments as `children` (so the UI can
+ * expand a group to show every deposit under it). Same scope + filters as the
+ * flat segment functions. Fetches once, groups in JS.
+ */
+export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, filters: BookFilters = {}): Promise<SegmentGroup[]> {
+  const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
+  const { rows } = await db.query<any>(
+    `SELECT a.application_no, a.total_amount AS amount, a.status, a.allotment_date, a.enrolled_by_agent_id,
+            c.customer_code, c.full_name AS customer, COALESCE(c.district,'Unassigned') AS district,
+            s.code AS series_code, s.status AS series_status,
+            COALESCE(ag.full_name,'Direct') AS agent, COALESCE(u.full_name,'—') AS staff,
+            COALESCE(ag.full_name, u.full_name, '—') AS sourced_by
+     ${FROM} LEFT JOIN agents ag ON ag.id = a.enrolled_by_agent_id LEFT JOIN users u ON u.id = a.enrolled_by_user_id
+     WHERE ${w.sql}`, w.params);
+
+  const groups = new Map<string, SegmentGroup>();
+  const custSets = new Map<string, Set<string>>();
+  const keyOf = (r: any): string =>
+    by === 'series' ? r.series_code : by === 'customer' ? r.customer_code : by === 'district' ? r.district : by === 'agent' ? r.agent : r.staff;
+
+  for (const r of rows) {
+    if (by === 'staff' && r.enrolled_by_agent_id != null) continue; // staff view = directly-enrolled only
+    const key = keyOf(r);
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        key,
+        label: by === 'customer' ? r.customer : key,
+        sublabel: by === 'customer' ? r.customer_code : by === 'series' ? r.series_status : null,
+        district: by === 'customer' ? r.district : null,
+        sourced_by: by === 'customer' ? r.sourced_by : null,
+        investors: 0, investments: 0, outstanding: 0, children: [],
+      };
+      groups.set(key, g);
+      custSets.set(key, new Set());
+    }
+    g.investments += 1;
+    g.outstanding = round2(g.outstanding + Number(r.amount));
+    custSets.get(key)!.add(r.customer_code);
+    g.children.push({
+      application_no: r.application_no, customer: r.customer, customer_code: r.customer_code,
+      series_code: r.series_code, amount: round2(Number(r.amount)), status: r.status,
+      allotment_date: r.allotment_date ?? null,
+    });
+  }
+  for (const [key, g] of groups) g.investors = custSets.get(key)!.size;
+  const out = [...groups.values()].sort((a, b) => b.outstanding - a.outstanding);
+  for (const g of out) g.children.sort((a, b) => b.amount - a.amount);
+  return out;
+}
+
 export async function redemptions(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, {});
   const params = [...w.params];

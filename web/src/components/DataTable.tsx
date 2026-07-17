@@ -31,6 +31,8 @@ export interface DataTableProps<T> {
   className?: string;
   /** Optional full-width content under a row (e.g. a notes panel). Return null to collapse. */
   renderExpanded?: (row: T) => ReactNode;
+  /** Optional DOM id for a row's <tr> (e.g. to scrollIntoView on deep-link). */
+  rowId?: (row: T) => string;
 }
 
 const rawValue = <T,>(col: Column<T>, row: T): string | number | null | undefined =>
@@ -45,7 +47,7 @@ function asNumber(v: unknown): number | null {
   return Number(s);
 }
 
-export function DataTable<T>({ columns, rows, rowKey, defaultSort, empty, className, renderExpanded }: DataTableProps<T>) {
+export function DataTable<T>({ columns, rows, rowKey, defaultSort, empty, className, renderExpanded, rowId }: DataTableProps<T>) {
   const [sortKey, setSortKey] = useState<string | null>(defaultSort?.key ?? null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>(defaultSort?.dir ?? 'asc');
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -168,7 +170,7 @@ export function DataTable<T>({ columns, rows, rowKey, defaultSort, empty, classN
               const expanded = renderExpanded ? renderExpanded(row) : null;
               return (
                 <Fragment key={rowKey(row)}>
-                  <tr className="hover:bg-bg">
+                  <tr className="hover:bg-bg" id={rowId ? rowId(row) : undefined}>
                     {columns.map((col) => (
                       <td key={col.key} className={`px-4 py-2.5 ${alignCls(col.align)} ${col.tdClassName ?? ''}`}>
                         {col.render ? col.render(row) : String(rawValue(col, row) ?? '')}

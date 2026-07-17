@@ -1,16 +1,17 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 
-/** NCD Portfolio dashboard (docs/06 §2). KPI tiles + series register +
- * district split + monthly redemptions, with in-page drill popups. */
+/** NCD Portfolio dashboard (docs/06 §2). KPI tiles + series/district pie charts
+ * (click a slice → Segments) + monthly redemptions. */
 export function Dashboard() {
   const { can } = useAuth();
   const overview = useQuery({ queryKey: ['dash-overview'], queryFn: () => api.get<any>('/api/dashboard/overview') });
   const monthly = useQuery({ queryKey: ['dash-monthly'], queryFn: () => api.get<any>('/api/dashboard/monthly-redemptions') });
-  const [drill, setDrill] = useState<{ title: string; widget: string; param: string } | null>(null);
 
   if (overview.isLoading) return <div className="text-text-muted">Loading dashboard…</div>;
   if (overview.error) return <div className="text-danger">Failed to load dashboard.</div>;
@@ -40,23 +41,9 @@ export function Dashboard() {
       </div>
 
       <div className="grid md:grid-cols-2 gap-5">
-        <Panel title="Series register">
-          <Table head={['Series', 'Investors', 'Outstanding']} money={[2]} defaultSort={{ col: 0, dir: 'desc' }}
-            rows={(overview.data.series ?? []).map((s: any) => ({
-              cells: [s.code, String(s.investors), formatINR(s.outstanding)],
-              onClick: canDrill ? () => setDrill({ title: `${s.code} — investors`, widget: 'series', param: String(s.series_id) }) : undefined,
-            }))} />
-        </Panel>
-        <Panel title="District distribution">
-          <Table head={['District', 'Investors', 'Amount']} money={[2]}
-            rows={(overview.data.districts ?? []).map((d: any) => ({
-              cells: [d.district, String(d.investors), formatINR(d.amount)],
-              onClick: canDrill ? () => setDrill({ title: `${d.district} — investors`, widget: 'district', param: d.district }) : undefined,
-            }))} />
-        </Panel>
+        <PieCard title="Series register" rows={overview.data.series ?? []} nameKey="code" valueKey="outstanding" tab="series" canDrill={canDrill} />
+        <PieCard title="District distribution" rows={overview.data.districts ?? []} nameKey="district" valueKey="amount" tab="district" canDrill={canDrill} />
       </div>
-
-      {drill && <DrillModal title={drill.title} widget={drill.widget} param={drill.param} onClose={() => setDrill(null)} />}
 
       <div className="mt-5">
         <Panel title="Monthly redemptions (money out)">
@@ -84,6 +71,58 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
     </div>
   );
 }
+
+const PIE_COLORS = ['#0b5cab', '#1a7f4b', '#b3730d', '#7048c4', '#0e8a9e', '#c23838', '#3f7cd6', '#4a9e6b', '#d19a3a', '#9a6bd6'];
+
+interface Slice { name: string; value: number; key: string }
+/** Top-N slices by value, with the rest folded into an "Others" slice. */
+function topSlices(rows: any[], nameKey: string, valueKey: string, n = 8): Slice[] {
+  const cleaned = (rows ?? [])
+    .map((r) => ({ name: String(r[nameKey] ?? '—'), value: Number(r[valueKey]) || 0 }))
+    .filter((r) => r.value > 0)
+    .sort((a, b) => b.value - a.value);
+  const top: Slice[] = cleaned.slice(0, n).map((r) => ({ ...r, key: r.name }));
+  const rest = cleaned.slice(n);
+  if (rest.length) top.push({ name: `Others (${rest.length})`, value: rest.reduce((s, r) => s + r.value, 0), key: '__others__' });
+  return top;
+}
+
+function PieCard({ title, rows, nameKey, valueKey, tab, canDrill }: {
+  title: string; rows: any[]; nameKey: string; valueKey: string; tab: string; canDrill: boolean;
+}) {
+  const nav = useNavigate();
+  const slices = topSlices(rows, nameKey, valueKey, 8);
+  const onSlice = (i: number) => {
+    if (!canDrill) return;
+    const s = slices[i];
+    if (!s) return;
+    nav(s.key === '__others__' ? `/app/segments?tab=${tab}` : `/app/segments?tab=${tab}&open=${encodeURIComponent(s.key)}`);
+  };
+  return (
+    <Panel title={title}>
+      {slices.length === 0 ? (
+        <div className="p-5 text-center text-text-muted text-sm">No data.</div>
+      ) : (
+        <div className="p-3">
+          <div style={{ height: 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={slices} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={48} outerRadius={92}
+                  onClick={(_d: any, i: number) => onSlice(i)} cursor={canDrill ? 'pointer' : 'default'}>
+                  {slices.map((_s, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                </Pie>
+                <Tooltip formatter={(v: any) => formatINR(Number(v))} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          {canDrill && <div className="text-center text-xs text-text-muted -mt-1">Click a slice to open it in Segments →</div>}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 interface TableRow { cells: string[]; onClick?: () => void }
 function Table({ head, rows, money = [], defaultSort }: { head: string[]; rows: TableRow[]; money?: number[]; defaultSort?: { col: number; dir: 'asc' | 'desc' } }) {
   const [sortCol, setSortCol] = useState<number | null>(defaultSort?.col ?? null);
@@ -114,35 +153,5 @@ function Table({ head, rows, money = [], defaultSort }: { head: string[]; rows: 
         ))}
       </tbody>
     </table>
-  );
-}
-
-function DrillModal({ title, widget, param, onClose }: { title: string; widget: string; param: string; onClose: () => void }) {
-  const { data, isLoading } = useQuery({ queryKey: ['drill', widget, param], queryFn: () => api.get<{ rows: any[] }>(`/api/dashboard/drill/${widget}?param=${encodeURIComponent(param)}`) });
-  return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-20 p-4" onClick={onClose}>
-      <div className="bg-surface rounded-lg shadow-card w-full max-w-lg max-h-[80vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="px-5 py-3 border-b border-border flex items-center">
-          <span className="font-semibold text-sm">{title}</span>
-          <button onClick={onClose} className="ml-auto text-text-muted hover:text-text">✕</button>
-        </div>
-        <div className="p-5">
-          {isLoading ? <div className="text-text-muted text-sm">Loading…</div> : (
-            <table className="w-full text-sm">
-              <tbody className="divide-y divide-border">
-                {(data?.rows ?? []).map((r, i) => (
-                  <tr key={i}>
-                    <td className="py-1.5">{r.customer ?? r.customer_name}</td>
-                    <td className="py-1.5 text-text-muted">{r.application_no ?? r.series ?? ''}</td>
-                    <td className="py-1.5 text-right mono">{formatINR(r.total_amount ?? r.net_payment ?? 0)}</td>
-                  </tr>
-                ))}
-                {!(data?.rows ?? []).length && <tr><td className="py-4 text-center text-text-muted">No rows.</td></tr>}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-    </div>
   );
 }

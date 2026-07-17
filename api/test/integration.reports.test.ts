@@ -94,10 +94,26 @@ describe('9-tab NCD book export', () => {
 });
 
 describe('segments', () => {
-  it('district segment returns rows', async () => {
+  it('district segment returns grouped rows', async () => {
     const a = await admin();
     const r = await a.get('/api/reports/segments/district');
     expect(r.status).toBe(200);
-    expect(Array.isArray(r.json.rows)).toBe(true);
+    expect(r.json.by).toBe('district');
+    expect(Array.isArray(r.json.groups)).toBe(true);
+    // each group carries its individual investments as children
+    if (r.json.groups.length) {
+      const g = r.json.groups[0];
+      expect(typeof g.key).toBe('string');
+      expect(Array.isArray(g.children)).toBe(true);
+      expect(g.investments).toBeGreaterThanOrEqual(g.children.length > 0 ? 1 : 0);
+    }
+  });
+
+  it('series segment is available and grouped', async () => {
+    const a = await admin();
+    const r = await a.get('/api/reports/segments/series');
+    expect(r.status).toBe(200);
+    expect(r.json.by).toBe('series');
+    expect(Array.isArray(r.json.groups)).toBe(true);
   });
 });

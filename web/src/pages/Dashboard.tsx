@@ -56,7 +56,7 @@ export function Dashboard() {
   const { can } = useAuth();
   const canDrill = can('dashboard:drilldown');
   const [range, setRange] = useState<Range>(defaultRange);
-  const [drill, setDrill] = useState<{ widget: string; title: string } | null>(null);
+  const [drill, setDrill] = useState<{ widget: string; title: string; seriesOverride?: number } | null>(null);
 
   const overview = useQuery({
     queryKey: ['dash-overview', range.from, range.to, (range.series ?? []).join(',')],
@@ -66,9 +66,9 @@ export function Dashboard() {
   const activeSeries = overview.data?.active_series;
   const lastSeries = overview.data?.last_series;
 
-  function pickWidget(widget: string, title: string) {
+  function pickWidget(widget: string, title: string, seriesOverride?: number) {
     if (!canDrill) return;
-    setDrill({ widget, title });
+    setDrill({ widget, title, seriesOverride });
   }
 
   return (
@@ -97,7 +97,7 @@ export function Dashboard() {
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mt-5 mb-6">
                   <Tile label="Active series" value={activeSeries ? activeSeries.code : '—'}
                     sub={activeSeries ? `${formatINR(activeSeries.outstanding)} · ${activeSeries.investments} NCDs` : 'No open series'}
-                    primary onClick={() => pickWidget('series', 'Active series → series-wise book')} canDrill={canDrill} />
+                    primary onClick={() => pickWidget('series', `${activeSeries?.code ?? 'Active series'} — investments`, activeSeries?.series_id)} canDrill={canDrill && !!activeSeries} />
                   <Tile label="Outstanding book" value={formatINR(k.outstanding_book)} sub={`${k.active_investors} investors`}
                     onClick={() => pickWidget('outstanding', 'Outstanding book — by series')} canDrill={canDrill} />
                   <Tile label="New investments" value={formatINR(f.money_in)} sub={`${f.new_investments} in range`}
@@ -106,9 +106,9 @@ export function Dashboard() {
                     onClick={() => pickWidget('locker', 'Locker deposits in range')} canDrill={canDrill} />
                   <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub="Money in · app"
                     onClick={() => pickWidget('app', 'DhanamFin app investments in range')} canDrill={canDrill} />
-                  <Tile label="Monthly interest" value={formatINR(f.interest_month)} sub={`${formatINR(f.interest_paid_month)} paid`}
-                    onClick={() => pickWidget('interest-month', 'Interest due in range')} canDrill={canDrill} />
-                  <Tile label="Interest accrued" value={formatINR(f.interest_accrued)} sub="Since last payout, till date"
+                  <Tile label="Interest paid" value={formatINR(f.interest_paid)} sub="Paid in range (0 for current month)"
+                    onClick={() => pickWidget('interest-paid', 'Interest paid in range')} canDrill={canDrill} />
+                  <Tile label="Interest accrued" value={formatINR(f.interest_accrued)} sub="Current month, till date"
                     onClick={() => pickWidget('interest-accrued', 'Interest accrued since last payout')} canDrill={canDrill} />
                   <Tile label="Redemptions" value={formatINR(f.redemptions_total)} sub={`${f.redemptions_count} in range`}
                     onClick={() => pickWidget('redemptions', 'Redemptions in range')} canDrill={canDrill} />
@@ -126,7 +126,7 @@ export function Dashboard() {
             );
           })()}
 
-      {drill && <DrillModal widget={drill.widget} title={drill.title} range={range} onClose={() => setDrill(null)} />}
+      {drill && <DrillModal widget={drill.widget} title={drill.title} range={range} seriesOverride={drill.seriesOverride} onClose={() => setDrill(null)} />}
     </div>
   );
 }
@@ -142,10 +142,6 @@ function RangeBar({ range, setRange, activeSeries, lastSeries }: {
   return (
     <div className="bg-surface border border-border rounded-lg shadow-card p-3">
       <div className="flex flex-wrap items-center gap-1.5">
-        {ranges.map((r) => (
-          <button key={r.key} className={chip(isActive(r.key, r.label))}
-            onClick={() => setRange({ ...r.range, label: r.label })}>{r.label}</button>
-        ))}
         {activeSeries && (
           <button className={chip(range.series?.[0] === activeSeries.series_id)}
             onClick={() => setRange({ from: '', to: '', series: [activeSeries.series_id], label: `Active series (${activeSeries.code})` })}>
@@ -158,6 +154,10 @@ function RangeBar({ range, setRange, activeSeries, lastSeries }: {
             Last series
           </button>
         )}
+        {ranges.map((r) => (
+          <button key={r.key} className={chip(isActive(r.key, r.label))}
+            onClick={() => setRange({ ...r.range, label: r.label })}>{r.label}</button>
+        ))}
       </div>
       <div className="flex flex-wrap items-center gap-2 mt-2.5 text-xs text-text-muted">
         <span>Custom:</span>
@@ -204,6 +204,11 @@ const FLAT_COLS: Record<string, FlatCol[]> = {
     { key: 'series_code', header: 'Series' }, { key: 'due_type', header: 'Type' },
     { key: 'amount', header: 'Net', kind: 'money' }, { key: 'status', header: 'Status' },
   ],
+  'interest-paid': [
+    { key: 'due_date', header: 'Due', kind: 'date' }, { key: 'customer', header: 'Customer' },
+    { key: 'series_code', header: 'Series' }, { key: 'due_type', header: 'Type' },
+    { key: 'amount', header: 'Net paid', kind: 'money' }, { key: 'paid_at', header: 'Paid on', kind: 'date' },
+  ],
   'interest-accrued': [
     { key: 'customer', header: 'Customer' }, { key: 'series_code', header: 'Series' },
     { key: 'principal', header: 'Principal', kind: 'money' }, { key: 'coupon_rate_pct', header: 'Coupon %', kind: 'num' },
@@ -224,11 +229,14 @@ function cell(v: unknown, kind?: FlatCol['kind']) {
   return String(v);
 }
 
-function DrillModal({ widget, title, range, onClose }: { widget: string; title: string; range: Range; onClose: () => void }) {
+function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget: string; title: string; range: Range; seriesOverride?: number; onClose: () => void }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
+  // A tile that targets one specific series (e.g. Active series) forces that
+  // series filter regardless of the current range's series selection.
+  const effRange: Range = seriesOverride ? { ...range, series: [seriesOverride] } : range;
   const q = useQuery({
-    queryKey: ['drill', widget, range.from, range.to, (range.series ?? []).join(',')],
-    queryFn: () => api.get<any>(`/api/dashboard/drill/${widget}?${qs(range)}`),
+    queryKey: ['drill', widget, effRange.from, effRange.to, (effRange.series ?? []).join(',')],
+    queryFn: () => api.get<any>(`/api/dashboard/drill/${widget}?${qs(effRange)}`),
   });
   const kind = q.data?.kind;
   const groups: any[] = q.data?.groups ?? [];

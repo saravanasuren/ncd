@@ -171,4 +171,26 @@ describe('dashboard tiles + drill (range-aware)', () => {
     expect(Number(ov.json.flow.money_in)).toBe(0);
     expect(ov.json.flow.new_investments).toBe(0);
   });
+
+  it('interest accrued is zero for a past range but shows for the current window', async () => {
+    const a = await admin();
+    const past = await a.get('/api/dashboard/overview?from=2020-01-01&to=2020-01-31');
+    expect(Number(past.json.flow.interest_accrued)).toBe(0);
+    const accruedDrill = await a.get('/api/dashboard/drill/interest-accrued?from=2020-01-01&to=2020-01-31');
+    expect(accruedDrill.json.rows.length).toBe(0);
+    // current window (open-ended) keeps a real accrued number
+    const now = await a.get('/api/dashboard/overview');
+    expect(Number(now.json.flow.interest_accrued)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('the series drill narrows to a single series when one is passed', async () => {
+    const a = await admin();
+    const sid = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const one = await a.get(`/api/dashboard/drill/series?series=${sid}`);
+    expect(one.json.kind).toBe('groups');
+    expect(one.json.groups.every((g: any) => g.key === 'NCD DEMO')).toBe(true);
+    // the outstanding drill still shows the whole book (every series)
+    const all = await a.get('/api/dashboard/drill/outstanding');
+    expect(all.json.kind).toBe('groups');
+  });
 });

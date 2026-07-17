@@ -27,19 +27,24 @@ function todayISO(): string {
 }
 
 export async function overview(db: Db, actor: AuthUser, filters: book.BookFilters = {}) {
-  const asOf = filters.to || todayISO();
+  const today = todayISO();
+  const asOf = today; // accrual is always "as of now" (till date), never the future range end
   const settings = await getSettingsMap(db);
   const payoutDay = Number(settings['interest.payout_day_of_month'] ?? 28) || 28;
   const anchor = payoutAnchor(asOf, payoutDay);
   const seriesFilter: book.BookFilters = { seriesIds: filters.seriesIds };
+  // Accrued interest only makes sense for the current/ongoing period. A range that
+  // ends in the past (last month, a closed quarter, last FY) shows zero — that
+  // interest was already paid, not "accruing".
+  const isCurrentPeriod = !filters.to || filters.to >= today;
 
   const [kpis, seriesRows, districts, moneyIn, interest, accrued, redemptionRows] = await Promise.all([
-    book.kpis(db, actor, {}),                              // snapshot
-    book.seriesSummary(db, actor, {}),                     // snapshot (pie + active-series pick)
-    book.districtwise(db, actor, {}),                      // snapshot (pie)
+    book.kpis(db, actor, seriesFilter),                    // snapshot, but honours a selected series
+    book.seriesSummary(db, actor, {}),                     // ALL series (pie + active/last-series pick)
+    book.districtwise(db, actor, seriesFilter),            // snapshot (pie), honours a selected series
     book.moneyInByChannel(db, actor, filters),             // flow
-    book.interestInRange(db, actor, filters),              // flow
-    book.interestAccrued(db, actor, seriesFilter, anchor, asOf), // snapshot-ish (series filter only)
+    book.interestInRange(db, actor, filters),              // flow (paid vs due)
+    isCurrentPeriod ? book.interestAccrued(db, actor, seriesFilter, anchor, asOf) : Promise.resolve({ total: 0 }),
     book.redemptions(db, actor, filters),                  // flow
   ]);
 
@@ -61,9 +66,9 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
       money_in_locker: moneyIn.locker,
       money_in_app: moneyIn.app,
       new_investments: moneyIn.count,
-      interest_month: interest.total,
-      interest_paid_month: interest.paid,
-      interest_accrued: accrued.total,
+      interest_paid: interest.paid,        // interest actually paid in the window (0 for the current MTD)
+      interest_due: interest.total,        // paid + still-scheduled, for reference
+      interest_accrued: accrued.total,     // current period only; 0 for past ranges
       redemptions_total: Math.round(redemptionsTotal * 100) / 100,
       redemptions_count: redemptionRows.length,
     },
@@ -102,11 +107,12 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
   const seriesFilter: book.BookFilters = { seriesIds: filters.seriesIds };
   switch (widget) {
     // ── grouped (expandable) ──
-    case 'outstanding':
-    case 'series':                 // snapshot: whole book by series
+    case 'outstanding':            // snapshot: WHOLE book by series
       return { kind: 'groups', groups: await book.segmentGrouped(db, actor, 'series', {}) };
-    case 'district':               // snapshot: whole book by district
-      return { kind: 'groups', groups: await book.segmentGrouped(db, actor, 'district', {}) };
+    case 'series':                 // snapshot by series, narrowed to a selected series when one is passed
+      return { kind: 'groups', groups: await book.segmentGrouped(db, actor, 'series', { seriesIds: filters.seriesIds }) };
+    case 'district':               // snapshot by district, honours a selected series
+      return { kind: 'groups', groups: await book.segmentGrouped(db, actor, 'district', seriesFilter) };
     case 'staff':                  // flow: new business in window by staff
       return { kind: 'groups', groups: await book.segmentGrouped(db, actor, 'staff', filters) };
     case 'agent':                  // flow: new business in window by agent
@@ -119,13 +125,16 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
       return { kind: 'rows', rows: await book.newInvestmentsList(db, actor, filters, 'locker') };
     case 'app':
       return { kind: 'rows', rows: await book.newInvestmentsList(db, actor, filters, 'app') };
-    case 'interest-month':
+    case 'interest-paid':
+      return { kind: 'rows', rows: await book.interestListInRange(db, actor, filters, true) };
+    case 'interest-month': // legacy alias → all interest due in the window
       return { kind: 'rows', rows: await book.interestListInRange(db, actor, filters) };
     case 'interest-accrued': {
-      const asOf = filters.to || todayISO();
+      const today = todayISO();
+      if (filters.to && filters.to < today) return { kind: 'rows', rows: [] }; // past period → nothing accruing now
       const settings = await getSettingsMap(db);
       const payoutDay = Number(settings['interest.payout_day_of_month'] ?? 28) || 28;
-      return { kind: 'rows', rows: await book.accruedList(db, actor, seriesFilter, payoutAnchor(asOf, payoutDay), asOf) };
+      return { kind: 'rows', rows: await book.accruedList(db, actor, seriesFilter, payoutAnchor(today, payoutDay), today) };
     }
     case 'redemptions':
       return { kind: 'rows', rows: await book.redemptions(db, actor, filters) };

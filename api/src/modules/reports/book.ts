@@ -300,15 +300,16 @@ export async function interestInRange(db: Db, actor: AuthUser, filters: BookFilt
   const r = rows[0]!;
   return { total: round2(Number(r.total)), paid: round2(Number(r.paid)), count: Number(r.n) };
 }
-export async function interestListInRange(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+export async function interestListInRange(db: Db, actor: AuthUser, filters: BookFilters = {}, onlyPaid = false) {
   const scope = interestWhere(actor, filters);
   const params = [...scope.params];
   let dcond = '';
   if (filters.from) { params.push(filters.from); dcond += ` AND ds.due_date >= $${params.length}`; }
   if (filters.to) { params.push(filters.to); dcond += ` AND ds.due_date <= $${params.length}`; }
+  if (onlyPaid) dcond += ` AND ds.status = 'Paid'`;
   const { rows } = await db.query(
     `SELECT ds.due_date, a.application_no, c.full_name AS customer, s.code AS series_code,
-            ds.due_type, ds.net_amount AS amount, ds.status
+            ds.due_type, ds.net_amount AS amount, ds.status, ds.paid_at
      FROM disbursement_schedule ds
      JOIN applications a ON a.id = ds.application_id
      JOIN customers c ON c.id = a.customer_id

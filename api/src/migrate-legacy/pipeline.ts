@@ -575,6 +575,37 @@ export async function runMigration(
       };
     });
 
+    // ── maturity redemption backfill ────────────────────────────────────
+    // The old app's `redemptions` table held ONLY premature withdrawals; a
+    // maturity redemption was recorded solely as application.status='Redeemed'
+    // + a payout. So every Redeemed app WITHOUT a premature record has no
+    // redemption log. Synthesise one from the wealth data (principal = the
+    // investment amount; interest was paid as coupons over the tenure).
+    const prematureAppIds = new Set(oldRedemptions.filter((r) => r.application_id != null).map((r) => r.application_id));
+    let redSeq = Math.max(0, ...oldRedemptions.map((r) => Number(r.id) || 0)) + 1;
+    const maturityRedRows: Row[] = [];
+    for (const app of oldApps) {
+      if (mapAppStatus(app.status) !== 'Redeemed') continue;
+      if (prematureAppIds.has(app.id)) continue;
+      const principal = num(app.total_amount);
+      const redDate = d(app.redemption_date) ?? d(app.maturity_date);
+      const matDate = d(app.maturity_date);
+      const isPremature = !!(redDate && matDate && redDate < matDate);
+      maturityRedRows.push({
+        id: redSeq++, redemption_no: `RED-${isPremature ? 'PRE' : 'MAT'}-${app.id}`,
+        application_id: app.id, type: isPremature ? 'premature' : 'maturity',
+        principal, penalty: 0, net_payment: principal, broken_interest: 0,
+        requested_date: redDate, redemption_date: redDate,
+        reason: null, approval_request_id: null, utr: null,
+        status: 'Paid', created_by_user_id: null,
+      });
+    }
+    const matRes = await insertBatch(tx, 'redemptions', maturityRedRows, (o, e) => {
+      if (anomalies.length < 200) anomalies.push(`redemptions(maturity) id=${o.id ?? '?'}: ${e.message}`);
+    });
+    tables.push({ table: 'redemptions (maturity backfill)', source: maturityRedRows.length, loaded: matRes.loaded, failed: matRes.failed });
+    progress(`redemptions (maturity backfill): ${matRes.loaded}/${maturityRedRows.length}`);
+
     // ── incentive accruals (staff + agent + referrer, normalised) ────────
     // referrers first (so referrer accruals have a payee row)
     const refByNorm = new Map<string, number>();

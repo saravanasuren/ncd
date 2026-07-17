@@ -7,6 +7,7 @@ import { asyncHandler } from '../../middleware/error.js';
 import { ACCESS_COOKIE, REFRESH_COOKIE, requireAuth } from '../../middleware/auth.js';
 import { errors } from '../../lib/errors.js';
 import * as service from './service.js';
+import * as reset from './reset.js';
 import { REFRESH_TTL_DAYS } from './tokens.js';
 
 const cookieBase: CookieOptions = {
@@ -73,5 +74,37 @@ authRouter.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     res.json({ user: req.user });
+  })
+);
+
+authRouter.post(
+  '/forgot-password',
+  asyncHandler(async (req, res) => {
+    const { email } = z.object({ email: z.string().email() }).parse(req.body);
+    await reset.requestReset(getDb(), email);
+    // Always 200 — never reveal whether the email exists.
+    res.json({ ok: true });
+  })
+);
+
+authRouter.post(
+  '/reset-password',
+  asyncHandler(async (req, res) => {
+    const { token, password } = z.object({ token: z.string().min(1), password: z.string().min(8) }).parse(req.body);
+    await reset.resetPassword(getDb(), token, password);
+    res.json({ ok: true });
+  })
+);
+
+authRouter.post(
+  '/change-password',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { currentPassword, newPassword } = z.object({
+      currentPassword: z.string().min(1),
+      newPassword: z.string().min(8),
+    }).parse(req.body);
+    await reset.changePassword(getDb(), req.user!.id, currentPassword, newPassword);
+    res.json({ ok: true });
   })
 );

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.js';
 import { ApiError } from '../api/client.js';
 
@@ -56,6 +56,9 @@ export function LoginPage() {
               {error}
             </div>
           )}
+          <div className="mt-3.5 text-center">
+            <Link to="/forgot-password" className="text-xs text-primary hover:underline">Forgot password?</Link>
+          </div>
         </form>
       </div>
     </div>

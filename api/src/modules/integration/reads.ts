@@ -574,10 +574,15 @@ customerReadsRouter.get('/customers/:id/ledger.csv', asyncHandler(async (req, re
 customerReadsRouter.get('/stats/ncd-aum', asyncHandler(async (req, res) => {
   const db = getDb();
   const asOfRaw = String(req.query?.as_of ?? '');
-  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : new Date().toISOString().slice(0, 10);
+  // Explicit as_of → bound by that date. Absent (LockerHub's usual call) → NO
+  // upper bound: snapshot "now". Bounding a default "today" by a JS-computed
+  // date races PG's now() across the UTC midnight boundary (brand-new rows land
+  // a day ahead of the JS date and vanish from the count).
+  const asOf: string | null = /^\d{4}-\d{2}-\d{2}$/.test(asOfRaw) ? asOfRaw : null;
   const TERMINAL = ['Redeemed', 'Matured', 'RolledOver', 'PrematureWithdrawn', 'Transferred'];
-
   // ncd has no application_date column — created_at::date is the equivalent.
+  const dateFilter = asOf ? 'WHERE a.created_at::date <= $2::date' : '';
+
   const g = (await db.query<Record<string, unknown>>(
     `SELECT
        ROUND(COALESCE(SUM(a.total_amount),0)/1e7, 2) AS total_issued_cr,
@@ -588,8 +593,8 @@ customerReadsRouter.get('/stats/ncd-aum', asyncHandler(async (req, res) => {
        COUNT(*) FILTER (WHERE a.status =  ANY($1::text[]))::int  AS apps_redeemed
        FROM applications a
        JOIN customers c ON c.id = a.customer_id AND c.is_active = TRUE
-      WHERE a.created_at::date <= $2::date`,
-    [TERMINAL, asOf]
+      ${dateFilter}`,
+    asOf ? [TERMINAL, asOf] : [TERMINAL]
   )).rows[0]!;
 
   const customersTotal = (await db.query<{ customers_total: number }>(
@@ -604,16 +609,16 @@ customerReadsRouter.get('/stats/ncd-aum', asyncHandler(async (req, res) => {
             ROUND(COALESCE(SUM(a.total_amount) FILTER (WHERE a.status <> ALL($1::text[])),0)/1e7, 2) AS outstanding_cr,
             COUNT(a.id)::int AS apps_count
        FROM series sr
-       LEFT JOIN applications a ON a.series_id = sr.id AND a.created_at::date <= $2::date
+       LEFT JOIN applications a ON a.series_id = sr.id${asOf ? ' AND a.created_at::date <= $2::date' : ''}
        LEFT JOIN customers c ON c.id = a.customer_id AND c.is_active = TRUE
       WHERE a.id IS NULL OR c.id IS NOT NULL
       GROUP BY sr.id, sr.code, sr.name, sr.status
       ORDER BY sr.id`,
-    [TERMINAL, asOf]
+    asOf ? [TERMINAL, asOf] : [TERMINAL]
   );
 
   res.json({
-    as_of: asOf,
+    as_of: asOf ?? new Date().toISOString().slice(0, 10),
     total_issued_cr: Number(g.total_issued_cr),
     total_redeemed_cr: Number(g.total_redeemed_cr),
     total_outstanding_cr: Number(g.total_outstanding_cr),

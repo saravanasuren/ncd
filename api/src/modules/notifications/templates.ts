@@ -9,6 +9,18 @@ const TEMPLATES: Record<string, Renderer> = {
     subject: 'Your Dhanam NCD login code',
     body: `Your one-time code is ${p.otp}. It is valid for ${p.ttlMinutes} minutes. Do not share it with anyone.`,
   }),
+  password_reset: (p) => ({
+    subject: 'Reset your Dhanam NCD password',
+    body: [
+      `Hi ${p.name ?? ''}`.trim() + ',',
+      ``,
+      `We received a request to reset your Dhanam NCD password. Open this link to set a new one — it expires in ${p.ttlMinutes} minutes:`,
+      ``,
+      `${p.link}`,
+      ``,
+      `If you didn't request this, you can ignore this email; your password stays unchanged.`,
+    ].join('\n'),
+  }),
   handover_approved: (p) => ({
     subject: 'Customer handover approved',
     body: `The handover of ${p.customerName} has been approved.`,

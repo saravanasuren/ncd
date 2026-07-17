@@ -70,6 +70,7 @@ export function createApp(): Express {
   app.use('/api/auth/login', authLimiter);
   app.use('/api/auth/refresh', authLimiter);
   app.use('/api/auth/forgot-password', authLimiter);
+  app.use('/api/auth/reset-password', authLimiter);
   app.use('/api/portal/otp', otpLimiter);
   app.use('/api/integration', integrationLimiter);
   app.use('/api', writeLimiter);

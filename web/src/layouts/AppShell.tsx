@@ -14,6 +14,7 @@ export function AppShell() {
   const location = useLocation();
   const items = NAV.filter((i) => can(...i.anyOf) && !(user && i.hideForRoles?.includes(user.role)));
   const [q, setQ] = useState('');
+  const [pwOpen, setPwOpen] = useState(false);
   const [results, setResults] = useState<{ customers: any[]; agents: any[]; staff: any[] } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -84,15 +85,65 @@ export function AppShell() {
               <div className="font-semibold">{user?.fullName}</div>
               <div className="text-xs text-text-muted">{user ? ROLE_LABELS[user.role] : ''}</div>
             </div>
+            <button onClick={() => setPwOpen(true)}
+              className="text-xs text-text-muted hover:text-primary border border-border rounded px-2 py-1 whitespace-nowrap">
+              Password
+            </button>
             <button onClick={async () => { await logout(); nav('/login'); }}
               className="text-xs text-text-muted hover:text-danger border border-border rounded px-2 py-1 whitespace-nowrap">
               Sign out
             </button>
           </div>
         </header>
+        {pwOpen && <ChangePasswordModal onClose={() => setPwOpen(false)} />}
         <main className="p-4 lg:p-6 overflow-auto">
           <Outlet />
         </main>
+      </div>
+    </div>
+  );
+}
+
+/** Self-service change-password modal (topbar → Password). */
+function ChangePasswordModal({ onClose }: { onClose: () => void }) {
+  const [cur, setCur] = useState('');
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [ok, setOk] = useState(false);
+  const inp = 'w-full px-2.5 py-2 text-sm border border-border-strong rounded outline-none focus:border-primary';
+
+  async function submit() {
+    setMsg('');
+    if (next.length < 8) { setMsg('New password must be at least 8 characters'); return; }
+    if (next !== confirm) { setMsg('Passwords do not match'); return; }
+    setBusy(true);
+    try {
+      await api.post('/api/auth/change-password', { currentPassword: cur, newPassword: next });
+      setOk(true); setMsg('Password updated.');
+      setTimeout(onClose, 1200);
+    } catch (e: unknown) {
+      setMsg(e instanceof Error ? e.message : 'Failed to change password');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-surface border border-border rounded-lg shadow-card p-5 w-full max-w-[340px]" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-sm font-bold mb-4">Change password</h2>
+        <label className="block text-xs font-semibold text-text-label mb-1.5">Current password</label>
+        <input type="password" autoComplete="current-password" className={inp} value={cur} onChange={(e) => setCur(e.target.value)} autoFocus />
+        <label className="block text-xs font-semibold text-text-label mt-3 mb-1.5">New password</label>
+        <input type="password" autoComplete="new-password" className={inp} value={next} onChange={(e) => setNext(e.target.value)} />
+        <label className="block text-xs font-semibold text-text-label mt-3 mb-1.5">Confirm new password</label>
+        <input type="password" autoComplete="new-password" className={inp} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+        {msg && <div className={`text-xs mt-3 ${ok ? 'text-success' : 'text-danger'}`}>{msg}</div>}
+        <div className="flex gap-2 justify-end mt-4">
+          <button onClick={onClose} className="text-xs text-text-muted hover:underline px-2">Cancel</button>
+          <button onClick={submit} disabled={busy || !cur || !next}
+            className="text-xs bg-primary text-white rounded px-4 py-2 disabled:opacity-40 hover:bg-primary-hover">Update</button>
+        </div>
       </div>
     </div>
   );

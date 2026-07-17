@@ -31,6 +31,12 @@ systemRouter.post('/notifications/drain', requirePermission('notifications:admin
   res.json(await drainOnce(getDb(), 25));
 }));
 
+// Manual daily book-summary run (compute + queue the summary email).
+systemRouter.post('/book-summary/run', requirePermission('settings:manage'), asyncHandler(async (_req, res) => {
+  const { runBookSummary } = await import('../../integrations/book-summary.js');
+  res.json(await runBookSummary(getDb()));
+}));
+
 // Manual backup-check run (read-only inspection + status email).
 systemRouter.post('/backup-check/run', requirePermission('settings:manage'), asyncHandler(async (_req, res) => {
   const { runBackupCheck } = await import('../../integrations/backup-check.js');

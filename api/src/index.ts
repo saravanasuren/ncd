@@ -37,6 +37,14 @@ async function startCrons(): Promise<void> {
     void dispatchPending(getDb()).catch((e) => console.warn('[cron] agent-event dispatch:', (e as Error).message));
   }, 30_000).unref();
 
+  // Daily book-summary email (docs/00 §12) — once per IST day after 18:00 IST.
+  const { runBookSummary } = await import('./integrations/book-summary.js');
+  setInterval(() => {
+    const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+    if (istNow.getUTCHours() < 18) return;
+    void runBookSummary(getDb()).catch((e) => console.warn('[cron] book summary:', (e as Error).message));
+  }, 15 * 60_000).unref();
+
   // Daily backup-check email (docs/08 §2) — once per IST day after 08:00 IST;
   // enqueue is per-day idempotent, and it degrades to "not configured" notes
   // until the SharePoint params land.
@@ -86,12 +94,17 @@ async function main(): Promise<void> {
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  const alert = config.NODE_ENV === 'production'
+    ? async (kind: string, e: unknown) => { const { sendCrashAlert } = await import('./lib/crashAlert.js'); await sendCrashAlert(kind, e); }
+    : async () => {};
   process.on('unhandledRejection', (reason) => {
     console.error('[new-wealth-api] unhandledRejection:', reason);
+    void alert('unhandledRejection', reason);
   });
   process.on('uncaughtException', (err) => {
     console.error('[new-wealth-api] uncaughtException:', err);
-    process.exit(1);
+    // Give the crash-alert a moment to enqueue+drain before exiting.
+    void alert('uncaughtException', err).finally(() => setTimeout(() => process.exit(1), 2000));
   });
 }
 

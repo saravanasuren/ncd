@@ -37,6 +37,24 @@ const TEMPLATES: Record<string, Renderer> = {
     subject: 'Your DhanamFin agent account is approved',
     body: `Welcome ${p.agentName}. Your agent code is ${p.agentCode}.`,
   }),
+  book_summary: (p) => ({
+    subject: `Dhanam NCD daily book — ${p.report_date}`,
+    body: [
+      `Book summary for ${p.report_date}`,
+      ``,
+      `Total outstanding: ₹${p.total_outstanding} across ${p.active_apps} live investments`,
+      `New today (physical): ${p.physical}`,
+      `New today (app/LockerHub): ${p.funded}`,
+      `Redemptions today: ${p.redemptions}`,
+      ``,
+      `By series:`,
+      `${p.by_series}`,
+    ].join('\n'),
+  }),
+  crash_alert: (p) => ({
+    subject: `⚠ Dhanam NCD ${p.kind}`,
+    body: `An unhandled ${p.kind} occurred at ${p.at}:\n\n${p.detail}\n\nCheck: journalctl -u dhanam-newwealth -n 200`,
+  }),
   backup_check: (p) => ({
     subject: `NCD backup check ${p.report_date} — ${p.ok ? 'OK' : '⚠ ATTENTION'}`,
     body: [

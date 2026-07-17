@@ -52,6 +52,15 @@ const schema = z.object({
   // Daily reconciliation cron runs ONLY when explicitly enabled.
   LOCKERHUB_RECONCILIATION_ENABLED: z.string().default('false'),
   LOCKERHUB_DB_PATH: z.string().default('/home/ubuntu/LockerHub/data/lockerhub.db'),
+  // ── Payments (docs/08 §2). Collection is LockerHub/Easebuzz-side; ncd
+  // receives funded payments via the façade. These wire the adapter selector
+  // + webhook verification. Stub default. ──
+  CASHFREE_APP_ID: z.string().optional(),
+  CASHFREE_SECRET_KEY: z.string().optional(),
+  CASHFREE_BASE: z.string().optional(),
+  EASEBUZZ_KEY: z.string().optional(),
+  EASEBUZZ_SALT: z.string().optional(),
+  EASEBUZZ_BASE: z.string().optional(),
   // ── Digio eSign (docs/08 §2). eSign is off ncd's critical path (records
   // esigned_at). All optional: stub when creds absent. ──
   DIGIO_CLIENT_ID: z.string().optional(),

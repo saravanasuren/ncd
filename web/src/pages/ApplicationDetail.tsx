@@ -146,6 +146,12 @@ export function ApplicationDetailPage() {
         )}
         {a.esigned_at && <span className="text-xs text-text-muted">eSigned ✓</span>}
         {a.receipt_file_path && <a href={`/api/applications/${id}/receipt`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">View receipt</a>}
+        {a.allotment_date && (
+          <>
+            <a href={`/api/reports/bond/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Bond certificate</a>
+            <a href={`/api/reports/allotment/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Allotment letter</a>
+          </>
+        )}
         {can('applications:update') && (
           <label className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg cursor-pointer">
             {a.receipt_file_path ? 'Replace receipt…' : 'Upload receipt…'}

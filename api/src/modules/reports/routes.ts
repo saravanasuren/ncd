@@ -49,6 +49,24 @@ reportsRouter.get('/soa/:customerId.pdf', requirePermission('reports:download', 
     res.end(buf);
   }));
 
+// Staff-facing bond certificate / allotment letter for one application.
+reportsRouter.get('/bond/:applicationId.pdf', requirePermission('customers:read'),
+  asyncHandler(async (req, res) => {
+    const { bondCertificatePdf } = await import('./documents.js');
+    const buf = await bondCertificatePdf(getDb(), Number(req.params.applicationId));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="bond-${req.params.applicationId}.pdf"`);
+    res.end(buf);
+  }));
+reportsRouter.get('/allotment/:applicationId.pdf', requirePermission('customers:read'),
+  asyncHandler(async (req, res) => {
+    const { allotmentLetterPdf } = await import('./documents.js');
+    const buf = await allotmentLetterPdf(getDb(), Number(req.params.applicationId));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="allotment-${req.params.applicationId}.pdf"`);
+    res.end(buf);
+  }));
+
 reportsRouter.get('/tds/:yyyymm.xlsx', requirePermission('reports:download'),
   asyncHandler(async (req, res) => {
     const { tdsReport } = await import('./documents.js');

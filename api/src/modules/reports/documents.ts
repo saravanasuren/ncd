@@ -34,6 +34,61 @@ export async function soaPdf(db: Db, customerId: number, customerFacing = false)
   });
 }
 
+async function loadAppForDoc(db: Db, applicationId: number) {
+  const a = (await db.query<Record<string, unknown>>(
+    `SELECT a.id, a.customer_id, a.application_no, a.status, a.total_amount, a.allotment_date, a.maturity_date,
+            s.deemed_date, c.full_name, c.customer_code, c.pan, c.address, s.code AS series_code, s.name AS series_name, s.isin
+       FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
+      WHERE a.id = $1`, [applicationId])).rows[0];
+  if (!a) throw errors.notFound('Application not found');
+  const lines = (await db.query<Record<string, unknown>>(
+    `SELECT al.amount, al.coupon_rate_pct, al.tenure_months, al.payout_frequency, sch.name AS scheme_name
+       FROM application_lines al LEFT JOIN schemes sch ON sch.id = al.scheme_id
+      WHERE al.application_id = $1 ORDER BY al.id`, [applicationId])).rows;
+  return { a, lines };
+}
+
+/** Bond (NCD) certificate for one allotted application. */
+export async function bondCertificatePdf(db: Db, applicationId: number): Promise<Buffer> {
+  const { a, lines } = await loadAppForDoc(db, applicationId);
+  return renderPdf((doc) => {
+    letterhead(doc, 'Non-Convertible Debenture Certificate', `${a.full_name} · ${a.customer_code}`);
+    doc.fontSize(10).font('Helvetica');
+    doc.text(`Certificate for Application No: ${a.application_no}`);
+    doc.text(`Series: ${a.series_name} (${a.series_code})${a.isin ? ` · ISIN ${a.isin}` : ''}`);
+    doc.text(`Debenture holder: ${a.full_name}   PAN: ${a.pan ?? '—'}`);
+    doc.text(`Face value / principal: ${formatINR(Number(a.total_amount))}`);
+    if (a.deemed_date) doc.text(`Deemed date of allotment: ${a.deemed_date}`);
+    if (a.allotment_date) doc.text(`Allotment date: ${a.allotment_date}`);
+    if (a.maturity_date) doc.text(`Redemption (maturity) date: ${a.maturity_date}`);
+    doc.moveDown(0.6).font('Helvetica-Bold').text('Debenture details').font('Helvetica').fontSize(9);
+    for (const l of lines) doc.text(`${l.scheme_name ?? '—'}   ${formatINR(Number(l.amount))}   ${Number(l.coupon_rate_pct)}% p.a.   ${l.tenure_months} months   ${l.payout_frequency}`);
+    if (!lines.length) doc.fillColor('#6b7380').text('None');
+    doc.moveDown(1.2).fillColor('#6b7380').fontSize(8).text('This certificate is issued by Dhanam Investment and Finance Private Limited and evidences the debentures allotted against the above application. Subject to the terms of the Debenture Trust Deed / offer document.');
+  });
+}
+
+/** Allotment letter for one allotted application. */
+export async function allotmentLetterPdf(db: Db, applicationId: number): Promise<Buffer> {
+  const { a, lines } = await loadAppForDoc(db, applicationId);
+  const totalCoupon = lines[0]?.coupon_rate_pct;
+  return renderPdf((doc) => {
+    letterhead(doc, 'Letter of Allotment', `${a.full_name} · ${a.customer_code}`);
+    doc.fontSize(10).font('Helvetica');
+    doc.text(`Dear ${a.full_name},`);
+    doc.moveDown(0.4);
+    doc.text(`We are pleased to confirm the allotment of Non-Convertible Debentures against your application ${a.application_no} in ${a.series_name} (${a.series_code}).`, { width: 480 });
+    doc.moveDown(0.6).font('Helvetica-Bold').text('Allotment summary').font('Helvetica').fontSize(9);
+    doc.text(`Amount allotted: ${formatINR(Number(a.total_amount))}`);
+    if (totalCoupon != null) doc.text(`Coupon rate: ${Number(totalCoupon)}% p.a.`);
+    if (a.allotment_date) doc.text(`Allotment date: ${a.allotment_date}`);
+    if (a.maturity_date) doc.text(`Maturity date: ${a.maturity_date}`);
+    if (a.isin) doc.text(`ISIN: ${a.isin}`);
+    doc.moveDown(1).fontSize(10).text('The corresponding debenture certificate is available in your account. Interest will be paid as per the payout schedule.', { width: 480 });
+    doc.moveDown(1.5).fillColor('#6b7380').fontSize(9).text('For Dhanam Investment and Finance Private Limited');
+  });
+}
+
 /** TDS register for a month (YYYY-MM) — one row per TDS-bearing payout. */
 export async function tdsReport(db: Db, yyyymm: string): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();

@@ -132,15 +132,38 @@ export async function requestRedemptionForCustomer(db: Db, actor: AuthUser, appl
 export async function documents(db: Db, actor: AuthUser) {
   const cid = requireCustomer(actor);
   const apps = (await db.query<{ id: string; application_no: string; allotment_date: string | null }>("SELECT id, application_no, allotment_date FROM applications WHERE customer_id = $1 AND status IN ('Active','Matured','Redeemed')", [cid])).rows;
-  const docs: Array<{ id: string; label: string }> = [];
+  const docs: Array<{ id: string; label: string; href: string }> = [];
   for (const a of apps) {
     // Bond certificate / allotment letter only exist once the series is allotted.
     if (!a.allotment_date) continue;
-    docs.push({ id: `BOND-${a.id}`, label: `Bond certificate — ${a.application_no}` });
-    docs.push({ id: `ALLOT-${a.id}`, label: `Allotment letter — ${a.application_no}` });
+    docs.push({ id: `BOND-${a.id}`, label: `Bond certificate — ${a.application_no}`, href: `/api/portal/documents/BOND-${a.id}` });
+    docs.push({ id: `ALLOT-${a.id}`, label: `Allotment letter — ${a.application_no}`, href: `/api/portal/documents/ALLOT-${a.id}` });
   }
-  docs.push({ id: `SOA-${cid}`, label: 'Statement of account' });
+  docs.push({ id: `SOA-${cid}`, label: 'Statement of account', href: `/api/portal/documents/SOA-${cid}` });
   return { documents: docs };
+}
+
+/** Stream a portal document PDF — ownership enforced against the logged-in
+ * customer (a BOND/ALLOT id must belong to one of their applications). */
+export async function documentPdf(db: Db, actor: AuthUser, docId: string): Promise<{ buffer: Buffer; filename: string }> {
+  const cid = requireCustomer(actor);
+  const m = docId.match(/^([A-Z]+)-(\d+)$/);
+  if (!m) throw errors.badRequest('Invalid document id');
+  const kind = m[1]!;
+  const entityId = Number(m[2]!);
+  const { bondCertificatePdf, allotmentLetterPdf, soaPdf } = await import('../reports/documents.js');
+
+  if (kind === 'SOA') {
+    if (entityId !== cid) throw errors.notFound('Document not found');
+    return { buffer: await soaPdf(db, cid, true), filename: `statement-${cid}.pdf` };
+  }
+  if (kind === 'BOND' || kind === 'ALLOT') {
+    const owns = (await db.query('SELECT 1 FROM applications WHERE id = $1 AND customer_id = $2 AND allotment_date IS NOT NULL', [entityId, cid])).rowCount;
+    if (!owns) throw errors.notFound('Document not found');
+    const buffer = kind === 'BOND' ? await bondCertificatePdf(db, entityId) : await allotmentLetterPdf(db, entityId);
+    return { buffer, filename: `${docId}.pdf` };
+  }
+  throw errors.badRequest('Unsupported document');
 }
 
 export async function createServiceRequest(db: Db, actor: AuthUser, kind: string, details: string) {

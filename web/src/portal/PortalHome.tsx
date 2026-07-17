@@ -75,8 +75,14 @@ export function PortalHome() {
         <Card title="Documents">
           <ul className="divide-y divide-border">
             {(docs.data?.documents ?? []).map((d: any) => (
-              <li key={d.id} className="px-4 py-2.5 text-sm flex items-center"><span>{d.label}</span><span className="ml-auto text-xs text-text-muted">{d.id}</span></li>
+              <li key={d.id} className="px-4 py-2.5 text-sm flex items-center">
+                <span>{d.label}</span>
+                {d.href
+                  ? <a href={d.href} target="_blank" rel="noreferrer" className="ml-auto text-xs text-primary hover:underline">Download PDF</a>
+                  : <span className="ml-auto text-xs text-text-muted">{d.id}</span>}
+              </li>
             ))}
+            {(docs.data?.documents ?? []).length === 0 && <li className="px-4 py-3 text-sm text-text-muted">No documents yet.</li>}
           </ul>
         </Card>
       </main>

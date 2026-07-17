@@ -111,10 +111,40 @@ function Editor({ s, val, setVal }: { s: SettingView; val: unknown; setVal: (v: 
     );
   }
   if (s.type === 'list') {
-    return (
-      <input className={`${cls} w-64`} value={(val as string[]).join(', ')}
-        onChange={(e) => setVal(e.target.value.split(',').map((x) => x.trim()).filter(Boolean))} />
-    );
+    return <ListEditor val={(val as string[]) ?? []} setVal={setVal} />;
   }
   return <input className={`${cls} w-48`} value={String(val)} onChange={(e) => setVal(e.target.value)} />;
+}
+
+/** Add/remove-option editor for `list` settings (dropdown vocabularies). */
+function ListEditor({ val, setVal }: { val: string[]; setVal: (v: string[]) => void }) {
+  const [add, setAdd] = useState('');
+  function addItem() {
+    const v = add.trim();
+    if (v && !val.includes(v)) setVal([...val, v]);
+    setAdd('');
+  }
+  return (
+    <div className="flex flex-col gap-1.5 w-72">
+      <div className="flex flex-wrap gap-1">
+        {val.length === 0 && <span className="text-xs text-text-muted italic">No options yet</span>}
+        {val.map((o) => (
+          <span key={o} className="inline-flex items-center gap-1 text-xs bg-bg border border-border rounded px-1.5 py-0.5">
+            {o}
+            <button type="button" onClick={() => setVal(val.filter((x) => x !== o))}
+              className="text-text-muted hover:text-danger leading-none" aria-label={`Remove ${o}`}>✕</button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-1">
+        <input className="px-2 py-1 text-xs border border-border-strong rounded flex-1 min-w-0 outline-none focus:border-primary"
+          placeholder="Add option…" value={add} onChange={(e) => setAdd(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addItem(); } }} />
+        <button type="button" onClick={addItem} disabled={!add.trim()}
+          className="text-xs bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-2 py-1 whitespace-nowrap">
+          + Add
+        </button>
+      </div>
+    </div>
+  );
 }

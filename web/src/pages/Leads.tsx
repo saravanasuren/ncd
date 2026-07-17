@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
@@ -43,10 +43,20 @@ const PROSPECTS_TAB = '__prospects__';
 
 const EMPTY_FORM = {
   full_name: '', phone: '', place: '', district: '', category: '', source: '',
-  referred_by_text: '', interested_scheme: '', expected_amount: '', follow_up_date: '', notes: '',
+  referred_by_text: '', interested_scheme: '', expected_amount: '', follow_up_date: '', status: '', notes: '',
 };
 
 const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
+
+/** Labelled form field for the lead modal. */
+function Field({ label, required, children }: { label: string; required?: boolean; children: ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-text-label">{label}{required && <span className="text-danger"> *</span>}</span>
+      {children}
+    </label>
+  );
+}
 
 /** Follow-up notes for one lead: history + add box. */
 function NotesPanel({ leadId, canUpdate }: { leadId: number; canUpdate: boolean }) {
@@ -114,6 +124,9 @@ export function LeadsPage() {
   });
   const SOURCES = uiConfig.data?.values['customers.lead_sources'] ?? [];
   const STATUSES = uiConfig.data?.values['customers.lead_statuses'] ?? [];
+  const CATEGORIES = uiConfig.data?.values['customers.lead_categories'] ?? [];
+  const REFERRED_BY = uiConfig.data?.values['customers.lead_referred_by'] ?? [];
+  const SCHEMES = uiConfig.data?.values['customers.lead_interested_schemes'] ?? [];
 
   // Duplicate-phone check while typing a new lead's phone.
   const phone = form.phone.trim();
@@ -135,6 +148,7 @@ export function LeadsPage() {
       ...(form.interested_scheme ? { interested_scheme: form.interested_scheme } : {}),
       ...(form.expected_amount ? { expected_amount: Number(form.expected_amount) } : {}),
       ...(form.follow_up_date ? { follow_up_date: form.follow_up_date } : {}),
+      ...(form.status ? { status: form.status } : {}),
       ...(form.notes ? { notes: form.notes } : {}),
     }),
     onSuccess: () => { setForm(EMPTY_FORM); setCreating(false); qc.invalidateQueries({ queryKey: ['leads'] }); },
@@ -175,35 +189,85 @@ export function LeadsPage() {
       </div>
 
       {can('leads:create') && creating && (
-        <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5">
-          <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2.5">New lead</div>
-          <div className="flex flex-wrap gap-2">
-            <input className={inp} placeholder="Full name *" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} autoFocus />
-            <input className={`${inp} w-36`} placeholder="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-            <input className={`${inp} w-32`} placeholder="Place" value={form.place} onChange={(e) => setForm({ ...form, place: e.target.value })} />
-            <input className={`${inp} w-32`} placeholder="District" value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} />
-            <input className={`${inp} w-32`} placeholder="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
-            <select className={inp} value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}>
-              <option value="">Source…</option>
-              {SOURCES.map((s) => <option key={s}>{s}</option>)}
-            </select>
-            <input className={inp} placeholder="Referred by" value={form.referred_by_text} onChange={(e) => setForm({ ...form, referred_by_text: e.target.value })} />
-            <input className={inp} placeholder="Interested scheme" value={form.interested_scheme} onChange={(e) => setForm({ ...form, interested_scheme: e.target.value })} />
-            <input className={`${inp} w-36`} type="number" placeholder="Expected ₹" value={form.expected_amount} onChange={(e) => setForm({ ...form, expected_amount: e.target.value })} />
-            <input className={inp} type="date" title="Follow-up date" value={form.follow_up_date} onChange={(e) => setForm({ ...form, follow_up_date: e.target.value })} />
-            <input className={`${inp} w-64`} placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
-            <button disabled={!form.full_name || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
-              className="bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-4 py-1.5 text-sm font-semibold">Save lead</button>
-            <button onClick={() => { setErr(''); setCreating(false); }} className="text-xs text-text-muted hover:underline px-2">Cancel</button>
-          </div>
-          {dup.data?.duplicate && (
-            <div className="text-xs text-warn mt-2">
-              ⚠ This phone belongs to existing customer <button className="font-mono underline" onClick={() => nav(`/app/customers/${dup.data!.customer!.id}`)}>{dup.data.customer!.customer_code}</button> ({dup.data.customer!.full_name}) — consider a handover request instead of a new lead.
+        <div className="fixed inset-0 z-40 bg-black/40 flex items-start justify-center overflow-y-auto py-8 px-4"
+          onClick={() => { setErr(''); setCreating(false); }}>
+          <div className="bg-surface border border-border rounded-lg shadow-lg w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-border">
+              <h2 className="text-base font-bold m-0">New lead</h2>
+              <button onClick={() => { setErr(''); setCreating(false); }} className="text-text-muted hover:text-text text-lg leading-none" aria-label="Close">✕</button>
             </div>
-          )}
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
+              <Field label="Phone number">
+                <input className={`${inp} w-full`} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              </Field>
+              <Field label="Full name" required>
+                <input className={`${inp} w-full`} value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} autoFocus />
+              </Field>
+              <Field label="Place">
+                <input className={`${inp} w-full`} value={form.place} onChange={(e) => setForm({ ...form, place: e.target.value })} />
+              </Field>
+              <Field label="District">
+                <input className={`${inp} w-full`} value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} />
+              </Field>
+              <Field label="Category">
+                <select className={`${inp} w-full`} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                  <option value="">Select…</option>
+                  {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+                </select>
+              </Field>
+              <Field label="Source">
+                <select className={`${inp} w-full`} value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}>
+                  <option value="">Select…</option>
+                  {SOURCES.map((s) => <option key={s}>{s}</option>)}
+                </select>
+              </Field>
+              <Field label="Referred by">
+                <select className={`${inp} w-full`} value={form.referred_by_text} onChange={(e) => setForm({ ...form, referred_by_text: e.target.value })}>
+                  <option value="">Select…</option>
+                  {REFERRED_BY.map((r) => <option key={r}>{r}</option>)}
+                </select>
+              </Field>
+              <Field label="Interested scheme">
+                <select className={`${inp} w-full`} value={form.interested_scheme} onChange={(e) => setForm({ ...form, interested_scheme: e.target.value })}>
+                  <option value="">Select…</option>
+                  {SCHEMES.map((s) => <option key={s}>{s}</option>)}
+                </select>
+              </Field>
+              <Field label="Expected amount (₹)">
+                <input className={`${inp} w-full`} type="number" value={form.expected_amount} onChange={(e) => setForm({ ...form, expected_amount: e.target.value })} />
+              </Field>
+              <Field label="Follow-up date">
+                <input className={`${inp} w-full`} type="date" value={form.follow_up_date} onChange={(e) => setForm({ ...form, follow_up_date: e.target.value })} />
+              </Field>
+              <Field label="Status">
+                <select className={`${inp} w-full`} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                  <option value="">Default (New)</option>
+                  {STATUSES.map((s) => <option key={s}>{s}</option>)}
+                </select>
+              </Field>
+              <div className="sm:col-span-2">
+                <Field label="Notes">
+                  <textarea className={`${inp} w-full`} rows={3} placeholder="Any notes or discussion details about the customer…"
+                    value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+                </Field>
+              </div>
+              {dup.data?.duplicate && (
+                <div className="sm:col-span-2 text-xs text-warn">
+                  ⚠ This phone belongs to existing customer <button className="font-mono underline" onClick={() => nav(`/app/customers/${dup.data!.customer!.id}`)}>{dup.data.customer!.customer_code}</button> ({dup.data.customer!.full_name}) — consider a handover request instead of a new lead.
+                </div>
+              )}
+            </div>
+            {err && <div className="text-xs text-danger px-5 pb-1">{err}</div>}
+            <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-border">
+              <button onClick={() => { setErr(''); setCreating(false); }} className="text-sm text-text-muted hover:underline px-3 py-1.5">Cancel</button>
+              <button disabled={!form.full_name || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
+                className="bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-4 py-1.5 text-sm font-semibold">Save lead</button>
+            </div>
+          </div>
         </div>
       )}
-      {err && <div className="text-xs text-danger mb-3">{err}</div>}
+
+      {err && !creating && <div className="text-xs text-danger mb-3">{err}</div>}
 
       <input
         className="w-full max-w-md px-3 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary mb-4"

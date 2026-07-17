@@ -10,7 +10,10 @@ export const settingsRouter = Router();
 
 // Safe, non-secret vocabularies the staff UI needs (lead form dropdowns etc.).
 // Any authed user may read these; the full registry stays admin-gated below.
-const UI_CONFIG_KEYS = ['customers.lead_sources', 'customers.lead_statuses', 'customers.collection_methods'] as const;
+const UI_CONFIG_KEYS = [
+  'customers.lead_sources', 'customers.lead_statuses', 'customers.collection_methods',
+  'customers.lead_categories', 'customers.lead_referred_by', 'customers.lead_interested_schemes',
+] as const;
 settingsRouter.get(
   '/ui-config',
   requireAuth,

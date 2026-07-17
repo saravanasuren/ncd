@@ -171,6 +171,33 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     default: ['NEFT', 'IMPS', 'RTGS', 'Cheque', 'Cash', 'Other'],
     editableBy: 'admin',
   },
+  {
+    key: 'customers.lead_categories',
+    group: 'Customers',
+    label: 'Lead categories',
+    description: 'Selectable investor-category values in the lead form.',
+    type: 'list',
+    default: ['Individual', 'HUF', 'Corporate', 'Trust', 'NRI', 'Others'],
+    editableBy: 'admin',
+  },
+  {
+    key: 'customers.lead_referred_by',
+    group: 'Customers',
+    label: 'Lead "Referred by" options',
+    description: 'Selectable referral-source values in the lead form.',
+    type: 'list',
+    default: ['Existing customer', 'Agent', 'Staff', 'Walk-in', 'Advertisement', 'Others'],
+    editableBy: 'admin',
+  },
+  {
+    key: 'customers.lead_interested_schemes',
+    group: 'Customers',
+    label: 'Lead interested schemes',
+    description: 'Selectable scheme-interest values in the lead form.',
+    type: 'list',
+    default: ['NCD', 'Fixed Deposit', 'Bond', 'Others'],
+    editableBy: 'admin',
+  },
 
   // ── Portal ──
   {

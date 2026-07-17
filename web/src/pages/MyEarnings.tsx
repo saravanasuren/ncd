@@ -16,7 +16,7 @@ export function MyEarningsPage() {
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Failed to load earnings.</div>;
   return (
-    <div className="max-w-2xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">My Earnings</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Your incentive accruals and payouts.</p>
       <div className="grid grid-cols-3 gap-3 mb-5">

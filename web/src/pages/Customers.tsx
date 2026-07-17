@@ -92,7 +92,7 @@ export function CustomersPage() {
   if (error) return <div className="text-danger">Failed to load customers.</div>;
 
   return (
-    <div className="max-w-4xl">
+    <div className="w-full">
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-xl font-bold tracking-tight m-0">Customers</h1>

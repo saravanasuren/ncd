@@ -43,7 +43,7 @@ export function RedemptionsPage() {
   const rest = data!.rows.filter((r) => !(r.status === 'Requested' && !r.approval_request_id));
 
   return (
-    <div className="max-w-4xl">
+    <div className="w-full">
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-xl font-bold tracking-tight m-0">Redemptions</h1>

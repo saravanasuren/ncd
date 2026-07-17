@@ -150,7 +150,7 @@ export function UsersPage() {
   ];
 
   return (
-    <div className="max-w-4xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Users</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Staff, agents and portal accounts.</p>
 

@@ -28,7 +28,7 @@ export function CustomerDetailPage() {
   const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
 
   return (
-    <div className="max-w-3xl">
+    <div className="w-full">
       <Link to="/app/customers" className="text-xs text-text-muted hover:text-primary">← Customers</Link>
       <div className="flex items-center gap-3 mt-1">
         <h1 className="text-xl font-bold tracking-tight m-0">{c.full_name}</h1>

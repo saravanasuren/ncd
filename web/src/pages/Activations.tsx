@@ -32,7 +32,7 @@ export function ActivationsPage() {
   ];
 
   return (
-    <div className="max-w-4xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Activations</h1>
       <p className="text-sm text-text-muted mt-1 mb-4">Activate funded investments — money is in the account and awaiting approval. On approval the NCD goes live: interest starts and incentives accrue. Allotment is a separate, later step. Submitting starts a maker-checker approval.</p>
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}

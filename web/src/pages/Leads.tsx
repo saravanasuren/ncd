@@ -146,7 +146,7 @@ export function LeadsPage() {
   });
 
   return (
-    <div className="max-w-5xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Leads</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Prospective investors you're following up.</p>
 

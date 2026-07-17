@@ -16,7 +16,7 @@ export function SystemPage() {
   const active = visible.some((t) => t.key === tab) ? tab : visible[0]?.key ?? 'audit';
 
   return (
-    <div className="max-w-4xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">System</h1>
       <p className="text-sm text-text-muted mt-1 mb-4">Audit trail, notification queue and background jobs.</p>
       <div className="flex gap-1 mb-4 border-b border-border">

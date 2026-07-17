@@ -68,7 +68,7 @@ export function ApprovalsPage() {
   if (isLoading) return <div className="text-text-muted">Loading approvals…</div>;
 
   return (
-    <div className="max-w-3xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Approvals</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Requests waiting on a checker. You can't approve your own submissions.</p>
       {msg && <div className="text-xs text-danger mb-3">{msg}</div>}

@@ -30,7 +30,7 @@ export function PortalHome() {
           <button onClick={async () => { await logout(); nav('/portal'); }} className="text-xs border border-white/30 rounded px-2 py-1 hover:bg-white/10">Sign out</button>
         </div>
       </header>
-      <main className="max-w-3xl mx-auto p-6">
+      <main className="w-full mx-auto p-6">
         <h1 className="text-xl font-bold tracking-tight m-0">Your investments</h1>
 
         <div className="grid grid-cols-2 gap-3 my-5">

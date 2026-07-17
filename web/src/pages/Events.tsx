@@ -39,7 +39,7 @@ export function EventsPage() {
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Failed to load NCD events.</div>;
   return (
-    <div className="max-w-4xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">NCD Events</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">
         Rollovers, holder transfers and transformations. Initiate them from the investment's application page (Applications → open one → lifecycle actions).

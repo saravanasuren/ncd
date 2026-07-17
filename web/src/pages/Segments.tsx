@@ -53,7 +53,7 @@ export function SegmentsPage() {
     setExpanded((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
 
   return (
-    <div className="max-w-4xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Segments</h1>
       <p className="text-sm text-text-muted mt-1 mb-4">The book sliced by series, customer, district, agent and staff. Click a row's <span className="font-mono">+</span> to see its individual investments.</p>
       <div className="flex gap-1 mb-4 border-b border-border">
@@ -70,7 +70,9 @@ export function SegmentsPage() {
           rows={data!.groups}
           rowKey={(g) => g.key}
           rowId={(g) => `seg-${g.key}`}
-          defaultSort={{ key: 'outstanding', dir: 'desc' }}
+          // Series-wise defaults to series-number descending (NCD 27 → 10);
+          // the numeric-aware sort reads the embedded number in the code.
+          defaultSort={tab === 'series' ? { key: 'label', dir: 'desc' } : { key: 'outstanding', dir: 'desc' }}
           empty="No data."
           renderExpanded={(g) => (expanded.has(g.key) ? <ChildTable tab={tab} rows={g.children} /> : null)}
         />

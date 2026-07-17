@@ -127,7 +127,7 @@ export function ApplicationDetailPage() {
   const a = data.application;
 
   return (
-    <div className="max-w-4xl">
+    <div className="w-full">
       <Link to="/app/applications" className="text-xs text-text-muted hover:text-primary">← Applications</Link>
       <div className="flex items-center gap-3 mt-1">
         <h1 className="text-xl font-bold tracking-tight m-0 font-mono">{a.application_no}</h1>

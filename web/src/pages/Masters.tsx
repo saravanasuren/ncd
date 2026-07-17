@@ -243,7 +243,7 @@ function CompanyProfile() {
   ];
   return (
     <Section title="Company profile">
-      <div className="p-4 grid grid-cols-2 gap-3 max-w-2xl">
+      <div className="p-4 grid grid-cols-2 gap-3 w-full">
         {FIELDS.map(([k, label]) => (
           <label key={k} className="text-xs text-text-label">
             {label}
@@ -277,7 +277,7 @@ function CompanyProfile() {
 /** Admin → Masters (docs/05): schemes, series, TDS rules, banks, holidays, company profile. */
 export function MastersPage() {
   return (
-    <div className="max-w-5xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Masters</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Product and company reference data. Every change is audited.</p>
       <Schemes />

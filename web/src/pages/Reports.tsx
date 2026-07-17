@@ -29,7 +29,7 @@ export function ReportsPage() {
   const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded';
 
   return (
-    <div className="max-w-3xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Reports</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Downloads and imports.</p>
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}

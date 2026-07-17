@@ -34,7 +34,7 @@ export function ApplicationsPage() {
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Failed to load applications.</div>;
   return (
-    <div className="max-w-4xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Applications</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">NCD investments in your scope.</p>
       <DataTable

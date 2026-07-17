@@ -30,7 +30,7 @@ export function SettingsPage() {
   if (error) return <div className="text-danger">Failed to load settings.</div>;
 
   return (
-    <div className="max-w-3xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Settings</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">
         Every business value is editable here — no hardcoded numbers anywhere.

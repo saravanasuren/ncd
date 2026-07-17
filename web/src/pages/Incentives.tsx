@@ -27,7 +27,7 @@ export function IncentivesPage() {
   });
 
   return (
-    <div className="max-w-3xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Incentives & commissions</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Balances owed to staff, agents and referrers.</p>
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}

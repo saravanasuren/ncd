@@ -33,7 +33,7 @@ export function PayoutsPage() {
   });
 
   return (
-    <div className="max-w-3xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Interest payouts (NEFT)</h1>
       <p className="text-sm text-text-muted mt-1 mb-4">Batch the interest due up to a date; a checker approves, then it's marked paid.</p>
       <div className="flex items-center gap-2 mb-4">

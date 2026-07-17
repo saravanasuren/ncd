@@ -45,7 +45,7 @@ export function AllotmentsPage() {
   ];
 
   return (
-    <div className="max-w-4xl">
+    <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Allotments</h1>
       <p className="text-sm text-text-muted mt-1 mb-4">Formally allot a series once its investments are already active — this stamps the allotment date and closes the series to new money. It does not change the book. Submitting starts a maker-checker approval.</p>
       <div className="flex items-center gap-2 mb-4">

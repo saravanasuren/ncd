@@ -652,9 +652,15 @@ class RollbackSignal extends Error {}
 function mapAppStatus(s: string): string {
   const v = (s ?? '').trim();
   if (v === 'PendingCollection') return 'PendingFundVerification';
+  // New lifecycle: money-credited-but-not-yet-live apps converge on
+  // PendingActivation (activation, not allotment, is what makes them Active).
+  // Legacy PendingEsign/PendingAllotment were exactly that funded, pre-live
+  // state, so map them forward — otherwise a re-import strands them (no path
+  // to Active in the new flow). eSign is now non-gating.
+  if (v === 'PendingEsign' || v === 'PendingAllotment') return 'PendingActivation';
   const known = new Set([
-    'Draft', 'PendingApproval', 'PendingFundVerification', 'PendingEsign',
-    'PendingAllotment', 'Active', 'Matured', 'Redeemed', 'RolledOver',
+    'Draft', 'PendingApproval', 'PendingFundVerification', 'PendingActivation',
+    'Active', 'Matured', 'Redeemed', 'RolledOver',
     'PrematureWithdrawn', 'Transferred', 'Cancelled', 'Rejected',
   ]);
   return known.has(v) ? v : 'Active';

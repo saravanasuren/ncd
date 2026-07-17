@@ -32,7 +32,7 @@ async function build() {
   appId = app.json.id;
   await a.post(`/api/applications/${appId}/confirm-collection`, { amount_received: 500000, date_money_received: '2026-07-12', method: 'NEFT' });
   await a.post(`/api/applications/${appId}/mark-esigned`);
-  const batch = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
+  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
   await a.post(`/api/approvals/${batch.json.request.id}/approve`);
 }
 
@@ -111,7 +111,7 @@ describe('funded subscription (integration)', () => {
     expect(again.json.already_processed).toBe(true);
     expect(again.json.wealth_subscription_id).toBe(first.json.wealth_subscription_id);
     const st = (await ctx.db.query('SELECT status FROM applications WHERE lockerhub_intent_no = $1', ['LH-INTENT-1'])).rows[0] as any;
-    expect(st.status).toBe('PendingApproval');
+    expect(st.status).toBe('PendingActivation');
 
     // an unknown phone auto-creates a Draft stub customer (money never 404s)
     const stubPost = await fetch(ctx.base + '/api/integration/subscription-payments/from-lockerhub', {

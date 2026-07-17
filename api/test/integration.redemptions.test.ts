@@ -32,7 +32,7 @@ async function activeInvestment(name: string, phone: string, amount = 500000) {
   const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount });
   await a.post(`/api/applications/${app.json.id}/confirm-collection`, { amount_received: amount, date_money_received: '2026-07-12', method: 'NEFT' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
-  const batch = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
+  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
   await a.post(`/api/approvals/${batch.json.request.id}/approve`);
   const detail = await a.get(`/api/applications/${app.json.id}`);
   return { customerId: cid, appId: app.json.id, appNo: detail.json.application.application_no };

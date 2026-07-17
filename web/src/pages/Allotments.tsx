@@ -28,8 +28,8 @@ export function AllotmentsPage() {
   const columns: Column<SeriesRow>[] = [
     { key: 'code', header: 'Series', tdClassName: 'font-semibold' },
     { key: 'name', header: 'Name' },
-    { key: 'pending_count', header: 'Pending', align: 'right', value: (s) => s.pending_count },
-    { key: 'pending_amount', header: 'Pending amount', align: 'right',
+    { key: 'pending_count', header: 'Ready to allot', align: 'right', value: (s) => s.pending_count },
+    { key: 'pending_amount', header: 'Ready amount', align: 'right',
       value: (s) => Number(s.pending_amount), render: (s) => <span className="mono">{formatINR(s.pending_amount)}</span> },
     { key: 'status', header: 'Status' },
     { key: 'actions', header: 'Actions', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
@@ -47,7 +47,7 @@ export function AllotmentsPage() {
   return (
     <div className="max-w-4xl">
       <h1 className="text-xl font-bold tracking-tight m-0">Allotments</h1>
-      <p className="text-sm text-text-muted mt-1 mb-4">Allot a whole series at once. Submitting starts a maker-checker approval.</p>
+      <p className="text-sm text-text-muted mt-1 mb-4">Formally allot a series once its investments are already active — this stamps the allotment date and closes the series to new money. It does not change the book. Submitting starts a maker-checker approval.</p>
       <div className="flex items-center gap-2 mb-4">
         <label className="text-sm text-text-label">Allotment date</label>
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="px-2.5 py-1.5 text-sm border border-border-strong rounded" />

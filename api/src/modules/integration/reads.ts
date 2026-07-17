@@ -350,7 +350,8 @@ customerReadsRouter.get('/customers/:id/documents', asyncHandler(async (req, res
   const docs: Array<Record<string, unknown>> = [];
   for (const a of apps) {
     const allotmentIso = iso(a.allotment_date);
-    if (['Active', 'Matured', 'Redeemed', 'RolledOver'].includes(a.status as string)) {
+    // Bond/allotment certificate only exists once the series has been allotted.
+    if (allotmentIso && ['Active', 'Matured', 'Redeemed', 'RolledOver'].includes(a.status as string)) {
       docs.push({
         doc_id: `BOND-${a.id}`,
         type: 'certificate',
@@ -699,7 +700,7 @@ customerReadsRouter.get('/ncd/locker-deposit-status', asyncHandler(async (req, r
       [String(app.id)]
     )).rows[0];
     rejectedReason = reason?.reason ?? null;
-  } else if (internal === 'PendingApproval') {
+  } else if (internal === 'PendingApproval' || internal === 'PendingActivation') {
     approvalStatus = 'pending_approval';
   } else {
     // Approved out of the LockerHub queue (PendingAllotment/Active/…): registered.

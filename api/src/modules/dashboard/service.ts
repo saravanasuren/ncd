@@ -2,7 +2,11 @@
  * so the dashboard and the export never disagree. */
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
+import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
 import * as book from '../reports/book.js';
+
+/** SQL list literal for the outstanding-book status set — matches reports/book.ts. */
+const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((s) => `'${s}'`).join(',');
 
 export async function overview(db: Db, actor: AuthUser, filters: book.BookFilters = {}) {
   const [kpis, series, districts] = await Promise.all([
@@ -38,10 +42,10 @@ export async function drill(db: Db, actor: AuthUser, widget: string, param: stri
   const sc = scopeWhere(scopeFor(actor), { userCol: 'a.enrolled_by_user_id', agentCol: 'a.enrolled_by_agent_id', branchCol: 'c.branch_id' }, 1);
   const FROM = 'FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id';
   if (widget === 'series') {
-    return (await db.query(`SELECT c.full_name AS customer, a.application_no, a.total_amount ${FROM} WHERE a.series_id = $1 AND a.status = 'Active' AND ${sc.sql} ORDER BY c.full_name`, [Number(param), ...sc.params])).rows;
+    return (await db.query(`SELECT c.full_name AS customer, a.application_no, a.total_amount ${FROM} WHERE a.series_id = $1 AND a.status IN (${OUTSTANDING_SQL_LIST}) AND ${sc.sql} ORDER BY c.full_name`, [Number(param), ...sc.params])).rows;
   }
   if (widget === 'district') {
-    return (await db.query(`SELECT c.full_name AS customer, a.application_no, a.total_amount ${FROM} WHERE COALESCE(c.district,'Unassigned') = $1 AND a.status = 'Active' AND ${sc.sql} ORDER BY c.full_name`, [param, ...sc.params])).rows;
+    return (await db.query(`SELECT c.full_name AS customer, a.application_no, a.total_amount ${FROM} WHERE COALESCE(c.district,'Unassigned') = $1 AND a.status IN (${OUTSTANDING_SQL_LIST}) AND ${sc.sql} ORDER BY c.full_name`, [param, ...sc.params])).rows;
   }
   if (widget === 'redemptions-month') {
     return (await db.query(

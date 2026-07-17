@@ -27,6 +27,11 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Application / Subscription',
     levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
+  activation_batch: {
+    type: 'activation_batch',
+    label: 'Batch Activation',
+    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
+  },
   allotment_batch: {
     type: 'allotment_batch',
     label: 'Batch Allotment',

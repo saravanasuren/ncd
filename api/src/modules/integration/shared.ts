@@ -33,6 +33,7 @@ export function customerFacingStatus(internal: string | null | undefined, isMatu
     case 'PendingApproval':
     case 'PendingFundVerification':
     case 'PendingEsign':
+    case 'PendingActivation':
     case 'PendingAllotment':
     case 'Active':
       return 'Active';

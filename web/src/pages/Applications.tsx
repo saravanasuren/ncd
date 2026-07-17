@@ -12,6 +12,7 @@ interface AppRow {
 const pill: Record<string, string> = {
   Active: 'bg-[color:var(--success-bg)] text-success',
   Redeemed: 'bg-bg text-text-muted',
+  PendingActivation: 'bg-[color:var(--warn-bg)] text-warn',
   PendingAllotment: 'bg-[color:var(--warn-bg)] text-warn',
   PendingFundVerification: 'bg-[color:var(--warn-bg)] text-warn',
   PendingEsign: 'bg-[color:var(--warn-bg)] text-warn',

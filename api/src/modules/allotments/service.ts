@@ -1,23 +1,26 @@
 /**
- * Batch allotment (docs/02 §4). Maker submits a series batch → checker
- * approves → every PendingAllotment app in the series goes Active, its
- * schedule is materialised, incentives accrue, and the series locks.
- * All inside the approval transaction (atomic).
+ * Batch allotment (docs/02 §4). A LATER, data-neutral series step: maker
+ * submits a series batch → checker approves → each already-Active application
+ * in the series gets its allotment_date stamped and the series locks. It does
+ * NOT change status, materialise schedules or accrue incentives — those all
+ * happen earlier, at activation (see ../activations). All inside the approval
+ * transaction (atomic).
  */
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
-import { assertTransition, canTransition } from '../../lib/statusMachine.js';
+import { canTransition } from '../../lib/statusMachine.js';
 import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
-import { materializeForApplication } from '../schedule/materialize.js';
-import { accrueForApplication } from '../incentives/accrual.js';
+
+/** Apps ready to allot = Active in the series but not yet allotted. */
+const READY_TO_ALLOT = "a.status = 'Active' AND a.allotment_date IS NULL";
 
 export async function pendingBySeriesSummary(db: Db) {
   const { rows } = await db.query(
     `SELECT s.id AS series_id, s.code, s.name, s.status,
-            count(a.id) FILTER (WHERE a.status = 'PendingAllotment')::int AS pending_count,
-            COALESCE(sum(a.total_amount) FILTER (WHERE a.status = 'PendingAllotment'),0) AS pending_amount
+            count(a.id) FILTER (WHERE ${READY_TO_ALLOT})::int AS pending_count,
+            COALESCE(sum(a.total_amount) FILTER (WHERE ${READY_TO_ALLOT}),0) AS pending_amount
      FROM series s LEFT JOIN applications a ON a.series_id = s.id
      GROUP BY s.id, s.code, s.name, s.status ORDER BY s.code`
   );
@@ -26,8 +29,8 @@ export async function pendingBySeriesSummary(db: Db) {
 
 export async function createAllotmentBatch(db: Db, actor: AuthUser, input: { series_id: number; allotment_date: string; isin?: string; notes?: string }) {
   return db.withTx(async (tx) => {
-    const n = Number((await tx.query<{ n: string }>("SELECT count(*)::int AS n FROM applications WHERE series_id = $1 AND status = 'PendingAllotment'", [input.series_id])).rows[0]!.n);
-    if (n === 0) throw errors.unprocessable('No applications are pending allotment in this series');
+    const n = Number((await tx.query<{ n: string }>(`SELECT count(*)::int AS n FROM applications a WHERE a.series_id = $1 AND ${READY_TO_ALLOT}`, [input.series_id])).rows[0]!.n);
+    if (n === 0) throw errors.unprocessable('No active applications are awaiting allotment in this series');
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO allotment_batches (series_id, allotment_date, isin, notes, status, created_by_user_id)
        VALUES ($1,$2,$3,$4,'PendingChecker',$5) RETURNING id`,
@@ -47,28 +50,19 @@ export async function createAllotmentBatch(db: Db, actor: AuthUser, input: { ser
   });
 }
 
-/** Revert a series allotment (Super Admin). Blocked once real interest/
- * incentive money has moved. Undoes activation + schedules + accruals. */
+/** Revert a series allotment (Super Admin): un-stamp allotment_date and reopen
+ * the series. Apps stay Active — their schedules and incentives (booked at
+ * activation) are untouched, so this is safe even after interest has paid. */
 export async function revertSeriesAllotment(db: Db, actor: AuthUser, seriesId: number, reason: string) {
   return db.withTx(async (tx) => {
-    const apps = (await tx.query<{ id: string }>("SELECT id FROM applications WHERE series_id = $1 AND status = 'Active'", [seriesId])).rows;
-    if (!apps.length) throw errors.unprocessable('No allotted applications in this series');
-    const appIds = apps.map((a) => Number(a.id));
-    // Block if any real payout has happened.
-    const paid = await tx.query("SELECT 1 FROM disbursement_schedule WHERE application_id = ANY($1) AND status = 'Paid' LIMIT 1", [appIds]);
-    if (paid.rowCount) throw errors.conflict('Cannot revert — interest has already been paid');
-    const paidInc = await tx.query('SELECT 1 FROM incentive_accruals WHERE application_id = ANY($1) AND paid_at IS NOT NULL LIMIT 1', [appIds]);
-    if (paidInc.rowCount) throw errors.conflict('Cannot revert — incentives have already been paid');
-
-    for (const appId of appIds) {
-      await tx.query('DELETE FROM disbursement_schedule WHERE application_id = $1', [appId]);
-      await tx.query('DELETE FROM incentive_accruals WHERE application_id = $1', [appId]);
-      await tx.query("UPDATE application_lines SET status = 'Active', maturity_date = NULL WHERE application_id = $1", [appId]);
-      await tx.query("UPDATE applications SET status = 'PendingAllotment', allotment_date = NULL, maturity_date = NULL, batch_allotment_id = NULL, updated_at = now() WHERE id = $1", [appId]);
-    }
+    const upd = await tx.query(
+      "UPDATE applications SET allotment_date = NULL, batch_allotment_id = NULL, updated_at = now() WHERE series_id = $1 AND allotment_date IS NOT NULL",
+      [seriesId]
+    );
+    if (!upd.rowCount) throw errors.unprocessable('No allotted applications in this series');
     await tx.query("UPDATE series SET status = 'Closing', allotted_at = NULL WHERE id = $1", [seriesId]);
-    await writeAudit(tx, { actorId: actor.id, action: 'allotment.revert', entityType: 'series', entityId: seriesId, after: { reason, apps: appIds.length } });
-    return { reverted: appIds.length };
+    await writeAudit(tx, { actorId: actor.id, action: 'allotment.revert', entityType: 'series', entityId: seriesId, after: { reason, apps: upd.rowCount } });
+    return { reverted: upd.rowCount };
   });
 }
 
@@ -78,14 +72,13 @@ registerOnFinalApprove('allotment_batch', async (tx, req) => {
   const isin = (req.metadata.isin as string | null) ?? null;
   const batchId = req.metadata.batch_id ? Number(req.metadata.batch_id) : null;
 
-  const apps = (await tx.query<{ id: string; status: string }>("SELECT id, status FROM applications WHERE series_id = $1 AND status = 'PendingAllotment'", [seriesId])).rows;
-  for (const app of apps) {
-    const appId = Number(app.id);
-    assertTransition('application', app.status, 'Active');
-    await tx.query("UPDATE applications SET status = 'Active', allotment_date = $1, batch_allotment_id = $2, updated_at = now() WHERE id = $3", [allotmentDate, batchId, appId]);
-    await materializeForApplication(tx, appId);
-    await accrueForApplication(tx, appId);
-  }
+  // Stamp allotment_date on the already-Active, not-yet-allotted apps. No
+  // status change, no schedule/incentive work — those ran at activation.
+  await tx.query(
+    `UPDATE applications AS a SET allotment_date = $1, batch_allotment_id = $2, updated_at = now()
+      WHERE a.series_id = $3 AND ${READY_TO_ALLOT}`,
+    [allotmentDate, batchId, seriesId]
+  );
 
   if (batchId) await tx.query("UPDATE allotment_batches SET status = 'Approved' WHERE id = $1", [batchId]);
 

@@ -1,7 +1,9 @@
 /**
  * Applications module (docs/04 §2). Lifecycle:
- *   create → PendingFundVerification → (confirm) PendingEsign → (eSign) PendingAllotment
- *   → (batch allot) Active → Redeemed/Matured…
+ *   create → PendingFundVerification → (confirm collection) PendingActivation
+ *   → (activation approval) Active → Redeemed/Matured…
+ * eSign is recorded (esigned_at) but no longer gates the flow; allotment is a
+ * separate, later series step that only stamps allotment_date.
  * State changes go through the shared state machine.
  */
 import type { Db } from '../../db/types.js';
@@ -9,7 +11,7 @@ import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { nextCode } from '../../lib/sequences.js';
-import { assertTransition } from '../../lib/statusMachine.js';
+import { assertTransition, isTerminal } from '../../lib/statusMachine.js';
 import { toISODate } from '../../lib/dates.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
 import { getSettingsMap } from '../settings/service.js';
@@ -126,7 +128,9 @@ export async function confirmCollection(db: Db, actor: AuthUser, appId: number, 
   return db.withTx(async (tx) => {
     const app = (await tx.query<{ status: string; series_id: string }>('SELECT status, series_id FROM applications WHERE id = $1', [appId])).rows[0];
     if (!app) throw errors.notFound('Application not found');
-    assertTransition('application', app.status, 'PendingEsign');
+    // Money is in Dhanam's account → the app is ready for the activation
+    // approval. eSign and allotment happen later and do not gate this.
+    assertTransition('application', app.status, 'PendingActivation');
     const series = (await tx.query<{ deemed_date: string | null }>('SELECT deemed_date FROM series WHERE id = $1', [app.series_id])).rows[0];
     const deemed = toISODate(series?.deemed_date ?? null);
     // interest_start_date = max(receipt date, series deemed date)
@@ -135,7 +139,7 @@ export async function confirmCollection(db: Db, actor: AuthUser, appId: number, 
     await tx.query('INSERT INTO collections (collection_no, application_id, amount, method, reference, collection_date, confirmed_by_user_id) VALUES ($1,$2,$3,$4,$5,$6,$7)',
       [colNo, appId, input.amount_received, input.method, input.reference ?? null, input.date_money_received, actor.id]);
     await tx.query(
-      `UPDATE applications SET status = 'PendingEsign', amount_received = $1, date_money_received = $2, collection_method = $3, collection_reference = $4, interest_start_date = $5, updated_at = now() WHERE id = $6`,
+      `UPDATE applications SET status = 'PendingActivation', amount_received = $1, date_money_received = $2, collection_method = $3, collection_reference = $4, interest_start_date = $5, updated_at = now() WHERE id = $6`,
       [input.amount_received, input.date_money_received, input.method, input.reference ?? null, isd, appId]
     );
     await writeAudit(tx, { actorId: actor.id, action: 'application.confirm-collection', entityType: 'applications', entityId: appId, after: { interest_start_date: isd } });
@@ -165,12 +169,14 @@ export async function getReceipt(db: Db, appId: number): Promise<{ buffer: Buffe
   return { buffer, mime: app.receipt_mime ?? 'application/octet-stream', filename: app.receipt_original_filename ?? 'receipt' };
 }
 
+/** Record eSign completion. Non-gating: it stamps esigned_at and does not
+ * change the lifecycle status (eSign no longer sits on the critical path). */
 export async function markESigned(db: Db, actor: AuthUser, appId: number) {
   await db.withTx(async (tx) => {
     const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [appId])).rows[0];
     if (!app) throw errors.notFound('Application not found');
-    assertTransition('application', app.status, 'PendingAllotment');
-    await tx.query("UPDATE applications SET status = 'PendingAllotment', updated_at = now() WHERE id = $1", [appId]);
+    if (isTerminal('application', app.status)) throw errors.conflict('Application is closed');
+    await tx.query('UPDATE applications SET esigned_at = now(), updated_at = now() WHERE id = $1', [appId]);
     await writeAudit(tx, { actorId: actor.id, action: 'application.esigned', entityType: 'applications', entityId: appId });
   });
 }

@@ -61,8 +61,7 @@ reportsRouter.get('/tds/:yyyymm.xlsx', requirePermission('reports:download'),
 reportsRouter.get('/dump.xlsx', requirePermission('imports:run', 'settings:manage'),
   asyncHandler(async (_req, res) => {
     const { dumpXlsx } = await import('./documents.js');
-    const buf = await dumpXlsx(getDb());
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="dhanam-dump.xlsx"');
-    res.end(buf);
+    await dumpXlsx(res, getDb()); // streams + ends the response
   }));

@@ -1,5 +1,6 @@
 /** SOA PDF, TDS register, and full DB dump (docs/06 §5). */
 import ExcelJS from 'exceljs';
+import type { Writable } from 'node:stream';
 import type { Db } from '../../db/types.js';
 import { renderPdf, letterhead } from '../../lib/pdf.js';
 import { formatINR } from '@new-wealth/shared';
@@ -48,22 +49,30 @@ export async function tdsReport(db: Db, yyyymm: string): Promise<Buffer> {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-/** Full DB dump — key tables as sheets (admin). */
-export async function dumpXlsx(db: Db): Promise<Buffer> {
-  const wb = new ExcelJS.Workbook();
+/** Full DB dump — key tables as sheets (admin). STREAMS to the response so the
+ * large Schedule sheet (~tens of thousands of rows) never buffers the whole
+ * workbook in memory (that OOM-killed the 512M service → nginx 502). */
+export async function dumpXlsx(out: Writable, db: Db): Promise<void> {
+  const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: out, useStyles: true, useSharedStrings: false });
   const sheets: [string, string][] = [
     ['Customers', 'SELECT id, customer_code, full_name, phone, district, kyc_status, creation_status FROM customers ORDER BY id'],
     ['Applications', 'SELECT id, application_no, customer_id, series_id, status, total_amount, allotment_date, maturity_date FROM applications ORDER BY id'],
-    ['Schedule', "SELECT id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status FROM disbursement_schedule ORDER BY id LIMIT 25000"],
+    ['Schedule', 'SELECT id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status FROM disbursement_schedule ORDER BY id'],
     ['Redemptions', 'SELECT id, redemption_no, application_id, type, principal, penalty, net_payment, status FROM redemptions ORDER BY id'],
   ];
   for (const [name, sql] of sheets) {
     const ws = wb.addWorksheet(name);
     const rows = (await db.query<Record<string, unknown>>(sql)).rows;
     if (rows.length) {
-      ws.addRow(Object.keys(rows[0]!)).eachCell((c) => { c.font = { bold: true }; });
-      for (const r of rows) ws.addRow(Object.values(r));
+      ws.columns = Object.keys(rows[0]!).map((k) => ({ header: k, width: 18 }));
+      const hdr = ws.getRow(1);
+      hdr.eachCell((c) => { c.font = { bold: true }; });
+      hdr.commit();
+      for (const r of rows) ws.addRow(Object.values(r)).commit();
+    } else {
+      ws.getRow(1).commit();
     }
+    await ws.commit();
   }
-  return Buffer.from(await wb.xlsx.writeBuffer());
+  await wb.commit();
 }

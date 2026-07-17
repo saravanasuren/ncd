@@ -97,6 +97,15 @@ describe('9-tab NCD book export', () => {
     const staff = await as('staff@demo.local');
     expect((await staff.raw('/api/reports/ncd-book.xlsx')).status).toBe(403);
   });
+
+  it('the full DB dump streams a valid workbook (Customers/Applications/Schedule/Redemptions)', async () => {
+    const a = await admin();
+    const dl = await a.raw('/api/reports/dump.xlsx');
+    expect(dl.status).toBe(200);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(dl.buffer);
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['Customers', 'Applications', 'Schedule', 'Redemptions']);
+  });
 });
 
 describe('segments', () => {

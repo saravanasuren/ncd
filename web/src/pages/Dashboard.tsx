@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -7,11 +6,10 @@ import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 
 /** NCD Portfolio dashboard (docs/06 §2). KPI tiles + series/district pie charts
- * (click a slice → Segments) + monthly redemptions. */
+ * (click a slice → Segments). */
 export function Dashboard() {
   const { can } = useAuth();
   const overview = useQuery({ queryKey: ['dash-overview'], queryFn: () => api.get<any>('/api/dashboard/overview') });
-  const monthly = useQuery({ queryKey: ['dash-monthly'], queryFn: () => api.get<any>('/api/dashboard/monthly-redemptions') });
 
   if (overview.isLoading) return <div className="text-text-muted">Loading dashboard…</div>;
   if (overview.error) return <div className="text-danger">Failed to load dashboard.</div>;
@@ -43,13 +41,6 @@ export function Dashboard() {
       <div className="grid md:grid-cols-2 gap-5">
         <PieCard title="Series register" rows={overview.data.series ?? []} nameKey="code" valueKey="outstanding" tab="series" canDrill={canDrill} />
         <PieCard title="District distribution" rows={overview.data.districts ?? []} nameKey="district" valueKey="amount" tab="district" canDrill={canDrill} />
-      </div>
-
-      <div className="mt-5">
-        <Panel title="Monthly redemptions (money out)">
-          <Table head={['Month', 'Redeemed']} money={[1]} defaultSort={{ col: 0, dir: 'desc' }}
-            rows={(monthly.data?.rows ?? []).map((m: any) => ({ cells: [m.month, formatINR(m.total)] }))} />
-        </Panel>
       </div>
     </div>
   );
@@ -123,35 +114,3 @@ function PieCard({ title, rows, nameKey, valueKey, tab, canDrill }: {
   );
 }
 
-interface TableRow { cells: string[]; onClick?: () => void }
-function Table({ head, rows, money = [], defaultSort }: { head: string[]; rows: TableRow[]; money?: number[]; defaultSort?: { col: number; dir: 'asc' | 'desc' } }) {
-  const [sortCol, setSortCol] = useState<number | null>(defaultSort?.col ?? null);
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(defaultSort?.dir ?? 'asc');
-  if (rows.length === 0) return <div className="p-5 text-center text-text-muted text-sm">No data.</div>;
-  const num = (v: string) => { const s = v.replace(/[₹,%\s]/g, ''); return s !== '' && !Number.isNaN(Number(s)) ? Number(s) : null; };
-  const sorted = sortCol == null ? rows : [...rows].sort((a, b) => {
-    const va = a.cells[sortCol] ?? '', vb = b.cells[sortCol] ?? '';
-    const na = num(va), nb = num(vb), d = sortDir === 'asc' ? 1 : -1;
-    if (na != null && nb != null) return (na - nb) * d;
-    return va.localeCompare(vb, undefined, { numeric: true }) * d;
-  });
-  const click = (i: number) => { if (sortCol === i) setSortDir((x) => (x === 'asc' ? 'desc' : 'asc')); else { setSortCol(i); setSortDir('asc'); } };
-  return (
-    <table className="w-full text-sm">
-      <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">
-        {head.map((h, i) => (
-          <th key={i} onClick={() => click(i)} className={`px-4 py-2 cursor-pointer select-none hover:text-text ${money.includes(i) ? 'text-right' : ''}`}>
-            <span className="inline-flex items-center gap-1">{h}<span className={`text-[10px] ${sortCol === i ? 'text-primary' : 'text-border-strong'}`}>{sortCol === i ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}</span></span>
-          </th>
-        ))}
-      </tr></thead>
-      <tbody className="divide-y divide-border">
-        {sorted.map((r, i) => (
-          <tr key={i} onClick={r.onClick} className={r.onClick ? 'cursor-pointer hover:bg-bg' : ''}>
-            {r.cells.map((c, j) => <td key={j} className={`px-4 py-1.5 ${money.includes(j) ? 'text-right mono' : ''}`}>{c}</td>)}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ROLE_LABELS, STAFF_ROLES, isRole } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 interface UserRow {
   id: number;
@@ -88,6 +89,66 @@ export function UsersPage() {
   const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
   const ready = form.full_name && form.email && form.password.length >= 8 && form.role;
 
+  // Columns close over edit state + mutations; each cell renders its edit control when the row is being edited.
+  const columns: Column<UserRow>[] = [
+    { key: 'full_name', header: 'Name', tdClassName: 'font-medium',
+      render: (u) => edit?.id === u.id
+        ? <input className={inp} value={edit.full_name} onChange={(e) => setEdit({ ...edit, full_name: e.target.value })} />
+        : u.full_name },
+    { key: 'email', header: 'Email', tdClassName: 'text-text-muted' },
+    { key: 'role', header: 'Role', value: (u) => (isRole(u.role) ? ROLE_LABELS[u.role] : u.role),
+      render: (u) => edit?.id === u.id
+        ? <select className={inp} value={edit.role} onChange={(e) => setEdit({ ...edit, role: e.target.value })}>
+            {STAFF_ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+          </select>
+        : (isRole(u.role) ? ROLE_LABELS[u.role] : u.role) },
+    { key: 'branch', header: 'Branch', tdClassName: 'text-text-muted', value: (u) => branchLabel(u.branch_id),
+      render: (u) => edit?.id === u.id
+        ? <select className={inp} value={edit.branch_id} onChange={(e) => setEdit({ ...edit, branch_id: e.target.value })}>
+            <option value="">No branch</option>
+            {branches?.rows.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        : branchLabel(u.branch_id) },
+    { key: 'status', header: 'Status', value: (u) => (u.is_active ? 'Active' : 'Disabled'),
+      render: (u) => edit?.id === u.id
+        ? <label className="flex items-center gap-1.5 text-xs">
+            <input type="checkbox" checked={edit.is_active} disabled={u.id === me?.id}
+              onChange={(e) => setEdit({ ...edit, is_active: e.target.checked })} />
+            Active
+          </label>
+        : <span className={`text-xs rounded px-1.5 py-0.5 ${u.is_active ? 'bg-[color:var(--success-bg)] text-success' : 'bg-[color:var(--danger-bg)] text-danger'}`}>
+            {u.is_active ? 'Active' : 'Disabled'}
+          </span> },
+    { key: 'actions', header: '', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
+      render: (u) => edit?.id === u.id ? (
+        <span className="inline-flex items-center gap-1.5 justify-end">
+          <input className={`${inp} w-36`} type="password" placeholder="New password" autoComplete="new-password"
+            value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} />
+          <button
+            disabled={!edit.full_name || (edit.password !== '' && edit.password.length < 8) || update.isPending}
+            onClick={() => { setErr(''); update.mutate(edit); }}
+            className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Save</button>
+          <button onClick={() => setEdit(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-2.5 justify-end">
+          {can('users:manage') && (
+            <button
+              onClick={() => { setErr(''); setEdit({ id: u.id, full_name: u.full_name, role: u.role, branch_id: u.branch_id != null ? String(u.branch_id) : '', is_active: u.is_active, password: '' }); }}
+              className="text-xs text-primary hover:underline">Edit</button>
+          )}
+          {can('users:delete') && u.id !== me?.id && (
+            <button
+              onClick={() => {
+                setErr('');
+                if (window.confirm(`Permanently delete ${u.full_name} (${u.email})? Prefer disabling unless the account was created in error.`)) remove.mutate(u.id);
+              }}
+              className="text-xs text-danger hover:underline">Delete</button>
+          )}
+        </span>
+      ) },
+  ];
+
   return (
     <div className="max-w-4xl">
       <h1 className="text-xl font-bold tracking-tight m-0">Users</h1>
@@ -124,91 +185,13 @@ export function UsersPage() {
         </div>
       )}
 
-      <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs font-semibold text-text-label border-b border-border">
-              <th className="px-4 py-2.5">Name</th>
-              <th className="px-4 py-2.5">Email</th>
-              <th className="px-4 py-2.5">Role</th>
-              <th className="px-4 py-2.5">Branch</th>
-              <th className="px-4 py-2.5">Status</th>
-              <th className="px-4 py-2.5"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {data!.rows.map((u) =>
-              edit?.id === u.id ? (
-                <tr key={u.id} className="bg-bg">
-                  <td className="px-4 py-2.5">
-                    <input className={inp} value={edit.full_name} onChange={(e) => setEdit({ ...edit, full_name: e.target.value })} />
-                  </td>
-                  <td className="px-4 py-2.5 text-text-muted">{u.email}</td>
-                  <td className="px-4 py-2.5">
-                    <select className={inp} value={edit.role} onChange={(e) => setEdit({ ...edit, role: e.target.value })}>
-                      {STAFF_ROLES.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-                    </select>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <select className={inp} value={edit.branch_id} onChange={(e) => setEdit({ ...edit, branch_id: e.target.value })}>
-                      <option value="">No branch</option>
-                      {branches?.rows.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                    </select>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <label className="flex items-center gap-1.5 text-xs">
-                      <input type="checkbox" checked={edit.is_active} disabled={u.id === me?.id}
-                        onChange={(e) => setEdit({ ...edit, is_active: e.target.checked })} />
-                      Active
-                    </label>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <span className="inline-flex items-center gap-1.5">
-                      <input className={`${inp} w-36`} type="password" placeholder="New password" autoComplete="new-password"
-                        value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} />
-                      <button
-                        disabled={!edit.full_name || (edit.password !== '' && edit.password.length < 8) || update.isPending}
-                        onClick={() => { setErr(''); update.mutate(edit); }}
-                        className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Save</button>
-                      <button onClick={() => setEdit(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
-                    </span>
-                  </td>
-                </tr>
-              ) : (
-                <tr key={u.id}>
-                  <td className="px-4 py-2.5 font-medium">{u.full_name}</td>
-                  <td className="px-4 py-2.5 text-text-muted">{u.email}</td>
-                  <td className="px-4 py-2.5">{isRole(u.role) ? ROLE_LABELS[u.role] : u.role}</td>
-                  <td className="px-4 py-2.5 text-text-muted">{branchLabel(u.branch_id)}</td>
-                  <td className="px-4 py-2.5">
-                    <span className={`text-xs rounded px-1.5 py-0.5 ${u.is_active ? 'bg-[color:var(--success-bg)] text-success' : 'bg-[color:var(--danger-bg)] text-danger'}`}>
-                      {u.is_active ? 'Active' : 'Disabled'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                    {can('users:manage') && (
-                      <button
-                        onClick={() => { setErr(''); setEdit({ id: u.id, full_name: u.full_name, role: u.role, branch_id: u.branch_id != null ? String(u.branch_id) : '', is_active: u.is_active, password: '' }); }}
-                        className="text-xs text-primary hover:underline">Edit</button>
-                    )}
-                    {can('users:delete') && u.id !== me?.id && (
-                      <button
-                        onClick={() => {
-                          setErr('');
-                          if (window.confirm(`Permanently delete ${u.full_name} (${u.email})? Prefer disabling unless the account was created in error.`)) remove.mutate(u.id);
-                        }}
-                        className="text-xs text-danger hover:underline ml-2.5">Delete</button>
-                    )}
-                  </td>
-                </tr>
-              )
-            )}
-            {data!.rows.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-6 text-center text-text-muted">No users yet.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        columns={columns}
+        rows={data!.rows}
+        rowKey={(u) => u.id}
+        defaultSort={{ key: 'full_name', dir: 'asc' }}
+        empty="No users yet."
+      />
     </div>
   );
 }

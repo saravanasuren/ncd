@@ -19,10 +19,13 @@ echo "wrote $FILE ($(du -h "$FILE" | cut -f1))"
 # Reuses the old app's Azure/SharePoint app; params live in SSM /dhanam/newwealth/*.
 HERE="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$HERE/upload-sharepoint.mjs" ]; then
-  R="--region ap-south-1 --query Parameter.Value --output text"
+  # --with-decryption on every fetch: the params are copied from the wealth
+  # app's SSM where even the tenant/client ids are SecureStrings — without
+  # the flag the CLI returns ciphertext and Graph auth 404s.
+  R="--with-decryption --region ap-south-1 --query Parameter.Value --output text"
   export SHAREPOINT_TENANT_ID=$(aws ssm get-parameter --name /dhanam/newwealth/SHAREPOINT_TENANT_ID $R 2>/dev/null || true)
   export SHAREPOINT_CLIENT_ID=$(aws ssm get-parameter --name /dhanam/newwealth/SHAREPOINT_CLIENT_ID $R 2>/dev/null || true)
-  export SHAREPOINT_CLIENT_SECRET=$(aws ssm get-parameter --name /dhanam/newwealth/SHAREPOINT_CLIENT_SECRET --with-decryption $R 2>/dev/null || true)
+  export SHAREPOINT_CLIENT_SECRET=$(aws ssm get-parameter --name /dhanam/newwealth/SHAREPOINT_CLIENT_SECRET $R 2>/dev/null || true)
   export SHAREPOINT_BACKUP_DRIVE_ID=$(aws ssm get-parameter --name /dhanam/newwealth/SHAREPOINT_BACKUP_DRIVE_ID $R 2>/dev/null || true)
   export SHAREPOINT_BACKUP_FOLDER=$(aws ssm get-parameter --name /dhanam/newwealth/SHAREPOINT_BACKUP_FOLDER $R 2>/dev/null || echo NewWealthBackups)
   node "$HERE/upload-sharepoint.mjs" "$FILE" || echo "[backup] offsite copy failed — local dump is safe"

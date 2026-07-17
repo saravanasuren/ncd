@@ -15,10 +15,10 @@ const SCOPE_COLS = {
 export async function listLeads(db: Db, actor: AuthUser) {
   // read-all permission bypasses scope
   if (actor.permissions.includes('leads:read-all')) {
-    return (await db.query('SELECT l.* FROM investor_leads l ORDER BY l.created_at DESC LIMIT 500')).rows;
+    return (await db.query('SELECT l.* FROM investor_leads l ORDER BY l.created_at DESC LIMIT 2000')).rows;
   }
   const sc = scopeWhere(scopeFor(actor), SCOPE_COLS, 0);
-  return (await db.query(`SELECT l.* FROM investor_leads l WHERE ${sc.sql} ORDER BY l.created_at DESC LIMIT 500`, sc.params)).rows;
+  return (await db.query(`SELECT l.* FROM investor_leads l WHERE ${sc.sql} ORDER BY l.created_at DESC LIMIT 2000`, sc.params)).rows;
 }
 
 export interface CreateLeadInput {

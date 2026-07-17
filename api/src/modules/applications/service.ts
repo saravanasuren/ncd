@@ -192,7 +192,7 @@ export async function listApplications(db: Db, actor: AuthUser, filters: { statu
     `SELECT a.id, a.application_no, a.status, a.total_amount, a.allotment_date, a.maturity_date,
             c.full_name AS customer_name, c.customer_code, s.code AS series_code
      FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
-     WHERE ${conds.join(' AND ')} ORDER BY a.created_at DESC LIMIT 500`,
+     WHERE ${conds.join(' AND ')} ORDER BY a.created_at DESC LIMIT 2000`,
     params
   );
   return rows;

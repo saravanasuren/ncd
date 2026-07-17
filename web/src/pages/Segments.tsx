@@ -82,28 +82,38 @@ export function SegmentsPage() {
 }
 
 function groupColumns(tab: Seg, expanded: Set<string>, toggle: (k: string) => void): Column<Group>[] {
+  // Expander shows only the label; tab-specific fields (status / customer id)
+  // get their own columns below so they're independently sortable/filterable.
   const expander = (g: Group) => (
     <button onClick={() => toggle(g.key)} className="inline-flex items-center gap-2 text-left hover:text-primary">
       <span className="w-4 h-4 inline-flex items-center justify-center rounded border border-border-strong text-[11px] leading-none text-text-muted">
         {expanded.has(g.key) ? '−' : '+'}
       </span>
       <span className="font-medium">{g.label}</span>
-      {g.sublabel && <span className="text-xs text-text-muted">{g.sublabel}</span>}
     </button>
   );
   const investors: Column<Group> = { key: 'investors', header: 'Investors', align: 'right', value: (g) => g.investors };
   const ncds: Column<Group> = { key: 'investments', header: 'NCDs', align: 'right', value: (g) => g.investments };
   const outstanding: Column<Group> = { key: 'outstanding', header: 'Outstanding', align: 'right', value: (g) => Number(g.outstanding), render: (g) => <span className="mono">{formatINR(g.outstanding)}</span> };
 
+  if (tab === 'series') {
+    return [
+      { key: 'label', header: 'Series', value: (g) => g.label, render: expander },
+      { key: 'status', header: 'Allotment status', value: (g) => g.sublabel ?? '',
+        render: (g) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{g.sublabel ?? '—'}</span> },
+      investors, ncds, outstanding,
+    ];
+  }
   if (tab === 'customer') {
     return [
       { key: 'label', header: 'Customer', value: (g) => g.label, render: expander },
+      { key: 'code', header: 'Customer ID', value: (g) => g.sublabel ?? '', tdClassName: 'font-mono text-xs', render: (g) => g.sublabel ?? '—' },
       { key: 'district', header: 'District', value: (g) => g.district ?? '', render: (g) => g.district ?? '—' },
       { key: 'sourced_by', header: 'Sourced by', value: (g) => g.sourced_by ?? '', render: (g) => g.sourced_by ?? '—' },
       ncds, outstanding,
     ];
   }
-  const label = tab === 'series' ? 'Series' : tab === 'district' ? 'District' : tab === 'agent' ? 'Agent' : 'Staff';
+  const label = tab === 'district' ? 'District' : tab === 'agent' ? 'Agent' : 'Staff';
   return [{ key: 'label', header: label, value: (g) => g.label, render: expander }, investors, ncds, outstanding];
 }
 

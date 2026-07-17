@@ -80,7 +80,7 @@ export async function listCustomers(db: Db, actor: AuthUser, filters: CustomerFi
   if (filters.q) { params.push(`%${filters.q}%`); conds.push(`(c.full_name ILIKE $${params.length} OR c.customer_code ILIKE $${params.length} OR c.phone ILIKE $${params.length})`); }
   const { rows } = await db.query(
     `SELECT c.id, c.customer_code, c.full_name, c.phone, c.district, c.kyc_status, c.creation_status, c.is_active
-     FROM customers c WHERE ${conds.join(' AND ')} ORDER BY c.created_at DESC LIMIT 500`,
+     FROM customers c WHERE ${conds.join(' AND ')} ORDER BY c.created_at DESC LIMIT 2000`,
     params
   );
   return rows;

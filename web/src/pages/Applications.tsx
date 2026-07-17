@@ -1,13 +1,21 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { Tabs, type TabDef } from '../components/Tabs.js';
 
 interface AppRow {
   id: number; application_no: string; status: string; total_amount: string;
   customer_name: string; customer_code: string; series_code: string; maturity_date: string | null;
 }
+
+type AppTab = 'all' | 'active' | 'pending' | 'redeemed';
+const APP_PENDING = new Set(['Draft', 'PendingApproval', 'PendingFundVerification', 'PendingEsign', 'PendingAllotment', 'PendingActivation']);
+const APP_REDEEMED = new Set(['Redeemed', 'Matured', 'PrematureWithdrawn', 'RolledOver', 'Transferred']);
+const appMatch = (tab: AppTab, s: string) =>
+  tab === 'all' ? true : tab === 'active' ? s === 'Active' : tab === 'pending' ? APP_PENDING.has(s) : APP_REDEEMED.has(s);
 
 const pill: Record<string, string> = {
   Active: 'bg-[color:var(--success-bg)] text-success',
@@ -30,19 +38,28 @@ const columns: Column<AppRow>[] = [
 ];
 
 export function ApplicationsPage() {
+  const [tab, setTab] = useState<AppTab>('all');
   const { data, isLoading, error } = useQuery({ queryKey: ['applications'], queryFn: () => api.get<{ rows: AppRow[] }>('/api/applications') });
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Failed to load applications.</div>;
+  const rows = data!.rows;
+  const tabs: TabDef<AppTab>[] = [
+    { key: 'all', label: 'All', count: rows.length },
+    { key: 'active', label: 'Active', count: rows.filter((r) => appMatch('active', r.status)).length },
+    { key: 'pending', label: 'Pending', count: rows.filter((r) => appMatch('pending', r.status)).length },
+    { key: 'redeemed', label: 'Redeemed', count: rows.filter((r) => appMatch('redeemed', r.status)).length },
+  ];
   return (
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Applications</h1>
-      <p className="text-sm text-text-muted mt-1 mb-5">NCD investments in your scope.</p>
+      <p className="text-sm text-text-muted mt-1 mb-4">NCD investments in your scope.</p>
+      <Tabs tabs={tabs} active={tab} onChange={setTab} />
       <DataTable
         columns={columns}
-        rows={data!.rows}
+        rows={rows.filter((r) => appMatch(tab, r.status))}
         rowKey={(a) => a.id}
         defaultSort={{ key: 'application_no', dir: 'desc' }}
-        empty="No applications yet."
+        empty="No applications in this view."
       />
     </div>
   );

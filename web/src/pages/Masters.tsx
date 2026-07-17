@@ -85,12 +85,15 @@ function SeriesSection() {
     onSuccess: () => { setIsinFor(null); invalidate(); }, onError: onErr,
   });
 
+  // Default: series-number descending (NCD 27 → NCD 10), numeric-aware on the code.
+  const seriesRows = [...(data?.rows ?? [])].sort((a, b) => String(b.code).localeCompare(String(a.code), undefined, { numeric: true }));
+
   return (
     <Section title="Series">
       <table className="w-full text-sm">
         <thead><tr className="border-b border-border"><th className={th}>Code</th><th className={th}>Name</th><th className={th}>Deemed date</th><th className={th}>ISIN</th><th className={th}>Status</th><th className={th}></th></tr></thead>
         <tbody className="divide-y divide-border">
-          {(data?.rows ?? []).map((s) => (
+          {seriesRows.map((s) => (
             <tr key={s.id}>
               <td className={`${td} font-mono text-xs`}>{s.code}</td><td className={td}>{s.name}</td>
               <td className={`${td} mono`}>{s.deemed_date ?? '—'}</td>

@@ -187,5 +187,5 @@ export async function listRedemptions(db: Db, filter?: 'requests' | 'all') {
     `SELECT r.id, r.redemption_no, r.type, r.status, r.source, r.requested_by_customer, r.principal, r.penalty, r.net_payment, r.redemption_date, r.approval_request_id,
             a.application_no, c.full_name AS customer_name
      FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
-     ${where} ORDER BY r.created_at DESC LIMIT 200`)).rows;
+     ${where} ORDER BY r.created_at DESC LIMIT 2000`)).rows;
 }

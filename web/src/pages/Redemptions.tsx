@@ -4,12 +4,16 @@ import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { useState } from 'react';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { Tabs, type TabDef } from '../components/Tabs.js';
 
 interface Redemption {
   id: number; redemption_no: string; type: string; status: string; source: string;
   requested_by_customer: boolean; principal: string; penalty: string; net_payment: string;
   application_no: string; customer_name: string; approval_request_id: number | null;
 }
+
+type RedTab = 'all' | 'premature' | 'maturity';
+const redMatch = (tab: RedTab, t: string) => tab === 'all' ? true : t === tab;
 
 const pill: Record<string, string> = {
   Approved: 'bg-[color:var(--success-bg)] text-success',
@@ -30,6 +34,7 @@ export function RedemptionsPage() {
   const qc = useQueryClient();
   const { can } = useAuth();
   const [msg, setMsg] = useState('');
+  const [tab, setTab] = useState<RedTab>('all');
   const { data, isLoading } = useQuery({ queryKey: ['redemptions'], queryFn: () => api.get<{ rows: Redemption[] }>('/api/redemptions') });
 
   const submit = useMutation({
@@ -76,12 +81,21 @@ export function RedemptionsPage() {
       )}
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">All redemptions</h2>
+      <Tabs
+        tabs={[
+          { key: 'all', label: 'All', count: rest.length },
+          { key: 'premature', label: 'Premature', count: rest.filter((r) => r.type === 'premature').length },
+          { key: 'maturity', label: 'Maturity', count: rest.filter((r) => r.type === 'maturity').length },
+        ] as TabDef<RedTab>[]}
+        active={tab}
+        onChange={setTab}
+      />
       <DataTable
         columns={columns}
-        rows={rest}
+        rows={rest.filter((r) => redMatch(tab, r.type))}
         rowKey={(r) => r.id}
         defaultSort={{ key: 'redemption_no', dir: 'desc' }}
-        empty="No redemptions yet."
+        empty="No redemptions in this view."
       />
     </div>
   );

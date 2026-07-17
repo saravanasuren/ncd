@@ -4,6 +4,11 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { Tabs, type TabDef } from '../components/Tabs.js';
+
+type CustTab = 'all' | 'approved' | 'pending' | 'draft';
+const custMatch = (tab: CustTab, s: string) =>
+  tab === 'all' ? true : tab === 'approved' ? s === 'Approved' : tab === 'pending' ? s === 'PendingApproval' : s === 'Draft';
 
 interface CustomerRow {
   id: number;
@@ -83,6 +88,7 @@ function EnrolForm({ onClose }: { onClose: () => void }) {
 export function CustomersPage() {
   const { can } = useAuth();
   const [q, setQ] = useState('');
+  const [tab, setTab] = useState<CustTab>('all');
   const [enrolling, setEnrolling] = useState(false);
   const query = q.trim();
   const { data, isLoading, error } = useQuery({
@@ -90,6 +96,13 @@ export function CustomersPage() {
     queryFn: () => api.get<{ rows: CustomerRow[] }>(`/api/customers${query ? `?q=${encodeURIComponent(query)}` : ''}`),
   });
   if (error) return <div className="text-danger">Failed to load customers.</div>;
+  const rows = data?.rows ?? [];
+  const tabs: TabDef<CustTab>[] = [
+    { key: 'all', label: 'All', count: rows.length },
+    { key: 'approved', label: 'Approved', count: rows.filter((r) => custMatch('approved', r.creation_status)).length },
+    { key: 'pending', label: 'Pending approval', count: rows.filter((r) => custMatch('pending', r.creation_status)).length },
+    { key: 'draft', label: 'Draft', count: rows.filter((r) => custMatch('draft', r.creation_status)).length },
+  ];
 
   return (
     <div className="w-full">
@@ -111,13 +124,15 @@ export function CustomersPage() {
         value={q} onChange={(e) => setQ(e.target.value)}
       />
 
+      <Tabs tabs={tabs} active={tab} onChange={setTab} />
+
       {isLoading ? <div className="text-text-muted">Loading customers…</div> : (
         <DataTable
           columns={columns}
-          rows={data!.rows}
+          rows={rows.filter((c) => custMatch(tab, c.creation_status))}
           rowKey={(c) => c.id}
           defaultSort={{ key: 'customer_code', dir: 'desc' }}
-          empty={query ? 'No matches.' : 'No customers yet — enrol one or convert a lead.'}
+          empty={query ? 'No matches.' : 'No customers in this view.'}
         />
       )}
     </div>

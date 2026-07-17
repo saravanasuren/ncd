@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { Tabs, type TabDef } from '../components/Tabs.js';
 
 interface Lead {
   id: number;
@@ -81,6 +82,7 @@ export function LeadsPage() {
   const [converting, setConverting] = useState<{ id: number; amount: string; seriesId: string } | null>(null);
   const [notesFor, setNotesFor] = useState<number | null>(null);
   const [edit, setEdit] = useState<{ id: number; status: string; follow_up_date: string; expected_amount: string } | null>(null);
+  const [tab, setTab] = useState<string>('all');
 
   const { data, isLoading } = useQuery({ queryKey: ['leads'], queryFn: () => api.get<{ rows: Lead[] }>('/api/leads') });
   const series = useQuery({
@@ -240,14 +242,26 @@ export function LeadsPage() {
               );
             } },
         ];
+        const leadRows = data!.rows;
+        // One tab per lead status present (statuses are config-driven), + All.
+        const statuses = [...new Set(leadRows.map((l) => l.status))].sort();
+        const leadTabs: TabDef<string>[] = [
+          { key: 'all', label: 'All', count: leadRows.length },
+          ...statuses.map((s) => ({ key: s, label: s, count: leadRows.filter((l) => l.status === s).length })),
+        ];
+        const activeTab = leadTabs.some((t) => t.key === tab) ? tab : 'all';
+        const shown = activeTab === 'all' ? leadRows : leadRows.filter((l) => l.status === activeTab);
         return (
-          <DataTable
-            columns={columns}
-            rows={data!.rows}
-            rowKey={(l) => l.id}
-            empty="No leads yet."
-            renderExpanded={(l) => (notesFor === l.id ? <NotesPanel leadId={l.id} canUpdate={can('leads:update')} /> : null)}
-          />
+          <>
+            <Tabs tabs={leadTabs} active={activeTab} onChange={setTab} />
+            <DataTable
+              columns={columns}
+              rows={shown}
+              rowKey={(l) => l.id}
+              empty="No leads in this view."
+              renderExpanded={(l) => (notesFor === l.id ? <NotesPanel leadId={l.id} canUpdate={can('leads:update')} /> : null)}
+            />
+          </>
         );
       })()}
     </div>

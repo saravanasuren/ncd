@@ -42,6 +42,23 @@ function appWhere(actor: AuthUser, filters: BookFilters, extra: string[] = []): 
 
 const FROM = 'FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id';
 
+/**
+ * Attribution (docs/06 §1). Who REFERRED the customer lives in the free-text
+ * `referred_by_text` (imported from wealth) — NOT the structured enroller
+ * columns. `sref.full_name` is the referrer matched to a STAFF user (a
+ * non-customer `users` row, by name): such referrers show Staff-wise; every
+ * other non-blank referrer shows Agent-wise by their typed name; blank → Direct.
+ * (Phase 2 replaces the name match with a code + is_staff lookup.)
+ */
+const FROM_ATTR = `${FROM}
+  LEFT JOIN LATERAL (
+    SELECT u.full_name FROM users u JOIN roles r ON r.id = u.role_id
+    WHERE r.name <> 'customer'
+      AND lower(btrim(u.full_name)) = lower(btrim(a.referred_by_text))
+    LIMIT 1
+  ) sref ON TRUE`;
+const REFERRER = "NULLIF(btrim(a.referred_by_text), '')";
+
 export async function kpis(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const active = appWhere(actor, { ...filters, status: 'active' });
   const outstanding = await db.query<{ v: string; n: string; inv: string }>(
@@ -99,18 +116,20 @@ export async function districtwise(db: Db, actor: AuthUser, filters: BookFilters
 export async function agentwise(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
   const { rows } = await db.query(
-    `SELECT COALESCE(ag.full_name,'Direct') AS agent, c.full_name AS customer, COALESCE(sum(a.total_amount),0) AS amount
-     ${FROM} LEFT JOIN agents ag ON ag.id = a.enrolled_by_agent_id
-     WHERE ${w.sql} GROUP BY COALESCE(ag.full_name,'Direct'), c.full_name ORDER BY agent, customer`, w.params);
+    `SELECT COALESCE(${REFERRER},'Direct') AS agent, c.full_name AS customer, COALESCE(sum(a.total_amount),0) AS amount
+     ${FROM_ATTR}
+     WHERE ${w.sql} AND sref.full_name IS NULL
+     GROUP BY COALESCE(${REFERRER},'Direct'), c.full_name ORDER BY agent, customer`, w.params);
   return rows;
 }
 
 export async function staffwise(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
   const { rows } = await db.query(
-    `SELECT COALESCE(u.full_name,'—') AS staff, c.full_name AS customer, COALESCE(sum(a.total_amount),0) AS amount
-     ${FROM} LEFT JOIN users u ON u.id = a.enrolled_by_user_id
-     WHERE ${w.sql} AND a.enrolled_by_agent_id IS NULL GROUP BY COALESCE(u.full_name,'—'), c.full_name ORDER BY staff, customer`, w.params);
+    `SELECT sref.full_name AS staff, c.full_name AS customer, COALESCE(sum(a.total_amount),0) AS amount
+     ${FROM_ATTR}
+     WHERE ${w.sql} AND sref.full_name IS NOT NULL
+     GROUP BY sref.full_name, c.full_name ORDER BY staff, customer`, w.params);
   return rows;
 }
 
@@ -118,10 +137,10 @@ export async function customerwise(db: Db, actor: AuthUser, filters: BookFilters
   const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
   const { rows } = await db.query(
     `SELECT c.customer_code, c.full_name AS customer, c.district,
-            COALESCE(ag.full_name, u.full_name, '—') AS sourced_by,
+            COALESCE(sref.full_name, ${REFERRER}, '—') AS sourced_by,
             count(a.id)::int AS ncds, COALESCE(sum(a.total_amount),0) AS outstanding
-     ${FROM} LEFT JOIN agents ag ON ag.id = a.enrolled_by_agent_id LEFT JOIN users u ON u.id = a.enrolled_by_user_id
-     WHERE ${w.sql} GROUP BY c.customer_code, c.full_name, c.district, COALESCE(ag.full_name, u.full_name, '—') ORDER BY customer`, w.params);
+     ${FROM_ATTR}
+     WHERE ${w.sql} GROUP BY c.customer_code, c.full_name, c.district, COALESCE(sref.full_name, ${REFERRER}, '—') ORDER BY customer`, w.params);
   return rows;
 }
 
@@ -187,21 +206,23 @@ export interface SegmentGroup {
 export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, filters: BookFilters = {}): Promise<SegmentGroup[]> {
   const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
   const { rows } = await db.query<any>(
-    `SELECT a.application_no, a.total_amount AS amount, a.status, a.allotment_date, a.enrolled_by_agent_id,
+    `SELECT a.application_no, a.total_amount AS amount, a.status, a.allotment_date,
             c.customer_code, c.full_name AS customer, COALESCE(c.district,'Unassigned') AS district,
             s.code AS series_code, s.status AS series_status,
-            COALESCE(ag.full_name,'Direct') AS agent, COALESCE(u.full_name,'—') AS staff,
-            COALESCE(ag.full_name, u.full_name, '—') AS sourced_by
-     ${FROM} LEFT JOIN agents ag ON ag.id = a.enrolled_by_agent_id LEFT JOIN users u ON u.id = a.enrolled_by_user_id
+            sref.full_name AS staff_ref, ${REFERRER} AS referrer
+     ${FROM_ATTR}
      WHERE ${w.sql}`, w.params);
 
   const groups = new Map<string, SegmentGroup>();
   const custSets = new Map<string, Set<string>>();
+  // Attribution: referrer matched to a staff user → Staff-wise; else Agent-wise.
   const keyOf = (r: any): string =>
-    by === 'series' ? r.series_code : by === 'customer' ? r.customer_code : by === 'district' ? r.district : by === 'agent' ? r.agent : r.staff;
+    by === 'series' ? r.series_code : by === 'customer' ? r.customer_code : by === 'district' ? r.district
+    : by === 'agent' ? (r.referrer ?? 'Direct') : (r.staff_ref ?? '');
 
   for (const r of rows) {
-    if (by === 'staff' && r.enrolled_by_agent_id != null) continue; // staff view = directly-enrolled only
+    if (by === 'staff' && !r.staff_ref) continue;   // staff view = staff-referred only
+    if (by === 'agent' && r.staff_ref) continue;    // agent view excludes staff-referred
     const key = keyOf(r);
     let g = groups.get(key);
     if (!g) {
@@ -210,7 +231,7 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
         label: by === 'customer' ? r.customer : key,
         sublabel: by === 'customer' ? r.customer_code : by === 'series' ? r.series_status : null,
         district: by === 'customer' ? r.district : null,
-        sourced_by: by === 'customer' ? r.sourced_by : null,
+        sourced_by: by === 'customer' ? (r.staff_ref ?? r.referrer ?? '—') : null,
         investors: 0, investments: 0, outstanding: 0, children: [],
       };
       groups.set(key, g);
@@ -352,21 +373,21 @@ export async function accruedList(db: Db, actor: AuthUser, filters: BookFilters,
 }
 
 export async function ongoingSeriesPivot(db: Db, actor: AuthUser, seriesId: number) {
-  // Ongoing NCD tab: agent → customer → amount for one series.
+  // Ongoing NCD tab: referrer → customer → amount for one series.
   const w = appWhere(actor, { seriesIds: [seriesId] });
   const { rows } = await db.query(
-    `SELECT COALESCE(ag.full_name,'Direct') AS agent, c.full_name AS customer, COALESCE(sum(a.total_amount),0) AS amount
-     ${FROM} LEFT JOIN agents ag ON ag.id = a.enrolled_by_agent_id
-     WHERE ${w.sql} GROUP BY COALESCE(ag.full_name,'Direct'), c.full_name ORDER BY agent, customer`, w.params);
+    `SELECT COALESCE(${REFERRER},'Direct') AS agent, c.full_name AS customer, COALESCE(sum(a.total_amount),0) AS amount
+     ${FROM}
+     WHERE ${w.sql} GROUP BY COALESCE(${REFERRER},'Direct'), c.full_name ORDER BY agent, customer`, w.params);
   return rows;
 }
 
 export async function masterClient(db: Db, actor: AuthUser) {
   const w = appWhere(actor, {});
   const { rows } = await db.query(
-    `SELECT DISTINCT c.pan, c.customer_code, COALESCE(ag.full_name, u.full_name, '—') AS agent_code,
+    `SELECT DISTINCT c.pan, c.customer_code, COALESCE(${REFERRER}, '—') AS agent_code,
             c.full_name AS name, c.phone, c.district, c.address
-     ${FROM} LEFT JOIN agents ag ON ag.id = a.enrolled_by_agent_id LEFT JOIN users u ON u.id = a.enrolled_by_user_id
+     ${FROM}
      WHERE ${w.sql} ORDER BY c.full_name`, w.params);
   return rows;
 }

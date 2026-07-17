@@ -2,17 +2,33 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { validTransitions } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
 const btn = 'text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover';
-const th = 'px-3 py-2 text-left text-xs font-semibold text-text-label';
-const td = 'px-3 py-1.5';
 
+/** Section = heading + a sortable/filterable DataTable + a create-form footer card. */
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="bg-surface border border-border rounded-lg shadow-card mb-6 overflow-hidden">
       <div className="px-4 py-3 border-b border-border text-xs font-semibold text-text-label uppercase tracking-wide">{title}</div>
       {children}
+    </div>
+  );
+}
+
+/** A masters block: a heading, a DataTable, then the create form below it. */
+function TableBlock<T>({ title, columns, rows, rowKey, defaultSort, empty, form }: {
+  title: string; columns: Column<T>[]; rows: T[]; rowKey: (r: T) => string | number;
+  defaultSort?: { key: string; dir: 'asc' | 'desc' }; empty: string; form: React.ReactNode;
+}) {
+  return (
+    <div className="mb-6">
+      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">{title}</h2>
+      <DataTable columns={columns} rows={rows} rowKey={rowKey} defaultSort={defaultSort} empty={empty} />
+      <div className="bg-surface border border-t-0 border-border rounded-b-lg shadow-card p-3 -mt-px flex flex-wrap gap-2 items-center">
+        {form}
+      </div>
     </div>
   );
 }
@@ -31,17 +47,17 @@ function Schemes() {
     onSuccess: () => { setF({ code: '', name: '', tenure_months: '', coupon_rate_pct: '', payout_frequency: 'Monthly', tds_rule_id: '' }); qc.invalidateQueries({ queryKey: ['schemes'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
+  const columns: Column<any>[] = [
+    { key: 'code', header: 'Code', tdClassName: 'font-mono text-xs' },
+    { key: 'name', header: 'Name' },
+    { key: 'tenure_months', header: 'Tenure', align: 'right', value: (s) => Number(s.tenure_months), render: (s) => `${s.tenure_months}m` },
+    { key: 'coupon_rate_pct', header: 'Rate %', align: 'right', value: (s) => Number(s.coupon_rate_pct) },
+    { key: 'payout_frequency', header: 'Payout' },
+    { key: 'is_active', header: 'Active', value: (s) => (s.is_active ? 'Yes' : 'No'), render: (s) => (s.is_active ? '✓' : '—') },
+  ];
   return (
-    <Section title="Schemes">
-      <table className="w-full text-sm">
-        <thead><tr className="border-b border-border"><th className={th}>Code</th><th className={th}>Name</th><th className={th}>Tenure</th><th className={th}>Rate %</th><th className={th}>Payout</th><th className={th}>Active</th></tr></thead>
-        <tbody className="divide-y divide-border">
-          {(data?.rows ?? []).map((s) => (
-            <tr key={s.id}><td className={`${td} font-mono text-xs`}>{s.code}</td><td className={td}>{s.name}</td><td className={td}>{s.tenure_months}m</td><td className={td}>{s.coupon_rate_pct}</td><td className={td}>{s.payout_frequency}</td><td className={td}>{s.is_active ? '✓' : '—'}</td></tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="p-3 border-t border-border flex flex-wrap gap-2 items-center">
+    <TableBlock title="Schemes" columns={columns} rows={data?.rows ?? []} rowKey={(s) => s.id} defaultSort={{ key: 'code', dir: 'asc' }} empty="No schemes yet."
+      form={<>
         <input className={inp} placeholder="Code" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />
         <input className={inp} placeholder="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
         <input className={`${inp} w-24`} type="number" placeholder="Tenure (m)" value={f.tenure_months} onChange={(e) => setF({ ...f, tenure_months: e.target.value })} />
@@ -56,8 +72,7 @@ function Schemes() {
         <button className={btn} disabled={!f.code || !f.name || !f.tenure_months || !f.coupon_rate_pct || create.isPending}
           onClick={() => { setErr(''); create.mutate(); }}>+ Scheme</button>
         {err && <span className="text-xs text-danger">{err}</span>}
-      </div>
-    </Section>
+      </>} />
   );
 }
 
@@ -85,40 +100,29 @@ function SeriesSection() {
     onSuccess: () => { setIsinFor(null); invalidate(); }, onError: onErr,
   });
 
-  // Default: series-number descending (NCD 27 → NCD 10), numeric-aware on the code.
-  const seriesRows = [...(data?.rows ?? [])].sort((a, b) => String(b.code).localeCompare(String(a.code), undefined, { numeric: true }));
-
+  const columns: Column<any>[] = [
+    { key: 'code', header: 'Code', tdClassName: 'font-mono text-xs' },
+    { key: 'name', header: 'Name' },
+    { key: 'deemed_date', header: 'Deemed date', value: (s) => s.deemed_date ?? '', render: (s) => s.deemed_date ?? '—' },
+    { key: 'isin', header: 'ISIN', tdClassName: 'font-mono text-xs', filterable: false, sortable: false,
+      render: (s) => (isinFor && isinFor.id === s.id ? (
+        <span className="inline-flex gap-1.5">
+          <input className={`${inp} w-32`} value={isinFor.isin} autoFocus onChange={(e) => setIsinFor({ id: s.id, isin: e.target.value })} />
+          <button className={btn} disabled={!isinFor.isin || setIsin.isPending} onClick={() => { setErr(''); setIsin.mutate({ id: s.id, isin: isinFor.isin }); }}>Set</button>
+        </span>
+      ) : (
+        <button className="text-primary hover:underline" onClick={() => setIsinFor({ id: s.id, isin: s.isin ?? '' })}>{s.isin ?? 'set ISIN'}</button>
+      )) },
+    { key: 'status', header: 'Status', render: (s) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{s.status}</span> },
+    { key: 'actions', header: '', align: 'right', sortable: false, filterable: false, tdClassName: 'whitespace-nowrap',
+      render: (s) => validTransitions('series', s.status).map((to) => (
+        <button key={to} className="text-xs text-primary hover:underline ml-2"
+          onClick={() => { setErr(''); if (window.confirm(`Move series ${s.code} to ${to}?`)) setStatus.mutate({ id: s.id, to }); }}>→ {to}</button>
+      )) },
+  ];
   return (
-    <Section title="Series">
-      <table className="w-full text-sm">
-        <thead><tr className="border-b border-border"><th className={th}>Code</th><th className={th}>Name</th><th className={th}>Deemed date</th><th className={th}>ISIN</th><th className={th}>Status</th><th className={th}></th></tr></thead>
-        <tbody className="divide-y divide-border">
-          {seriesRows.map((s) => (
-            <tr key={s.id}>
-              <td className={`${td} font-mono text-xs`}>{s.code}</td><td className={td}>{s.name}</td>
-              <td className={`${td} mono`}>{s.deemed_date ?? '—'}</td>
-              <td className={`${td} font-mono text-xs`}>
-                {isinFor && isinFor.id === s.id ? (
-                  <span className="inline-flex gap-1.5">
-                    <input className={`${inp} w-32`} value={isinFor.isin} autoFocus onChange={(e) => setIsinFor({ id: s.id, isin: e.target.value })} />
-                    <button className={btn} disabled={!isinFor.isin || setIsin.isPending} onClick={() => { setErr(''); setIsin.mutate({ id: s.id, isin: isinFor.isin }); }}>Set</button>
-                  </span>
-                ) : (
-                  <button className="text-primary hover:underline" onClick={() => setIsinFor({ id: s.id, isin: s.isin ?? '' })}>{s.isin ?? 'set ISIN'}</button>
-                )}
-              </td>
-              <td className={td}><span className="text-xs rounded px-1.5 py-0.5 bg-bg">{s.status}</span></td>
-              <td className={`${td} text-right`}>
-                {validTransitions('series', s.status).map((to) => (
-                  <button key={to} className="text-xs text-primary hover:underline ml-2"
-                    onClick={() => { setErr(''); if (window.confirm(`Move series ${s.code} to ${to}?`)) setStatus.mutate({ id: s.id, to }); }}>→ {to}</button>
-                ))}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="p-3 border-t border-border flex flex-wrap gap-2 items-center">
+    <TableBlock title="Series" columns={columns} rows={data?.rows ?? []} rowKey={(s) => s.id} defaultSort={{ key: 'code', dir: 'desc' }} empty="No series yet."
+      form={<>
         <input className={inp} placeholder="Code" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />
         <input className={inp} placeholder="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
         <input className={inp} type="date" value={f.deemed_date} onChange={(e) => setF({ ...f, deemed_date: e.target.value })} />
@@ -128,8 +132,7 @@ function SeriesSection() {
         </select>
         <button className={btn} disabled={!f.code || !f.name || create.isPending} onClick={() => { setErr(''); create.mutate(); }}>+ Series (opens)</button>
         {err && <span className="text-xs text-danger">{err}</span>}
-      </div>
-    </Section>
+      </>} />
   );
 }
 
@@ -143,17 +146,15 @@ function TdsRules() {
     onSuccess: () => { setF({ name: '', kind: 'standard', rate_pct: '', threshold: '' }); qc.invalidateQueries({ queryKey: ['tds-rules'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
+  const columns: Column<any>[] = [
+    { key: 'name', header: 'Name' },
+    { key: 'kind', header: 'Kind' },
+    { key: 'rate_pct', header: 'Rate %', align: 'right', value: (r) => Number(r.rate_pct) },
+    { key: 'threshold', header: 'Threshold', align: 'right', value: (r) => (r.threshold != null ? Number(r.threshold) : ''), render: (r) => r.threshold ?? '—' },
+  ];
   return (
-    <Section title="TDS rules">
-      <table className="w-full text-sm">
-        <thead><tr className="border-b border-border"><th className={th}>Name</th><th className={th}>Kind</th><th className={th}>Rate %</th><th className={th}>Threshold</th></tr></thead>
-        <tbody className="divide-y divide-border">
-          {(data?.rows ?? []).map((r) => (
-            <tr key={r.id}><td className={td}>{r.name}</td><td className={td}>{r.kind}</td><td className={td}>{r.rate_pct}</td><td className={`${td} mono`}>{r.threshold ?? '—'}</td></tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="p-3 border-t border-border flex flex-wrap gap-2 items-center">
+    <TableBlock title="TDS rules" columns={columns} rows={data?.rows ?? []} rowKey={(r) => r.id} defaultSort={{ key: 'name', dir: 'asc' }} empty="No TDS rules yet."
+      form={<>
         <input className={inp} placeholder="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
         <select className={inp} value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}>
           {['standard', '15G', '15H', 'custom', 'LDC'].map((k) => <option key={k}>{k}</option>)}
@@ -162,8 +163,7 @@ function TdsRules() {
         <input className={`${inp} w-32`} type="number" placeholder="Threshold ₹" value={f.threshold} onChange={(e) => setF({ ...f, threshold: e.target.value })} />
         <button className={btn} disabled={!f.name || !f.rate_pct || create.isPending} onClick={() => { setErr(''); create.mutate(); }}>+ TDS rule</button>
         {err && <span className="text-xs text-danger">{err}</span>}
-      </div>
-    </Section>
+      </>} />
   );
 }
 
@@ -177,17 +177,17 @@ function Banks() {
     onSuccess: () => { setF({ account_label: '', bank_name: '', account_number: '', ifsc: '', is_collection_account: false, is_disbursement_account: false }); qc.invalidateQueries({ queryKey: ['banks'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
+  const columns: Column<any>[] = [
+    { key: 'account_label', header: 'Label' },
+    { key: 'bank_name', header: 'Bank' },
+    { key: 'account_number', header: 'Account', tdClassName: 'font-mono text-xs', value: (b) => b.account_number ?? '', render: (b) => b.account_number ?? '—' },
+    { key: 'ifsc', header: 'IFSC', tdClassName: 'font-mono text-xs', value: (b) => b.ifsc ?? '', render: (b) => b.ifsc ?? '—' },
+    { key: 'is_collection_account', header: 'Collection', value: (b) => (b.is_collection_account ? 'Yes' : 'No'), render: (b) => (b.is_collection_account ? '✓' : '—') },
+    { key: 'is_disbursement_account', header: 'Disbursement', value: (b) => (b.is_disbursement_account ? 'Yes' : 'No'), render: (b) => (b.is_disbursement_account ? '✓' : '—') },
+  ];
   return (
-    <Section title="Company bank accounts">
-      <table className="w-full text-sm">
-        <thead><tr className="border-b border-border"><th className={th}>Label</th><th className={th}>Bank</th><th className={th}>Account</th><th className={th}>IFSC</th><th className={th}>Collection</th><th className={th}>Disbursement</th></tr></thead>
-        <tbody className="divide-y divide-border">
-          {(data?.rows ?? []).map((b) => (
-            <tr key={b.id}><td className={td}>{b.account_label}</td><td className={td}>{b.bank_name}</td><td className={`${td} font-mono text-xs`}>{b.account_number ?? '—'}</td><td className={`${td} font-mono text-xs`}>{b.ifsc ?? '—'}</td><td className={td}>{b.is_collection_account ? '✓' : '—'}</td><td className={td}>{b.is_disbursement_account ? '✓' : '—'}</td></tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="p-3 border-t border-border flex flex-wrap gap-2 items-center">
+    <TableBlock title="Company bank accounts" columns={columns} rows={data?.rows ?? []} rowKey={(b) => b.id} defaultSort={{ key: 'account_label', dir: 'asc' }} empty="No bank accounts yet."
+      form={<>
         <input className={inp} placeholder="Label" value={f.account_label} onChange={(e) => setF({ ...f, account_label: e.target.value })} />
         <input className={inp} placeholder="Bank name" value={f.bank_name} onChange={(e) => setF({ ...f, bank_name: e.target.value })} />
         <input className={inp} placeholder="Account no." value={f.account_number} onChange={(e) => setF({ ...f, account_number: e.target.value })} />
@@ -196,8 +196,7 @@ function Banks() {
         <label className="text-xs flex items-center gap-1"><input type="checkbox" checked={f.is_disbursement_account} onChange={(e) => setF({ ...f, is_disbursement_account: e.target.checked })} />Disbursement</label>
         <button className={btn} disabled={!f.account_label || !f.bank_name || create.isPending} onClick={() => { setErr(''); create.mutate(); }}>+ Bank</button>
         {err && <span className="text-xs text-danger">{err}</span>}
-      </div>
-    </Section>
+      </>} />
   );
 }
 

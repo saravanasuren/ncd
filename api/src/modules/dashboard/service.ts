@@ -38,7 +38,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
   // interest was already paid, not "accruing".
   const isCurrentPeriod = !filters.to || filters.to >= today;
 
-  const [kpis, seriesRows, districts, moneyIn, interest, accrued, redemptionRows] = await Promise.all([
+  const [kpis, seriesRows, districts, moneyIn, interest, accrued, redemptionRows, leadFunnel, almTiles, rateMix, todayBook] = await Promise.all([
     book.kpis(db, actor, seriesFilter),                    // snapshot, but honours a selected series
     book.seriesSummary(db, actor, {}),                     // ALL series (pie + active/last-series pick)
     book.districtwise(db, actor, seriesFilter),            // snapshot (pie), honours a selected series
@@ -46,6 +46,10 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     book.interestInRange(db, actor, filters),              // flow (paid vs due)
     isCurrentPeriod ? book.interestAccrued(db, actor, seriesFilter, anchor, asOf) : Promise.resolve({ total: 0 }),
     book.redemptions(db, actor, filters),                  // flow
+    book.leadFunnel(db, actor),                            // lead pipeline (snapshot)
+    book.alm(db, actor, today),                            // ALM timing tiles (snapshot)
+    book.rateMix(db, actor),                               // cost-of-funds rate mix (snapshot)
+    book.todayBook(db, actor, today),                      // today's additions/deletions
   ]);
 
   // Active series = the Open series (latest code); Last series = latest non-Open.
@@ -74,6 +78,10 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     },
     series: seriesRows,
     districts,
+    lead_funnel: leadFunnel,      // [{ status, count, expected }]
+    alm: almTiles,                // { net_due_this_month, overdue, paid_fy, fy_label }
+    rate_mix: rateMix,            // { mix:[{rate,outstanding,investments}], weighted_avg_rate, total_outstanding }
+    today_book: todayBook,        // { additions:{count,amount}, deletions:{count,amount} }
   };
 }
 

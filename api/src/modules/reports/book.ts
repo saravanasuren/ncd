@@ -144,6 +144,75 @@ export async function customerwise(db: Db, actor: AuthUser, filters: BookFilters
   return rows;
 }
 
+/** Lead pipeline funnel — count + Σ expected amount per lead status (scoped). */
+export async function leadFunnel(db: Db, actor: AuthUser) {
+  const sc = scopeWhere(scopeFor(actor), { userCol: 'l.created_by_user_id', agentCol: 'l.created_by_agent_id', branchCol: 'l.branch_id' }, 0);
+  const { rows } = await db.query<{ status: string; n: string; expected: string }>(
+    `SELECT COALESCE(l.status,'New') AS status, count(*)::int AS n, COALESCE(sum(l.expected_amount),0) AS expected
+       FROM investor_leads l WHERE ${sc.sql} GROUP BY COALESCE(l.status,'New') ORDER BY n DESC`, sc.params);
+  return rows.map((r) => ({ status: r.status, count: Number(r.n), expected: round2(Number(r.expected)) }));
+}
+
+/** ALM tiles — asset-liability timing of the interest/redemption schedule.
+ *   net_due_this_month : Scheduled payouts due in the current calendar month
+ *   overdue            : Scheduled payouts whose due_date is already past
+ *   paid_fy            : Paid payouts in the current Indian financial year (Apr–Mar)
+ * All net amounts, scoped to the actor's applications. */
+export async function alm(db: Db, actor: AuthUser, asOf: string) {
+  const scopeAll = appWhere(actor, {});
+  const inScope = `ds.application_id IN (SELECT a.id ${FROM} WHERE ${scopeAll.sql})`;
+  const d = new Date(`${asOf}T00:00:00Z`);
+  const monthStart = `${asOf.slice(0, 7)}-01`;
+  const monthEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+  const fyStartYear = d.getUTCMonth() >= 3 ? d.getUTCFullYear() : d.getUTCFullYear() - 1;
+  const fyStart = `${fyStartYear}-04-01`;
+  const fyEnd = `${fyStartYear + 1}-03-31`;
+
+  const q = async (cond: string, params: unknown[]) =>
+    Number((await db.query<{ v: string }>(`SELECT COALESCE(sum(ds.net_amount),0) AS v FROM disbursement_schedule ds WHERE ${cond} AND ${inScope}`, params)).rows[0]!.v);
+
+  const p = scopeAll.params;
+  const [netDueThisMonth, overdue, paidFy] = await Promise.all([
+    q(`ds.status = 'Scheduled' AND ds.due_date >= $${p.length + 1}::date AND ds.due_date <= $${p.length + 2}::date`, [...p, monthStart, monthEnd]),
+    q(`ds.status = 'Scheduled' AND ds.due_date < $${p.length + 1}::date`, [...p, asOf]),
+    q(`ds.status = 'Paid' AND ds.due_date >= $${p.length + 1}::date AND ds.due_date <= $${p.length + 2}::date`, [...p, fyStart, fyEnd]),
+  ]);
+  return { net_due_this_month: round2(netDueThisMonth), overdue: round2(overdue), paid_fy: round2(paidFy), fy_label: `FY${String(fyStartYear).slice(2)}-${String(fyStartYear + 1).slice(2)}` };
+}
+
+/** Cost-of-funds rate mix — outstanding principal grouped by coupon rate, so
+ * the weighted average cost of the book is visible. Uses application_lines. */
+export async function rateMix(db: Db, actor: AuthUser) {
+  const w = appWhere(actor, { status: 'active' });
+  const { rows } = await db.query<{ rate: string; outstanding: string; investments: string }>(
+    `SELECT al.coupon_rate_pct AS rate, COALESCE(sum(al.outstanding_amount),0) AS outstanding, count(DISTINCT a.id)::int AS investments
+       ${FROM} JOIN application_lines al ON al.application_id = a.id
+      WHERE ${w.sql} GROUP BY al.coupon_rate_pct ORDER BY al.coupon_rate_pct`, w.params);
+  const mix = rows.map((r) => ({ rate: Number(r.rate), outstanding: round2(Number(r.outstanding)), investments: Number(r.investments) }));
+  const total = mix.reduce((s, m) => s + m.outstanding, 0);
+  const weightedAvg = total > 0 ? round2(mix.reduce((s, m) => s + m.rate * m.outstanding, 0) / total) : 0;
+  return { mix, weighted_avg_rate: weightedAvg, total_outstanding: round2(total) };
+}
+
+/** Today's book — money in / out that landed today (independent of the range). */
+export async function todayBook(db: Db, actor: AuthUser, today: string) {
+  // additions: new investments funded today
+  const addScope = appWhere(actor, {});
+  const additions = await db.query<{ n: string; amt: string }>(
+    `SELECT count(a.id)::int AS n, COALESCE(sum(a.total_amount),0) AS amt ${FROM}
+      WHERE ${addScope.sql} AND a.date_money_received = $${addScope.params.length + 1}::date`, [...addScope.params, today]);
+  // deletions: redemptions created today (scoped via their application)
+  const redScope = appWhere(actor, {});
+  const deletions = await db.query<{ n: string; amt: string }>(
+    `SELECT count(r.id)::int AS n, COALESCE(sum(r.net_payment),0) AS amt FROM redemptions r
+      WHERE r.created_at::date = $${redScope.params.length + 1}::date
+        AND r.application_id IN (SELECT a.id ${FROM} WHERE ${redScope.sql})`, [...redScope.params, today]);
+  return {
+    additions: { count: Number(additions.rows[0]!.n), amount: round2(Number(additions.rows[0]!.amt)) },
+    deletions: { count: Number(deletions.rows[0]!.n), amount: round2(Number(deletions.rows[0]!.amt)) },
+  };
+}
+
 /** Flat application register — one row per investment line (allotment/maturity
  * dates, coupon, tenure). For the NCD Book "Applications" sheet + data backup. */
 export async function applicationsFlat(db: Db, actor: AuthUser, filters: BookFilters = {}) {

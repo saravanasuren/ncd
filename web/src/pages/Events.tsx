@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 interface EventRow {
   id: number;
@@ -8,24 +9,17 @@ interface EventRow {
   created_at: string;
 }
 
+const columns: Column<EventRow>[] = [
+  { key: 'ref', header: 'Ref', tdClassName: 'font-mono text-xs' },
+  { key: 'status', header: 'Status', render: (r) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{r.status}</span> },
+  { key: 'created_at', header: 'Created', value: (r) => r.created_at, render: (r) => <span className="text-text-muted text-xs">{String(r.created_at).slice(0, 10)}</span> },
+];
+
 function EventTable({ title, rows }: { title: string; rows: EventRow[] }) {
   return (
-    <div className="bg-surface border border-border rounded-lg shadow-card mb-6 overflow-hidden">
-      <div className="px-4 py-3 border-b border-border text-xs font-semibold text-text-label uppercase tracking-wide">{title}</div>
-      <table className="w-full text-sm">
-        <thead><tr className="text-left text-xs font-semibold text-text-label border-b border-border">
-          <th className="px-4 py-2">Ref</th><th className="px-4 py-2">Status</th><th className="px-4 py-2">Created</th></tr></thead>
-        <tbody className="divide-y divide-border">
-          {rows.map((r) => (
-            <tr key={r.id}>
-              <td className="px-4 py-1.5 font-mono text-xs">{r.ref}</td>
-              <td className="px-4 py-1.5"><span className="text-xs rounded px-1.5 py-0.5 bg-bg">{r.status}</span></td>
-              <td className="px-4 py-1.5 text-text-muted text-xs">{String(r.created_at).slice(0, 10)}</td>
-            </tr>
-          ))}
-          {rows.length === 0 && <tr><td colSpan={3} className="px-4 py-5 text-center text-text-muted">None yet.</td></tr>}
-        </tbody>
-      </table>
+    <div className="mb-6">
+      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">{title}</h2>
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} defaultSort={{ key: 'created_at', dir: 'desc' }} empty="None yet." />
     </div>
   );
 }

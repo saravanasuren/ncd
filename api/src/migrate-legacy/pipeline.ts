@@ -553,11 +553,18 @@ export async function runMigration(
     });
     tables.push({ table: 'disbursement_schedule', source: oldSchedule.length, loaded: schedRes.loaded, failed: schedRes.failed + schedMapFailed });
     report.interest.regeneratedRows = regenPushed;
-    // frozen / paid counts straight from what actually landed (accurate even if a row failed)
-    const frozenR = await tx.query<{ n: string }>('SELECT COUNT(*) AS n FROM disbursement_schedule WHERE due_date <= $1', [anchor]);
-    report.interest.frozenRows = Number(frozenR.rows[0]?.n ?? 0);
-    const paidR = await tx.query<{ n: string }>("SELECT COUNT(*) AS n FROM disbursement_schedule WHERE status='Paid'");
-    report.interest.loadedPaidRows = Number(paidR.rows[0]?.n ?? 0);
+    // Frozen / paid counts, SCOPED to this migration's applications (not the whole
+    // table) so a re-run against a DB that already holds schedule rows doesn't
+    // over-count. schedRows is exactly what this batch built.
+    const migratedAppIds = [...new Set(schedRows.map((r) => r.application_id))];
+    if (migratedAppIds.length) {
+      const frozenR = await tx.query<{ n: string }>(
+        'SELECT COUNT(*) AS n FROM disbursement_schedule WHERE due_date <= $1 AND application_id = ANY($2)', [anchor, migratedAppIds]);
+      report.interest.frozenRows = Number(frozenR.rows[0]?.n ?? 0);
+      const paidR = await tx.query<{ n: string }>(
+        "SELECT COUNT(*) AS n FROM disbursement_schedule WHERE status='Paid' AND application_id = ANY($1)", [migratedAppIds]);
+      report.interest.loadedPaidRows = Number(paidR.rows[0]?.n ?? 0);
+    }
     progress(`schedule: ${schedRes.loaded}/${schedRows.length} loaded, ${regenPushed} regenerated`);
 
     // ── redemptions ─────────────────────────────────────────────────────

@@ -41,7 +41,7 @@ const columns: Column<CustomerRow>[] = [
 export function CustomersPage() {
   const { can } = useAuth();
   const [q, setQ] = useState('');
-  const [tab, setTab] = useState<CustTab>('all');
+  const [tab, setTab] = useState<CustTab>('approved');
   const [enrolling, setEnrolling] = useState(false);
   const query = q.trim();
   const { data, isLoading, error } = useQuery({
@@ -51,10 +51,10 @@ export function CustomersPage() {
   if (error) return <div className="text-danger">Failed to load customers.</div>;
   const rows = data?.rows ?? [];
   const tabs: TabDef<CustTab>[] = [
-    { key: 'all', label: 'All', count: rows.length },
     { key: 'approved', label: 'Approved', count: rows.filter((r) => custMatch('approved', r.creation_status)).length },
     { key: 'pending', label: 'Pending approval', count: rows.filter((r) => custMatch('pending', r.creation_status)).length },
     { key: 'draft', label: 'Draft', count: rows.filter((r) => custMatch('draft', r.creation_status)).length },
+    { key: 'all', label: 'All', count: rows.length },
   ];
 
   return (

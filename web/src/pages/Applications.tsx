@@ -38,16 +38,16 @@ const columns: Column<AppRow>[] = [
 ];
 
 export function ApplicationsPage() {
-  const [tab, setTab] = useState<AppTab>('all');
+  const [tab, setTab] = useState<AppTab>('active');
   const { data, isLoading, error } = useQuery({ queryKey: ['applications'], queryFn: () => api.get<{ rows: AppRow[] }>('/api/applications') });
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Failed to load applications.</div>;
   const rows = data!.rows;
   const tabs: TabDef<AppTab>[] = [
-    { key: 'all', label: 'All', count: rows.length },
     { key: 'active', label: 'Active', count: rows.filter((r) => appMatch('active', r.status)).length },
     { key: 'pending', label: 'Pending', count: rows.filter((r) => appMatch('pending', r.status)).length },
     { key: 'redeemed', label: 'Redeemed', count: rows.filter((r) => appMatch('redeemed', r.status)).length },
+    { key: 'all', label: 'All', count: rows.length },
   ];
   return (
     <div className="w-full">

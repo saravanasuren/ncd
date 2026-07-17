@@ -34,10 +34,10 @@ reportsRouter.get('/segments/:by', requirePermission('reports:download', 'dashbo
 
 reportsRouter.get('/ncd-book.xlsx', requirePermission('reports:download'),
   asyncHandler(async (req, res) => {
-    const buf = await buildNcdBook(getDb(), req.user!, filtersFromQuery(req.query));
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="dhanam-ncd-book.xlsx"');
-    res.end(buf);
+    // Streams the workbook straight to the response (bounded memory) and ends it.
+    await buildNcdBook(res, getDb(), req.user!, filtersFromQuery(req.query));
   }));
 
 reportsRouter.get('/soa/:customerId.pdf', requirePermission('reports:download', 'customers:read'),

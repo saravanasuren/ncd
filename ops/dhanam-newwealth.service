@@ -9,7 +9,7 @@ WorkingDirectory=/home/ubuntu/ncd/api
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=3
-MemoryMax=512M
+MemoryMax=1G
 Environment=NODE_ENV=production
 Environment=FILE_STORAGE_DIR=/var/lib/dhanam-newwealth
 EnvironmentFile=/home/ubuntu/ncd/api/.env

@@ -1,7 +1,9 @@
 /**
- * The owner's 9-tab NCD book export (docs/06 §3). Built with exceljs from the
- * shared book queries, so tab totals reconcile with the dashboard under the
- * same filters + scope. Indian number format throughout.
+ * The owner's NCD book export (docs/06 §3): 9 business-report tabs + 2 raw-data
+ * tabs (Applications register, Interest Payouts ledger) so the workbook also
+ * serves as a human-readable data snapshot. Built with exceljs from the shared
+ * book queries, so tab totals reconcile with the dashboard under the same
+ * filters + scope. Indian number format throughout.
  */
 import ExcelJS from 'exceljs';
 import type { Db } from '../../db/types.js';
@@ -137,6 +139,29 @@ export async function buildNcdBook(db: Db, actor: AuthUser, filters: book.BookFi
   }
   ws9.columns = [{ width: 14 }, { width: 26 }, { width: 14 }, { width: 16 }, { width: 14 }, { width: 18 }, { width: 14 }, { width: 14 }];
   amountCol(ws9, 7);
+
+  // Tab 10 — Applications (flat register: one row per investment line)
+  const ws10 = wb.addWorksheet('Applications');
+  headerRow(ws10, ['App No', 'Customer Code', 'Customer', 'Series', 'Status', 'Amount', 'Coupon %', 'Tenure (m)', 'Frequency', 'Money received', 'Allotment', 'Maturity', 'Redemption']);
+  const apps = await book.applicationsFlat(db, actor, filters) as Array<Record<string, unknown>>;
+  for (const a of apps) {
+    ws10.addRow([a.application_no, a.customer_code ?? '', a.customer, a.series_code, a.status, Number(a.total_amount),
+      a.coupon_rate_pct != null ? Number(a.coupon_rate_pct) : '', a.tenure_months ?? '', a.payout_frequency ?? '',
+      a.date_money_received ?? '', a.allotment_date ?? '', a.maturity_date ?? '', a.redemption_date ?? '']);
+  }
+  ws10.columns = [{ width: 16 }, { width: 14 }, { width: 28 }, { width: 12 }, { width: 16 }, { width: 15 }, { width: 9 }, { width: 10 }, { width: 12 }, { width: 14 }, { width: 13 }, { width: 13 }, { width: 13 }];
+  amountCol(ws10, 6);
+
+  // Tab 11 — Interest Payouts (full disbursement ledger: interest/broken/redemption rows)
+  const ws11 = wb.addWorksheet('Interest Payouts');
+  headerRow(ws11, ['Due Date', 'App No', 'Customer Code', 'Customer', 'Series', 'Type', 'Gross', 'TDS', 'Net', 'Status', 'Paid At', 'UTR']);
+  const ledger = await book.interestLedger(db, actor) as Array<Record<string, unknown>>;
+  for (const r of ledger) {
+    ws11.addRow([r.due_date, r.application_no, r.customer_code ?? '', r.customer, r.series_code, r.due_type,
+      Number(r.gross_amount), Number(r.tds_amount), Number(r.net_amount), r.status, r.paid_at ?? '', r.utr ?? '']);
+  }
+  ws11.columns = [{ width: 12 }, { width: 16 }, { width: 14 }, { width: 28 }, { width: 12 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 14 }, { width: 12 }, { width: 12 }, { width: 18 }];
+  [7, 8, 9].forEach((i) => amountCol(ws11, i));
 
   return Buffer.from(await wb.xlsx.writeBuffer());
 }

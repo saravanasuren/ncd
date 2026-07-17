@@ -61,14 +61,20 @@ describe('dashboard', () => {
 });
 
 describe('9-tab NCD book export', () => {
-  it('produces exactly the 9 named tabs', async () => {
+  it('produces the 9 report tabs + Applications + Interest Payouts data tabs', async () => {
     const a = await admin();
     const dl = await a.raw('/api/reports/ncd-book.xlsx');
     expect(dl.status).toBe(200);
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(dl.buffer);
     const names = wb.worksheets.map((w) => w.name);
-    expect(names).toEqual(['Ongoing NCD', 'NCD Summary', 'Master Client', 'Redemption', 'Depositorwise', 'Districtwise', 'Agent wise', 'Staff wise', 'Leads']);
+    expect(names).toEqual([
+      'Ongoing NCD', 'NCD Summary', 'Master Client', 'Redemption', 'Depositorwise',
+      'Districtwise', 'Agent wise', 'Staff wise', 'Leads', 'Applications', 'Interest Payouts',
+    ]);
+    // the two raw-data tabs carry their expected headers
+    expect(wb.getWorksheet('Applications')!.getRow(1).getCell(1).value).toBe('App No');
+    expect(wb.getWorksheet('Interest Payouts')!.getRow(1).getCell(6).value).toBe('Type');
   });
 
   it('Depositorwise grand total reconciles with the outstanding book (₹8,00,000)', async () => {

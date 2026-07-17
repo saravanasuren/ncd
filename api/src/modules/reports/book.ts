@@ -122,6 +122,36 @@ export async function customerwise(db: Db, actor: AuthUser, filters: BookFilters
   return rows;
 }
 
+/** Flat application register — one row per investment line (allotment/maturity
+ * dates, coupon, tenure). For the NCD Book "Applications" sheet + data backup. */
+export async function applicationsFlat(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+  const w = appWhere(actor, filters);
+  const { rows } = await db.query(
+    `SELECT a.application_no, c.customer_code, c.full_name AS customer, s.code AS series_code,
+            a.status, a.total_amount, a.date_money_received, a.allotment_date, a.maturity_date, a.redemption_date,
+            l.coupon_rate_pct, l.tenure_months, l.payout_frequency
+     ${FROM} LEFT JOIN application_lines l ON l.application_id = a.id
+     WHERE ${w.sql} ORDER BY a.application_no`, w.params);
+  return rows;
+}
+
+/** Full disbursement ledger (interest / broken-interest / redemption rows) for
+ * in-scope applications — gross/TDS/net, status, paid date, UTR. For the NCD Book
+ * "Interest Payouts" sheet + data backup. */
+export async function interestLedger(db: Db, actor: AuthUser) {
+  const w = appWhere(actor, {});
+  const { rows } = await db.query(
+    `SELECT ds.due_date, a.application_no, c.customer_code, c.full_name AS customer, s.code AS series_code,
+            ds.due_type, ds.gross_amount, ds.tds_amount, ds.net_amount, ds.status, ds.paid_at, ds.utr
+     FROM disbursement_schedule ds
+     JOIN applications a ON a.id = ds.application_id
+     JOIN customers c ON c.id = a.customer_id
+     JOIN series s ON s.id = a.series_id
+     WHERE ${w.sql}
+     ORDER BY ds.due_date, a.application_no`, w.params);
+  return rows;
+}
+
 export type SegmentBy = 'series' | 'customer' | 'district' | 'agent' | 'staff';
 
 export interface SegmentChild {

@@ -136,37 +136,43 @@ function RangeBar({ range, setRange, activeSeries, lastSeries }: {
   range: Range; setRange: (r: Range) => void; activeSeries: any; lastSeries: any;
 }) {
   const ranges = useMemo(dateQuickRanges, []);
-  const isActive = (key: string, label: string) => range.label === label || range.label === key;
+  // Date period and series are INDEPENDENT filters. A series chip narrows to
+  // that series while keeping the current date window (so the interest tiles
+  // stay period-correct); a date chip keeps whatever series is selected.
+  const selSeries = range.series?.[0] ?? null;
+  const seriesName = selSeries == null ? null
+    : activeSeries?.series_id === selSeries ? activeSeries.code
+    : lastSeries?.series_id === selSeries ? lastSeries.code : `Series ${selSeries}`;
+  const toggleSeries = (id: number) => setRange({ ...range, series: selSeries === id ? null : [id] });
   const chip = (active: boolean) =>
     `text-xs rounded-full px-3 py-1 border ${active ? 'bg-primary text-white border-primary' : 'bg-surface border-border hover:border-primary'}`;
   return (
     <div className="bg-surface border border-border rounded-lg shadow-card p-3">
       <div className="flex flex-wrap items-center gap-1.5">
         {activeSeries && (
-          <button className={chip(range.series?.[0] === activeSeries.series_id)}
-            onClick={() => setRange({ from: '', to: '', series: [activeSeries.series_id], label: `Active series (${activeSeries.code})` })}>
-            Active series
-          </button>
+          <button className={chip(selSeries === activeSeries.series_id)} onClick={() => toggleSeries(activeSeries.series_id)}>Active series</button>
         )}
         {lastSeries && (
-          <button className={chip(range.series?.[0] === lastSeries.series_id)}
-            onClick={() => setRange({ from: '', to: '', series: [lastSeries.series_id], label: `Last series (${lastSeries.code})` })}>
-            Last series
-          </button>
+          <button className={chip(selSeries === lastSeries.series_id)} onClick={() => toggleSeries(lastSeries.series_id)}>Last series</button>
         )}
+        {selSeries != null && (
+          <button className="text-xs rounded-full px-2 py-1 border border-border text-text-muted hover:border-danger hover:text-danger"
+            onClick={() => setRange({ ...range, series: null })} title="Clear series filter">series: {seriesName} ✕</button>
+        )}
+        <span className="mx-1 text-border">|</span>
         {ranges.map((r) => (
-          <button key={r.key} className={chip(isActive(r.key, r.label))}
-            onClick={() => setRange({ ...r.range, label: r.label })}>{r.label}</button>
+          <button key={r.key} className={chip(range.label === r.label)}
+            onClick={() => setRange({ ...range, from: r.range.from, to: r.range.to, label: r.label })}>{r.label}</button>
         ))}
       </div>
       <div className="flex flex-wrap items-center gap-2 mt-2.5 text-xs text-text-muted">
         <span>Custom:</span>
         <input type="date" className="px-2 py-1 border border-border-strong rounded outline-none focus:border-primary"
-          value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value, series: null, label: 'Custom' })} />
+          value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value, label: 'Custom' })} />
         <span>→</span>
         <input type="date" className="px-2 py-1 border border-border-strong rounded outline-none focus:border-primary"
-          value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value, series: null, label: 'Custom' })} />
-        <span className="ml-1 font-medium text-text-label">Showing: {range.label}</span>
+          value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value, label: 'Custom' })} />
+        <span className="ml-1 font-medium text-text-label">Showing: {range.label}{seriesName ? ` · ${seriesName}` : ''}</span>
       </div>
     </div>
   );

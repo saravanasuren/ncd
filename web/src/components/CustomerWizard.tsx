@@ -1,0 +1,304 @@
+import { useState, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
+import { api, ApiError } from '../api/client.js';
+
+/**
+ * Staff customer-enrolment wizard (modal). Mirrors the old app's 6-section
+ * flow — Personal · Demat · KYC docs · Bank · Nominee · Review. Everything is
+ * collected in memory and persisted on "Save and exit" / "Submit for approval":
+ * create the customer → demat → KYC docs → bank account → nominee → (submit).
+ * No draft is written until the user saves, so Back/Next never duplicates rows.
+ */
+
+const GENDERS = ['Male', 'Female', 'Other'];
+const CATEGORIES = ['Individual', 'HUF', 'Corporate', 'Trust', 'NRI', 'Others'];
+const DEPOSITORIES = ['NSDL', 'CDSL'];
+const ACCOUNT_TYPES = ['Savings', 'Current'];
+const RELATIONSHIPS = ['Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister', 'Other'];
+
+const STEPS = ['Personal', 'Demat', 'KYC docs', 'Bank', 'Nominee', 'Review'] as const;
+
+const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary w-full';
+
+const EMPTY = {
+  // Personal
+  full_name: '', father_name: '', occupation: '', dob: '', gender: '', pan: '', aadhaar: '',
+  phone: '', phone_secondary: '', email: '', investor_category: '',
+  address: '', city: '', district: '', state: '', is_nri: false, referred_by_text: '',
+  // Demat
+  depository: '', dp_id: '', client_id: '',
+  // KYC
+  ckyc_number: '',
+  // Bank
+  bank_holder_name: '', account_number: '', account_type: '', tds: 'yes', ifsc: '',
+  bank_name: '', branch_name: '', branch_city: '',
+  // Nominee
+  nom_full_name: '', nom_dob: '', nom_relationship: '', nom_pan: '', nom_phone: '',
+  nom_address: '', guardian_name: '', guardian_pan: '',
+};
+type Form = typeof EMPTY;
+type DocKey = 'pan_card' | 'aadhaar_card' | 'customer_photo' | 'customer_signature' | 'address_proof' | 'cml' | 'bank_proof';
+
+function readBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] ?? '');
+    r.onerror = () => reject(new Error('read failed'));
+    r.readAsDataURL(file);
+  });
+}
+
+function Field({ label, required, hint, children }: { label: string; required?: boolean; hint?: string; children: ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-text-label uppercase tracking-wide">{label}{required && <span className="text-danger"> *</span>}</span>
+      {children}
+      {hint && <span className="text-[11px] text-text-muted">{hint}</span>}
+    </label>
+  );
+}
+
+function FilePick({ label, hint, file, onPick }: { label: string; hint?: string; file: File | null; onPick: (f: File | null) => void }) {
+  return (
+    <div className="bg-bg border border-border rounded p-3">
+      <div className="text-sm font-semibold">{label}</div>
+      {hint && <div className="text-xs text-text-muted mb-2">{hint}</div>}
+      <input type="file" accept="image/*,application/pdf" className="text-xs w-full"
+        onChange={(e) => onPick(e.target.files?.[0] ?? null)} />
+      {file && <div className="text-[11px] text-success mt-1">✓ {file.name}</div>}
+    </div>
+  );
+}
+
+export function CustomerWizard({ onClose }: { onClose: () => void }) {
+  const nav = useNavigate();
+  const qc = useQueryClient();
+  const [step, setStep] = useState(0);
+  const [f, setF] = useState<Form>(EMPTY);
+  const [files, setFiles] = useState<Record<DocKey, File | null>>({
+    pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null,
+  });
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
+  const setFile = (k: DocKey, file: File | null) => setFiles((prev) => ({ ...prev, [k]: file }));
+
+  async function persist(submit: boolean): Promise<number> {
+    const personal: Record<string, unknown> = { full_name: f.full_name.trim(), is_nri: f.is_nri, tds_applicable: f.tds !== 'no' };
+    const put = (k: string, v: string) => { if (v.trim()) personal[k] = v.trim(); };
+    put('pan', f.pan); put('dob', f.dob); put('gender', f.gender); put('phone', f.phone);
+    put('email', f.email); put('address', f.address); put('city', f.city); put('district', f.district); put('state', f.state);
+    put('referred_by_text', f.referred_by_text); put('father_name', f.father_name); put('occupation', f.occupation);
+    put('phone_secondary', f.phone_secondary); put('investor_category', f.investor_category); put('ckyc_number', f.ckyc_number);
+    if (f.aadhaar.replace(/\D/g, '').length >= 4) personal.aadhaar_last4 = f.aadhaar.replace(/\D/g, '').slice(-4);
+
+    const { id } = await api.post<{ id: number }>('/api/customers', personal);
+
+    if (f.dp_id.trim() || f.client_id.trim() || f.depository)
+      await api.put(`/api/customers/${id}/demat`, { dp_id: f.dp_id.trim(), client_id: f.client_id.trim(), depository: f.depository || null });
+
+    for (const [doc_type, file] of Object.entries(files)) {
+      if (!file) continue;
+      const data_base64 = await readBase64(file);
+      if (data_base64) await api.post(`/api/customers/${id}/documents`, { doc_type, filename: file.name, mime: file.type || 'application/octet-stream', data_base64 });
+    }
+
+    if (f.account_number.trim() && f.ifsc.trim())
+      await api.post(`/api/customers/${id}/bank-accounts`, {
+        account_number: f.account_number.trim(), ifsc: f.ifsc.trim().toUpperCase(),
+        bank_name: f.bank_name.trim() || undefined, branch_name: f.branch_name.trim() || undefined, branch_city: f.branch_city.trim() || undefined,
+        account_type: f.account_type || undefined, holder_name: f.bank_holder_name.trim() || undefined, tds_applicable: f.tds !== 'no',
+      });
+
+    if (f.nom_full_name.trim())
+      await api.put(`/api/customers/${id}/nominees`, { nominees: [{
+        full_name: f.nom_full_name.trim(), dob: f.nom_dob || null, relationship: f.nom_relationship || null,
+        pan: f.nom_pan.trim() || null, phone: f.nom_phone.trim() || null, address: f.nom_address.trim() || null,
+        guardian_name: f.guardian_name.trim() || null, guardian_pan: f.guardian_pan.trim() || null,
+      }] });
+
+    if (submit) await api.post(`/api/customers/${id}/submit-for-approval`);
+    return id;
+  }
+
+  async function finish(submit: boolean) {
+    if (!f.full_name.trim()) { setErr('Full name is required.'); setStep(0); return; }
+    setErr(''); setBusy(true);
+    try {
+      const id = await persist(submit);
+      qc.invalidateQueries({ queryKey: ['customers'] });
+      onClose();
+      nav(`/app/customers/${id}`);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Save failed');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/40 flex items-start justify-center overflow-y-auto py-6 px-4" onClick={onClose}>
+      <div className="bg-surface border border-border rounded-lg shadow-lg w-full max-w-3xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border sticky top-0 bg-surface z-10">
+          <h2 className="text-base font-bold m-0">Enroll customer</h2>
+          <button onClick={onClose} className="text-text-muted hover:text-text text-lg leading-none" aria-label="Close">✕</button>
+        </div>
+
+        {/* Step strip */}
+        <div className="flex flex-wrap gap-1 px-5 py-3 border-b border-border bg-bg/50">
+          {STEPS.map((label, i) => (
+            <button key={label} onClick={() => setStep(i)}
+              className={`text-xs rounded-full px-3 py-1 flex items-center gap-1.5 ${i === step ? 'bg-primary text-white' : i < step ? 'text-success' : 'text-text-muted'}`}>
+              <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] ${i === step ? 'bg-white/20' : i < step ? 'bg-[color:var(--success-bg)]' : 'bg-border'}`}>{i < step ? '✓' : i + 1}</span>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="p-5 max-h-[65vh] overflow-y-auto">
+          {step === 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
+              <div className="sm:col-span-2"><Field label="Full name" required><input className={inp} value={f.full_name} onChange={(e) => set({ full_name: e.target.value })} autoFocus /></Field></div>
+              <Field label="Father's name"><input className={inp} value={f.father_name} onChange={(e) => set({ father_name: e.target.value })} /></Field>
+              <Field label="Occupation" hint="e.g. Salaried, Business, Retired"><input className={inp} value={f.occupation} onChange={(e) => set({ occupation: e.target.value })} /></Field>
+              <Field label="Date of birth"><input className={inp} type="date" value={f.dob} onChange={(e) => set({ dob: e.target.value })} /></Field>
+              <Field label="Gender"><select className={inp} value={f.gender} onChange={(e) => set({ gender: e.target.value })}><option value="">—</option>{GENDERS.map((g) => <option key={g}>{g}</option>)}</select></Field>
+              <Field label="PAN"><input className={`${inp} uppercase`} placeholder="ABCDE1234F" value={f.pan} onChange={(e) => set({ pan: e.target.value.toUpperCase() })} /></Field>
+              <Field label="Aadhaar (12 digits)" hint="Only the last 4 digits are stored (UIDAI)."><input className={inp} inputMode="numeric" maxLength={12} placeholder="Full 12-digit Aadhaar" value={f.aadhaar} onChange={(e) => set({ aadhaar: e.target.value.replace(/\D/g, '') })} /></Field>
+              <Field label="Phone (primary)"><input className={inp} inputMode="numeric" maxLength={10} value={f.phone} onChange={(e) => set({ phone: e.target.value.replace(/\D/g, '') })} /></Field>
+              <Field label="Phone (secondary)"><input className={inp} inputMode="numeric" maxLength={10} value={f.phone_secondary} onChange={(e) => set({ phone_secondary: e.target.value.replace(/\D/g, '') })} /></Field>
+              <Field label="Email"><input className={inp} type="email" value={f.email} onChange={(e) => set({ email: e.target.value })} /></Field>
+              <Field label="Investor category"><select className={inp} value={f.investor_category} onChange={(e) => set({ investor_category: e.target.value })}><option value="">—</option>{CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select></Field>
+              <div className="sm:col-span-2"><Field label="Address"><input className={inp} value={f.address} onChange={(e) => set({ address: e.target.value })} /></Field></div>
+              <Field label="City"><input className={inp} value={f.city} onChange={(e) => set({ city: e.target.value })} /></Field>
+              <Field label="District"><input className={inp} value={f.district} onChange={(e) => set({ district: e.target.value })} /></Field>
+              <Field label="State"><input className={inp} value={f.state} onChange={(e) => set({ state: e.target.value })} /></Field>
+              <Field label="Referred by"><input className={inp} value={f.referred_by_text} onChange={(e) => set({ referred_by_text: e.target.value })} /></Field>
+              <label className="text-xs flex items-center gap-1.5 mt-1"><input type="checkbox" checked={f.is_nri} onChange={(e) => set({ is_nri: e.target.checked })} />NRI</label>
+            </div>
+          )}
+
+          {step === 1 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
+              <p className="sm:col-span-2 text-xs text-text-muted -mb-1">DP ID and Client ID are 8 characters each (NSDL/CDSL standard). Optional at this stage.</p>
+              <Field label="Depository"><select className={inp} value={f.depository} onChange={(e) => set({ depository: e.target.value })}><option value="">—</option>{DEPOSITORIES.map((d) => <option key={d}>{d}</option>)}</select></Field>
+              <div />
+              <Field label="DP ID (8 chars)"><input className={`${inp} uppercase`} placeholder="e.g. IN300456" value={f.dp_id} onChange={(e) => set({ dp_id: e.target.value.toUpperCase() })} /></Field>
+              <Field label="Client ID (8 chars)"><input className={inp} placeholder="e.g. 12345678" value={f.client_id} onChange={(e) => set({ client_id: e.target.value })} /></Field>
+              <div className="sm:col-span-2"><FilePick label="CML copy" hint="Client Master List from depository — PDF or image scan" file={files.cml} onPick={(x) => setFile('cml', x)} /></div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div>
+              <p className="text-xs text-text-muted mb-3">Upload PDF or image scans (max 10 MB each). All documents are optional at this stage — they can be collected later.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <FilePick label="PAN card" hint="Front side, clear scan" file={files.pan_card} onPick={(x) => setFile('pan_card', x)} />
+                <FilePick label="Aadhaar card" hint="Both sides / e-Aadhaar PDF" file={files.aadhaar_card} onPick={(x) => setFile('aadhaar_card', x)} />
+                <FilePick label="Customer photo" hint="Passport-size, clear face" file={files.customer_photo} onPick={(x) => setFile('customer_photo', x)} />
+                <FilePick label="Customer signature" hint="On white paper, scanned" file={files.customer_signature} onPick={(x) => setFile('customer_signature', x)} />
+                <FilePick label="Address proof" hint="Aadhaar / Voter ID / utility bill" file={files.address_proof} onPick={(x) => setFile('address_proof', x)} />
+              </div>
+              <div className="mt-3 max-w-sm"><Field label="CKYC number (optional)"><input className={inp} value={f.ckyc_number} onChange={(e) => set({ ckyc_number: e.target.value })} /></Field></div>
+            </div>
+          )}
+
+          {step === 3 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
+              <p className="sm:col-span-2 text-xs text-text-muted -mb-1">Where monthly interest lands. Enter an account + IFSC to save it now, or add it later.</p>
+              <div className="sm:col-span-2"><Field label="Beneficiary name (as on passbook)"><input className={inp} value={f.bank_holder_name} onChange={(e) => set({ bank_holder_name: e.target.value })} /></Field></div>
+              <Field label="Account number"><input className={inp} value={f.account_number} onChange={(e) => set({ account_number: e.target.value.replace(/\s/g, '') })} /></Field>
+              <Field label="Account type"><select className={inp} value={f.account_type} onChange={(e) => set({ account_type: e.target.value })}><option value="">—</option>{ACCOUNT_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
+              <div className="sm:col-span-2">
+                <Field label="TDS applicable on interest payouts?">
+                  <div className="flex gap-4 text-sm">
+                    <label className="flex items-center gap-1.5"><input type="radio" name="tds" checked={f.tds === 'yes'} onChange={() => set({ tds: 'yes' })} /> Yes — deduct 10% TDS</label>
+                    <label className="flex items-center gap-1.5"><input type="radio" name="tds" checked={f.tds === 'no'} onChange={() => set({ tds: 'no' })} /> No — exempt (15G / 15H / Form 12BB filer)</label>
+                  </div>
+                </Field>
+              </div>
+              <Field label="IFSC"><input className={`${inp} uppercase`} placeholder="e.g. SBIN0001234" value={f.ifsc} onChange={(e) => set({ ifsc: e.target.value.toUpperCase() })} /></Field>
+              <Field label="Bank name"><input className={inp} value={f.bank_name} onChange={(e) => set({ bank_name: e.target.value })} /></Field>
+              <Field label="Branch name"><input className={inp} value={f.branch_name} onChange={(e) => set({ branch_name: e.target.value })} /></Field>
+              <Field label="Branch city"><input className={inp} value={f.branch_city} onChange={(e) => set({ branch_city: e.target.value })} /></Field>
+              <div className="sm:col-span-2"><FilePick label="Cheque / passbook image" hint="Shows account number + IFSC + name" file={files.bank_proof} onPick={(x) => setFile('bank_proof', x)} /></div>
+            </div>
+          )}
+
+          {step === 4 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
+              <p className="sm:col-span-2 text-xs text-text-muted -mb-1">Optional. Only the nominee's name is required if a nominee is being added.</p>
+              <div className="sm:col-span-2"><Field label="Full name" hint="Required only if a nominee is being added"><input className={inp} value={f.nom_full_name} onChange={(e) => set({ nom_full_name: e.target.value })} /></Field></div>
+              <Field label="Date of birth"><input className={inp} type="date" value={f.nom_dob} onChange={(e) => set({ nom_dob: e.target.value })} /></Field>
+              <Field label="Relationship"><select className={inp} value={f.nom_relationship} onChange={(e) => set({ nom_relationship: e.target.value })}><option value="">—</option>{RELATIONSHIPS.map((r) => <option key={r}>{r}</option>)}</select></Field>
+              <Field label="Nominee PAN"><input className={`${inp} uppercase`} value={f.nom_pan} onChange={(e) => set({ nom_pan: e.target.value.toUpperCase() })} /></Field>
+              <Field label="Nominee phone"><input className={inp} inputMode="numeric" maxLength={10} value={f.nom_phone} onChange={(e) => set({ nom_phone: e.target.value.replace(/\D/g, '') })} /></Field>
+              <div className="sm:col-span-2"><Field label="Nominee address"><textarea className={inp} rows={2} value={f.nom_address} onChange={(e) => set({ nom_address: e.target.value })} /></Field></div>
+              <Field label="Guardian name (if minor)"><input className={inp} value={f.guardian_name} onChange={(e) => set({ guardian_name: e.target.value })} /></Field>
+              <Field label="Guardian PAN (if minor)"><input className={`${inp} uppercase`} value={f.guardian_pan} onChange={(e) => set({ guardian_pan: e.target.value.toUpperCase() })} /></Field>
+            </div>
+          )}
+
+          {step === 5 && <Review f={f} files={files} />}
+        </div>
+
+        {err && <div className="text-xs text-danger px-5 pb-1">{err}</div>}
+        <div className="flex items-center justify-between gap-2 px-5 py-3.5 border-t border-border">
+          <button onClick={() => (step === 0 ? onClose() : setStep(step - 1))} className="text-sm text-text-muted hover:underline px-3 py-1.5">
+            {step === 0 ? 'Cancel' : '← Back'}
+          </button>
+          <div className="flex items-center gap-2">
+            <button disabled={busy} onClick={() => finish(false)} className="text-sm border border-border-strong rounded px-4 py-1.5 hover:border-primary disabled:opacity-40">Save &amp; exit</button>
+            {step < 5
+              ? <button onClick={() => setStep(step + 1)} className="text-sm bg-primary hover:bg-primary-hover text-white rounded px-5 py-1.5 font-semibold">Next →</button>
+              : <button disabled={busy} onClick={() => finish(true)} className="text-sm bg-primary hover:bg-primary-hover text-white rounded px-5 py-1.5 font-semibold disabled:opacity-40">Submit for approval</button>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Review ─────────────────────────────────────────────────────────────────
+function Review({ f, files }: { f: Form; files: Record<DocKey, File | null> }) {
+  const dash = (v: string) => (v && v.trim() ? v : '—');
+  const docCount = Object.values(files).filter(Boolean).length;
+  const Row = ({ k, v }: { k: string; v: string }) => (
+    <div className="flex justify-between gap-4 py-1 border-b border-border/40 text-sm"><span className="text-text-muted">{k}</span><span className="text-right font-medium">{v}</span></div>
+  );
+  const Section = ({ title, children }: { title: string; children: ReactNode }) => (
+    <div className="bg-bg rounded-lg p-4 mb-3">
+      <div className="text-xs font-bold text-text-label uppercase tracking-wide mb-2">{title}</div>
+      {children}
+    </div>
+  );
+  return (
+    <div>
+      <p className="text-sm text-text-muted mb-3">Verify everything below. <strong>Submit for approval</strong> sends the customer to the Approvals queue for final sign-off. The customer is created in a pending state and goes live only after approval.</p>
+      <Section title="Personal">
+        <Row k="Name" v={dash(f.full_name)} /><Row k="Father's name" v={dash(f.father_name)} /><Row k="Occupation" v={dash(f.occupation)} />
+        <Row k="DOB" v={dash(f.dob)} /><Row k="Gender" v={dash(f.gender)} /><Row k="PAN" v={dash(f.pan)} />
+        <Row k="Aadhaar" v={f.aadhaar ? `••••••••${f.aadhaar.slice(-4)}` : '—'} /><Row k="Phone" v={dash(f.phone)} /><Row k="Alt phone" v={dash(f.phone_secondary)} />
+        <Row k="Email" v={dash(f.email)} /><Row k="Category" v={dash(f.investor_category)} />
+        <Row k="Address" v={[f.address, f.city, f.district, f.state].filter(Boolean).join(', ') || '—'} /><Row k="NRI" v={f.is_nri ? 'Yes' : 'No'} />
+      </Section>
+      <Section title="Demat">
+        <Row k="Depository" v={dash(f.depository)} /><Row k="DP ID" v={dash(f.dp_id)} /><Row k="Client ID" v={dash(f.client_id)} />
+      </Section>
+      <Section title={`KYC docs (${docCount})`}>
+        {docCount === 0 ? <div className="text-sm text-text-muted">No documents uploaded.</div>
+          : Object.entries(files).filter(([, x]) => x).map(([k, x]) => <Row key={k} k={k.replace(/_/g, ' ')} v={x!.name} />)}
+        <Row k="CKYC number" v={dash(f.ckyc_number)} />
+      </Section>
+      <Section title="Bank">
+        <Row k="Beneficiary" v={dash(f.bank_holder_name)} /><Row k="Account" v={dash(f.account_number)} /><Row k="Type" v={dash(f.account_type)} />
+        <Row k="TDS" v={f.tds === 'no' ? 'Exempt' : 'Deduct 10%'} /><Row k="IFSC" v={dash(f.ifsc)} />
+        <Row k="Bank" v={dash(f.bank_name)} /><Row k="Branch" v={[f.branch_name, f.branch_city].filter(Boolean).join(', ') || '—'} />
+      </Section>
+      <Section title="Nominee">
+        {f.nom_full_name.trim()
+          ? <><Row k="Name" v={dash(f.nom_full_name)} /><Row k="Relationship" v={dash(f.nom_relationship)} /><Row k="DOB" v={dash(f.nom_dob)} /><Row k="PAN" v={dash(f.nom_pan)} /><Row k="Phone" v={dash(f.nom_phone)} /></>
+          : <div className="text-sm text-text-muted">No nominee added.</div>}
+      </Section>
+    </div>
+  );
+}

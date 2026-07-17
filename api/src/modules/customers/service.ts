@@ -37,11 +37,21 @@ export interface CreateCustomerInput {
   state?: string;
   is_nri?: boolean;
   referred_by_text?: string;
+  // Enrolment-wizard personal fields (all optional/additive).
+  father_name?: string;
+  occupation?: string;
+  aadhaar_last4?: string;
+  phone_secondary?: string;
+  investor_category?: string;
+  ckyc_number?: string;
+  tds_applicable?: boolean;
 }
 
 export async function createCustomer(db: Db, actor: AuthUser, input: CreateCustomerInput): Promise<{ id: number; customer_code: string }> {
   const settings = await getSettingsMap(db);
   const codeFmt = String(settings['numbering.customer_format'] ?? 'DHN{seq:6}');
+  // Store only the last 4 Aadhaar digits (UIDAI), whatever the client sends.
+  const aadhaar4 = input.aadhaar_last4 ? String(input.aadhaar_last4).replace(/\D/g, '').slice(-4) || null : null;
   return db.withTx(async (tx) => {
     if (input.pan) {
       const dup = await tx.query('SELECT 1 FROM customers WHERE pan = $1', [input.pan]);
@@ -51,11 +61,15 @@ export async function createCustomer(db: Db, actor: AuthUser, input: CreateCusto
     const branchId = actor.branchIds[0] ?? null;
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO customers (customer_code, full_name, pan, dob, gender, phone, email, address, city, district, state, is_nri, referred_by_text,
+        father_name, occupation, aadhaar_last4, phone_secondary, investor_category, ckyc_number, tds_applicable,
         creation_status, enrolled_by_user_id, enrolled_by_agent_id, branch_id, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'Draft',$14,$15,$16,FALSE) RETURNING id`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'Draft',$21,$22,$23,FALSE) RETURNING id`,
       [code, input.full_name, input.pan ?? null, input.dob ?? null, input.gender ?? null, input.phone ?? null,
        input.email ?? null, input.address ?? null, input.city ?? null, input.district ?? null, input.state ?? null,
-       input.is_nri ?? false, input.referred_by_text ?? null, actor.id, actor.agentId, branchId]
+       input.is_nri ?? false, input.referred_by_text ?? null,
+       input.father_name ?? null, input.occupation ?? null, aadhaar4, input.phone_secondary ?? null,
+       input.investor_category ?? null, input.ckyc_number ?? null, input.tds_applicable ?? true,
+       actor.id, actor.agentId, branchId]
     );
     const id = Number(rows[0]!.id);
     await writeAudit(tx, { actorId: actor.id, action: 'customer.create', entityType: 'customers', entityId: id, after: { code, name: input.full_name } });
@@ -112,7 +126,7 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
   return { customer: c, bankAccounts, nominees, jointHolders, documents };
 }
 
-export async function addBankAccount(db: Db, actor: AuthUser, customerId: number, input: { account_number: string; ifsc: string; bank_name?: string; holder_name?: string }) {
+export async function addBankAccount(db: Db, actor: AuthUser, customerId: number, input: { account_number: string; ifsc: string; bank_name?: string; branch_name?: string; branch_city?: string; account_type?: string; holder_name?: string; tds_applicable?: boolean }) {
   await assertVisible(db, actor, customerId);
   const pd = await kycProvider().pennyDrop(input.account_number, input.ifsc);
   return db.withTx(async (tx) => {
@@ -121,11 +135,16 @@ export async function addBankAccount(db: Db, actor: AuthUser, customerId: number
     const anyActive = await tx.query('SELECT 1 FROM customer_bank_accounts WHERE customer_id = $1 AND is_active = TRUE', [customerId]);
     const makeActive = anyActive.rowCount === 0 && pd.status === 'Verified';
     const { rows } = await tx.query<{ id: string }>(
-      `INSERT INTO customer_bank_accounts (customer_id, account_number, ifsc, bank_name, holder_name, penny_drop_status, penny_drop_detail, is_active, verified_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-      [customerId, input.account_number, input.ifsc, input.bank_name ?? null, input.holder_name ?? pd.holderName ?? null,
+      `INSERT INTO customer_bank_accounts (customer_id, account_number, ifsc, bank_name, branch_name, branch_city, account_type, holder_name, penny_drop_status, penny_drop_detail, is_active, verified_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+      [customerId, input.account_number, input.ifsc, input.bank_name ?? null, input.branch_name ?? null, input.branch_city ?? null,
+       input.account_type ?? null, input.holder_name ?? pd.holderName ?? null,
        pd.status, pd.detail, makeActive, pd.status === 'Verified' ? new Date().toISOString() : null]
     );
+    // The TDS-on-payout choice is a customer-level fact (matches the old wizard's Bank step).
+    if (typeof input.tds_applicable === 'boolean') {
+      await tx.query('UPDATE customers SET tds_applicable = $1, updated_at = now() WHERE id = $2', [input.tds_applicable, customerId]);
+    }
     await writeAudit(tx, { actorId: actor.id, action: 'customer.bank.add', entityType: 'customer_bank_accounts', entityId: Number(rows[0]!.id), after: { customerId, pennyDrop: pd.status } });
     return { id: Number(rows[0]!.id), pennyDrop: pd };
   });
@@ -197,15 +216,20 @@ export async function setJointHolders(db: Db, actor: AuthUser, customerId: numbe
 }
 
 // ── Nominees ──────────────────────────────────────────────────────────
-export async function setNominees(db: Db, actor: AuthUser, customerId: number, nominees: Array<{ full_name: string; relationship?: string | null; share_pct?: number | null; dob?: string | null }>) {
+export interface NomineeInput {
+  full_name: string; relationship?: string | null; share_pct?: number | null; dob?: string | null;
+  pan?: string | null; phone?: string | null; address?: string | null; guardian_name?: string | null; guardian_pan?: string | null;
+}
+export async function setNominees(db: Db, actor: AuthUser, customerId: number, nominees: NomineeInput[]) {
   await assertVisible(db, actor, customerId);
   const total = nominees.reduce((s, n) => s + (n.share_pct ?? 0), 0);
   if (nominees.length && total > 100.01) throw errors.badRequest('Nominee shares exceed 100%');
   await db.withTx(async (tx) => {
     await tx.query('DELETE FROM nominees WHERE customer_id = $1', [customerId]);
     for (const n of nominees) {
-      await tx.query('INSERT INTO nominees (customer_id, full_name, relationship, share_pct, dob) VALUES ($1,$2,$3,$4,$5)',
-        [customerId, n.full_name, n.relationship ?? null, n.share_pct ?? null, n.dob ?? null]);
+      await tx.query('INSERT INTO nominees (customer_id, full_name, relationship, share_pct, dob, pan, phone, address, guardian_name, guardian_pan) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+        [customerId, n.full_name, n.relationship ?? null, n.share_pct ?? null, n.dob ?? null,
+         n.pan ?? null, n.phone ?? null, n.address ?? null, n.guardian_name ?? null, n.guardian_pan ?? null]);
     }
     await writeAudit(tx, { actorId: actor.id, action: 'customer.nominees', entityType: 'customers', entityId: customerId, after: { count: nominees.length } });
   });
@@ -213,10 +237,11 @@ export async function setNominees(db: Db, actor: AuthUser, customerId: number, n
 }
 
 // ── Demat ─────────────────────────────────────────────────────────────
-export async function setDemat(db: Db, actor: AuthUser, customerId: number, dpId: string, clientId: string) {
+export async function setDemat(db: Db, actor: AuthUser, customerId: number, dpId: string, clientId: string, depository?: string | null) {
   await assertVisible(db, actor, customerId);
-  await db.query('UPDATE customers SET demat_dp_id = $1, demat_client_id = $2, updated_at = now() WHERE id = $3', [dpId, clientId, customerId]);
-  await writeAudit(db, { actorId: actor.id, action: 'customer.demat', entityType: 'customers', entityId: customerId, after: { dpId, clientId } });
+  await db.query('UPDATE customers SET demat_dp_id = $1, demat_client_id = $2, depository = COALESCE($3, depository), updated_at = now() WHERE id = $4',
+    [dpId, clientId, depository ?? null, customerId]);
+  await writeAudit(db, { actorId: actor.id, action: 'customer.demat', entityType: 'customers', entityId: customerId, after: { dpId, clientId, depository } });
   return { ok: true };
 }
 

@@ -125,3 +125,43 @@ describe('no-self-approve rule (docs/03 rule zero)', () => {
     expect(r.status).toBe(403);
   });
 });
+
+describe('enrolment wizard — the 6-section fields persist', () => {
+  it('captures personal / demat / bank / nominee detail through the wizard endpoints', async () => {
+    const staff = await as('staff@demo.local');
+    // Personal step (with the new fields + full Aadhaar → only last 4 kept).
+    const created = await staff.post('/api/customers', {
+      full_name: 'Wizard Investor', phone: '9000000010', father_name: 'Elder Investor', occupation: 'Business',
+      pan: 'WZRDA1234Z', aadhaar_last4: '123456789012', investor_category: 'Individual', phone_secondary: '9000000011',
+      ckyc_number: 'CKYC-99', tds_applicable: false, district: 'Erode',
+    });
+    expect(created.status).toBe(201);
+    const id = created.json.id;
+
+    // Demat step (depository + DP/Client).
+    expect((await staff.put(`/api/customers/${id}/demat`, { dp_id: 'IN300456', client_id: '12345678', depository: 'NSDL' })).status).toBe(200);
+    // Bank step (account type + branch + TDS choice).
+    expect((await staff.post(`/api/customers/${id}/bank-accounts`, {
+      account_number: '12345678901', ifsc: 'HDFC0001234', account_type: 'Savings',
+      bank_name: 'HDFC Bank', branch_name: 'RS Puram', branch_city: 'Coimbatore', tds_applicable: false,
+    })).status).toBe(201);
+    // Nominee step (PAN + guardian).
+    expect((await staff.put(`/api/customers/${id}/nominees`, { nominees: [{
+      full_name: 'Nominee One', relationship: 'Son', pan: 'NOMEE1234Z', phone: '9000000012', guardian_name: 'Guardian', guardian_pan: 'GRDNA1234Z',
+    }] })).status).toBe(200);
+
+    const detail = await staff.get(`/api/customers/${id}`);
+    expect(detail.status).toBe(200);
+    expect(detail.json.customer.father_name).toBe('Elder Investor');
+    expect(detail.json.customer.aadhaar_last4).toBe('9012');       // only last 4 stored
+    expect(detail.json.customer.investor_category).toBe('Individual');
+    expect(detail.json.customer.tds_applicable).toBe(false);
+    expect(detail.json.customer.depository).toBe('NSDL');
+    const bank = detail.json.bankAccounts[0];
+    expect(bank.account_type).toBe('Savings');
+    expect(bank.branch_city).toBe('Coimbatore');
+    const nom = detail.json.nominees[0];
+    expect(nom.pan).toBe('NOMEE1234Z');
+    expect(nom.guardian_name).toBe('Guardian');
+  });
+});

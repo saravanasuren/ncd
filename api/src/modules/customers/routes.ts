@@ -28,6 +28,13 @@ const createSchema = z.object({
   state: z.string().optional(),
   is_nri: z.boolean().optional(),
   referred_by_text: z.string().optional(),
+  father_name: z.string().optional(),
+  occupation: z.string().optional(),
+  aadhaar_last4: z.string().optional(),
+  phone_secondary: z.string().optional(),
+  investor_category: z.string().optional(),
+  ckyc_number: z.string().optional(),
+  tds_applicable: z.boolean().optional(),
 });
 
 customersRouter.post('/', requirePermission('customers:create'),
@@ -38,7 +45,11 @@ customersRouter.get('/:id', requirePermission('customers:read'),
 
 customersRouter.post('/:id/bank-accounts', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
-    const b = z.object({ account_number: z.string().min(4), ifsc: z.string().min(4), bank_name: z.string().optional(), holder_name: z.string().optional() }).parse(req.body);
+    const b = z.object({
+      account_number: z.string().min(4), ifsc: z.string().min(4),
+      bank_name: z.string().optional(), branch_name: z.string().optional(), branch_city: z.string().optional(),
+      account_type: z.string().optional(), holder_name: z.string().optional(), tds_applicable: z.boolean().optional(),
+    }).parse(req.body);
     res.status(201).json(await s.addBankAccount(getDb(), req.user!, Number(req.params.id), b));
   }));
 
@@ -79,13 +90,16 @@ customersRouter.put('/:id/joint-holders', requirePermission('customers:update'),
   }));
 customersRouter.put('/:id/nominees', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
-    const { nominees } = z.object({ nominees: z.array(z.object({ full_name: z.string().min(1), relationship: z.string().nullish(), share_pct: z.number().nullish(), dob: z.string().nullish() })) }).parse(req.body);
+    const { nominees } = z.object({ nominees: z.array(z.object({
+      full_name: z.string().min(1), relationship: z.string().nullish(), share_pct: z.number().nullish(), dob: z.string().nullish(),
+      pan: z.string().nullish(), phone: z.string().nullish(), address: z.string().nullish(), guardian_name: z.string().nullish(), guardian_pan: z.string().nullish(),
+    })) }).parse(req.body);
     res.json(await s.setNominees(getDb(), req.user!, Number(req.params.id), nominees));
   }));
 customersRouter.put('/:id/demat', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
-    const { dp_id, client_id } = z.object({ dp_id: z.string(), client_id: z.string() }).parse(req.body);
-    res.json(await s.setDemat(getDb(), req.user!, Number(req.params.id), dp_id, client_id));
+    const { dp_id, client_id, depository } = z.object({ dp_id: z.string(), client_id: z.string(), depository: z.string().nullish() }).parse(req.body);
+    res.json(await s.setDemat(getDb(), req.user!, Number(req.params.id), dp_id, client_id, depository));
   }));
 
 // Deceased flag (delete/destructive-ish → Super Admin/Admin via customers:deactivate)

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 
@@ -71,6 +71,42 @@ function FilePick({ label, hint, file, onPick }: { label: string; hint?: string;
   );
 }
 
+
+interface Payee { kind: 'agent' | 'staff'; id: number; code: string | null; full_name: string }
+
+/** Referred-by combo: searchable agent/staff dropdown, free text allowed.
+ * Picking a payee stores their CODE (falls back to name when no code). */
+function ReferredByPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const q = value.trim();
+  const search = useQuery({
+    queryKey: ['payee-search', q],
+    queryFn: () => api.get<{ rows: Payee[] }>(`/api/agents/payee-search?q=${encodeURIComponent(q)}`),
+    enabled: open && q.length >= 2,
+  });
+  const rows = search.data?.rows ?? [];
+  return (
+    <span className="relative block">
+      <input className="w-full px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary"
+        value={value} placeholder="Code or name…"
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)} />
+      {open && rows.length > 0 && (
+        <span className="absolute top-full left-0 right-0 mt-1 bg-surface border border-border rounded shadow-card z-20 block max-h-44 overflow-auto">
+          {rows.map((r) => (
+            <button key={`${r.kind}-${r.id}`} type="button" className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg block"
+              onMouseDown={(e) => { e.preventDefault(); onChange(r.code || r.full_name); setOpen(false); }}>
+              {r.full_name} <span className="font-mono text-text-muted">{r.code ?? ''}</span>
+              <span className={`float-right text-[10px] rounded px-1 ${r.kind === 'staff' ? 'bg-bg' : 'bg-[color:var(--warn-bg)]'}`}>{r.kind}</span>
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function CustomerWizard({ onClose }: { onClose: () => void }) {
   const nav = useNavigate();
   const qc = useQueryClient();
@@ -80,6 +116,7 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
     pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null,
   });
   const [err, setErr] = useState('');
+  const [dup, setDup] = useState<{ id: number; customer_code: string; full_name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
   const setFile = (k: DocKey, file: File | null) => setFiles((prev) => ({ ...prev, [k]: file }));
@@ -124,13 +161,15 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
 
   async function finish(submit: boolean) {
     if (!f.full_name.trim()) { setErr('Full name is required.'); setStep(0); return; }
-    setErr(''); setBusy(true);
+    setErr(''); setDup(null); setBusy(true);
     try {
       const id = await persist(submit);
       qc.invalidateQueries({ queryKey: ['customers'] });
       onClose();
       nav(`/app/customers/${id}`);
     } catch (e) {
+      const d = e instanceof ApiError ? (e.detail as { existing_customer?: { id: number; customer_code: string; full_name: string } } | undefined) : undefined;
+      if (d?.existing_customer) setDup(d.existing_customer);
       setErr(e instanceof ApiError ? e.message : 'Save failed');
     } finally { setBusy(false); }
   }
@@ -172,7 +211,7 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
               <Field label="City"><input className={inp} value={f.city} onChange={(e) => set({ city: e.target.value })} /></Field>
               <Field label="District"><input className={inp} value={f.district} onChange={(e) => set({ district: e.target.value })} /></Field>
               <Field label="State"><input className={inp} value={f.state} onChange={(e) => set({ state: e.target.value })} /></Field>
-              <Field label="Referred by"><input className={inp} value={f.referred_by_text} onChange={(e) => set({ referred_by_text: e.target.value })} /></Field>
+              <Field label="Referred by" hint="Pick an agent/staff code — or type a new name (becomes an agent after approval)"><ReferredByPicker value={f.referred_by_text} onChange={(v) => set({ referred_by_text: v })} /></Field>
               <label className="text-xs flex items-center gap-1.5 mt-1"><input type="checkbox" checked={f.is_nri} onChange={(e) => set({ is_nri: e.target.checked })} />NRI</label>
             </div>
           )}
@@ -242,6 +281,11 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
         </div>
 
         {err && <div className="text-xs text-danger px-5 pb-1">{err}</div>}
+        {dup && (
+          <div className="text-xs px-5 pb-2">
+            Existing customer: <button className="font-mono text-primary underline" onClick={() => { onClose(); nav(`/app/customers/${dup.id}`); }}>{dup.customer_code}</button> ({dup.full_name}) — open them to book the new investment and use <b>Request handover</b> there (Admin/CXO/BM approve).
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2 px-5 py-3.5 border-t border-border">
           <button onClick={() => (step === 0 ? onClose() : setStep(step - 1))} className="text-sm text-text-muted hover:underline px-3 py-1.5">
             {step === 0 ? 'Cancel' : '← Back'}

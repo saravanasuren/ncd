@@ -54,8 +54,17 @@ export async function createCustomer(db: Db, actor: AuthUser, input: CreateCusto
   const aadhaar4 = input.aadhaar_last4 ? String(input.aadhaar_last4).replace(/\D/g, '').slice(-4) || null : null;
   return db.withTx(async (tx) => {
     if (input.pan) {
-      const dup = await tx.query('SELECT 1 FROM customers WHERE pan = $1', [input.pan]);
-      if (dup.rowCount) throw errors.conflict('A customer with this PAN already exists');
+      // Repeat customer (owner spec 2026-07-18): an existing PAN is not an
+      // error to hide — surface WHO it is so the UI offers a handover request
+      // (Admin/CXO/BM approve) and the new investment books on the SAME
+      // customer record (→ customer_was_new_at_creation=false → repeat rate).
+      const dup = (await tx.query<{ id: string; customer_code: string; full_name: string }>(
+        'SELECT id, customer_code, full_name FROM customers WHERE upper(btrim(pan)) = upper(btrim($1))', [input.pan])).rows[0];
+      if (dup) {
+        throw errors.conflict('A customer with this PAN already exists — request a handover to book their new investment', {
+          existing_customer: { id: Number(dup.id), customer_code: dup.customer_code, full_name: dup.full_name },
+        });
+      }
     }
     const code = await nextCode(tx, 'customer', codeFmt);
     const branchId = actor.branchIds[0] ?? null;
@@ -72,6 +81,15 @@ export async function createCustomer(db: Db, actor: AuthUser, input: CreateCusto
        actor.id, actor.agentId, branchId]
     );
     const id = Number(rows[0]!.id);
+    // Referred-by that matches no known agent/staff code or name → a brand-new
+    // agent: create it PendingApproval + open an agent_registration approval
+    // (owner: free text "will be created as new agent upon approval").
+    const refText = input.referred_by_text?.trim();
+    if (refText) {
+      const { resolveReferrer, ensurePendingAgentForName } = await import('../agents/service.js');
+      const known = await resolveReferrer(tx, refText);
+      if (!known) await ensurePendingAgentForName(tx, actor, refText);
+    }
     await writeAudit(tx, { actorId: actor.id, action: 'customer.create', entityType: 'customers', entityId: id, after: { code, name: input.full_name } });
     return { id, customer_code: code };
   });

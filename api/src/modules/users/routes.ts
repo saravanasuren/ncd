@@ -31,6 +31,8 @@ const createSchema = z.object({
   password: z.string().min(8),
   branch_id: z.number().nullable().optional(),
   reports_to_user_id: z.number().nullable().optional(),
+  code: z.string().max(20).nullable().optional(),
+  is_staff: z.boolean().optional(),
 });
 
 usersRouter.post(
@@ -49,6 +51,8 @@ const updateSchema = z.object({
   reports_to_user_id: z.number().nullable().optional(),
   is_active: z.boolean().optional(),
   password: z.string().min(8).optional(),
+  code: z.string().max(20).nullable().optional(),
+  is_staff: z.boolean().optional(),
 });
 
 usersRouter.put(

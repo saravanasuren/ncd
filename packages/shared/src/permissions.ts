@@ -49,6 +49,9 @@ export const PERMISSIONS = [
   // approvals
   'approvals:check', // generic checker (never own submission)
   'approvals:check-premature', // CXO's single action power (docs/03 §4)
+  'approvals:check-handover', // repeat-customer handover: any one of Admin/CXO/BM
+  // agents (manual agent admin — LockerHub self-signup is separate)
+  'agents:manage',
   // incentives
   'incentives:manage-eligibility',
   'incentives:pay',
@@ -112,6 +115,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'dashboard:drilldown',
     'reports:download',
     'approvals:check-premature', // the one CXO action (docs/03 §4)
+    'approvals:check-handover', // repeat-customer handover (any one of Admin/CXO/BM)
   ],
 
   ncd_manager: [
@@ -137,6 +141,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'redemptions:initiate',
     'payouts:generate',
     'approvals:check',
+    'agents:manage',
     'incentives:manage-eligibility',
     'earnings:read-own',
     'dashboard:view',
@@ -150,6 +155,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     ...STAFF_FUNNEL,
     'dashboard:drilldown',
     'reports:download',
+    'approvals:check-handover', // repeat-customer handover (any one of Admin/CXO/BM)
   ],
 
   branch_staff: [...STAFF_FUNNEL],

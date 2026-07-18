@@ -67,7 +67,8 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
   customer_reassignment: {
     type: 'customer_reassignment',
     label: 'Customer Handover',
-    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
+    // Owner 2026-07-18: any ONE of Admin / CXO / Branch Manager approves.
+    levels: [{ level: 1, checkerPermission: 'approvals:check-handover', label: 'Admin / CXO / Branch Manager' }],
   },
   agent_registration: {
     type: 'agent_registration',

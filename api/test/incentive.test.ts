@@ -28,19 +28,20 @@ describe('incentive matrix — the 4 cells (default pct rates)', () => {
     expect(r.staffAmount).toBe(20000);
     expect(r.referrerAmount).toBe(0);
   });
-  it('existing + referrer → staff 0.25%, referrer 0', () => {
+  it('existing + referrer → referrer 0.25% (the new agent earns the repeat rate), staff 0', () => {
     const r = computeIncentives(DEFAULT_MATRIX, false, true, AMOUNT);
-    expect(r.staffAmount).toBe(2500);
-    expect(r.referrerAmount).toBe(0);
+    expect(r.staffAmount).toBe(0);
+    expect(r.referrerAmount).toBe(2500);
   });
 });
 
 describe('incentive matrix — flat ₹ rates are supported', () => {
   const flatMatrix: IncentiveMatrix = {
     selfSourced: { mode: 'flat', value: 5000 },
-    existingWithReferrer: { mode: 'pct', value: 0.25 },
+    existingWithReferrer: { mode: 'pct', value: 0 },
     newWithReferrer: { mode: 'pct', value: 0 },
     referrerNewCustomer: { mode: 'flat', value: 7500 },
+    referrerExistingCustomer: { mode: 'pct', value: 0.25 },
   };
   it('flat staff rate pays the flat amount regardless of investment', () => {
     expect(computeIncentives(flatMatrix, true, false, AMOUNT).staffAmount).toBe(5000);

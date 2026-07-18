@@ -17,5 +17,6 @@ export async function getMatrix(db: Db): Promise<IncentiveMatrix> {
     existingWithReferrer: asRate(s[MATRIX_SETTING_KEYS.existingWithReferrer], DEFAULT_MATRIX.existingWithReferrer),
     newWithReferrer: asRate(s[MATRIX_SETTING_KEYS.newWithReferrer], DEFAULT_MATRIX.newWithReferrer),
     referrerNewCustomer: asRate(s[MATRIX_SETTING_KEYS.referrerNewCustomer], DEFAULT_MATRIX.referrerNewCustomer),
+    referrerExistingCustomer: asRate(s[MATRIX_SETTING_KEYS.referrerExistingCustomer], DEFAULT_MATRIX.referrerExistingCustomer),
   };
 }

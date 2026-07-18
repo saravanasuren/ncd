@@ -11,7 +11,12 @@
  *
  *   referrer? no  → staff: selfSourced,          referrer: 0
  *   referrer? yes + new customer → staff: newWithReferrer,      referrer: referrerNewCustomer
- *   referrer? yes + existing     → staff: existingWithReferrer, referrer: 0
+ *   referrer? yes + existing     → staff: existingWithReferrer, referrer: referrerExistingCustomer
+ *
+ * 2026-07-18 (owner): on a repeat investment from an existing customer, the
+ * REFERRER (the new agent who brought the money) earns the repeat rate
+ * (default 0.25%), not the enrolling staff. Fresh customers stay at 2% to the
+ * referrer. Both editable in Admin → Settings.
  */
 import { round2 } from './dates.js';
 
@@ -22,6 +27,7 @@ export interface IncentiveMatrix {
   existingWithReferrer: RateSpec;
   newWithReferrer: RateSpec;
   referrerNewCustomer: RateSpec;
+  referrerExistingCustomer: RateSpec;
 }
 
 /** Settings keys holding each rate (docs/07). */
@@ -30,14 +36,16 @@ export const MATRIX_SETTING_KEYS = {
   existingWithReferrer: 'incentive.staff_existing_with_referrer',
   newWithReferrer: 'incentive.referrer_new_with_referrer_staff',
   referrerNewCustomer: 'incentive.referrer_new_with_referrer',
+  referrerExistingCustomer: 'incentive.referrer_existing_with_referrer',
 } as const;
 
 /** Production defaults (all percent). */
 export const DEFAULT_MATRIX: IncentiveMatrix = {
   selfSourced: { mode: 'pct', value: 2.0 },
-  existingWithReferrer: { mode: 'pct', value: 0.25 },
+  existingWithReferrer: { mode: 'pct', value: 0 },
   newWithReferrer: { mode: 'pct', value: 0 },
   referrerNewCustomer: { mode: 'pct', value: 2.0 },
+  referrerExistingCustomer: { mode: 'pct', value: 0.25 },
 };
 
 /** Resolve a rate spec against an investment amount → rupee amount. */
@@ -58,7 +66,7 @@ export function pickRates(
   if (isNewCustomer) {
     return { staff: matrix.newWithReferrer, referrer: matrix.referrerNewCustomer };
   }
-  return { staff: matrix.existingWithReferrer, referrer: { mode: 'pct', value: 0 } };
+  return { staff: matrix.existingWithReferrer, referrer: matrix.referrerExistingCustomer };
 }
 
 export interface IncentiveResult {

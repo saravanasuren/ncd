@@ -68,6 +68,24 @@ describe("today's flow cards", () => {
     expect(app.application_no).toMatch(/^APP-/);
   });
 
+  it('a batch approval detail lists the covered applications', async () => {
+    const a = await admin();
+    const ncd = new Client(ctx.base);
+    await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
+    const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
+    const reqId = Number(batch.json.request.id);
+    const det = await a.get(`/api/approvals/${reqId}`);
+    expect(det.status).toBe(200);
+    const covered = det.json.covered as any[];
+    expect(Array.isArray(covered)).toBe(true);
+    expect(covered.length).toBeGreaterThan(0);
+    expect(covered[0].customer).toBeTruthy();
+    expect(covered[0].application_no).toMatch(/^APP-/);
+    expect(Number(covered[0].amount)).toBeGreaterThan(0);
+    // clean up: reject so other tests' state is untouched
+    await a.post(`/api/approvals/${reqId}/reject`, { reason: 'test cleanup' });
+  });
+
   it('a locker-flagged addition lands in the locker split', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Locker Today', phone: '9880002222' });

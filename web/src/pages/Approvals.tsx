@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 
 interface ApprovalReq {
@@ -29,25 +30,71 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 /** Expanded row: full request payload from GET /api/approvals/:id. */
+interface CoveredRow {
+  application_no: string; customer: string; customer_code: string;
+  amount: string; date_money_received: string | null; series_code: string;
+}
+
 function Detail({ id }: { id: number }) {
   const { data, isLoading } = useQuery({
     queryKey: ['approval', id],
-    queryFn: () => api.get<{ request: Record<string, unknown> }>(`/api/approvals/${id}`),
+    queryFn: () => api.get<{ request: Record<string, unknown>; covered: CoveredRow[] | null }>(`/api/approvals/${id}`),
   });
+  const [showRaw, setShowRaw] = useState(false);
   if (isLoading) return <div className="text-xs text-text-muted px-4 pb-3">Loading detail…</div>;
   const r = data?.request ?? {};
+  const covered = data?.covered ?? null;
   const skip = new Set(['id', 'canAct']);
   const entries = Object.entries(r).filter(([k, v]) => !skip.has(k) && v != null && v !== '');
+  const total = (covered ?? []).reduce((s, c) => s + Number(c.amount), 0);
   return (
     <div className="px-4 pb-4">
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs bg-bg rounded p-3">
-        {entries.map(([k, v]) => (
-          <span key={k} className="contents">
-            <dt className="text-text-muted">{k}</dt>
-            <dd className="m-0 font-mono break-all">{typeof v === 'object' ? JSON.stringify(v, null, 1) : String(v)}</dd>
-          </span>
-        ))}
-      </dl>
+      {covered && (
+        <div className="bg-bg rounded p-3 mb-2">
+          <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">
+            {covered.length} investment{covered.length === 1 ? '' : 's'} in this batch · {formatINR(total)}
+          </div>
+          {covered.length === 0 ? (
+            <div className="text-xs text-text-muted">Nothing left in this batch — the covered investments were already processed.</div>
+          ) : (
+            <div className="max-h-72 overflow-y-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-border text-left">
+                    <th className="py-1.5 pr-3 font-semibold text-text-label">Customer</th>
+                    <th className="py-1.5 pr-3 font-semibold text-text-label">App no</th>
+                    <th className="py-1.5 pr-3 font-semibold text-text-label">Received</th>
+                    <th className="py-1.5 font-semibold text-text-label text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {covered.map((c) => (
+                    <tr key={c.application_no} className="border-b border-border last:border-0">
+                      <td className="py-1.5 pr-3">{c.customer} <span className="text-text-muted font-mono">{c.customer_code}</span></td>
+                      <td className="py-1.5 pr-3 font-mono whitespace-nowrap">{c.application_no}</td>
+                      <td className="py-1.5 pr-3 whitespace-nowrap">{c.date_money_received ? String(c.date_money_received).slice(0, 10) : '—'}</td>
+                      <td className="py-1.5 text-right mono">{formatINR(c.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <button onClick={() => setShowRaw(!showRaw)} className="text-xs text-text-muted hover:text-primary mt-2">
+            {showRaw ? 'Hide request record' : 'Show request record'}
+          </button>
+        </div>
+      )}
+      {(!covered || showRaw) && (
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs bg-bg rounded p-3">
+          {entries.map(([k, v]) => (
+            <span key={k} className="contents">
+              <dt className="text-text-muted">{k}</dt>
+              <dd className="m-0 font-mono break-all">{typeof v === 'object' ? JSON.stringify(v, null, 1) : String(v)}</dd>
+            </span>
+          ))}
+        </dl>
+      )}
     </div>
   );
 }

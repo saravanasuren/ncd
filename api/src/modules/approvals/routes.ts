@@ -26,7 +26,7 @@ approvalsRouter.get(
   asyncHandler(async (req, res) => {
     const row = await service.getById(getDb(), Number(req.params.id));
     if (!row) throw errors.notFound('Approval request not found');
-    res.json({ request: row });
+    res.json({ request: row, covered: await service.coveredApplications(getDb(), row) });
   })
 );
 

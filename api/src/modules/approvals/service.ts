@@ -215,3 +215,24 @@ export async function getById(db: Db, id: number): Promise<ApprovalRow | null> {
   const { rows } = await db.query<Record<string, unknown>>('SELECT * FROM approval_requests WHERE id = $1', [id]);
   return rows[0] ? rowToApproval(rows[0]) : null;
 }
+
+/**
+ * The applications a pending batch approval will act on — the same predicate
+ * the on-approve handler uses (activation: PendingActivation in the series;
+ * allotment: Active and not yet allotted). Snapshot at read time.
+ */
+export async function coveredApplications(db: Db, request: { request_type?: string; metadata?: Record<string, unknown> }) {
+  const type = String(request.request_type ?? '');
+  const seriesId = Number((request.metadata as Record<string, unknown> | undefined)?.series_id ?? 0);
+  if (!seriesId || (type !== 'activation_batch' && type !== 'allotment_batch')) return null;
+  const cond = type === 'activation_batch'
+    ? "a.status = 'PendingActivation'"
+    : "a.status = 'Active' AND a.allotment_date IS NULL";
+  const { rows } = await db.query(
+    `SELECT a.application_no, c.full_name AS customer, c.customer_code, a.total_amount AS amount,
+            a.date_money_received, s.code AS series_code
+     FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
+     WHERE a.series_id = $1 AND ${cond}
+     ORDER BY a.total_amount DESC, a.application_no`, [seriesId]);
+  return rows;
+}

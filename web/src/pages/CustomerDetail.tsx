@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
+import { formatINR } from '@new-wealth/shared';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
@@ -120,6 +121,8 @@ export function CustomerDetailPage() {
         )}
       </div>
 
+      <InvestmentsCard rows={data.applications ?? []} />
+
       <div className={card}>
         <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Bank accounts</h2>
         <div className="divide-y divide-border">
@@ -149,6 +152,61 @@ export function CustomerDetailPage() {
       <RelationsKyc customerId={Number(id)} data={data} onChange={invalidate} can={can} />
 
       {can('applications:create') && c.creation_status === 'Approved' && <NewInvestment customerId={Number(id)} />}
+    </div>
+  );
+}
+
+const appPill: Record<string, string> = {
+  Active: 'bg-[color:var(--success-bg)] text-success',
+  Redeemed: 'bg-bg text-text-muted', Matured: 'bg-bg text-text-muted',
+  Rejected: 'bg-[color:var(--danger-bg)] text-danger', Cancelled: 'bg-[color:var(--danger-bg)] text-danger',
+};
+
+/** The customer's investments — every application, newest first, linking to the
+ * application page. LIVE statuses total into the header line. */
+function InvestmentsCard({ rows }: { rows: any[] }) {
+  const nav = useNavigate();
+  const DEAD = ['Rejected', 'Cancelled', 'Redeemed', 'Matured', 'RolledOver', 'PrematureWithdrawn', 'Transferred'];
+  const live = rows.filter((r) => !DEAD.includes(r.status));
+  const outstanding = live.reduce((s, r) => s + Number(r.outstanding ?? 0), 0);
+  const th = 'py-2 px-3 text-xs font-semibold text-text-label uppercase tracking-wide text-left';
+  const td = 'py-2 px-3 align-middle';
+  return (
+    <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
+      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1">Investments</h2>
+      {rows.length === 0 ? (
+        <div className="py-2 text-text-muted text-sm">No investments yet.</div>
+      ) : (
+        <>
+          <div className="text-xs text-text-muted mb-2">
+            {live.length} live · outstanding <span className="font-semibold text-text">{formatINR(outstanding)}</span>
+            {rows.length > live.length ? ` · ${rows.length - live.length} closed` : ''}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className={th}>Series</th><th className={th}>App no</th>
+                  <th className={th}>Status</th><th className={th}>Received</th>
+                  <th className={`${th} text-right`}>Invested</th><th className={`${th} text-right`}>Outstanding</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className="border-b border-border last:border-0 hover:bg-bg cursor-pointer" onClick={() => nav(`/app/applications/${r.id}`)}>
+                    <td className={td}>{r.series_code}</td>
+                    <td className={`${td} font-mono text-xs whitespace-nowrap`}>{r.application_no}</td>
+                    <td className={td}><span className={`text-[11px] rounded px-1.5 py-0.5 ${appPill[r.status] ?? 'bg-[color:var(--warn-bg)] text-warn'}`}>{r.status}</span></td>
+                    <td className={`${td} text-xs whitespace-nowrap`}>{r.date_money_received ? String(r.date_money_received).slice(0, 10) : '—'}</td>
+                    <td className={`${td} text-right mono`}>{formatINR(r.amount)}</td>
+                    <td className={`${td} text-right mono font-medium`}>{formatINR(r.outstanding ?? 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }

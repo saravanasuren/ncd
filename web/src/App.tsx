@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext.js';
 import { LoginPage } from './pages/Login.js';
 import { ForgotPasswordPage } from './pages/ForgotPassword.js';
+import { SignupPage } from './pages/Signup.js';
 import { ResetPasswordPage } from './pages/ResetPassword.js';
 import { AppShell } from './layouts/AppShell.js';
 // Lazy-loaded: the dashboard pulls in the (heavy) charting library, so it
@@ -52,6 +53,7 @@ export function App() {
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/portal" element={<PortalLogin />} />

@@ -31,8 +31,17 @@ function clearAuthCookies(res: Response): void {
 }
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  email: z.string().min(1), // email OR mobile
   password: z.string().min(1),
+});
+
+const signupSchema = z.object({
+  type: z.enum(['staff', 'agent']),
+  mobile: z.string().min(10),
+  password: z.string().min(8),
+  full_name: z.string().optional(),
+  employee_id: z.string().optional(),
+  branch_id: z.number().optional(),
 });
 
 export const authRouter = Router();
@@ -45,6 +54,24 @@ authRouter.post(
     const { user, tokens } = await service.login(getDb(), email, password, meta);
     setAuthCookies(res, tokens);
     res.json({ user });
+  })
+);
+
+// Public sign-up (Staff / Agent) — creates an unverified, own-scope login.
+authRouter.post(
+  '/signup',
+  asyncHandler(async (req, res) => {
+    const input = signupSchema.parse(req.body);
+    res.status(201).json(await service.signup(getDb(), input));
+  })
+);
+
+// Public branch list for the staff sign-up dropdown (non-secret reference data).
+authRouter.get(
+  '/branches',
+  asyncHandler(async (_req, res) => {
+    const { rows } = await getDb().query('SELECT id, code, name FROM branches ORDER BY name');
+    res.json({ rows });
   })
 );
 

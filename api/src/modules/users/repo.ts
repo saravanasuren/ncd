@@ -59,6 +59,29 @@ export async function findByEmailWithSecret(
   return { user, passwordHash: row.password_hash, isActive: row.is_active };
 }
 
+/** Login lookup by email OR mobile (digits-only). Returns the verification
+ * status too, so the auth layer can enforce the 30-day unverified block. */
+export async function findByLoginWithSecret(
+  db: Db,
+  identifier: string
+): Promise<{ user: AuthUser; passwordHash: string | null; isActive: boolean; isSelfSignup: boolean; verifiedAt: string | null; createdAt: string } | null> {
+  const digits = identifier.replace(/\D/g, '');
+  const { rows } = await db.query<UserRow & { is_self_signup: boolean; verified_at: string | null; created_at: string }>(
+    `SELECT u.id, u.email, u.password_hash, u.full_name, r.name AS role_name, u.is_active,
+            u.is_self_signup, u.verified_at, u.created_at
+     FROM users u JOIN roles r ON r.id = u.role_id
+     WHERE lower(u.email) = lower($1)
+        OR ($2 <> '' AND regexp_replace(COALESCE(u.phone,''),'\\D','','g') = $2)
+     ORDER BY (lower(u.email) = lower($1)) DESC
+     LIMIT 1`,
+    [identifier, digits]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const user = await hydrate(db, row);
+  return { user, passwordHash: row.password_hash, isActive: row.is_active, isSelfSignup: row.is_self_signup, verifiedAt: row.verified_at, createdAt: row.created_at };
+}
+
 export async function findAuthUserById(db: Db, id: number): Promise<AuthUser | null> {
   const { rows } = await db.query<UserRow>(
     `SELECT u.id, u.email, u.password_hash, u.full_name, r.name AS role_name, u.is_active

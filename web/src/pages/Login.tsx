@@ -38,9 +38,9 @@ export function LoginPage() {
         </div>
         <form onSubmit={onSubmit}>
           <label className="block text-xs font-semibold text-text-label mt-3.5 mb-1.5" htmlFor="email">
-            Email
+            Email or mobile
           </label>
-          <input id="email" type="email" autoComplete="username" value={email}
+          <input id="email" type="text" autoComplete="username" value={email}
             onChange={(e) => setEmail(e.target.value)} required autoFocus className={input} />
           <label className="block text-xs font-semibold text-text-label mt-3.5 mb-1.5" htmlFor="password">
             Password
@@ -56,8 +56,10 @@ export function LoginPage() {
               {error}
             </div>
           )}
-          <div className="mt-3.5 text-center">
+          <div className="mt-3.5 text-center flex items-center justify-center gap-3">
             <Link to="/forgot-password" className="text-xs text-primary hover:underline">Forgot password?</Link>
+            <span className="text-border">·</span>
+            <Link to="/signup" className="text-xs text-primary hover:underline">Sign up</Link>
           </div>
         </form>
       </div>

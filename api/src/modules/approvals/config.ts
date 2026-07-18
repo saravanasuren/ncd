@@ -75,6 +75,12 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Agent Registration',
     levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
+  // Self-signup review — Admin or CXO verifies the new staff/agent.
+  user_verification: {
+    type: 'user_verification',
+    label: 'User Verification',
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
+  },
   rollover: {
     type: 'rollover',
     label: 'NCD Rollover',

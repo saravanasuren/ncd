@@ -29,6 +29,7 @@ const TYPE_LABELS: Record<string, string> = {
   agent_registration: 'Agent Registration',
   activation_batch: 'Activation',
   allotment_batch: 'Allotment',
+  user_verification: 'User Verification',
 };
 
 /** Human title for a request card, e.g. "NCD_27 · Activation" for a batch. */
@@ -136,7 +137,10 @@ export function ApprovalsPage() {
                 <div className="text-sm font-semibold">{requestTitle(r)}
                   {r.max_levels > 1 && <span className="text-xs text-text-muted font-normal"> · level {r.level} of {r.max_levels}</span>}
                 </div>
-                <div className="text-xs text-text-muted font-mono">{r.request_no}{r.metadata.customerName ? ` · ${String(r.metadata.customerName)}` : ''}</div>
+                <div className="text-xs text-text-muted font-mono">{r.request_no}
+                  {r.metadata.customerName ? ` · ${String(r.metadata.customerName)}` : ''}
+                  {r.request_type === 'user_verification' ? ` · ${String(r.metadata.name ?? '')} (${String(r.metadata.kind ?? '')}) · ${String(r.metadata.mobile ?? '')}` : ''}
+                </div>
               </div>
               <button onClick={() => setOpenId(openId === r.id ? null : r.id)} className="text-xs text-primary hover:underline">
                 {openId === r.id ? 'Hide' : 'Details'}

@@ -33,3 +33,16 @@ UPDATE app_settings
 SET value = '{"mode":"pct","value":0}'
 WHERE key = 'incentive.staff_existing_with_referrer'
   AND value::jsonb = '{"mode":"pct","value":0.25}'::jsonb;
+
+-- Permission grants for the new capabilities. deploy.sh runs migrate but NOT
+-- seed, so the grants must land here or nobody can approve a handover (the
+-- role_permissions table is only rewritten on a manual reseed).
+INSERT INTO role_permissions (role_id, permission)
+SELECT r.id, 'approvals:check-handover' FROM roles r
+WHERE r.name IN ('super_admin','admin','cxo','branch_manager')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO role_permissions (role_id, permission)
+SELECT r.id, 'agents:manage' FROM roles r
+WHERE r.name IN ('super_admin','admin','ncd_manager')
+ON CONFLICT DO NOTHING;

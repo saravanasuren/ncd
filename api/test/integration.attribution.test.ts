@@ -64,6 +64,16 @@ describe('agent/staff attribution by referred-by', () => {
     expect(keys(agent.json.groups)).not.toContain('Demo NCD Manager');
   });
 
+  it('dashboard staff/agent tiles split the money-in (not the same total)', async () => {
+    const a = await admin();
+    const ov = await a.get('/api/dashboard/overview');
+    expect(ov.status).toBe(200);
+    // staff tile = staff-referred money only; agent tile = everything else
+    expect(Number(ov.json.flow.money_in_staff)).toBe(300000);   // Demo NCD Manager
+    expect(Number(ov.json.flow.money_in_agent)).toBe(500000);   // Gokul
+    expect(Number(ov.json.flow.money_in_staff) + Number(ov.json.flow.money_in_agent)).toBe(Number(ov.json.flow.money_in));
+  });
+
   it('no referrer falls back to Direct in Agent-wise', async () => {
     const a = await admin();
     await fund(a, 'Cust Direct', 100000, '');

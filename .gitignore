@@ -14,3 +14,4 @@ packages/*/dist/
 
 # runtime upload dir (tests write here in dev)
 api/data/
+.claude/worktrees/

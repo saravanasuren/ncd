@@ -370,6 +370,18 @@ export async function moneyInByChannel(db: Db, actor: AuthUser, filters: BookFil
   return { total: round2(Number(r.total)), locker: round2(Number(r.locker)), app: round2(Number(r.app)), count: Number(r.n) };
 }
 
+/** Money-in for the window split by attribution: referrer matched to a staff
+ * user → staff; everything else (agents, Direct) → agent. staff+agent = total. */
+export async function moneyInBySource(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+  const w = appWhere(actor, { ...filters, status: 'active' });
+  const { rows } = await db.query<{ staff: string; agent: string }>(
+    `SELECT COALESCE(sum(a.total_amount) FILTER (WHERE sref.full_name IS NOT NULL),0) AS staff,
+            COALESCE(sum(a.total_amount) FILTER (WHERE sref.full_name IS NULL),0) AS agent
+     ${FROM_ATTR} WHERE ${w.sql} AND a.date_money_received IS NOT NULL`, w.params);
+  const r = rows[0]!;
+  return { staff: round2(Number(r.staff)), agent: round2(Number(r.agent)) };
+}
+
 /** New-investment list for the window; optional channel = 'locker' | 'app'. */
 export async function newInvestmentsList(db: Db, actor: AuthUser, filters: BookFilters = {}, channel?: 'locker' | 'app') {
   const extra = ['a.date_money_received IS NOT NULL'];

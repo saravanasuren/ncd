@@ -5,7 +5,7 @@ import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 
-interface Payee { payee_type: string; payee_id: number; accrued: string; paid: string; balance: string; }
+interface Payee { payee_type: string; payee_id: number; payee_name: string | null; accrued: string; paid: string; balance: string; }
 interface Referrer { id: number; display_name: string; eligibility_status: string; }
 interface AgentRow { id: number; full_name: string; agent_code: string; commission_status: string; commission_rate_pct: number | null; }
 
@@ -49,7 +49,13 @@ export function IncentivesPage() {
       <div className="mb-6">
         <DataTable
           columns={[
-            { key: 'payee', header: 'Payee', value: (p) => `${p.payee_type} #${p.payee_id}`, render: (p) => `${p.payee_type} #${p.payee_id}` },
+            { key: 'payee', header: 'Payee', value: (p) => p.payee_name ?? `${p.payee_type} #${p.payee_id}`,
+              render: (p) => (
+                <span>
+                  <span className="font-medium">{p.payee_name ?? `${p.payee_type} #${p.payee_id}`}</span>{' '}
+                  <span className="text-xs text-text-muted capitalize">{p.payee_type}</span>
+                </span>
+              ) },
             { key: 'accrued', header: 'Accrued', align: 'right', value: (p) => Number(p.accrued), render: (p) => <span className="mono">{formatINR(p.accrued)}</span> },
             { key: 'paid', header: 'Paid', align: 'right', value: (p) => Number(p.paid), render: (p) => <span className="mono text-text-muted">{formatINR(p.paid)}</span> },
             { key: 'balance', header: 'Balance', align: 'right', value: (p) => Number(p.balance), render: (p) => <span className="mono font-semibold">{formatINR(p.balance)}</span> },

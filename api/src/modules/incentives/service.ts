@@ -113,11 +113,20 @@ export async function statementPdf(db: Db, payeeType: string, payeeId: number): 
 export async function overview(db: Db) {
   const { rows } = await db.query(
     `SELECT ia.payee_type, ia.payee_id, COALESCE(sum(ia.amount),0) AS accrued,
-            COALESCE((SELECT sum(p.amount) FROM incentive_payouts p WHERE p.payee_type = ia.payee_type AND p.payee_id = ia.payee_id),0) AS paid
+            COALESCE((SELECT sum(p.amount) FROM incentive_payouts p WHERE p.payee_type = ia.payee_type AND p.payee_id = ia.payee_id),0) AS paid,
+            CASE ia.payee_type
+              WHEN 'staff' THEN (SELECT u.full_name FROM users u WHERE u.id = ia.payee_id)
+              WHEN 'agent' THEN (SELECT ag.full_name FROM agents ag WHERE ag.id = ia.payee_id)
+              WHEN 'referrer' THEN (SELECT rf.display_name FROM referrers rf WHERE rf.id = ia.payee_id)
+            END AS payee_name
      FROM incentive_accruals ia GROUP BY ia.payee_type, ia.payee_id`
   );
   return rows.map((r) => {
     const accrued = Number((r as any).accrued); const paid = Number((r as any).paid);
-    return { payee_type: (r as any).payee_type, payee_id: Number((r as any).payee_id), accrued: round2(accrued), paid: round2(paid), balance: round2(accrued - paid) };
+    return {
+      payee_type: (r as any).payee_type, payee_id: Number((r as any).payee_id),
+      payee_name: (r as any).payee_name ?? null,
+      accrued: round2(accrued), paid: round2(paid), balance: round2(accrued - paid),
+    };
   });
 }

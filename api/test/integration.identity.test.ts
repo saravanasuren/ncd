@@ -143,6 +143,15 @@ describe('incentive accrual routing', () => {
     expect(acc.find((r) => r.payee_type === 'staff')).toBeUndefined(); // newWithReferrer = 0
   });
 
+  it('the payees ledger resolves names (no raw "type #id")', async () => {
+    const a = await admin();
+    const led = await a.get('/api/incentives/overview');
+    expect(led.status).toBe(200);
+    const rows = led.json.rows as Array<{ payee_type: string; payee_name: string | null }>;
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(r.payee_name, `unresolved ${r.payee_type}`).toBeTruthy();
+  });
+
   it('repeat investment referred by an agent → agent gets 0.25%, staff 0', async () => {
     const a = await admin();
     const { cid } = await invest(a, { full_name: 'Repeat Investor', phone: '9811110006' }, 100000);

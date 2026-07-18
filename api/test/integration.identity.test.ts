@@ -50,6 +50,31 @@ describe('agents admin + payee search', () => {
     const s2 = await a.get('/api/agents/payee-search?q=coded');
     expect((s2.json.rows as Array<{ kind: string }>).some((r) => r.kind === 'staff')).toBe(true);
   });
+
+  it('edits an agent: name, phone and bank details persist; list returns them', async () => {
+    const a = await admin();
+    const ag = await a.post('/api/agents', { full_name: 'Editable Agent' });
+    const upd = await a.put(`/api/agents/${ag.json.id}`, {
+      full_name: 'Edited Agent', phone: '9812345678',
+      bank_name: 'ICICI', account_number: '9988776655', ifsc: 'ICIC0001234',
+    });
+    expect(upd.status).toBe(200);
+    const list = await a.get('/api/agents');
+    const row = (list.json.rows as any[]).find((r) => r.id === ag.json.id);
+    expect(row.full_name).toBe('Edited Agent');
+    expect(row.phone).toBe('9812345678');
+    expect(row.bank_name).toBe('ICICI');
+    expect(row.account_number).toBe('9988776655');
+    expect(row.ifsc).toBe('ICIC0001234');
+
+    // Clearing a field sends null (what the edit form does) — must not 400.
+    const clear = await a.put(`/api/agents/${ag.json.id}`, { phone: null, bank_name: null });
+    expect(clear.status).toBe(200);
+    const list2 = await a.get('/api/agents');
+    const row2 = (list2.json.rows as any[]).find((r) => r.id === ag.json.id);
+    expect(row2.phone).toBeNull();
+    expect(row2.bank_name).toBeNull();
+  });
 });
 
 describe('enrol: duplicate PAN → handover offer; free text → pending agent', () => {

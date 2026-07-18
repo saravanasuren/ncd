@@ -16,6 +16,7 @@ export async function listAgents(db: Db) {
   const { rows } = await db.query(
     `SELECT a.id, a.agent_code, a.full_name, a.phone, a.email, a.source,
             a.commission_status, a.commission_rate_pct, a.is_active, a.user_id,
+            a.bank_name, a.account_number, a.ifsc,
             u.full_name AS user_name
      FROM agents a LEFT JOIN users u ON u.id = a.user_id
      ORDER BY a.full_name`);
@@ -49,7 +50,19 @@ export async function createAgent(db: Db, actor: AuthUser, input: CreateAgentInp
   });
 }
 
-export async function updateAgent(db: Db, actor: AuthUser, id: number, input: Partial<CreateAgentInput> & { is_active?: boolean }) {
+export interface UpdateAgentInput {
+  full_name?: string;
+  agent_code?: string;
+  phone?: string | null;
+  email?: string | null;
+  user_id?: number | null;
+  bank_name?: string | null;
+  account_number?: string | null;
+  ifsc?: string | null;
+  is_active?: boolean;
+}
+
+export async function updateAgent(db: Db, actor: AuthUser, id: number, input: UpdateAgentInput) {
   await db.withTx(async (tx) => {
     const cur = (await tx.query<Record<string, unknown>>('SELECT * FROM agents WHERE id = $1', [id])).rows[0];
     if (!cur) throw errors.notFound('Agent not found');

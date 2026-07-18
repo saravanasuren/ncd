@@ -24,7 +24,8 @@ const SELF_INVESTMENT = `(
 const NOT_SELF = `NOT COALESCE(${SELF_INVESTMENT}, false)`;
 const ACCRUAL_FROM = `FROM incentive_accruals ia
   JOIN applications a ON a.id = ia.application_id
-  JOIN customers c ON c.id = a.customer_id`;
+  JOIN customers c ON c.id = a.customer_id
+  JOIN series s ON s.id = a.series_id`;
 
 export async function payeeBalance(db: Db, payeeType: string, payeeId: number) {
   // Balance = eligible accruals not yet paid (paid = accruals with paid_at set).
@@ -41,6 +42,7 @@ export async function payeeBalance(db: Db, payeeType: string, payeeId: number) {
 export async function payeeAccruals(db: Db, payeeType: string, payeeId: number) {
   const { rows } = await db.query(
     `SELECT ia.application_id, a.application_no, c.full_name AS customer, c.customer_code,
+            s.code AS series_code, a.date_money_received,
             a.total_amount AS investment_amount, ia.amount AS incentive_amount,
             ia.rate_value, ia.rate_mode, ia.accrual_date, (ia.paid_at IS NOT NULL) AS paid, ia.paid_at
      ${ACCRUAL_FROM}

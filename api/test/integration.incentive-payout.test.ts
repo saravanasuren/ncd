@@ -49,6 +49,9 @@ describe('incentives — self-investment excluded, per-customer pay', () => {
     const apps = dl.json.rows.map((r: any) => r.application_no);
     expect(apps).toContain('APP-INC-1');
     expect(apps).not.toContain('APP-INC-2');
+    // rows carry the series + investment date for the Month/Series columns
+    expect(dl.json.rows[0].series_code).toBe('NCD DEMO');
+    expect(dl.json.rows[0]).toHaveProperty('date_money_received');
   });
 
   it('paying one customer in full marks it paid and clears the balance', async () => {

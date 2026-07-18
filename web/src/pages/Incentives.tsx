@@ -7,7 +7,14 @@ import { DataTable, type Column } from '../components/DataTable.js';
 import { Tabs, type TabDef } from '../components/Tabs.js';
 
 interface Payee { payee_type: string; payee_id: number; payee_name: string | null; investment_amount: string; accrued: string; paid: string; balance: string; }
-interface Accrual { application_id: number; application_no: string; customer: string; customer_code: string; investment_amount: string; incentive_amount: string; paid: boolean; }
+interface Accrual { application_id: number; application_no: string; customer: string; customer_code: string; series_code: string; date_money_received: string | null; investment_amount: string; incentive_amount: string; paid: boolean; }
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function monthLabel(d: string | null): string {
+  if (!d) return '—';
+  const [y, m] = d.slice(0, 7).split('-');
+  return `${MONTHS[Number(m) - 1] ?? m} ${y}`;
+}
 interface Referrer { id: number; display_name: string; eligibility_status: string; }
 interface AgentRow { id: number; full_name: string; agent_code: string; commission_status: string; commission_rate_pct: number | null; }
 
@@ -166,42 +173,32 @@ function PayeeAccruals({ p, canPay, canRevert, onPaid, onReverted }: { p: Payee;
     onSuccess: () => { qc.invalidateQueries({ queryKey: key }); onReverted(); },
   });
   const rows = data?.rows ?? [];
-  const th = 'py-1.5 px-3 text-xs font-semibold text-text-label uppercase tracking-wide';
-  const td = 'py-1.5 px-3 align-middle text-sm';
+  const cols: Column<Accrual>[] = [
+    { key: 'customer', header: 'Customer', value: (r) => r.customer,
+      render: (r) => <span>{r.customer} <span className="font-mono text-xs text-text-muted">{r.customer_code}</span></span> },
+    { key: 'application_no', header: 'App no', tdClassName: 'font-mono text-xs' },
+    { key: 'month', header: 'Month',
+      value: (r) => r.date_money_received ? `${r.date_money_received.slice(0, 7)} ${monthLabel(r.date_money_received)}` : '',
+      render: (r) => monthLabel(r.date_money_received) },
+    { key: 'series_code', header: 'Series' },
+    { key: 'investment_amount', header: 'Investment', align: 'right', value: (r) => Number(r.investment_amount), render: (r) => <span className="mono">{formatINR(r.investment_amount)}</span> },
+    { key: 'incentive_amount', header: 'Incentive', align: 'right', value: (r) => Number(r.incentive_amount), render: (r) => <span className="mono font-semibold">{formatINR(r.incentive_amount)}</span> },
+    { key: 'status', header: 'Status', align: 'right', sortable: false, filterable: false,
+      render: (r) => r.paid ? (
+        <span className="inline-flex items-center gap-2 justify-end whitespace-nowrap">
+          <span className="text-xs text-success">Paid</span>
+          {canRevert && <button disabled={revertOne.isPending} onClick={() => revertOne.mutate(r.application_id)}
+            className="text-xs border border-border text-danger rounded px-2 py-1 disabled:opacity-40 hover:bg-[color:var(--danger-bg)]">Revert</button>}
+        </span>
+      ) : canPay ? <button disabled={payOne.isPending} onClick={() => payOne.mutate(r.application_id)}
+            className="text-xs bg-primary text-white rounded px-3 py-1 disabled:opacity-40 hover:bg-primary-hover">Pay</button>
+        : <span className="text-xs text-text-muted">Unpaid</span> },
+  ];
   return (
     <div className="bg-bg p-3">
-      {isLoading ? <div className="text-xs text-text-muted px-2 py-3">Loading…</div>
-        : rows.length === 0 ? <div className="text-xs text-text-muted px-2 py-3">No eligible customers.</div> : (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead><tr className="text-left border-b border-border">
-              <th className={th}>Customer</th><th className={th}>App no</th>
-              <th className={`${th} text-right`}>Investment</th><th className={`${th} text-right`}>Incentive</th>
-              <th className={`${th} text-right`}>Status</th>
-            </tr></thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.application_id} className="border-b border-border/60 last:border-0">
-                  <td className={td}>{r.customer} <span className="font-mono text-xs text-text-muted">{r.customer_code}</span></td>
-                  <td className={`${td} font-mono text-xs`}>{r.application_no}</td>
-                  <td className={`${td} text-right mono`}>{formatINR(r.investment_amount)}</td>
-                  <td className={`${td} text-right mono font-semibold`}>{formatINR(r.incentive_amount)}</td>
-                  <td className={`${td} text-right whitespace-nowrap`}>
-                    {r.paid ? (
-                      <span className="inline-flex items-center gap-2 justify-end">
-                        <span className="text-xs text-success">Paid</span>
-                        {canRevert && <button disabled={revertOne.isPending} onClick={() => revertOne.mutate(r.application_id)}
-                          className="text-xs border border-border text-danger rounded px-2 py-1 disabled:opacity-40 hover:bg-[color:var(--danger-bg)]">Revert</button>}
-                      </span>
-                    ) : canPay ? <button disabled={payOne.isPending} onClick={() => payOne.mutate(r.application_id)}
-                          className="text-xs bg-primary text-white rounded px-3 py-1 disabled:opacity-40 hover:bg-primary-hover">Pay</button>
-                      : <span className="text-xs text-text-muted">Unpaid</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {isLoading ? <div className="text-xs text-text-muted px-2 py-3">Loading…</div> : (
+        <DataTable columns={cols} rows={rows} rowKey={(r) => r.application_id}
+          defaultSort={{ key: 'investment_amount', dir: 'desc' }} empty="No eligible customers." />
       )}
     </div>
   );

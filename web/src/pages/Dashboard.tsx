@@ -120,22 +120,12 @@ export function Dashboard() {
                     onClick={() => pickWidget('agent', 'New business by agent (in range)')} canDrill={canDrill} />
                 </div>
 
-                {(() => {
-                  const alm = overview.data.alm, tb = overview.data.today_book;
-                  if (!alm || !tb) return null;
-                  return (
-                    <>
-                      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Asset–liability timing & today</h2>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
-                        <Tile label="Net due this month" value={formatINR(alm.net_due_this_month)} sub="Scheduled payouts, this calendar month" />
-                        <Tile label="Overdue payouts" value={formatINR(alm.overdue)} sub="Scheduled but past due date" />
-                        <Tile label={`Interest paid ${alm.fy_label}`} value={formatINR(alm.paid_fy)} sub="Financial year to date" />
-                        <Tile label="Added today" value={formatINR(tb.additions.amount)} sub={`${tb.additions.count} new investment(s)`} />
-                        <Tile label="Redeemed today" value={formatINR(tb.deletions.amount)} sub={`${tb.deletions.count} redemption(s)`} />
-                      </div>
-                    </>
-                  );
-                })()}
+                {overview.data.today_book && (
+                  <div className="grid md:grid-cols-2 gap-5 mb-6">
+                    <TodayFlowCard kind="additions" data={overview.data.today_book.additions} />
+                    <TodayFlowCard kind="deletions" data={overview.data.today_book.deletions} />
+                  </div>
+                )}
 
                 <div className="grid md:grid-cols-2 gap-5">
                   <PieCard title="Series register" rows={overview.data.series ?? []} nameKey="code" valueKey="outstanding" tab="series" canDrill={canDrill} />
@@ -382,6 +372,101 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
     <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
       <div className="px-4 py-3 border-b border-border text-xs font-semibold text-text-label uppercase tracking-wide">{title}</div>
       {children}
+    </div>
+  );
+}
+
+// ── Today's flow (money in / money out) ────────────────────────────────────
+interface TodayRow {
+  application_no: string; customer_id: number; customer: string; customer_code: string;
+  series_code: string; amount?: string; net_payment?: string; penalty?: string;
+  received_via?: string; referred_by?: string | null; type?: string; status?: string;
+}
+interface TodayData {
+  count: number; amount: number; rows: TodayRow[];
+  app?: number; locker?: number; physical?: number; premature?: number; maturity?: number;
+}
+const viaPill: Record<string, string> = {
+  'DhanamFin app': 'bg-[color:var(--primary-bg,#e8f0fb)] text-primary',
+  Locker: 'bg-[color:var(--warn-bg)] text-warn',
+  'Other / physical': 'bg-bg text-text-muted',
+};
+
+/** Two symmetric cards: today's additions (money in) and deletions (money out),
+ * each with a channel/type breakdown line and a clickable per-row table. */
+function TodayFlowCard({ kind, data }: { kind: 'additions' | 'deletions'; data: TodayData }) {
+  const nav = useNavigate();
+  const isAdd = kind === 'additions';
+  const accent = isAdd ? 'bg-success' : 'bg-danger';
+  const heading = isAdd ? "Today's additions — money in" : "Today's deletions — money out";
+  const noun = isAdd ? 'investment' : 'redemption';
+
+  // Breakdown sentence: additions split by channel, deletions by redemption type.
+  const parts: string[] = [];
+  if (isAdd) {
+    if (data.app) parts.push(`${formatINR(data.app)} DhanamFin app`);
+    if (data.physical) parts.push(`${formatINR(data.physical)} other/physical`);
+    if (data.locker) parts.push(`${formatINR(data.locker)} locker`);
+  } else {
+    if (data.premature) parts.push(`${formatINR(data.premature)} premature`);
+    if (data.maturity) parts.push(`${formatINR(data.maturity)} maturity`);
+  }
+  const breakdown = parts.length > 1 ? ` = ${parts.join(' + ')}` : '';
+
+  const th = 'py-2 px-3 text-xs font-semibold text-text-label uppercase tracking-wide';
+  const td = 'py-2 px-3 align-middle';
+
+  return (
+    <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+        <span className={`inline-block w-1 h-4 rounded ${accent}`} />
+        <span className="text-sm font-semibold">{heading}</span>
+      </div>
+      <div className="px-4 pt-3 text-xs text-text-muted">
+        {data.count === 0
+          ? `No money ${isAdd ? 'in' : 'out'} today.`
+          : <>{data.count} {noun}{data.count === 1 ? '' : 's'} today · total <span className="font-semibold text-text">{formatINR(data.amount)}</span>{breakdown}. Click a row for the customer.</>}
+      </div>
+      {data.count > 0 && (
+        <div className="p-3 overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="text-left border-b border-border">
+                <th className={th}>Customer</th>
+                <th className={th}>Series</th>
+                <th className={`${th} whitespace-nowrap`}>App no</th>
+                {isAdd ? <th className={th}>Received via</th> : <th className={th}>Type</th>}
+                {isAdd ? <th className={th}>Referred by</th> : <th className={`${th} text-right`}>Penalty</th>}
+                <th className={`${th} text-right`}>{isAdd ? 'Amount' : 'Net'}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((r, i) => (
+                <tr key={r.application_no + i} className="border-b border-border last:border-0 hover:bg-bg cursor-pointer"
+                  onClick={() => nav(`/app/customers/${r.customer_id}`)}>
+                  <td className={td}>
+                    <span className="font-medium">{r.customer}</span>{' '}
+                    <span className="font-mono text-xs text-text-muted">{r.customer_code}</span>
+                  </td>
+                  <td className={td}>{r.series_code}</td>
+                  <td className={`${td} font-mono text-xs whitespace-nowrap`}>{r.application_no}</td>
+                  {isAdd ? (
+                    <td className={td}><span className={`text-[11px] rounded px-1.5 py-0.5 ${viaPill[r.received_via ?? ''] ?? 'bg-bg'}`}>{r.received_via}</span></td>
+                  ) : (
+                    <td className={`${td} capitalize`}>{r.type}</td>
+                  )}
+                  {isAdd ? (
+                    <td className={`${td} text-text-muted`}>{r.referred_by ?? 'Direct'}</td>
+                  ) : (
+                    <td className={`${td} text-right mono`}>{formatINR(r.penalty ?? 0)}</td>
+                  )}
+                  <td className={`${td} text-right mono font-medium`}>{formatINR((isAdd ? r.amount : r.net_payment) ?? 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

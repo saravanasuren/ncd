@@ -29,7 +29,7 @@ export async function pendingBySeriesSummary(db: Db) {
 
 export async function createAllotmentBatch(db: Db, actor: AuthUser, input: { series_id: number; allotment_date: string; isin?: string; notes?: string }) {
   return db.withTx(async (tx) => {
-    const series = (await tx.query<{ status: string }>('SELECT status FROM series WHERE id = $1', [input.series_id])).rows[0];
+    const series = (await tx.query<{ status: string; code: string }>('SELECT status, code FROM series WHERE id = $1', [input.series_id])).rows[0];
     if (!series) throw errors.notFound('Series not found');
     const n = Number((await tx.query<{ n: string }>(`SELECT count(*)::int AS n FROM applications a WHERE a.series_id = $1 AND ${READY_TO_ALLOT}`, [input.series_id])).rows[0]!.n);
     // Allow allotting a series that has nothing pending, as long as it can still
@@ -51,7 +51,7 @@ export async function createAllotmentBatch(db: Db, actor: AuthUser, input: { ser
       entityType: 'allotment_batches',
       entityId: batchId,
       makerUserId: actor.id,
-      metadata: { series_id: input.series_id, allotment_date: input.allotment_date, isin: input.isin ?? null, batch_id: batchId, count: n },
+      metadata: { series_id: input.series_id, series_code: series.code, allotment_date: input.allotment_date, isin: input.isin ?? null, batch_id: batchId, count: n },
     });
     await tx.query('UPDATE allotment_batches SET approval_request_id = $1 WHERE id = $2', [req.id, batchId]);
     await writeAudit(tx, { actorId: actor.id, action: 'allotment.submit', entityType: 'allotment_batches', entityId: batchId, after: { series_id: input.series_id, count: n } });

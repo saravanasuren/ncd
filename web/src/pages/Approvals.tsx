@@ -27,7 +27,16 @@ const TYPE_LABELS: Record<string, string> = {
   ncd_transfer: 'Holder Transfer',
   ncd_transformation: 'Transformation',
   agent_registration: 'Agent Registration',
+  activation_batch: 'Activation',
+  allotment_batch: 'Allotment',
 };
+
+/** Human title for a request card, e.g. "NCD_27 · Activation" for a batch. */
+function requestTitle(r: ApprovalReq): string {
+  const label = TYPE_LABELS[r.request_type] ?? r.request_type;
+  const series = r.metadata.series_code ? String(r.metadata.series_code) : null;
+  return series ? `${series} · ${label}` : label;
+}
 
 /** Expanded row: full request payload from GET /api/approvals/:id. */
 interface CoveredRow {
@@ -124,7 +133,7 @@ export function ApprovalsPage() {
           <div key={r.id}>
             <div className="p-4 flex items-center gap-4">
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold">{TYPE_LABELS[r.request_type] ?? r.request_type}
+                <div className="text-sm font-semibold">{requestTitle(r)}
                   {r.max_levels > 1 && <span className="text-xs text-text-muted font-normal"> · level {r.level} of {r.max_levels}</span>}
                 </div>
                 <div className="text-xs text-text-muted font-mono">{r.request_no}{r.metadata.customerName ? ` · ${String(r.metadata.customerName)}` : ''}</div>

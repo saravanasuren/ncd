@@ -4,6 +4,7 @@ import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { Tabs, type TabDef } from '../components/Tabs.js';
 
 interface Payee { payee_type: string; payee_id: number; payee_name: string | null; accrued: string; paid: string; balance: string; }
 interface Referrer { id: number; display_name: string; eligibility_status: string; }
@@ -13,6 +14,7 @@ export function IncentivesPage() {
   const qc = useQueryClient();
   const { can } = useAuth();
   const [msg, setMsg] = useState('');
+  const [balTab, setBalTab] = useState<'staff' | 'agent'>('staff');
   const overview = useQuery({ queryKey: ['inc-overview'], queryFn: () => api.get<{ rows: Payee[] }>('/api/incentives/overview') });
   const referrers = useQuery({ queryKey: ['inc-referrers'], queryFn: () => api.get<{ rows: Referrer[] }>('/api/incentives/referrers') });
   const agents = useQuery({ queryKey: ['inc-agents'], queryFn: () => api.get<{ rows: AgentRow[] }>('/api/incentives/agents'), enabled: can('incentives:manage-eligibility') });
@@ -46,7 +48,21 @@ export function IncentivesPage() {
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Balances</h2>
-      <div className="mb-6">
+      {(() => {
+        const all = overview.data?.rows ?? [];
+        // Staff tab = internal staff; Agent tab = external earners (agents + referrers).
+        const isStaff = (p: Payee) => p.payee_type === 'staff';
+        const staffRows = all.filter(isStaff);
+        const agentRows = all.filter((p) => !isStaff(p));
+        const balTabs: TabDef<'staff' | 'agent'>[] = [
+          { key: 'staff', label: 'Staff', count: staffRows.length },
+          { key: 'agent', label: 'Agent', count: agentRows.length },
+        ];
+        const shown = balTab === 'staff' ? staffRows : agentRows;
+        return (
+        <>
+        <Tabs tabs={balTabs} active={balTab} onChange={setBalTab} />
+        <div className="mb-6">
         <DataTable
           columns={[
             { key: 'payee', header: 'Payee', value: (p) => p.payee_name ?? `${p.payee_type} #${p.payee_id}`,
@@ -62,12 +78,15 @@ export function IncentivesPage() {
             { key: 'actions', header: '', sortable: false, filterable: false, align: 'right',
               render: (p) => <PayActions p={p} canPay={can('incentives:pay')} onPay={(amount) => { setMsg(''); pay.mutate({ type: p.payee_type, id: p.payee_id, amount }); }} /> },
           ] as Column<Payee>[]}
-          rows={overview.data?.rows ?? []}
+          rows={shown}
           rowKey={(p) => `${p.payee_type}-${p.payee_id}`}
           defaultSort={{ key: 'balance', dir: 'desc' }}
-          empty="No accruals yet."
+          empty={balTab === 'staff' ? 'No staff accruals yet.' : 'No agent/referrer accruals yet.'}
         />
-      </div>
+        </div>
+        </>
+        );
+      })()}
 
       {can('incentives:manage-eligibility') && (
         <>

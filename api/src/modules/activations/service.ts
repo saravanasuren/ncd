@@ -32,6 +32,7 @@ export async function createActivationBatch(db: Db, actor: AuthUser, input: { se
   return db.withTx(async (tx) => {
     const n = Number((await tx.query<{ n: string }>("SELECT count(*)::int AS n FROM applications WHERE series_id = $1 AND status = 'PendingActivation'", [input.series_id])).rows[0]!.n);
     if (n === 0) throw errors.unprocessable('No funded applications are pending activation in this series');
+    const seriesCode = (await tx.query<{ code: string }>('SELECT code FROM series WHERE id = $1', [input.series_id])).rows[0]?.code ?? null;
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO activation_batches (series_id, notes, status, created_by_user_id)
        VALUES ($1,$2,'PendingChecker',$3) RETURNING id`,
@@ -43,7 +44,7 @@ export async function createActivationBatch(db: Db, actor: AuthUser, input: { se
       entityType: 'activation_batches',
       entityId: batchId,
       makerUserId: actor.id,
-      metadata: { series_id: input.series_id, batch_id: batchId, count: n },
+      metadata: { series_id: input.series_id, series_code: seriesCode, batch_id: batchId, count: n },
     });
     await tx.query('UPDATE activation_batches SET approval_request_id = $1 WHERE id = $2', [req.id, batchId]);
     await writeAudit(tx, { actorId: actor.id, action: 'activation.submit', entityType: 'activation_batches', entityId: batchId, after: { series_id: input.series_id, count: n } });

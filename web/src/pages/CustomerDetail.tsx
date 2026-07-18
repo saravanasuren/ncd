@@ -216,6 +216,7 @@ function NewInvestment({ customerId }: { customerId: number }) {
   const [schemeId, setSchemeId] = useState('');
   const [amount, setAmount] = useState('');
   const [clubWith, setClubWith] = useState('');
+  const [lockerDeposit, setLockerDeposit] = useState(false);
   const [err, setErr] = useState('');
   const series = useQuery({ queryKey: ['series'], queryFn: () => api.get<{ rows: any[] }>('/api/series') });
   const schemes = useQuery({ queryKey: ['schemes'], queryFn: () => api.get<{ rows: any[] }>('/api/schemes') });
@@ -230,6 +231,7 @@ function NewInvestment({ customerId }: { customerId: number }) {
     mutationFn: () => api.post<{ id: number }>('/api/applications', {
       customer_id: customerId, series_id: Number(seriesId), scheme_id: Number(schemeId), amount: Number(amount),
       ...(clubWith ? { club_with_application_id: Number(clubWith) } : {}),
+      ...(lockerDeposit ? { is_locker_deposit: true } : {}),
     }),
     onSuccess: (r) => nav(`/app/applications/${r.id}`),
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
@@ -249,6 +251,9 @@ function NewInvestment({ customerId }: { customerId: number }) {
           {(schemes.data?.rows ?? []).map((s) => <option key={s.id} value={s.id}>{s.code} ({s.coupon_rate_pct}%)</option>)}
         </select>
         <input className={sel} placeholder="Amount" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <label className="text-xs flex items-center gap-1.5" title="Money came from a locker (LockerHub-originated deposits flag themselves automatically)">
+          <input type="checkbox" checked={lockerDeposit} onChange={(e) => setLockerDeposit(e.target.checked)} /> Locker deposit
+        </label>
         <button disabled={!seriesId || !schemeId || !amount || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
           className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
           {clubWith ? 'Add to application' : 'Create investment'}

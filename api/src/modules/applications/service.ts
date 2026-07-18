@@ -30,6 +30,7 @@ export interface CreateApplicationInput {
   amount: number;
   club_with_application_id?: number; // append this line to an in-flight app
   receipt?: { file_path: string; original_filename: string; mime: string };
+  is_locker_deposit?: boolean; // staff-keyed locker money; the LockerHub flow sets its own flag
 }
 
 async function addLine(tx: Db, appId: number, scheme: Record<string, unknown>, amount: number) {
@@ -71,10 +72,11 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
     const initialStatus = subGate ? 'PendingApproval' : 'PendingFundVerification';
 
     const { rows } = await tx.query<{ id: string }>(
-      `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, receipt_file_path, receipt_original_filename, receipt_mime)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'staff',$8,$9,$10,$11,$12) RETURNING id`,
+      `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, receipt_file_path, receipt_original_filename, receipt_mime, is_locker_deposit)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'staff',$8,$9,$10,$11,$12,$13) RETURNING id`,
       [appNo, input.customer_id, input.series_id, initialStatus, input.amount, isNew, customer.referred_by_text ?? null, actor.id, actor.agentId,
-       input.receipt?.file_path ?? null, input.receipt?.original_filename ?? null, input.receipt?.mime ?? null]
+       input.receipt?.file_path ?? null, input.receipt?.original_filename ?? null, input.receipt?.mime ?? null,
+       input.is_locker_deposit ?? false]
     );
     const appId = Number(rows[0]!.id);
     await addLine(tx, appId, scheme, input.amount);
@@ -167,6 +169,15 @@ export async function getReceipt(db: Db, appId: number): Promise<{ buffer: Buffe
   const buffer = readStored(app.receipt_file_path);
   if (!buffer) return null;
   return { buffer, mime: app.receipt_mime ?? 'application/octet-stream', filename: app.receipt_original_filename ?? 'receipt' };
+}
+
+/** Correct the locker-deposit flag on an application (staff-keyed entries;
+ * the LockerHub integration path sets its own flag automatically). */
+export async function setLockerDeposit(db: Db, actor: AuthUser, appId: number, value: boolean) {
+  const upd = await db.query('UPDATE applications SET is_locker_deposit = $1, updated_at = now() WHERE id = $2', [value, appId]);
+  if (!upd.rowCount) throw errors.notFound('Application not found');
+  await writeAudit(db, { actorId: actor.id, action: 'application.locker-deposit', entityType: 'applications', entityId: appId, after: { is_locker_deposit: value } });
+  return { ok: true };
 }
 
 /** Record eSign completion. Non-gating: it stamps esigned_at and does not

@@ -153,6 +153,13 @@ export function ApplicationDetailPage() {
           </>
         )}
         {a.esigned_at && <span className="text-xs text-text-muted">eSigned ✓</span>}
+        {can('applications:update') && (
+          <label className="text-xs flex items-center gap-1.5 border border-border rounded px-3 py-1.5" title="Money came from a locker (LockerHub-originated deposits flag themselves automatically)">
+            <input type="checkbox" checked={!!a.is_locker_deposit}
+              onChange={(e) => run(api.post(`/api/applications/${id}/locker-deposit`, { is_locker_deposit: e.target.checked }))} />
+            Locker deposit
+          </label>
+        )}
         {a.receipt_file_path && <a href={`/api/applications/${id}/receipt`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">View receipt</a>}
         {a.allotment_date && (
           <>

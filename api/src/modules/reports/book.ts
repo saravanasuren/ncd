@@ -53,8 +53,9 @@ const FROM = 'FROM applications a JOIN customers c ON c.id = a.customer_id JOIN 
 const FROM_ATTR = `${FROM}
   LEFT JOIN LATERAL (
     SELECT u.full_name FROM users u JOIN roles r ON r.id = u.role_id
-    WHERE r.name <> 'customer'
-      AND lower(btrim(u.full_name)) = lower(btrim(a.referred_by_text))
+    WHERE r.name <> 'customer' AND u.is_staff = TRUE
+      AND (lower(btrim(u.full_name)) = lower(btrim(a.referred_by_text))
+           OR upper(btrim(u.code)) = upper(btrim(a.referred_by_text)))
     LIMIT 1
   ) sref ON TRUE`;
 const REFERRER = "NULLIF(btrim(a.referred_by_text), '')";

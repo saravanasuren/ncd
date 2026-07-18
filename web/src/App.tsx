@@ -18,6 +18,7 @@ import { ApprovalsPage } from './pages/Approvals.js';
 import { ApplicationsPage } from './pages/Applications.js';
 import { ApplicationDetailPage } from './pages/ApplicationDetail.js';
 import { ActivationsPage } from './pages/Activations.js';
+import { AgentsPage } from './pages/Agents.js';
 import { AllotmentsPage } from './pages/Allotments.js';
 import { PayoutsPage } from './pages/Payouts.js';
 import { MyEarningsPage } from './pages/MyEarnings.js';
@@ -75,6 +76,7 @@ export function App() {
           <Route path="applications/:id" element={<ApplicationDetailPage />} />
           <Route path="approvals" element={<ApprovalsPage />} />
           <Route path="activations" element={<ActivationsPage />} />
+          <Route path="agents" element={<AgentsPage />} />
           <Route path="allotments" element={<AllotmentsPage />} />
           <Route path="redemptions" element={<RedemptionsPage />} />
           <Route path="ncd-events" element={<EventsPage />} />

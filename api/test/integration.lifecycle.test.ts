@@ -118,11 +118,16 @@ describe('interest payout', () => {
 
 describe('incentives accrued at allotment', () => {
   it('the referrer (named on the app) accrued 2% of ₹5L = ₹10,000', async () => {
-    // customer_was_new + referrer named → referrer gets 2%
-    const { rows } = await ctx.db.query("SELECT payee_type, amount FROM incentive_accruals WHERE application_id = $1", [appId]);
-    const referrer = rows.find((r: any) => r.payee_type === 'referrer');
+    // customer_was_new + referrer named → the referrer gets 2%. The free-text
+    // name became a PendingApproval AGENT at enrolment (2026-07-18 spec), so
+    // the accrual routes to that agent payee, not the legacy referrers ledger.
+    const { rows } = await ctx.db.query("SELECT payee_type, payee_id, amount FROM incentive_accruals WHERE application_id = $1", [appId]);
+    const referrer = rows.find((r: any) => r.payee_type === 'agent');
     expect(referrer).toBeTruthy();
     expect(Number((referrer as any).amount)).toBeCloseTo(10000, 2);
+    const agent = (await ctx.db.query("SELECT full_name, commission_status FROM agents WHERE id = $1", [(referrer as any).payee_id])).rows[0] as any;
+    expect(agent.full_name).toBe('Neighbour Uncle');
+    expect(agent.commission_status).toBe('PendingApproval');
   });
 });
 
@@ -157,11 +162,11 @@ describe('incentive payout ledger', () => {
     const staffUserId = 1; // seed admin enrolled this customer
     const before = await a.get(`/api/incentives/payees/staff/${staffUserId}/balance`);
     // referrer got the money in this case (new+referrer), so staff balance may be 0;
-    // pay a referrer instead to exercise the ledger:
-    const refId = Number((await ctx.db.query("SELECT payee_id FROM incentive_accruals WHERE payee_type='referrer' AND application_id=$1", [appId])).rows[0]!.payee_id);
-    const bal0 = await a.get(`/api/incentives/payees/referrer/${refId}/balance`);
+    // the free-text referrer routed to an auto-created agent — pay that agent:
+    const refId = Number((await ctx.db.query("SELECT payee_id FROM incentive_accruals WHERE payee_type='agent' AND application_id=$1", [appId])).rows[0]!.payee_id);
+    const bal0 = await a.get(`/api/incentives/payees/agent/${refId}/balance`);
     expect(Number(bal0.json.balance)).toBeCloseTo(10000, 2);
-    const pay = await a.post(`/api/incentives/payees/referrer/${refId}/pay`, { amount: 4000, reference: 'part-1' });
+    const pay = await a.post(`/api/incentives/payees/agent/${refId}/pay`, { amount: 4000, reference: 'part-1' });
     expect(pay.status).toBe(200);
     expect(Number(pay.json.balance)).toBeCloseTo(6000, 2);
     void before;

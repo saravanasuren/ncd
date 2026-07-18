@@ -15,11 +15,13 @@ export interface UserListRow {
   branch_ids: number[];
   reports_to_user_id: number | null;
   is_active: boolean;
+  code: string | null;
+  is_staff: boolean;
 }
 
 export async function listUsers(db: Db): Promise<UserListRow[]> {
   const { rows } = await db.query<Record<string, unknown>>(
-    `SELECT u.id, u.email, u.full_name, r.name AS role, u.branch_id, u.reports_to_user_id, u.is_active,
+    `SELECT u.id, u.email, u.full_name, r.name AS role, u.branch_id, u.reports_to_user_id, u.is_active, u.code, u.is_staff,
             COALESCE((SELECT array_agg(ub.branch_id) FROM user_branches ub WHERE ub.user_id = u.id), '{}') AS branch_ids
      FROM users u JOIN roles r ON r.id = u.role_id ORDER BY u.full_name`
   );
@@ -32,6 +34,8 @@ export async function listUsers(db: Db): Promise<UserListRow[]> {
     branch_ids: (r.branch_ids as (number | string)[]).map(Number),
     reports_to_user_id: r.reports_to_user_id != null ? Number(r.reports_to_user_id) : null,
     is_active: Boolean(r.is_active),
+    code: r.code != null ? String(r.code) : null,
+    is_staff: Boolean(r.is_staff),
   }));
 }
 
@@ -59,22 +63,30 @@ export interface CreateUserInput {
   password: string;
   branch_id?: number | null;
   reports_to_user_id?: number | null;
+  code?: string | null; // unique identity code — what goes in "referred by"
+  is_staff?: boolean;   // staff vs agent split on the reports
 }
 
 export async function createUser(db: Db, actor: AuthUser, input: CreateUserInput): Promise<{ id: number }> {
   if (!isRole(input.role)) throw errors.badRequest('Unknown role');
   const rid = await roleId(db, input.role);
   const hash = await bcrypt.hash(input.password, 10);
+  const code = input.code?.trim().toUpperCase() || null;
   return db.withTx(async (tx) => {
     const existing = await tx.query('SELECT 1 FROM users WHERE lower(email) = lower($1)', [input.email]);
     if (existing.rowCount) throw errors.conflict('Email already in use');
+    if (code) {
+      const dupe = await tx.query('SELECT 1 FROM users WHERE upper(code) = $1', [code]);
+      if (dupe.rowCount) throw errors.conflict('Code already in use');
+    }
     const { rows } = await tx.query<{ id: string }>(
-      `INSERT INTO users (email, password_hash, full_name, role_id, branch_id, reports_to_user_id)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [input.email, hash, input.full_name, rid, input.branch_id ?? null, input.reports_to_user_id ?? null]
+      `INSERT INTO users (email, password_hash, full_name, role_id, branch_id, reports_to_user_id, code, is_staff)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [input.email, hash, input.full_name, rid, input.branch_id ?? null, input.reports_to_user_id ?? null,
+       code, input.is_staff ?? true]
     );
     const id = Number(rows[0]!.id);
-    await writeAudit(tx, { actorId: actor.id, action: 'user.create', entityType: 'users', entityId: id, after: { email: input.email, role: input.role } });
+    await writeAudit(tx, { actorId: actor.id, action: 'user.create', entityType: 'users', entityId: id, after: { email: input.email, role: input.role, code, is_staff: input.is_staff ?? true } });
     return { id };
   });
 }
@@ -86,6 +98,8 @@ export interface UpdateUserInput {
   reports_to_user_id?: number | null;
   is_active?: boolean;
   password?: string;
+  code?: string | null;
+  is_staff?: boolean;
 }
 
 export async function updateUser(db: Db, actor: AuthUser, id: number, input: UpdateUserInput): Promise<void> {
@@ -106,6 +120,15 @@ export async function updateUser(db: Db, actor: AuthUser, id: number, input: Upd
       sets.push(`reports_to_user_id = $${++p}`); params.push(input.reports_to_user_id);
     }
     if (input.is_active !== undefined) { sets.push(`is_active = $${++p}`); params.push(input.is_active); }
+    if (input.code !== undefined) {
+      const code = input.code?.trim().toUpperCase() || null;
+      if (code) {
+        const dupe = await tx.query('SELECT 1 FROM users WHERE upper(code) = $1 AND id <> $2', [code, id]);
+        if (dupe.rowCount) throw errors.conflict('Code already in use');
+      }
+      sets.push(`code = $${++p}`); params.push(code);
+    }
+    if (input.is_staff !== undefined) { sets.push(`is_staff = $${++p}`); params.push(input.is_staff); }
     if (input.password) { sets.push(`password_hash = $${++p}`); params.push(await bcrypt.hash(input.password, 10)); }
     if (!sets.length) return;
     sets.push(`updated_at = now()`);

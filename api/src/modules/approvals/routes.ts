@@ -10,7 +10,7 @@ import * as service from './service.js';
 export const approvalsRouter = Router();
 
 // Visible to anyone who can check anything (generic or premature).
-const canCheck = requirePermission('approvals:check', 'approvals:check-premature');
+const canCheck = requirePermission('approvals:check', 'approvals:check-premature', 'approvals:check-handover');
 
 approvalsRouter.get(
   '/queue',

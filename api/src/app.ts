@@ -22,6 +22,7 @@ import { customersRouter } from './modules/customers/routes.js';
 import { approvalsRouter } from './modules/approvals/routes.js';
 import { applicationsRouter } from './modules/applications/routes.js';
 import { activationsRouter } from './modules/activations/routes.js';
+import { agentsRouter } from './modules/agents/routes.js';
 import { allotmentsRouter } from './modules/allotments/routes.js';
 import { payoutsRouter } from './modules/payouts/routes.js';
 import { redemptionsRouter } from './modules/redemptions/routes.js';
@@ -95,6 +96,7 @@ export function createApp(): Express {
   app.use('/api/approvals', approvalsRouter);
   app.use('/api/applications', applicationsRouter);
   app.use('/api/activations', activationsRouter);
+  app.use('/api/agents', agentsRouter);
   app.use('/api/allotments', allotmentsRouter);
   app.use('/api/payouts', payoutsRouter);
   app.use('/api/bank-statements', statementsRouter);

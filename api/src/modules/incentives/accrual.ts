@@ -40,18 +40,31 @@ export async function accrueForApplication(tx: Db, applicationId: number): Promi
     }
   }
 
-  // Referrer side.
+  // Referrer side. The referred-by value (code or name) is resolved to a real
+  // payee — an agent or a staff user — so the person mapped to the code earns
+  // the incentive (owner spec 2026-07-18). Unmatched names fall back to the
+  // legacy referrers ledger (they become payable once registered as an agent).
   if (result.referrerAmount > 0 && hasReferrer) {
-    const norm = normalizeName(referrerName);
-    const ref = (await tx.query<{ id: string }>(
-      `INSERT INTO referrers (normalized_name, display_name, eligibility_status) VALUES ($1,$2,'PendingApproval')
-       ON CONFLICT (normalized_name) DO UPDATE SET display_name = referrers.display_name RETURNING id`,
-      [norm, referrerName]
-    )).rows[0]!;
-    await tx.query(
-      `INSERT INTO incentive_accruals (application_id, payee_type, payee_id, matrix_cell, rate_mode, rate_value, amount, accrual_date)
-       VALUES ($1,'referrer',$2,'referrer',$3,$4,$5,$6) ON CONFLICT (application_id, payee_type, payee_id) DO NOTHING`,
-      [applicationId, Number(ref.id), result.referrerSpec.mode, result.referrerSpec.value, result.referrerAmount, today]
-    );
+    const { resolveReferrer } = await import('../agents/service.js');
+    const payee = await resolveReferrer(tx, referrerName);
+    if (payee) {
+      await tx.query(
+        `INSERT INTO incentive_accruals (application_id, payee_type, payee_id, matrix_cell, rate_mode, rate_value, amount, accrual_date)
+         VALUES ($1,$2,$3,'referrer',$4,$5,$6,$7) ON CONFLICT (application_id, payee_type, payee_id) DO NOTHING`,
+        [applicationId, payee.kind, payee.id, result.referrerSpec.mode, result.referrerSpec.value, result.referrerAmount, today]
+      );
+    } else {
+      const norm = normalizeName(referrerName);
+      const ref = (await tx.query<{ id: string }>(
+        `INSERT INTO referrers (normalized_name, display_name, eligibility_status) VALUES ($1,$2,'PendingApproval')
+         ON CONFLICT (normalized_name) DO UPDATE SET display_name = referrers.display_name RETURNING id`,
+        [norm, referrerName]
+      )).rows[0]!;
+      await tx.query(
+        `INSERT INTO incentive_accruals (application_id, payee_type, payee_id, matrix_cell, rate_mode, rate_value, amount, accrual_date)
+         VALUES ($1,'referrer',$2,'referrer',$3,$4,$5,$6) ON CONFLICT (application_id, payee_type, payee_id) DO NOTHING`,
+        [applicationId, Number(ref.id), result.referrerSpec.mode, result.referrerSpec.value, result.referrerAmount, today]
+      );
+    }
   }
 }

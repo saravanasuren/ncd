@@ -14,6 +14,8 @@ interface UserRow {
   branch_ids: number[];
   reports_to_user_id: number | null;
   is_active: boolean;
+  code: string | null;
+  is_staff: boolean;
 }
 
 interface BranchRow {
@@ -22,7 +24,7 @@ interface BranchRow {
   name: string;
 }
 
-const EMPTY_FORM = { full_name: '', email: '', password: '', role: '', branch_id: '', reports_to_user_id: '' };
+const EMPTY_FORM = { full_name: '', email: '', password: '', role: '', branch_id: '', reports_to_user_id: '', code: '', is_staff: true };
 
 interface EditState {
   id: number;
@@ -63,6 +65,8 @@ export function UsersPage() {
         role: form.role,
         branch_id: form.branch_id ? Number(form.branch_id) : null,
         reports_to_user_id: form.reports_to_user_id ? Number(form.reports_to_user_id) : null,
+        code: form.code.trim() || null,
+        is_staff: form.is_staff,
       }),
     onSuccess: () => { setForm(EMPTY_FORM); qc.invalidateQueries({ queryKey: ['users'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to create user'),
@@ -120,6 +124,8 @@ export function UsersPage() {
             {branches?.rows.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
         : branchLabel(u.branch_id) },
+    { key: 'code', header: 'Code', tdClassName: 'font-mono text-xs', value: (u) => u.code ?? '', render: (u) => u.code ?? '—' },
+    { key: 'is_staff', header: 'Staff?', value: (u) => (u.is_staff ? 'Yes' : 'No'), render: (u) => (u.is_staff ? 'Yes' : 'No') },
     { key: 'status', header: 'Status', value: (u) => (u.is_active ? 'Active' : 'Disabled'),
       render: (u) => edit?.id === u.id
         ? <label className="flex items-center gap-1.5 text-xs">
@@ -197,6 +203,11 @@ export function UsersPage() {
               <option value="">Reports to…</option>
               {data?.rows.filter((u) => u.is_active).map((u) => <option key={u.id} value={u.id}>{u.full_name}</option>)}
             </select>
+            <input className={`${inp} w-28`} placeholder="Code (unique)" title="Identity code — used in the referred-by field" value={form.code}
+              onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} />
+            <label className="text-sm flex items-center gap-1.5 px-1" title="Staff show under Staff-wise; non-staff (agent-type users) under Agent-wise">
+              <input type="checkbox" checked={form.is_staff} onChange={(e) => setForm({ ...form, is_staff: e.target.checked })} /> Staff
+            </label>
             <button disabled={!ready || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
               className="bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-4 py-1.5 text-sm font-semibold">
               + Add user

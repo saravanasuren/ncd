@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
@@ -65,7 +64,6 @@ export function Dashboard() {
   });
 
   const activeSeries = overview.data?.active_series;
-  const lastSeries = overview.data?.last_series;
 
   function pickWidget(widget: string, title: string, seriesOverride?: number) {
     if (!canDrill) return;
@@ -87,7 +85,7 @@ export function Dashboard() {
         )}
       </div>
 
-      <RangeBar range={range} setRange={setRange} activeSeries={activeSeries} lastSeries={lastSeries} />
+      <RangeBar range={range} setRange={setRange} activeSeries={activeSeries} seriesList={overview.data?.series ?? []} />
 
       {overview.isLoading ? <div className="text-text-muted mt-6">Loading dashboard…</div>
         : overview.error ? <div className="text-danger mt-6">Failed to load dashboard.</div>
@@ -115,35 +113,20 @@ export function Dashboard() {
                     onClick={() => pickWidget('agent', 'New business by agent (in range)')} canDrill={canDrill} />
                 </div>
 
-                {isnap && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-                    <Tile label="Monthly interest" value={formatINR(isnap.monthly_projected)} sub="Projected payout by the 28th"
-                      onClick={() => pickWidget('interest-month', 'This month’s interest (projected)')} canDrill={canDrill} />
-                    <Tile label="Accrued interest" value={formatINR(isnap.accrued_total)} sub="Total payable as on date"
-                      onClick={() => pickWidget('interest-accrued', 'Interest accrued, as on date')} canDrill={canDrill} />
-                  </div>
-                )}
-
-                {(() => {
-                  const alm = overview.data.alm, tb = overview.data.today_book;
-                  if (!alm || !tb) return null;
-                  return (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+                  {isnap && (
                     <>
-                      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Asset–liability timing & today</h2>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
-                        <Tile label="Net due this month" value={formatINR(alm.net_due_this_month)} sub="Scheduled payouts, this calendar month" />
-                        <Tile label="Overdue payouts" value={formatINR(alm.overdue)} sub="Scheduled but past due date" />
-                        <Tile label={`Interest paid ${alm.fy_label}`} value={formatINR(alm.paid_fy)} sub="Financial year to date" />
-                        <Tile label="Added today" value={formatINR(tb.additions.amount)} sub={`${tb.additions.count} new investment(s)`} />
-                        <Tile label="Redeemed today" value={formatINR(tb.deletions.amount)} sub={`${tb.deletions.count} redemption(s)`} />
-                      </div>
+                      <Tile label="Monthly interest" value={formatINR(isnap.monthly_projected)} sub="Projected payout by the 28th"
+                        onClick={() => pickWidget('interest-month', 'This month’s interest (projected)')} canDrill={canDrill} />
+                      <Tile label="Interest accrued" value={formatINR(isnap.accrued_total)} sub="Total accrued as on date"
+                        onClick={() => pickWidget('interest-accrued', 'Interest accrued, as on date')} canDrill={canDrill} />
                     </>
-                  );
-                })()}
-
-                <div className="grid md:grid-cols-2 gap-5">
-                  <LeadFunnelCard funnel={overview.data.lead_funnel ?? []} />
-                  <RateMixCard rateMix={overview.data.rate_mix} />
+                  )}
+                  {overview.data.rate_mix && (
+                    <Tile label="Cost of funds" value={`${overview.data.rate_mix.weighted_avg_rate}%`}
+                      sub={`Weighted-avg coupon on ${formatINR(overview.data.rate_mix.total_outstanding)}`}
+                      onClick={() => pickWidget('rate-mix', 'Cost of funds — by coupon rate')} canDrill={canDrill} />
+                  )}
                 </div>
               </>
             );
@@ -155,8 +138,8 @@ export function Dashboard() {
 }
 
 // ── Range bar ──────────────────────────────────────────────────────────────
-function RangeBar({ range, setRange, activeSeries, lastSeries }: {
-  range: Range; setRange: (r: Range) => void; activeSeries: any; lastSeries: any;
+function RangeBar({ range, setRange, activeSeries, seriesList }: {
+  range: Range; setRange: (r: Range) => void; activeSeries: any; seriesList: { series_id: number; code: string }[];
 }) {
   const ranges = useMemo(dateQuickRanges, []);
   // Single-select: exactly ONE quick-range item is active at a time. Picking a
@@ -164,8 +147,7 @@ function RangeBar({ range, setRange, activeSeries, lastSeries }: {
   // chip are never both highlighted.
   const selSeries = range.series?.[0] ?? null;
   const seriesName = selSeries == null ? null
-    : activeSeries?.series_id === selSeries ? activeSeries.code
-    : lastSeries?.series_id === selSeries ? lastSeries.code : `Series ${selSeries}`;
+    : seriesList.find((s) => s.series_id === selSeries)?.code ?? `Series ${selSeries}`;
   const pickSeries = (id: number, label: string) => setRange({ from: '', to: '', series: [id], label });
   const pickDate = (from: string, to: string, label: string) => setRange({ from, to, series: null, label });
   const dateActive = (label: string) => selSeries == null && range.label === label;
@@ -177,16 +159,18 @@ function RangeBar({ range, setRange, activeSeries, lastSeries }: {
         {activeSeries && (
           <button className={chip(selSeries === activeSeries.series_id)} onClick={() => pickSeries(activeSeries.series_id, `Active series (${activeSeries.code})`)}>Active series</button>
         )}
-        {lastSeries && (
-          <button className={chip(selSeries === lastSeries.series_id)} onClick={() => pickSeries(lastSeries.series_id, `Last series (${lastSeries.code})`)}>Last series</button>
-        )}
+        <select
+          className={`text-xs rounded-full px-3 py-1 border outline-none ${selSeries != null && selSeries !== activeSeries?.series_id ? 'bg-primary text-white border-primary' : 'bg-surface border-border'}`}
+          value={selSeries ?? ''}
+          onChange={(e) => { const v = e.target.value; v ? pickSeries(Number(v), seriesList.find((s) => s.series_id === Number(v))?.code ?? 'Series') : pickDate('', '', 'All'); }}>
+          <option value="">Select series…</option>
+          {seriesList.map((s) => <option key={s.series_id} value={s.series_id}>{s.code}</option>)}
+        </select>
+        <button className={chip(dateActive('All'))} onClick={() => pickDate('', '', 'All')} title="All data, from the beginning till date">All</button>
         {ranges.map((r) => (
           <button key={r.key} className={chip(dateActive(r.label))}
             onClick={() => pickDate(r.range.from, r.range.to, r.label)}>{r.label}</button>
         ))}
-        <button className={chip(selSeries == null && range.label === 'All time')}
-          onClick={() => setRange({ from: '', to: '', series: null, label: 'All time' })}
-          title="Clear every filter — whole book, till date">✕ Clear filters</button>
       </div>
       <div className="flex flex-wrap items-center gap-2 mt-2.5 text-xs text-text-muted">
         <span>Custom:</span>
@@ -247,6 +231,11 @@ const FLAT_COLS: Record<string, FlatCol[]> = {
     { key: 'redemption_date', header: 'Date', kind: 'date' }, { key: 'customer_name', header: 'Customer' },
     { key: 'series_code', header: 'Series' }, { key: 'type', header: 'Type' },
     { key: 'net_payment', header: 'Net paid', kind: 'money' },
+  ],
+  'rate-mix': [
+    { key: 'rate', header: 'Coupon %', kind: 'num' },
+    { key: 'outstanding', header: 'Outstanding', kind: 'money' },
+    { key: 'investments', header: 'NCDs', kind: 'num' },
   ],
 };
 
@@ -359,72 +348,4 @@ function GroupRows({ g, open, onToggle }: { g: any; open: boolean; onToggle: () 
 }
 
 function Empty() { return <div className="text-center text-text-muted text-sm py-6">No records in this view.</div>; }
-
-// ── Snapshot cards ─────────────────────────────────────────────────────────
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
-      <div className="px-4 py-3 border-b border-border text-xs font-semibold text-text-label uppercase tracking-wide">{title}</div>
-      {children}
-    </div>
-  );
-}
-
-/** Lead pipeline funnel — horizontal bars, longest first, with count + Σ expected. */
-function LeadFunnelCard({ funnel }: { funnel: { status: string; count: number; expected: number }[] }) {
-  const nav = useNavigate();
-  const max = Math.max(1, ...funnel.map((f) => f.count));
-  const totalCount = funnel.reduce((s, f) => s + f.count, 0);
-  return (
-    <Panel title="Lead pipeline">
-      {funnel.length === 0 ? <div className="p-5 text-center text-text-muted text-sm">No leads yet.</div> : (
-        <div className="p-4 space-y-2">
-          {funnel.map((f) => (
-            <button key={f.status} onClick={() => nav('/app/leads')} className="w-full text-left group">
-              <div className="flex items-center justify-between text-xs mb-0.5">
-                <span className="font-medium">{f.status}</span>
-                <span className="text-text-muted">{f.count} · {formatINR(f.expected)} expected</span>
-              </div>
-              <div className="h-2.5 rounded bg-bg overflow-hidden">
-                <div className="h-full bg-primary/80 group-hover:bg-primary" style={{ width: `${(f.count / max) * 100}%` }} />
-              </div>
-            </button>
-          ))}
-          <div className="text-xs text-text-muted pt-1">{totalCount} leads in your scope</div>
-        </div>
-      )}
-    </Panel>
-  );
-}
-
-/** Cost-of-funds rate mix — outstanding by coupon rate + weighted-average rate. */
-function RateMixCard({ rateMix }: { rateMix?: { mix: { rate: number; outstanding: number; investments: number }[]; weighted_avg_rate: number; total_outstanding: number } }) {
-  if (!rateMix) return null;
-  const max = Math.max(1, ...rateMix.mix.map((m) => m.outstanding));
-  return (
-    <Panel title="Cost of funds (rate mix)">
-      {rateMix.mix.length === 0 ? <div className="p-5 text-center text-text-muted text-sm">No outstanding book.</div> : (
-        <div className="p-4">
-          <div className="flex items-baseline gap-2 mb-3">
-            <span className="text-2xl font-bold tracking-tight">{rateMix.weighted_avg_rate}%</span>
-            <span className="text-xs text-text-muted">weighted-average coupon on {formatINR(rateMix.total_outstanding)}</span>
-          </div>
-          <div className="space-y-2">
-            {rateMix.mix.map((m) => (
-              <div key={m.rate}>
-                <div className="flex items-center justify-between text-xs mb-0.5">
-                  <span className="font-medium">{m.rate}% p.a.</span>
-                  <span className="text-text-muted">{formatINR(m.outstanding)} · {m.investments} NCDs</span>
-                </div>
-                <div className="h-2.5 rounded bg-bg overflow-hidden">
-                  <div className="h-full bg-[#1a7f4b]/80" style={{ width: `${(m.outstanding / max) * 100}%` }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </Panel>
-  );
-}
 

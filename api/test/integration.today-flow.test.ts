@@ -55,6 +55,17 @@ describe("today's flow cards", () => {
     expect(Number(ov.json.flow.redemptions_count)).toBeGreaterThanOrEqual(1);
   });
 
+  it('an unfunded PendingApproval subscription is NOT in the outstanding book', async () => {
+    const a = await admin();
+    const before = Number((await a.get('/api/dashboard/overview')).json.kpis.outstanding_book);
+    // A PendingApproval app (subscription gate, no money received) must not count.
+    const cust = await a.post('/api/customers', { full_name: 'Pending Approval Cust', phone: '9744400009' });
+    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 999999 });
+    await ctx.db.query("UPDATE applications SET status='PendingApproval' WHERE id=$1", [app.json.id]);
+    const after = Number((await a.get('/api/dashboard/overview')).json.kpis.outstanding_book);
+    expect(after).toBe(before); // unchanged — pending-approval money excluded
+  });
+
   it('monthly interest = gross run-rate coupon of the whole outstanding book', async () => {
     const a = await admin();
     const ov = await a.get('/api/dashboard/overview');

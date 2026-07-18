@@ -120,7 +120,10 @@ export type Entity = keyof typeof STATUS_MACHINES;
  * than showing ₹0 for an open series.
  */
 export const OUTSTANDING_APPLICATION_STATUSES = [
-  'PendingApproval',
+  // NB: 'PendingApproval' is intentionally EXCLUDED. That status is a
+  // subscription still awaiting maker-checker approval with no money received
+  // yet — it is neither funded nor approved, so it must not inflate the
+  // outstanding book. The book starts once money is in / the app is approved.
   'PendingFundVerification',
   'PendingEsign',
   'PendingActivation',

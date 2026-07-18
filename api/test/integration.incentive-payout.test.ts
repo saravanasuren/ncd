@@ -79,6 +79,16 @@ describe('incentives — self-investment excluded, per-customer pay', () => {
     expect(dl.json.totals).toHaveProperty('earned');
   });
 
+  it('CXO can also see the incentive tiles + drill (read-only)', async () => {
+    const cxo = new Client(ctx.base);
+    await cxo.post('/api/auth/login', { email: 'cxo@demo.local', password: 'Demo_1234' });
+    const ov = await cxo.get('/api/dashboard/overview');
+    expect(ov.json.incentives).toBeTruthy();
+    const dl = await cxo.get('/api/dashboard/drill/staff-incentive');
+    expect(dl.json.kind).toBe('incentive');
+    expect(dl.json.groups.length).toBeGreaterThan(0);
+  });
+
   it('only a Super Admin can revert a payment; revert restores the balance', async () => {
     // A plain admin (has incentives:pay) is still refused the revert.
     const plainAdmin = new Client(ctx.base);

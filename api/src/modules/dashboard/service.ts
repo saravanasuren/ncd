@@ -27,6 +27,12 @@ function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Who may VIEW the dashboard incentive tiles/drill — incentive managers plus
+ * CXO (read-only; paying still needs incentives:pay on the Incentives page). */
+function canViewIncentives(actor: AuthUser): boolean {
+  return actor.permissions.includes('incentives:manage-eligibility') || actor.role === 'cxo';
+}
+
 export async function overview(db: Db, actor: AuthUser, filters: book.BookFilters = {}) {
   const today = todayISO();
   const asOf = today; // accrual is always "as of now" (till date), never the future range end
@@ -38,7 +44,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
   // ends in the past (last month, a closed quarter, last FY) shows zero — that
   // interest was already paid, not "accruing".
   const isCurrentPeriod = !filters.to || filters.to >= today;
-  const showIncentives = actor.permissions.includes('incentives:manage-eligibility');
+  const showIncentives = canViewIncentives(actor);
 
   // Point-in-time interest snapshots (independent of the selected window):
   //  - accrued_total    : total interest payable AS ON today (since the last payout)
@@ -171,7 +177,7 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
       return { kind: 'rows', rows: await book.redemptions(db, actor, filters) };
     case 'staff-incentive':
     case 'agent-incentive': {
-      if (!actor.permissions.includes('incentives:manage-eligibility')) return { kind: 'incentive', groups: [], totals: { earned: 0, paid: 0, pending: 0 } };
+      if (!canViewIncentives(actor)) return { kind: 'incentive', groups: [], totals: { earned: 0, paid: 0, pending: 0 } };
       const which = widget === 'staff-incentive' ? 'staff' : 'agent';
       return { kind: 'incentive', ...(await incentives.dashboardIncentives(db, which)) };
     }

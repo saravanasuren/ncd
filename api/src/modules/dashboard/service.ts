@@ -40,11 +40,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
 
   // Point-in-time interest snapshots (independent of the selected window):
   //  - accrued_total    : total interest payable AS ON today (since the last payout)
-  //  - monthly_projected : interest we must pay by this month's 28th payout
-  const monthStartISO = `${today.slice(0, 7)}-01`;
-  const td = new Date(`${today}T00:00:00Z`);
-  const monthEndISO = new Date(Date.UTC(td.getUTCFullYear(), td.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
-
+  //  - monthly_projected : gross run-rate monthly coupon cost of the outstanding book
   const [kpis, seriesRows, districts, moneyIn, moneyBySource, interest, accrued, redemptionRows, leadFunnel, almTiles, rateMix, todayBook, accruedTotal, monthlyInterest] = await Promise.all([
     book.kpis(db, actor, seriesFilter),                    // snapshot, but honours a selected series
     book.seriesSummary(db, actor, {}),                     // ALL series (pie + active/last-series pick)
@@ -59,7 +55,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     book.rateMix(db, actor),                               // cost-of-funds rate mix (snapshot)
     book.todayBook(db, actor, today),                      // today's additions/deletions
     book.interestAccrued(db, actor, seriesFilter, anchor, today),                                    // accrued payable as-on-date (always)
-    book.interestInRange(db, actor, { seriesIds: filters.seriesIds, from: monthStartISO, to: monthEndISO }), // this month's interest (projected)
+    book.monthlyInterestRunRate(db, actor, seriesFilter),                                            // run-rate gross monthly coupon of the whole outstanding book
   ]);
 
   // Active series = the Open series (latest code); Last series = latest non-Open.
@@ -89,8 +85,8 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
       redemptions_count: redemptionRows.length,
     },
     interest_snapshot: {
-      accrued_total: accruedTotal.total,        // total interest payable as on date
-      monthly_projected: monthlyInterest.total, // interest due by this month's 28th payout
+      accrued_total: accruedTotal.total,           // total interest payable as on date
+      monthly_projected: monthlyInterest.gross_monthly, // gross run-rate monthly coupon cost of the outstanding book
     },
     series: seriesRows,
     districts,

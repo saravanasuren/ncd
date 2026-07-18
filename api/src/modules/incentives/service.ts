@@ -6,18 +6,62 @@ import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { round2 } from '../../lib/dates.js';
 
+/**
+ * A "self-investment": the payee is the same person as the customer, so no
+ * incentive is owed (owner rule 2026-07-18). Staff/agent → phone match
+ * (digits-only); referrer (free-text name) → name match. Evaluated per accrual
+ * `ia`, which must be joined to application `a` and customer `c`. Wrapped in
+ * COALESCE(...,false) at the call site so a NULL never mis-excludes a row.
+ */
+const SELF_INVESTMENT = `(
+  (ia.payee_type = 'staff'    AND c.phone IS NOT NULL AND regexp_replace(c.phone,'\\D','','g') <> ''
+     AND regexp_replace(c.phone,'\\D','','g') = (SELECT regexp_replace(u.phone,'\\D','','g') FROM users u WHERE u.id = ia.payee_id))
+  OR (ia.payee_type = 'agent' AND c.phone IS NOT NULL AND regexp_replace(c.phone,'\\D','','g') <> ''
+     AND regexp_replace(c.phone,'\\D','','g') = (SELECT regexp_replace(ag.phone,'\\D','','g') FROM agents ag WHERE ag.id = ia.payee_id))
+  OR (ia.payee_type = 'referrer'
+     AND lower(btrim(c.full_name)) = (SELECT lower(btrim(rf.display_name)) FROM referrers rf WHERE rf.id = ia.payee_id))
+)`;
+const NOT_SELF = `NOT COALESCE(${SELF_INVESTMENT}, false)`;
+const ACCRUAL_FROM = `FROM incentive_accruals ia
+  JOIN applications a ON a.id = ia.application_id
+  JOIN customers c ON c.id = a.customer_id`;
+
 export async function payeeBalance(db: Db, payeeType: string, payeeId: number) {
-  const accrued = Number((await db.query<{ s: string }>('SELECT COALESCE(sum(amount),0) AS s FROM incentive_accruals WHERE payee_type = $1 AND payee_id = $2', [payeeType, payeeId])).rows[0]!.s);
-  const paid = Number((await db.query<{ s: string }>('SELECT COALESCE(sum(amount),0) AS s FROM incentive_payouts WHERE payee_type = $1 AND payee_id = $2', [payeeType, payeeId])).rows[0]!.s);
+  // Balance = eligible accruals not yet paid (paid = accruals with paid_at set).
+  const r = (await db.query<{ accrued: string; paid: string }>(
+    `SELECT COALESCE(sum(ia.amount),0) AS accrued,
+            COALESCE(sum(ia.amount) FILTER (WHERE ia.paid_at IS NOT NULL),0) AS paid
+     ${ACCRUAL_FROM}
+     WHERE ia.payee_type = $1 AND ia.payee_id = $2 AND ${NOT_SELF}`, [payeeType, payeeId])).rows[0]!;
+  const accrued = Number(r.accrued), paid = Number(r.paid);
   return { accrued: round2(accrued), paid: round2(paid), balance: round2(accrued - paid) };
 }
 
-export async function pay(db: Db, actor: AuthUser, payeeType: string, payeeId: number, amount: number, reference?: string) {
-  if (amount <= 0) throw errors.badRequest('Amount must be positive');
+/** Per-customer incentive breakdown for one payee (self-investments excluded). */
+export async function payeeAccruals(db: Db, payeeType: string, payeeId: number) {
+  const { rows } = await db.query(
+    `SELECT ia.application_id, a.application_no, c.full_name AS customer, c.customer_code,
+            a.total_amount AS investment_amount, ia.amount AS incentive_amount,
+            ia.rate_value, ia.rate_mode, ia.accrual_date, (ia.paid_at IS NOT NULL) AS paid, ia.paid_at
+     ${ACCRUAL_FROM}
+     WHERE ia.payee_type = $1 AND ia.payee_id = $2 AND ${NOT_SELF}
+     ORDER BY (ia.paid_at IS NOT NULL), a.total_amount DESC`, [payeeType, payeeId]);
+  return rows;
+}
+
+/** Pay one customer's incentive in full — marks that accrual paid + logs the
+ * payout against the application. Idempotent (a paid accrual is a no-op). */
+export async function payCustomerAccrual(db: Db, actor: AuthUser, payeeType: string, payeeId: number, applicationId: number) {
   return db.withTx(async (tx) => {
-    await tx.query('INSERT INTO incentive_payouts (payee_type, payee_id, amount, reference, created_by_user_id) VALUES ($1,$2,$3,$4,$5)',
-      [payeeType, payeeId, amount, reference ?? null, actor.id]);
-    await writeAudit(tx, { actorId: actor.id, action: 'incentive.pay', entityType: 'incentive_payouts', entityId: `${payeeType}:${payeeId}`, after: { amount, reference } });
+    const acc = (await tx.query<{ id: string; amount: string; paid_at: string | null }>(
+      'SELECT id, amount, paid_at FROM incentive_accruals WHERE payee_type = $1 AND payee_id = $2 AND application_id = $3',
+      [payeeType, payeeId, applicationId])).rows[0];
+    if (!acc) throw errors.notFound('No incentive found for this customer');
+    if (acc.paid_at) return payeeBalance(tx, payeeType, payeeId); // already paid — idempotent
+    await tx.query('UPDATE incentive_accruals SET paid_at = now() WHERE id = $1', [acc.id]);
+    await tx.query('INSERT INTO incentive_payouts (payee_type, payee_id, amount, application_id, reference, created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6)',
+      [payeeType, payeeId, acc.amount, applicationId, `APP:${applicationId}`, actor.id]);
+    await writeAudit(tx, { actorId: actor.id, action: 'incentive.pay-customer', entityType: 'incentive_accruals', entityId: Number(acc.id), after: { amount: acc.amount, applicationId } });
     return payeeBalance(tx, payeeType, payeeId);
   });
 }
@@ -28,8 +72,8 @@ export async function myEarnings(db: Db, actor: AuthUser) {
   const bal = await payeeBalance(db, payeeType, payeeId);
   const accruals = (await db.query(
     `SELECT ia.amount, ia.rate_mode, ia.rate_value, ia.accrual_date, ia.paid_at, a.application_no
-     FROM incentive_accruals ia JOIN applications a ON a.id = ia.application_id
-     WHERE ia.payee_type = $1 AND ia.payee_id = $2 ORDER BY ia.accrual_date DESC`, [payeeType, payeeId])).rows;
+     ${ACCRUAL_FROM}
+     WHERE ia.payee_type = $1 AND ia.payee_id = $2 AND ${NOT_SELF} ORDER BY ia.accrual_date DESC`, [payeeType, payeeId])).rows;
   const payouts = (await db.query('SELECT amount, reference, paid_at FROM incentive_payouts WHERE payee_type = $1 AND payee_id = $2 ORDER BY paid_at DESC', [payeeType, payeeId])).rows;
   return { ...bal, accruals, payouts };
 }
@@ -109,23 +153,29 @@ export async function statementPdf(db: Db, payeeType: string, payeeId: number): 
   });
 }
 
-/** Overview for managers: every staff/agent/referrer with a nonzero balance. */
+/** Overview for managers: every staff/agent/referrer, self-investments excluded.
+ * `investment_amount` = the investments underlying their eligible incentive. */
 export async function overview(db: Db) {
   const { rows } = await db.query(
-    `SELECT ia.payee_type, ia.payee_id, COALESCE(sum(ia.amount),0) AS accrued,
-            COALESCE((SELECT sum(p.amount) FROM incentive_payouts p WHERE p.payee_type = ia.payee_type AND p.payee_id = ia.payee_id),0) AS paid,
+    `SELECT ia.payee_type, ia.payee_id,
+            COALESCE(sum(ia.amount),0) AS accrued,
+            COALESCE(sum(ia.amount) FILTER (WHERE ia.paid_at IS NOT NULL),0) AS paid,
+            COALESCE(sum(a.total_amount),0) AS investment_amount,
             CASE ia.payee_type
               WHEN 'staff' THEN (SELECT u.full_name FROM users u WHERE u.id = ia.payee_id)
               WHEN 'agent' THEN (SELECT ag.full_name FROM agents ag WHERE ag.id = ia.payee_id)
               WHEN 'referrer' THEN (SELECT rf.display_name FROM referrers rf WHERE rf.id = ia.payee_id)
             END AS payee_name
-     FROM incentive_accruals ia GROUP BY ia.payee_type, ia.payee_id`
+     ${ACCRUAL_FROM}
+     WHERE ${NOT_SELF}
+     GROUP BY ia.payee_type, ia.payee_id`
   );
   return rows.map((r) => {
     const accrued = Number((r as any).accrued); const paid = Number((r as any).paid);
     return {
       payee_type: (r as any).payee_type, payee_id: Number((r as any).payee_id),
       payee_name: (r as any).payee_name ?? null,
+      investment_amount: round2(Number((r as any).investment_amount)),
       accrued: round2(accrued), paid: round2(paid), balance: round2(accrued - paid),
     };
   });

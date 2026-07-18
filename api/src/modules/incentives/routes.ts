@@ -28,11 +28,12 @@ incentivesRouter.get('/payees/:type/:id/statement.pdf', requirePermission('incen
 incentivesRouter.get('/payees/:type/:id/balance', requirePermission('incentives:manage-eligibility'),
   asyncHandler(async (req, res) => res.json(await s.payeeBalance(getDb(), req.params.type!, Number(req.params.id)))));
 
-incentivesRouter.post('/payees/:type/:id/pay', requirePermission('incentives:pay'),
-  asyncHandler(async (req, res) => {
-    const { amount, reference } = z.object({ amount: z.number().positive(), reference: z.string().optional() }).parse(req.body);
-    res.json(await s.pay(getDb(), req.user!, req.params.type!, Number(req.params.id), amount, reference));
-  }));
+// Per-customer incentive breakdown + pay-in-full for one customer.
+incentivesRouter.get('/payees/:type/:id/accruals', requirePermission('incentives:manage-eligibility'),
+  asyncHandler(async (req, res) => res.json({ rows: await s.payeeAccruals(getDb(), req.params.type!, Number(req.params.id)) })));
+
+incentivesRouter.post('/payees/:type/:id/accruals/:applicationId/pay', requirePermission('incentives:pay'),
+  asyncHandler(async (req, res) => res.json(await s.payCustomerAccrual(getDb(), req.user!, req.params.type!, Number(req.params.id), Number(req.params.applicationId)))));
 
 // Agent commission eligibility (maker-checker).
 incentivesRouter.post('/agents/:id/eligibility', requirePermission('incentives:manage-eligibility'),

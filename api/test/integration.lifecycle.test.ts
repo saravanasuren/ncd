@@ -157,18 +157,16 @@ describe('premature redemption closes the application (docs/17 regression)', () 
 });
 
 describe('incentive payout ledger', () => {
-  it('admin pays a partial incentive and the balance drops', async () => {
+  it('admin pays a customer incentive in full and the balance clears', async () => {
     const a = await admin();
-    const staffUserId = 1; // seed admin enrolled this customer
-    const before = await a.get(`/api/incentives/payees/staff/${staffUserId}/balance`);
-    // referrer got the money in this case (new+referrer), so staff balance may be 0;
-    // the free-text referrer routed to an auto-created agent — pay that agent:
+    // The free-text referrer routed to an auto-created agent — pay that agent's
+    // incentive for this customer's investment (pay-in-full, per customer).
     const refId = Number((await ctx.db.query("SELECT payee_id FROM incentive_accruals WHERE payee_type='agent' AND application_id=$1", [appId])).rows[0]!.payee_id);
     const bal0 = await a.get(`/api/incentives/payees/agent/${refId}/balance`);
     expect(Number(bal0.json.balance)).toBeCloseTo(10000, 2);
-    const pay = await a.post(`/api/incentives/payees/agent/${refId}/pay`, { amount: 4000, reference: 'part-1' });
+    const pay = await a.post(`/api/incentives/payees/agent/${refId}/accruals/${appId}/pay`, {});
     expect(pay.status).toBe(200);
-    expect(Number(pay.json.balance)).toBeCloseTo(6000, 2);
-    void before;
+    expect(Number(pay.json.paid)).toBeCloseTo(10000, 2);
+    expect(Number(pay.json.balance)).toBeCloseTo(0, 2);
   });
 });

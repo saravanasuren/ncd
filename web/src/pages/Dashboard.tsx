@@ -164,7 +164,8 @@ function RangeBar({ range, setRange, activeSeries, seriesList }: {
           value={selSeries ?? ''}
           onChange={(e) => { const v = e.target.value; v ? pickSeries(Number(v), seriesList.find((s) => s.series_id === Number(v))?.code ?? 'Series') : pickDate('', '', 'All'); }}>
           <option value="">Select series…</option>
-          {seriesList.map((s) => <option key={s.series_id} value={s.series_id}>{s.code}</option>)}
+          {[...seriesList].sort((a, b) => b.code.localeCompare(a.code, undefined, { numeric: true, sensitivity: 'base' }))
+            .map((s) => <option key={s.series_id} value={s.series_id}>{s.code}</option>)}
         </select>
         <button className={chip(dateActive('All'))} onClick={() => pickDate('', '', 'All')} title="All data, from the beginning till date">All</button>
         {ranges.map((r) => (

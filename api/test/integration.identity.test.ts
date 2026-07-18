@@ -37,6 +37,23 @@ describe('users: code + staff flag', () => {
     const dup = await a.post('/api/users', { full_name: 'Other', email: 'other@demo.local', password: 'Password1', role: 'branch_staff', code: 'ST01' });
     expect(dup.status).toBe(409);
   });
+
+  it('deletes an unreferenced user cleanly; a user who owns records is blocked (not a 500)', async () => {
+    const a = await admin();
+    // A fresh user with no business records → deletes cleanly.
+    const fresh = await a.post('/api/users', { full_name: 'Deletable', email: 'deletable@demo.local', password: 'Password1', role: 'branch_staff' });
+    const freshId = (await a.get('/api/users')).json.rows.find((x: any) => x.email === 'deletable@demo.local').id;
+    expect((await a.del(`/api/users/${freshId}`)).status).toBe(200);
+    expect((await a.get('/api/users')).json.rows.some((x: any) => x.email === 'deletable@demo.local')).toBe(false);
+
+    // A user who enrolled a customer → blocked with 409 (disable instead), no 500.
+    const staff = await a.post('/api/users', { full_name: 'HasCustomer', email: 'hascust@demo.local', password: 'Password1', role: 'branch_staff' });
+    const staffId = (await a.get('/api/users')).json.rows.find((x: any) => x.email === 'hascust@demo.local').id;
+    await ctx.db.query("INSERT INTO customers (customer_code, full_name, creation_status, enrolled_by_user_id, is_active) VALUES ('DELCUS','Owned Cust','Approved',$1,TRUE)", [staffId]);
+    const blocked = await a.del(`/api/users/${staffId}`);
+    expect(blocked.status).toBe(409);
+    void staff;
+  });
 });
 
 describe('agents admin + payee search', () => {

@@ -149,10 +149,34 @@ export async function setUserBranches(db: Db, actor: AuthUser, id: number, branc
 }
 
 export async function deleteUser(db: Db, actor: AuthUser, id: number): Promise<void> {
-  await db.withTx(async (tx) => {
-    const cur = await tx.query('SELECT email FROM users WHERE id = $1', [id]);
-    if (!cur.rowCount) throw errors.notFound('User not found');
-    await tx.query('DELETE FROM users WHERE id = $1', [id]);
-    await writeAudit(tx, { actorId: actor.id, action: 'user.delete', entityType: 'users', entityId: id, before: cur.rows[0] });
-  });
+  const cur = await db.query('SELECT email FROM users WHERE id = $1', [id]);
+  if (!cur.rowCount) throw errors.notFound('User not found');
+  if (id === actor.id) throw errors.badRequest('You cannot delete your own account');
+
+  // A user who owns real business records must NOT be hard-deleted — that would
+  // orphan those customers/applications and dangle their incentive accruals.
+  // Block with a clear message; the account can be disabled instead.
+  const n = Number((await db.query<{ n: string }>(
+    `SELECT (SELECT count(*) FROM customers WHERE enrolled_by_user_id = $1)
+          + (SELECT count(*) FROM applications WHERE enrolled_by_user_id = $1)
+          + (SELECT count(*) FROM investor_leads WHERE created_by_user_id = $1)
+          + (SELECT count(*) FROM agents WHERE user_id = $1)
+          + (SELECT count(*) FROM approval_requests WHERE maker_user_id = $1) AS n`, [id])).rows[0]!.n);
+  if (n > 0) {
+    throw errors.conflict('This user is linked to customers, applications, leads, approvals or an agent record — disable the account instead of deleting it.');
+  }
+
+  try {
+    await db.withTx(async (tx) => {
+      // Per-user auxiliary rows cascade (sessions, user_branches, …); delete the user.
+      await tx.query('DELETE FROM users WHERE id = $1', [id]);
+      await writeAudit(tx, { actorId: actor.id, action: 'user.delete', entityType: 'users', entityId: id, before: cur.rows[0] });
+    });
+  } catch (e) {
+    // Safety net: any un-enumerated reference → a clear message, never a raw 500.
+    if ((e as { code?: string })?.code === '23503') {
+      throw errors.conflict('This user is still referenced elsewhere and cannot be deleted. Disable the account instead.');
+    }
+    throw e;
+  }
 }

@@ -202,7 +202,7 @@ function Tile({ label, value, sub, primary, onClick, canDrill = false }: {
 }
 
 // ── Drill-down modal ───────────────────────────────────────────────────────
-interface FlatCol { key: string; header: string; kind?: 'money' | 'date' | 'num' }
+interface FlatCol { key: string; header: string; kind?: 'money' | 'date' | 'num'; foot?: 'sum' }
 const INVESTMENT_COLS: FlatCol[] = [
   { key: 'application_no', header: 'App No' }, { key: 'customer', header: 'Customer' },
   { key: 'series_code', header: 'Series' }, { key: 'amount', header: 'Amount', kind: 'money' },
@@ -235,7 +235,7 @@ const FLAT_COLS: Record<string, FlatCol[]> = {
   'rate-mix': [
     { key: 'rate', header: 'Coupon %', kind: 'num' },
     { key: 'outstanding', header: 'Outstanding', kind: 'money' },
-    { key: 'investments', header: 'NCDs', kind: 'num' },
+    { key: 'customers', header: 'Active customers', kind: 'num', foot: 'sum' },
   ],
 };
 
@@ -304,16 +304,28 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
                         </tr>
                       ))}
                     </tbody>
-                    {cols.some((c) => c.kind === 'money') && (
+                    {cols.some((c) => c.kind === 'money') && (() => {
+                      // First-cell footer label: rate-mix shows the weighted-average
+                      // coupon (Σ rate×outstanding ÷ Σ outstanding); others show a count.
+                      let firstFoot = `Total (${rows.length})`;
+                      if (widget === 'rate-mix') {
+                        const tot = rows.reduce((s, r) => s + Number(r.outstanding || 0), 0);
+                        const wavg = tot > 0 ? (rows.reduce((s, r) => s + Number(r.rate || 0) * Number(r.outstanding || 0), 0) / tot).toFixed(2) : '0';
+                        firstFoot = `Average (${wavg}%)`;
+                      }
+                      return (
                       <tfoot><tr className="border-t-2 border-border font-semibold">
                         {cols.map((c, i) => (
                           <td key={c.key} className={`py-2 px-2 ${c.kind === 'money' || c.kind === 'num' ? 'text-right mono' : ''}`}>
-                            {i === 0 ? `Total (${rows.length})` : c.kind === 'money'
-                              ? formatINR(rows.reduce((s, r) => s + Number(r[c.key] || 0), 0)) : ''}
+                            {i === 0 ? firstFoot
+                              : c.kind === 'money' || c.foot === 'sum'
+                                ? (c.kind === 'money' ? formatINR(rows.reduce((s, r) => s + Number(r[c.key] || 0), 0)) : rows.reduce((s, r) => s + Number(r[c.key] || 0), 0))
+                                : ''}
                           </td>
                         ))}
                       </tr></tfoot>
-                    )}
+                      );
+                    })()}
                   </table>
                 )
               )}

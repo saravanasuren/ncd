@@ -169,9 +169,10 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
     case 'redemptions':
       return { kind: 'rows', rows: await book.redemptions(db, actor, filters) };
     case 'rate-mix': {
-      // Cost-of-funds breakdown: outstanding book by coupon rate.
+      // Cost-of-funds breakdown: outstanding book by coupon rate, with the
+      // active-customer count per rate.
       const rm = await book.rateMix(db, actor);
-      return { kind: 'rows', rows: rm.mix.map((m: any) => ({ rate: m.rate, outstanding: m.outstanding, investments: m.investments })) };
+      return { kind: 'rows', rows: rm.mix.map((m: any) => ({ rate: m.rate, outstanding: m.outstanding, customers: m.customers })) };
     }
     // legacy monthly-redemption drill (kept for back-compat)
     case 'redemptions-month': {

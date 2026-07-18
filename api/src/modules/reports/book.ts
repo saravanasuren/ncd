@@ -198,11 +198,12 @@ export async function alm(db: Db, actor: AuthUser, asOf: string) {
  * the weighted average cost of the book is visible. Uses application_lines. */
 export async function rateMix(db: Db, actor: AuthUser) {
   const w = appWhere(actor, { status: 'active' });
-  const { rows } = await db.query<{ rate: string; outstanding: string; investments: string }>(
-    `SELECT al.coupon_rate_pct AS rate, COALESCE(sum(al.outstanding_amount),0) AS outstanding, count(DISTINCT a.id)::int AS investments
+  const { rows } = await db.query<{ rate: string; outstanding: string; investments: string; customers: string }>(
+    `SELECT al.coupon_rate_pct AS rate, COALESCE(sum(al.outstanding_amount),0) AS outstanding,
+            count(DISTINCT a.id)::int AS investments, count(DISTINCT a.customer_id)::int AS customers
        ${FROM} JOIN application_lines al ON al.application_id = a.id
       WHERE ${w.sql} GROUP BY al.coupon_rate_pct ORDER BY al.coupon_rate_pct`, w.params);
-  const mix = rows.map((r) => ({ rate: Number(r.rate), outstanding: round2(Number(r.outstanding)), investments: Number(r.investments) }));
+  const mix = rows.map((r) => ({ rate: Number(r.rate), outstanding: round2(Number(r.outstanding)), investments: Number(r.investments), customers: Number(r.customers) }));
   const total = mix.reduce((s, m) => s + m.outstanding, 0);
   const weightedAvg = total > 0 ? round2(mix.reduce((s, m) => s + m.rate * m.outstanding, 0) / total) : 0;
   return { mix, weighted_avg_rate: weightedAvg, total_outstanding: round2(total) };

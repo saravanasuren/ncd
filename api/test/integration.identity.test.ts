@@ -66,6 +66,14 @@ describe('agents admin + payee search', () => {
     expect(row.bank_name).toBe('ICICI');
     expect(row.account_number).toBe('9988776655');
     expect(row.ifsc).toBe('ICIC0001234');
+
+    // Clearing a field sends null (what the edit form does) — must not 400.
+    const clear = await a.put(`/api/agents/${ag.json.id}`, { phone: null, bank_name: null });
+    expect(clear.status).toBe(200);
+    const list2 = await a.get('/api/agents');
+    const row2 = (list2.json.rows as any[]).find((r) => r.id === ag.json.id);
+    expect(row2.phone).toBeNull();
+    expect(row2.bank_name).toBeNull();
   });
 });
 

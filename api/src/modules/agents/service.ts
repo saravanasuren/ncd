@@ -50,7 +50,19 @@ export async function createAgent(db: Db, actor: AuthUser, input: CreateAgentInp
   });
 }
 
-export async function updateAgent(db: Db, actor: AuthUser, id: number, input: Partial<CreateAgentInput> & { is_active?: boolean }) {
+export interface UpdateAgentInput {
+  full_name?: string;
+  agent_code?: string;
+  phone?: string | null;
+  email?: string | null;
+  user_id?: number | null;
+  bank_name?: string | null;
+  account_number?: string | null;
+  ifsc?: string | null;
+  is_active?: boolean;
+}
+
+export async function updateAgent(db: Db, actor: AuthUser, id: number, input: UpdateAgentInput) {
   await db.withTx(async (tx) => {
     const cur = (await tx.query<Record<string, unknown>>('SELECT * FROM agents WHERE id = $1', [id])).rows[0];
     if (!cur) throw errors.notFound('Agent not found');

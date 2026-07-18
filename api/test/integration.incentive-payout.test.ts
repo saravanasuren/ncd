@@ -64,6 +64,21 @@ describe('incentives — self-investment excluded, per-customer pay', () => {
     expect(dl.json.rows.find((r: any) => r.application_no === 'APP-INC-1').paid).toBe(true);
   });
 
+  it('dashboard exposes staff/agent incentive totals + a per-payee drill with children', async () => {
+    const a = await admin();
+    const ov = await a.get('/api/dashboard/overview');
+    expect(ov.json.incentives).toBeTruthy();
+    expect(Number(ov.json.incentives.staff.earned)).toBeGreaterThan(0); // our seeded staff accrual
+    const dl = await a.get('/api/dashboard/drill/staff-incentive');
+    expect(dl.json.kind).toBe('incentive');
+    const g = dl.json.groups.find((x: any) => x.payee_type === 'staff' && x.payee_id === payeeUserId);
+    expect(g).toBeTruthy();
+    expect(Array.isArray(g.children)).toBe(true);
+    expect(g.children.some((c: any) => c.application_no === 'APP-INC-1')).toBe(true); // per-customer breakdown
+    // totals present
+    expect(dl.json.totals).toHaveProperty('earned');
+  });
+
   it('only a Super Admin can revert a payment; revert restores the balance', async () => {
     // A plain admin (has incentives:pay) is still refused the revert.
     const plainAdmin = new Client(ctx.base);

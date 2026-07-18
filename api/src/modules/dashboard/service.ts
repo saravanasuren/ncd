@@ -11,6 +11,7 @@ import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import * as book from '../reports/book.js';
 import { getSettingsMap } from '../settings/service.js';
+import * as incentives from '../incentives/service.js';
 
 /** Most recent payout-day anchor (28th by default) on/before `asOf`. Accrual runs
  * from here to `asOf`. Config-driven via settings.interest.payout_day_of_month. */
@@ -37,6 +38,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
   // ends in the past (last month, a closed quarter, last FY) shows zero — that
   // interest was already paid, not "accruing".
   const isCurrentPeriod = !filters.to || filters.to >= today;
+  const showIncentives = actor.permissions.includes('incentives:manage-eligibility');
 
   // Point-in-time interest snapshots (independent of the selected window):
   //  - accrued_total    : total interest payable AS ON today (since the last payout)
@@ -57,6 +59,8 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     book.interestAccrued(db, actor, seriesFilter, anchor, today),                                    // accrued payable as-on-date (always)
     book.monthlyInterestRunRate(db, actor, seriesFilter),                                            // run-rate gross monthly coupon of the whole outstanding book
   ]);
+  // Incentive totals (Staff vs Agent) — management only.
+  const incentiveTotals = showIncentives ? await incentives.incentiveTotals(db) : null;
 
   // Active series = the Open series (latest code); Last series = latest non-Open.
   const openSeries = seriesRows.filter((r: any) => r.status === 'Open').sort(byCodeDesc);
@@ -94,6 +98,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     alm: almTiles,                // { net_due_this_month, overdue, paid_fy, fy_label }
     rate_mix: rateMix,            // { mix:[{rate,outstanding,investments}], weighted_avg_rate, total_outstanding }
     today_book: todayBook,        // { additions:{count,amount,app,locker,physical,rows[]}, deletions:{count,amount,premature,maturity,rows[]} }
+    incentives: incentiveTotals,  // { staff:{earned,paid,pending}, agent:{...} } | null (management only)
   };
 }
 
@@ -164,6 +169,12 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
     }
     case 'redemptions':
       return { kind: 'rows', rows: await book.redemptions(db, actor, filters) };
+    case 'staff-incentive':
+    case 'agent-incentive': {
+      if (!actor.permissions.includes('incentives:manage-eligibility')) return { kind: 'incentive', groups: [], totals: { earned: 0, paid: 0, pending: 0 } };
+      const which = widget === 'staff-incentive' ? 'staff' : 'agent';
+      return { kind: 'incentive', ...(await incentives.dashboardIncentives(db, which)) };
+    }
     case 'rate-mix': {
       // Cost-of-funds breakdown: outstanding book by coupon rate, with the
       // active-customer count per rate.

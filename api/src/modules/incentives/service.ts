@@ -85,6 +85,38 @@ export async function revertCustomerPayment(db: Db, actor: AuthUser, payeeType: 
   });
 }
 
+/** Dashboard incentive totals, split Staff vs Agent (agent = agents + referrers). */
+export async function incentiveTotals(db: Db) {
+  const rows = await overview(db);
+  const agg = (pred: (r: any) => boolean) => {
+    const t = rows.filter(pred).reduce((s, r: any) => ({ earned: s.earned + r.accrued, paid: s.paid + r.paid, pending: s.pending + r.balance }), { earned: 0, paid: 0, pending: 0 });
+    return { earned: round2(t.earned), paid: round2(t.paid), pending: round2(t.pending) };
+  };
+  return { staff: agg((r) => r.payee_type === 'staff'), agent: agg((r) => r.payee_type !== 'staff') };
+}
+
+/** Dashboard drill: every Staff (or Agent) payee with earned/paid/pending and
+ * their per-customer breakdown as children. Self-investments already excluded. */
+export async function dashboardIncentives(db: Db, which: 'staff' | 'agent') {
+  const all = await overview(db);
+  const payees = all.filter((r: any) => (which === 'staff' ? r.payee_type === 'staff' : r.payee_type !== 'staff'));
+  const groups = [];
+  for (const p of payees as any[]) {
+    const children = await payeeAccruals(db, p.payee_type, p.payee_id);
+    groups.push({
+      payee_type: p.payee_type, payee_id: p.payee_id, name: p.payee_name ?? `${p.payee_type} #${p.payee_id}`,
+      earned: p.accrued, paid: p.paid, pending: p.balance,
+      children: (children as any[]).map((c) => ({
+        customer: c.customer, customer_code: c.customer_code, application_no: c.application_no,
+        series_code: c.series_code, investment_amount: c.investment_amount, incentive_amount: c.incentive_amount, paid: c.paid,
+      })),
+    });
+  }
+  groups.sort((a, b) => b.earned - a.earned);
+  const totals = groups.reduce((t, g) => ({ earned: round2(t.earned + g.earned), paid: round2(t.paid + g.paid), pending: round2(t.pending + g.pending) }), { earned: 0, paid: 0, pending: 0 });
+  return { groups, totals };
+}
+
 export async function myEarnings(db: Db, actor: AuthUser) {
   const payeeType = actor.agentId ? 'agent' : 'staff';
   const payeeId = actor.agentId ?? actor.id;

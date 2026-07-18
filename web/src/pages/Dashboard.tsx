@@ -128,6 +128,20 @@ export function Dashboard() {
                       onClick={() => pickWidget('rate-mix', 'Cost of funds — by coupon rate')} canDrill={canDrill} />
                   )}
                 </div>
+
+                {overview.data.incentives && (
+                  <>
+                    <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Incentives</h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+                      <Tile label="Staff-wise incentive" value={formatINR(overview.data.incentives.staff.earned)}
+                        sub={`${formatINR(overview.data.incentives.staff.paid)} paid · ${formatINR(overview.data.incentives.staff.pending)} pending`}
+                        onClick={() => pickWidget('staff-incentive', 'Staff incentive — by person')} canDrill={canDrill} />
+                      <Tile label="Agent-wise incentive" value={formatINR(overview.data.incentives.agent.earned)}
+                        sub={`${formatINR(overview.data.incentives.agent.paid)} paid · ${formatINR(overview.data.incentives.agent.pending)} pending`}
+                        onClick={() => pickWidget('agent-incentive', 'Agent incentive — by person')} canDrill={canDrill} />
+                    </div>
+                  </>
+                )}
               </>
             );
           })()}
@@ -260,6 +274,7 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
   const kind = q.data?.kind;
   const groups: any[] = q.data?.groups ?? [];
   const rows: any[] = q.data?.rows ?? [];
+  const incTotals = q.data?.totals as { earned: number; paid: number; pending: number } | undefined;
   const footTotals: Record<string, number> = q.data?.foot_totals ?? {};
   const cols = FLAT_COLS[widget] ?? [];
   const toggle = (key: string) => setOpen((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
@@ -277,7 +292,30 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
         <div className="p-4 max-h-[70vh] overflow-y-auto">
           {q.isLoading ? <div className="text-text-muted text-sm">Loading…</div>
             : q.error ? <div className="text-danger text-sm">Failed to load.</div>
-              : kind === 'groups' ? (
+              : kind === 'incentive' ? (
+                groups.length === 0 ? <Empty /> : (
+                  <table className="w-full text-sm border-collapse">
+                    <thead><tr className="text-left text-xs text-text-label uppercase tracking-wide border-b border-border">
+                      <th className="py-2 pr-3">Payee</th><th className="py-2 px-3 text-right">Earned</th>
+                      <th className="py-2 px-3 text-right">Paid</th><th className="py-2 pl-3 text-right">Pending</th>
+                    </tr></thead>
+                    <tbody>
+                      {groups.map((g) => {
+                        const key = `${g.payee_type}-${g.payee_id}`;
+                        return <IncentiveRows key={key} g={g} open={open.has(key)} onToggle={() => toggle(key)} />;
+                      })}
+                    </tbody>
+                    {incTotals && (
+                      <tfoot><tr className="border-t-2 border-border font-semibold">
+                        <td className="py-2 pr-3">Total ({groups.length})</td>
+                        <td className="py-2 px-3 text-right mono">{formatINR(incTotals.earned)}</td>
+                        <td className="py-2 px-3 text-right mono">{formatINR(incTotals.paid)}</td>
+                        <td className="py-2 pl-3 text-right mono">{formatINR(incTotals.pending)}</td>
+                      </tr></tfoot>
+                    )}
+                  </table>
+                )
+              ) : kind === 'groups' ? (
                 groups.length === 0 ? <Empty /> : (
                   <table className="w-full text-sm border-collapse">
                     <thead><tr className="text-left text-xs text-text-label uppercase tracking-wide border-b border-border">
@@ -357,6 +395,34 @@ function GroupRows({ g, open, onToggle }: { g: any; open: boolean; onToggle: () 
           <td className="py-1 pl-3 text-right mono">{formatINR(ch.amount)}</td>
         </tr>
       ))}
+    </>
+  );
+}
+
+/** Incentive drill: one payee row (earned/paid/pending), expandable to the
+ * per-customer breakdown (investment + incentive + paid status). */
+function IncentiveRows({ g, open, onToggle }: { g: any; open: boolean; onToggle: () => void }) {
+  return (
+    <>
+      <tr className="border-b border-border/60 cursor-pointer hover:bg-bg" onClick={onToggle}>
+        <td className="py-2 pr-3 font-medium">
+          <span className="inline-block w-4 text-text-muted">{open ? '▾' : '▸'}</span>
+          {g.name} <span className="text-text-muted text-xs">({g.children.length})</span>
+        </td>
+        <td className="py-2 px-3 text-right mono">{formatINR(g.earned)}</td>
+        <td className="py-2 px-3 text-right mono text-text-muted">{formatINR(g.paid)}</td>
+        <td className="py-2 pl-3 text-right mono font-semibold">{formatINR(g.pending)}</td>
+      </tr>
+      {open && (g.children.length === 0
+        ? <tr className="bg-bg/50 text-xs"><td colSpan={4} className="py-1.5 pl-8 text-text-muted">No eligible customers.</td></tr>
+        : g.children.map((ch: any) => (
+          <tr key={ch.application_no} className="bg-bg/50 text-xs">
+            <td className="py-1 pl-8 pr-3">{ch.customer} <span className="text-text-muted font-mono">{ch.customer_code}</span> · <span className="text-text-muted">{ch.series_code}</span></td>
+            <td className="py-1 px-3 text-right text-text-muted" title="Investment">{formatINR(ch.investment_amount)}</td>
+            <td className="py-1 px-3 text-right mono">{formatINR(ch.incentive_amount)}</td>
+            <td className="py-1 pl-3 text-right">{ch.paid ? <span className="text-success">Paid</span> : <span className="text-text-muted">Pending</span>}</td>
+          </tr>
+        )))}
     </>
   );
 }

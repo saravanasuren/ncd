@@ -16,6 +16,7 @@ export async function listAgents(db: Db) {
   const { rows } = await db.query(
     `SELECT a.id, a.agent_code, a.full_name, a.phone, a.email, a.source,
             a.commission_status, a.commission_rate_pct, a.is_active, a.user_id,
+            a.bank_name, a.account_number, a.ifsc,
             u.full_name AS user_name
      FROM agents a LEFT JOIN users u ON u.id = a.user_id
      ORDER BY a.full_name`);

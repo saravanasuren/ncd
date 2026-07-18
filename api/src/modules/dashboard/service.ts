@@ -38,7 +38,14 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
   // interest was already paid, not "accruing".
   const isCurrentPeriod = !filters.to || filters.to >= today;
 
-  const [kpis, seriesRows, districts, moneyIn, moneyBySource, interest, accrued, redemptionRows, leadFunnel, almTiles, rateMix, todayBook] = await Promise.all([
+  // Point-in-time interest snapshots (independent of the selected window):
+  //  - accrued_total    : total interest payable AS ON today (since the last payout)
+  //  - monthly_projected : interest we must pay by this month's 28th payout
+  const monthStartISO = `${today.slice(0, 7)}-01`;
+  const td = new Date(`${today}T00:00:00Z`);
+  const monthEndISO = new Date(Date.UTC(td.getUTCFullYear(), td.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+
+  const [kpis, seriesRows, districts, moneyIn, moneyBySource, interest, accrued, redemptionRows, leadFunnel, almTiles, rateMix, todayBook, accruedTotal, monthlyInterest] = await Promise.all([
     book.kpis(db, actor, seriesFilter),                    // snapshot, but honours a selected series
     book.seriesSummary(db, actor, {}),                     // ALL series (pie + active/last-series pick)
     book.districtwise(db, actor, seriesFilter),            // snapshot (pie), honours a selected series
@@ -51,6 +58,8 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     book.alm(db, actor, today),                            // ALM timing tiles (snapshot)
     book.rateMix(db, actor),                               // cost-of-funds rate mix (snapshot)
     book.todayBook(db, actor, today),                      // today's additions/deletions
+    book.interestAccrued(db, actor, seriesFilter, anchor, today),                                    // accrued payable as-on-date (always)
+    book.interestInRange(db, actor, { seriesIds: filters.seriesIds, from: monthStartISO, to: monthEndISO }), // this month's interest (projected)
   ]);
 
   // Active series = the Open series (latest code); Last series = latest non-Open.
@@ -78,6 +87,10 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
       interest_accrued: accrued.total,     // current period only; 0 for past ranges
       redemptions_total: Math.round(redemptionsTotal * 100) / 100,
       redemptions_count: redemptionRows.length,
+    },
+    interest_snapshot: {
+      accrued_total: accruedTotal.total,        // total interest payable as on date
+      monthly_projected: monthlyInterest.total, // interest due by this month's 28th payout
     },
     series: seriesRows,
     districts,
@@ -138,11 +151,17 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
       return { kind: 'rows', rows: await book.newInvestmentsList(db, actor, filters, 'app') };
     case 'interest-paid':
       return { kind: 'rows', rows: await book.interestListInRange(db, actor, filters, true) };
-    case 'interest-month': // legacy alias → all interest due in the window
-      return { kind: 'rows', rows: await book.interestListInRange(db, actor, filters) };
-    case 'interest-accrued': {
+    case 'interest-month': {
+      // "Monthly interest" tile = this calendar month's interest (projected), not the selected window.
       const today = todayISO();
-      if (filters.to && filters.to < today) return { kind: 'rows', rows: [] }; // past period → nothing accruing now
+      const monthStart = `${today.slice(0, 7)}-01`;
+      const d = new Date(`${today}T00:00:00Z`);
+      const monthEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+      return { kind: 'rows', rows: await book.interestListInRange(db, actor, { seriesIds: filters.seriesIds, from: monthStart, to: monthEnd }) };
+    }
+    case 'interest-accrued': {
+      // "Accrued interest" tile = total payable as on today (always), scoped to any selected series.
+      const today = todayISO();
       const settings = await getSettingsMap(db);
       const payoutDay = Number(settings['interest.payout_day_of_month'] ?? 28) || 28;
       return { kind: 'rows', rows: await book.accruedList(db, actor, seriesFilter, payoutAnchor(today, payoutDay), today) };

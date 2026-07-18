@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
@@ -93,7 +92,7 @@ export function Dashboard() {
       {overview.isLoading ? <div className="text-text-muted mt-6">Loading dashboard…</div>
         : overview.error ? <div className="text-danger mt-6">Failed to load dashboard.</div>
           : (() => {
-            const k = overview.data.kpis, f = overview.data.flow;
+            const k = overview.data.kpis, f = overview.data.flow, isnap = overview.data.interest_snapshot;
             return (
               <>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mt-5 mb-6">
@@ -108,10 +107,6 @@ export function Dashboard() {
                     onClick={() => pickWidget('locker', 'Locker deposits in range')} canDrill={canDrill} />
                   <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub="Money in · app"
                     onClick={() => pickWidget('app', 'DhanamFin app investments in range')} canDrill={canDrill} />
-                  <Tile label="Interest paid" value={formatINR(f.interest_paid)} sub="Paid in range (0 for current month)"
-                    onClick={() => pickWidget('interest-paid', 'Interest paid in range')} canDrill={canDrill} />
-                  <Tile label="Interest accrued" value={formatINR(f.interest_accrued)} sub="Current month, till date"
-                    onClick={() => pickWidget('interest-accrued', 'Interest accrued since last payout')} canDrill={canDrill} />
                   <Tile label="Redemptions" value={formatINR(f.redemptions_total)} sub={`${f.redemptions_count} in range`}
                     onClick={() => pickWidget('redemptions', 'Redemptions in range')} canDrill={canDrill} />
                   <Tile label="Staff-wise" value={formatINR(f.money_in_staff)} sub="New business by staff"
@@ -120,19 +115,33 @@ export function Dashboard() {
                     onClick={() => pickWidget('agent', 'New business by agent (in range)')} canDrill={canDrill} />
                 </div>
 
-                {overview.data.today_book && (
-                  <div className="grid md:grid-cols-2 gap-5 mb-6">
-                    <TodayFlowCard kind="additions" data={overview.data.today_book.additions} />
-                    <TodayFlowCard kind="deletions" data={overview.data.today_book.deletions} />
+                {isnap && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+                    <Tile label="Monthly interest" value={formatINR(isnap.monthly_projected)} sub="Projected payout by the 28th"
+                      onClick={() => pickWidget('interest-month', 'This month’s interest (projected)')} canDrill={canDrill} />
+                    <Tile label="Accrued interest" value={formatINR(isnap.accrued_total)} sub="Total payable as on date"
+                      onClick={() => pickWidget('interest-accrued', 'Interest accrued, as on date')} canDrill={canDrill} />
                   </div>
                 )}
 
-                <div className="grid md:grid-cols-2 gap-5">
-                  <PieCard title="Series register" rows={overview.data.series ?? []} nameKey="code" valueKey="outstanding" tab="series" canDrill={canDrill} />
-                  <PieCard title="District distribution" rows={overview.data.districts ?? []} nameKey="district" valueKey="amount" tab="district" canDrill={canDrill} />
-                </div>
+                {(() => {
+                  const alm = overview.data.alm, tb = overview.data.today_book;
+                  if (!alm || !tb) return null;
+                  return (
+                    <>
+                      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Asset–liability timing & today</h2>
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
+                        <Tile label="Net due this month" value={formatINR(alm.net_due_this_month)} sub="Scheduled payouts, this calendar month" />
+                        <Tile label="Overdue payouts" value={formatINR(alm.overdue)} sub="Scheduled but past due date" />
+                        <Tile label={`Interest paid ${alm.fy_label}`} value={formatINR(alm.paid_fy)} sub="Financial year to date" />
+                        <Tile label="Added today" value={formatINR(tb.additions.amount)} sub={`${tb.additions.count} new investment(s)`} />
+                        <Tile label="Redeemed today" value={formatINR(tb.deletions.amount)} sub={`${tb.deletions.count} redemption(s)`} />
+                      </div>
+                    </>
+                  );
+                })()}
 
-                <div className="grid md:grid-cols-2 gap-5 mt-5">
+                <div className="grid md:grid-cols-2 gap-5">
                   <LeadFunnelCard funnel={overview.data.lead_funnel ?? []} />
                   <RateMixCard rateMix={overview.data.rate_mix} />
                 </div>
@@ -150,46 +159,43 @@ function RangeBar({ range, setRange, activeSeries, lastSeries }: {
   range: Range; setRange: (r: Range) => void; activeSeries: any; lastSeries: any;
 }) {
   const ranges = useMemo(dateQuickRanges, []);
-  // Date period and series are INDEPENDENT filters. A series chip narrows to
-  // that series while keeping the current date window (so the interest tiles
-  // stay period-correct); a date chip keeps whatever series is selected.
+  // Single-select: exactly ONE quick-range item is active at a time. Picking a
+  // series clears any date window and vice-versa — a series chip and a date
+  // chip are never both highlighted.
   const selSeries = range.series?.[0] ?? null;
   const seriesName = selSeries == null ? null
     : activeSeries?.series_id === selSeries ? activeSeries.code
     : lastSeries?.series_id === selSeries ? lastSeries.code : `Series ${selSeries}`;
-  const toggleSeries = (id: number) => setRange({ ...range, series: selSeries === id ? null : [id] });
+  const pickSeries = (id: number, label: string) => setRange({ from: '', to: '', series: [id], label });
+  const pickDate = (from: string, to: string, label: string) => setRange({ from, to, series: null, label });
+  const dateActive = (label: string) => selSeries == null && range.label === label;
   const chip = (active: boolean) =>
     `text-xs rounded-full px-3 py-1 border ${active ? 'bg-primary text-white border-primary' : 'bg-surface border-border hover:border-primary'}`;
   return (
     <div className="bg-surface border border-border rounded-lg shadow-card p-3">
       <div className="flex flex-wrap items-center gap-1.5">
         {activeSeries && (
-          <button className={chip(selSeries === activeSeries.series_id)} onClick={() => toggleSeries(activeSeries.series_id)}>Active series</button>
+          <button className={chip(selSeries === activeSeries.series_id)} onClick={() => pickSeries(activeSeries.series_id, `Active series (${activeSeries.code})`)}>Active series</button>
         )}
         {lastSeries && (
-          <button className={chip(selSeries === lastSeries.series_id)} onClick={() => toggleSeries(lastSeries.series_id)}>Last series</button>
+          <button className={chip(selSeries === lastSeries.series_id)} onClick={() => pickSeries(lastSeries.series_id, `Last series (${lastSeries.code})`)}>Last series</button>
         )}
-        {selSeries != null && (
-          <button className="text-xs rounded-full px-2 py-1 border border-border text-text-muted hover:border-danger hover:text-danger"
-            onClick={() => setRange({ ...range, series: null })} title="Clear series filter">series: {seriesName} ✕</button>
-        )}
-        <span className="mx-1 text-border">|</span>
         {ranges.map((r) => (
-          <button key={r.key} className={chip(range.label === r.label)}
-            onClick={() => setRange({ ...range, from: r.range.from, to: r.range.to, label: r.label })}>{r.label}</button>
+          <button key={r.key} className={chip(dateActive(r.label))}
+            onClick={() => pickDate(r.range.from, r.range.to, r.label)}>{r.label}</button>
         ))}
-        <button className={chip(range.label === 'All time')}
+        <button className={chip(selSeries == null && range.label === 'All time')}
           onClick={() => setRange({ from: '', to: '', series: null, label: 'All time' })}
           title="Clear every filter — whole book, till date">✕ Clear filters</button>
       </div>
       <div className="flex flex-wrap items-center gap-2 mt-2.5 text-xs text-text-muted">
         <span>Custom:</span>
         <input type="date" className="px-2 py-1 border border-border-strong rounded outline-none focus:border-primary"
-          value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value, label: 'Custom' })} />
+          value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value, series: null, label: 'Custom' })} />
         <span>→</span>
         <input type="date" className="px-2 py-1 border border-border-strong rounded outline-none focus:border-primary"
-          value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value, label: 'Custom' })} />
-        <span className="ml-1 font-medium text-text-label">Showing: {range.label}{seriesName ? ` · ${seriesName}` : ''}</span>
+          value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value, series: null, label: 'Custom' })} />
+        <span className="ml-1 font-medium text-text-label">Showing: {seriesName ?? range.label}</span>
       </div>
     </div>
   );
@@ -354,19 +360,7 @@ function GroupRows({ g, open, onToggle }: { g: any; open: boolean; onToggle: () 
 
 function Empty() { return <div className="text-center text-text-muted text-sm py-6">No records in this view.</div>; }
 
-// ── Pie charts (snapshot → Segments) ───────────────────────────────────────
-const PIE_COLORS = ['#0b5cab', '#1a7f4b', '#b3730d', '#7048c4', '#0e8a9e', '#c23838', '#3f7cd6', '#4a9e6b', '#d19a3a', '#9a6bd6'];
-interface Slice { name: string; value: number; key: string }
-function topSlices(rows: any[], nameKey: string, valueKey: string, n = 8): Slice[] {
-  const cleaned = (rows ?? [])
-    .map((r) => ({ name: String(r[nameKey] ?? '—'), value: Number(r[valueKey]) || 0 }))
-    .filter((r) => r.value > 0)
-    .sort((a, b) => b.value - a.value);
-  const top: Slice[] = cleaned.slice(0, n).map((r) => ({ ...r, key: r.name }));
-  const rest = cleaned.slice(n);
-  if (rest.length) top.push({ name: `Others (${rest.length})`, value: rest.reduce((s, r) => s + r.value, 0), key: '__others__' });
-  return top;
-}
+// ── Snapshot cards ─────────────────────────────────────────────────────────
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
@@ -376,100 +370,6 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-// ── Today's flow (money in / money out) ────────────────────────────────────
-interface TodayRow {
-  application_no: string; customer_id: number; customer: string; customer_code: string;
-  series_code: string; amount?: string; net_payment?: string; penalty?: string;
-  received_via?: string; referred_by?: string | null; type?: string; status?: string;
-}
-interface TodayData {
-  count: number; amount: number; rows: TodayRow[];
-  app?: number; locker?: number; physical?: number; premature?: number; maturity?: number;
-}
-const viaPill: Record<string, string> = {
-  'DhanamFin app': 'bg-[color:var(--primary-bg,#e8f0fb)] text-primary',
-  Locker: 'bg-[color:var(--warn-bg)] text-warn',
-  'Other / physical': 'bg-bg text-text-muted',
-};
-
-/** Two symmetric cards: today's additions (money in) and deletions (money out),
- * each with a channel/type breakdown line and a clickable per-row table. */
-function TodayFlowCard({ kind, data }: { kind: 'additions' | 'deletions'; data: TodayData }) {
-  const nav = useNavigate();
-  const isAdd = kind === 'additions';
-  const accent = isAdd ? 'bg-success' : 'bg-danger';
-  const heading = isAdd ? "Today's additions — money in" : "Today's deletions — money out";
-  const noun = isAdd ? 'investment' : 'redemption';
-
-  // Breakdown sentence: additions split by channel, deletions by redemption type.
-  const parts: string[] = [];
-  if (isAdd) {
-    if (data.app) parts.push(`${formatINR(data.app)} DhanamFin app`);
-    if (data.physical) parts.push(`${formatINR(data.physical)} other/physical`);
-    if (data.locker) parts.push(`${formatINR(data.locker)} locker`);
-  } else {
-    if (data.premature) parts.push(`${formatINR(data.premature)} premature`);
-    if (data.maturity) parts.push(`${formatINR(data.maturity)} maturity`);
-  }
-  const breakdown = parts.length > 1 ? ` = ${parts.join(' + ')}` : '';
-
-  const th = 'py-2 px-3 text-xs font-semibold text-text-label uppercase tracking-wide';
-  const td = 'py-2 px-3 align-middle';
-
-  return (
-    <div className="bg-surface border border-border rounded-lg shadow-card overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
-        <span className={`inline-block w-1 h-4 rounded ${accent}`} />
-        <span className="text-sm font-semibold">{heading}</span>
-      </div>
-      <div className="px-4 pt-3 text-xs text-text-muted">
-        {data.count === 0
-          ? `No money ${isAdd ? 'in' : 'out'} today.`
-          : <>{data.count} {noun}{data.count === 1 ? '' : 's'} today · total <span className="font-semibold text-text">{formatINR(data.amount)}</span>{breakdown}. Click a row for the customer.</>}
-      </div>
-      {data.count > 0 && (
-        <div className="p-3 overflow-x-auto">
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="text-left border-b border-border">
-                <th className={th}>Customer</th>
-                <th className={th}>Series</th>
-                <th className={`${th} whitespace-nowrap`}>App no</th>
-                {isAdd ? <th className={th}>Received via</th> : <th className={th}>Type</th>}
-                {isAdd ? <th className={th}>Referred by</th> : <th className={`${th} text-right`}>Penalty</th>}
-                <th className={`${th} text-right`}>{isAdd ? 'Amount' : 'Net'}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.rows.map((r, i) => (
-                <tr key={r.application_no + i} className="border-b border-border last:border-0 hover:bg-bg cursor-pointer"
-                  onClick={() => nav(`/app/customers/${r.customer_id}`)}>
-                  <td className={td}>
-                    <span className="font-medium">{r.customer}</span>{' '}
-                    <span className="font-mono text-xs text-text-muted">{r.customer_code}</span>
-                  </td>
-                  <td className={td}>{r.series_code}</td>
-                  <td className={`${td} font-mono text-xs whitespace-nowrap`}>{r.application_no}</td>
-                  {isAdd ? (
-                    <td className={td}><span className={`text-[11px] rounded px-1.5 py-0.5 ${viaPill[r.received_via ?? ''] ?? 'bg-bg'}`}>{r.received_via}</span></td>
-                  ) : (
-                    <td className={`${td} capitalize`}>{r.type}</td>
-                  )}
-                  {isAdd ? (
-                    <td className={`${td} text-text-muted`}>{r.referred_by ?? 'Direct'}</td>
-                  ) : (
-                    <td className={`${td} text-right mono`}>{formatINR(r.penalty ?? 0)}</td>
-                  )}
-                  <td className={`${td} text-right mono font-medium`}>{formatINR((isAdd ? r.amount : r.net_payment) ?? 0)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
 /** Lead pipeline funnel — horizontal bars, longest first, with count + Σ expected. */
 function LeadFunnelCard({ funnel }: { funnel: { status: string; count: number; expected: number }[] }) {
   const nav = useNavigate();
@@ -528,38 +428,3 @@ function RateMixCard({ rateMix }: { rateMix?: { mix: { rate: number; outstanding
   );
 }
 
-function PieCard({ title, rows, nameKey, valueKey, tab, canDrill }: {
-  title: string; rows: any[]; nameKey: string; valueKey: string; tab: string; canDrill: boolean;
-}) {
-  const nav = useNavigate();
-  const slices = topSlices(rows, nameKey, valueKey, 8);
-  const onSlice = (i: number) => {
-    if (!canDrill) return;
-    const s = slices[i];
-    if (!s) return;
-    nav(s.key === '__others__' ? `/app/segments?tab=${tab}` : `/app/segments?tab=${tab}&open=${encodeURIComponent(s.key)}`);
-  };
-  return (
-    <Panel title={title}>
-      {slices.length === 0 ? (
-        <div className="p-5 text-center text-text-muted text-sm">No data.</div>
-      ) : (
-        <div className="p-3">
-          <div style={{ height: 280 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={slices} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={48} outerRadius={92}
-                  onClick={(_d: any, i: number) => onSlice(i)} cursor={canDrill ? 'pointer' : 'default'}>
-                  {slices.map((_s, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-                </Pie>
-                <Tooltip formatter={(v: any) => formatINR(Number(v))} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          {canDrill && <div className="text-center text-xs text-text-muted -mt-1">Click a slice to open it in Segments →</div>}
-        </div>
-      )}
-    </Panel>
-  );
-}

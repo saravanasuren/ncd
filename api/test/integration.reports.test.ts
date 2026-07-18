@@ -172,15 +172,17 @@ describe('dashboard tiles + drill (range-aware)', () => {
     expect(ov.json.flow.new_investments).toBe(0);
   });
 
-  it('interest accrued is zero for a past range but shows for the current window', async () => {
+  it('interest snapshot (accrued + monthly) is point-in-time, independent of the range', async () => {
     const a = await admin();
-    const past = await a.get('/api/dashboard/overview?from=2020-01-01&to=2020-01-31');
-    expect(Number(past.json.flow.interest_accrued)).toBe(0);
+    // Snapshot block is present and non-negative regardless of window.
+    const ov = await a.get('/api/dashboard/overview?from=2020-01-01&to=2020-01-31');
+    expect(Number(ov.json.interest_snapshot.accrued_total)).toBeGreaterThanOrEqual(0);
+    expect(Number(ov.json.interest_snapshot.monthly_projected)).toBeGreaterThanOrEqual(0);
+    // The accrued drill is always "as on today", even when a past window is passed.
     const accruedDrill = await a.get('/api/dashboard/drill/interest-accrued?from=2020-01-01&to=2020-01-31');
-    expect(accruedDrill.json.rows.length).toBe(0);
-    // current window (open-ended) keeps a real accrued number
-    const now = await a.get('/api/dashboard/overview');
-    expect(Number(now.json.flow.interest_accrued)).toBeGreaterThanOrEqual(0);
+    expect(accruedDrill.json.kind).toBe('rows');
+    // The legacy range-based flow field still zeroes out for a fully-past window.
+    expect(Number(ov.json.flow.interest_accrued)).toBe(0);
   });
 
   it('the series drill narrows to a single series when one is passed', async () => {

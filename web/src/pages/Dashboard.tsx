@@ -188,6 +188,9 @@ function RangeBar({ range, setRange, activeSeries, lastSeries }: {
           <button key={r.key} className={chip(range.label === r.label)}
             onClick={() => setRange({ ...range, from: r.range.from, to: r.range.to, label: r.label })}>{r.label}</button>
         ))}
+        <button className={chip(range.label === 'All time')}
+          onClick={() => setRange({ from: '', to: '', series: null, label: 'All time' })}
+          title="Clear every filter — whole book, till date">✕ Clear filters</button>
       </div>
       <div className="flex flex-wrap items-center gap-2 mt-2.5 text-xs text-text-muted">
         <span>Custom:</span>

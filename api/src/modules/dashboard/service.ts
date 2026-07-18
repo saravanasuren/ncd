@@ -84,7 +84,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     lead_funnel: leadFunnel,      // [{ status, count, expected }]
     alm: almTiles,                // { net_due_this_month, overdue, paid_fy, fy_label }
     rate_mix: rateMix,            // { mix:[{rate,outstanding,investments}], weighted_avg_rate, total_outstanding }
-    today_book: todayBook,        // { additions:{count,amount}, deletions:{count,amount} }
+    today_book: todayBook,        // { additions:{count,amount,app,locker,physical,rows[]}, deletions:{count,amount,premature,maturity,rows[]} }
   };
 }
 

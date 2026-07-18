@@ -210,20 +210,48 @@ export async function rateMix(db: Db, actor: AuthUser) {
 
 /** Today's book — money in / out that landed today (independent of the range). */
 export async function todayBook(db: Db, actor: AuthUser, today: string) {
-  // additions: new investments funded today
+  // additions: new investments funded today, with per-row detail + channel split.
   const addScope = appWhere(actor, {});
-  const additions = await db.query<{ n: string; amt: string }>(
-    `SELECT count(a.id)::int AS n, COALESCE(sum(a.total_amount),0) AS amt ${FROM}
-      WHERE ${addScope.sql} AND a.date_money_received = $${addScope.params.length + 1}::date`, [...addScope.params, today]);
-  // deletions: redemptions created today (scoped via their application)
+  const addRows = (await db.query<Record<string, unknown>>(
+    `SELECT a.application_no, c.id AS customer_id, c.full_name AS customer, c.customer_code,
+            s.code AS series_code, a.total_amount AS amount, a.date_money_received, a.status,
+            NULLIF(btrim(a.referred_by_text), '') AS referred_by,
+            CASE WHEN a.is_locker_deposit THEN 'Locker'
+                 WHEN a.source IN ('dhanamfin','lockerhub') THEN 'DhanamFin app'
+                 ELSE 'Other / physical' END AS received_via
+     ${FROM} WHERE ${addScope.sql} AND a.date_money_received = $${addScope.params.length + 1}::date
+     ORDER BY a.total_amount DESC, a.application_no`, [...addScope.params, today])).rows;
+
+  // deletions: redemptions created today (scoped via their application), with detail + type split.
   const redScope = appWhere(actor, {});
-  const deletions = await db.query<{ n: string; amt: string }>(
-    `SELECT count(r.id)::int AS n, COALESCE(sum(r.net_payment),0) AS amt FROM redemptions r
-      WHERE r.created_at::date = $${redScope.params.length + 1}::date
-        AND r.application_id IN (SELECT a.id ${FROM} WHERE ${redScope.sql})`, [...redScope.params, today]);
+  const delRows = (await db.query<Record<string, unknown>>(
+    `SELECT r.redemption_no, a.application_no, c.id AS customer_id, c.full_name AS customer, c.customer_code,
+            s.code AS series_code, r.type, r.principal, r.penalty, r.net_payment, r.status, r.redemption_date
+     FROM redemptions r JOIN applications a ON a.id = r.application_id
+     JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
+     WHERE r.created_at::date = $${redScope.params.length + 1}::date
+       AND r.application_id IN (SELECT a.id ${FROM} WHERE ${redScope.sql})
+     ORDER BY r.net_payment DESC, r.redemption_no`, [...redScope.params, today])).rows;
+
+  const sumBy = (rows: Record<string, unknown>[], key: string, pred: (r: Record<string, unknown>) => boolean) =>
+    round2(rows.filter(pred).reduce((s, r) => s + Number(r[key] ?? 0), 0));
+
   return {
-    additions: { count: Number(additions.rows[0]!.n), amount: round2(Number(additions.rows[0]!.amt)) },
-    deletions: { count: Number(deletions.rows[0]!.n), amount: round2(Number(deletions.rows[0]!.amt)) },
+    additions: {
+      count: addRows.length,
+      amount: sumBy(addRows, 'amount', () => true),
+      app: sumBy(addRows, 'amount', (r) => r.received_via === 'DhanamFin app'),
+      locker: sumBy(addRows, 'amount', (r) => r.received_via === 'Locker'),
+      physical: sumBy(addRows, 'amount', (r) => r.received_via === 'Other / physical'),
+      rows: addRows,
+    },
+    deletions: {
+      count: delRows.length,
+      amount: sumBy(delRows, 'net_payment', () => true),
+      premature: sumBy(delRows, 'net_payment', (r) => r.type === 'premature'),
+      maturity: sumBy(delRows, 'net_payment', (r) => r.type === 'maturity'),
+      rows: delRows,
+    },
   };
 }
 

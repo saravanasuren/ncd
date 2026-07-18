@@ -70,7 +70,11 @@ export async function signup(db: Db, input: SignupInput): Promise<{ id: number; 
   const digits = input.mobile.replace(/\D/g, '');
   if (digits.length !== 10) throw errors.badRequest('Mobile number must be 10 digits');
   assertStrongPassword(input.password);
-  if (input.type === 'staff' && !input.full_name?.trim()) throw errors.badRequest('Name is required');
+  if (input.type === 'staff') {
+    if (!input.full_name?.trim()) throw errors.badRequest('Name is required');
+    if (!input.employee_id?.trim()) throw errors.badRequest('Employee ID is required');
+    if (!input.branch_id) throw errors.badRequest('Branch is required');
+  }
 
   return db.withTx(async (tx) => {
     // One login per mobile.

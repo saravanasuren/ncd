@@ -31,7 +31,11 @@ export function SignupPage() {
     if (!mobileOk) { setErr('Enter a valid 10-digit mobile number.'); return; }
     if (!pwOk) { setErr('Password must be at least 8 characters and include a letter and a number.'); return; }
     if (f.password !== f.confirm) { setErr('Passwords do not match.'); return; }
-    if (type === 'staff' && !f.full_name.trim()) { setErr('Name is required.'); return; }
+    if (type === 'staff') {
+      if (!f.full_name.trim()) { setErr('Name is required.'); return; }
+      if (!f.employee_id.trim()) { setErr('Employee ID is required.'); return; }
+      if (!f.branch_id) { setErr('Branch is required.'); return; }
+    }
     setBusy(true);
     try {
       const body: Record<string, unknown> = { type, mobile: f.mobile.replace(/\D/g, ''), password: f.password };
@@ -78,11 +82,11 @@ export function SignupPage() {
 
             {type === 'staff' && (
               <>
-                <label className={label}>Employee ID</label>
+                <label className={label}>Employee ID *</label>
                 <input className={input} value={f.employee_id} onChange={(e) => set({ employee_id: e.target.value })} />
                 <label className={label}>Name *</label>
                 <input className={input} value={f.full_name} onChange={(e) => set({ full_name: e.target.value })} autoFocus />
-                <label className={label}>Branch</label>
+                <label className={label}>Branch *</label>
                 <select className={input} value={f.branch_id} onChange={(e) => set({ branch_id: e.target.value })}>
                   <option value="">Select branch…</option>
                   {(branches.data?.rows ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}

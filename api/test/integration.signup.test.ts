@@ -55,9 +55,16 @@ describe('self-service sign-up', () => {
   });
 
   it('a duplicate mobile is rejected', async () => {
+    const branchId = Number((await ctx.db.query("SELECT id FROM branches WHERE code = 'HO'")).rows[0]!.id);
     const c = new Client(ctx.base);
-    const su = await c.post('/api/auth/signup', { type: 'staff', mobile: '9800000001', password: 'Passw0rd', full_name: 'Dup' });
+    const su = await c.post('/api/auth/signup', { type: 'staff', mobile: '9800000001', password: 'Passw0rd', full_name: 'Dup', employee_id: 'E-9', branch_id: branchId });
     expect(su.status).toBe(409);
+  });
+
+  it('staff signup requires employee id and branch', async () => {
+    const c = new Client(ctx.base);
+    const noEmp = await c.post('/api/auth/signup', { type: 'staff', mobile: '9800000011', password: 'Passw0rd', full_name: 'No Emp' });
+    expect(noEmp.status).toBe(400);
   });
 
   it('a weak password (no number) is rejected', async () => {
@@ -67,8 +74,9 @@ describe('self-service sign-up', () => {
   });
 
   it('an unverified account older than 30 days is blocked from login', async () => {
+    const branchId = Number((await ctx.db.query("SELECT id FROM branches WHERE code = 'HO'")).rows[0]!.id);
     const c = new Client(ctx.base);
-    await c.post('/api/auth/signup', { type: 'staff', mobile: '9800000003', password: 'Passw0rd', full_name: 'Old Staff' });
+    await c.post('/api/auth/signup', { type: 'staff', mobile: '9800000003', password: 'Passw0rd', full_name: 'Old Staff', employee_id: 'E-3', branch_id: branchId });
     await ctx.db.query("UPDATE users SET created_at = now() - interval '40 days' WHERE phone = '9800000003'");
     const login = new Client(ctx.base);
     const lr = await login.post('/api/auth/login', { email: '9800000003', password: 'Passw0rd' });

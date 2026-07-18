@@ -30,7 +30,7 @@ describe("today's flow cards", () => {
     expect(Array.isArray(tb.additions.rows)).toBe(true);
     const row = tb.additions.rows.find((r: any) => r.application_no === app.json.application_no);
     expect(row).toBeTruthy();
-    expect(row.received_via).toBe('Other / physical'); // staff-keyed, not locker/app
+    expect(row.received_via).toBe('NEFT'); // staff-keyed → shows the actual payment method
     expect(Number(row.amount)).toBe(250000);
     expect(row.customer_id).toBe(cust.json.id);         // row is clickable → customer
     expect(tb.additions.count).toBe(1);

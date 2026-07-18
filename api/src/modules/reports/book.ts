@@ -218,7 +218,7 @@ export async function todayBook(db: Db, actor: AuthUser, today: string) {
             NULLIF(btrim(a.referred_by_text), '') AS referred_by,
             CASE WHEN a.is_locker_deposit THEN 'Locker'
                  WHEN a.source IN ('dhanamfin','lockerhub') THEN 'DhanamFin app'
-                 ELSE 'Other / physical' END AS received_via
+                 ELSE COALESCE(NULLIF(btrim(a.collection_method), ''), 'Physical') END AS received_via
      ${FROM} WHERE ${addScope.sql} AND a.date_money_received = $${addScope.params.length + 1}::date
      ORDER BY a.total_amount DESC, a.application_no`, [...addScope.params, today])).rows;
 
@@ -242,7 +242,7 @@ export async function todayBook(db: Db, actor: AuthUser, today: string) {
       amount: sumBy(addRows, 'amount', () => true),
       app: sumBy(addRows, 'amount', (r) => r.received_via === 'DhanamFin app'),
       locker: sumBy(addRows, 'amount', (r) => r.received_via === 'Locker'),
-      physical: sumBy(addRows, 'amount', (r) => r.received_via === 'Other / physical'),
+      physical: sumBy(addRows, 'amount', (r) => r.received_via !== 'DhanamFin app' && r.received_via !== 'Locker'),
       rows: addRows,
     },
     deletions: {

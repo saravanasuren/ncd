@@ -122,6 +122,15 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     default: { mode: 'pct', value: 1.0 } as RateValue,
     editableBy: 'workflow',
   },
+  {
+    key: 'redemption.premature_penalty_waiver_enabled',
+    group: 'Redemptions',
+    label: 'Allow premature penalty waiver / discount',
+    description: 'When on, a CXO can waive or reduce the premature-withdrawal penalty while approving.',
+    type: 'boolean',
+    default: true,
+    editableBy: 'admin',
+  },
 
   // ── Numbering ──
   {

@@ -158,3 +158,34 @@ describe('rollover / transfer / transformation', () => {
     expect(Number(owner.customer_id)).toBe(nominee.customerId);
   });
 });
+
+describe('premature penalty waiver (CXO)', () => {
+  it('CXO waives the penalty → net = principal; a non-CXO cannot, and it can only reduce', async () => {
+    const inv = await activeInvestment('Waive Cust', '9333300001', 500000);
+    const ncd = await as('ncd@demo.local');
+    const init = await ncd.post('/api/redemptions/premature', { application_id: inv.appId, reason: 'hardship' });
+    expect(init.status).toBe(201);
+    const redId = init.json.redemption_id;
+    expect(Number(init.json.penalty)).toBeGreaterThan(0);          // 1% of ₹5L = ₹5,000
+
+    // Staff (no check-premature) cannot waive.
+    expect((await ncd.post(`/api/redemptions/${redId}/waive-penalty`, { new_penalty: 0, reason: 'no' })).status).toBe(403);
+
+    const cxo = await as('cxo@demo.local');
+    // Cannot increase the penalty.
+    expect((await cxo.post(`/api/redemptions/${redId}/waive-penalty`, { new_penalty: 999999, reason: 'nope' })).status).toBe(400);
+
+    // Waive fully → penalty 0, net = principal.
+    const w = await cxo.post(`/api/redemptions/${redId}/waive-penalty`, { new_penalty: 0, reason: 'genuine hardship' });
+    expect(w.status).toBe(200);
+    expect(Number(w.json.penalty)).toBe(0);
+    expect(Number(w.json.net_payment)).toBe(500000);
+    const row = (await ctx.db.query('SELECT penalty, net_payment, penalty_original FROM redemptions WHERE id = $1', [redId])).rows[0] as any;
+    expect(Number(row.penalty)).toBe(0);
+    expect(Number(row.net_payment)).toBe(500000);
+    expect(Number(row.penalty_original)).toBe(5000);
+
+    // Approve → app Redeemed at the waived net.
+    expect((await cxo.post(`/api/approvals/${init.json.request.id}/approve`)).json.request.status).toBe('Approved');
+  });
+});

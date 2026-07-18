@@ -13,6 +13,7 @@ import { writeAudit } from '../../lib/audit.js';
 import { assertTransition } from '../../lib/statusMachine.js';
 import { nextCode } from '../../lib/sequences.js';
 import { computeRedemption } from '../../lib/redemption.js';
+import { round2 } from '../../lib/dates.js';
 import type { RateSpec } from '../../lib/incentive.js';
 import { getSettingsMap } from '../settings/service.js';
 import { createApprovalRequest, registerOnFinalApprove, type ApprovalRow } from '../approvals/service.js';
@@ -106,6 +107,51 @@ export async function initiateMaturity(db: Db, actor: AuthUser, applicationId: n
     await tx.query('UPDATE redemptions SET approval_request_id = $1 WHERE id = $2', [req.id, rec.id]);
     await writeAudit(tx, { actorId: actor.id, action: 'redemption.maturity.initiate', entityType: 'redemptions', entityId: rec.id });
     return { redemption_id: rec.id, redemption_no: rec.redemption_no, request: req };
+  });
+}
+
+/**
+ * CXO waives / discounts a pending premature penalty before approving.
+ * new_penalty = 0 (waive) or a reduced amount (discount); can't exceed the
+ * current penalty or go negative. Recomputes net = principal − penalty and
+ * mirrors the new figures onto the approval request so the card is truthful.
+ */
+export async function adjustPrematurePenalty(db: Db, actor: AuthUser, redemptionId: number, input: { new_penalty: number; reason: string }) {
+  const settings = await getSettingsMap(db);
+  if (settings['redemption.premature_penalty_waiver_enabled'] === false) {
+    throw errors.unprocessable('Premature penalty waivers are turned off in Settings');
+  }
+  if (input.new_penalty < 0) throw errors.badRequest('Penalty cannot be negative');
+  if (!input.reason?.trim() || input.reason.trim().length < 3) throw errors.badRequest('A reason is required');
+
+  return db.withTx(async (tx) => {
+    const red = (await tx.query<{ type: string; status: string; principal: string; penalty: string; penalty_original: string | null; approval_request_id: string | null }>(
+      'SELECT type, status, principal, penalty, penalty_original, approval_request_id FROM redemptions WHERE id = $1 FOR UPDATE', [redemptionId])).rows[0];
+    if (!red) throw errors.notFound('Redemption not found');
+    if (red.type !== 'premature') throw errors.unprocessable('Only premature redemptions carry a penalty');
+    if (red.status !== 'Requested') throw errors.unprocessable('This redemption is no longer pending approval');
+    const current = Number(red.penalty);
+    if (input.new_penalty > current + 0.001) throw errors.badRequest('The penalty can only be waived or reduced, not increased');
+
+    const principal = Number(red.principal);
+    const newPenalty = round2(input.new_penalty);
+    const newNet = round2(principal - newPenalty);
+    const original = red.penalty_original != null ? Number(red.penalty_original) : current;
+
+    await tx.query(
+      `UPDATE redemptions SET penalty = $1, net_payment = $2,
+         penalty_original = $3, penalty_waived_by_user_id = $4, penalty_waive_reason = $5, penalty_waived_at = now()
+       WHERE id = $6`,
+      [newPenalty, newNet, original, actor.id, input.reason.trim(), redemptionId]);
+
+    // Keep the approval card's metadata in sync (it shows penalty + net_payment).
+    if (red.approval_request_id) {
+      await tx.query(
+        `UPDATE approval_requests SET metadata = metadata || jsonb_build_object('penalty', $1::numeric, 'net_payment', $2::numeric, 'penalty_waived', true) WHERE id = $3`,
+        [newPenalty, newNet, Number(red.approval_request_id)]);
+    }
+    await writeAudit(tx, { actorId: actor.id, action: 'redemption.penalty-waive', entityType: 'redemptions', entityId: redemptionId, before: { penalty: current }, after: { penalty: newPenalty, net_payment: newNet, reason: input.reason.trim() } });
+    return { redemption_id: redemptionId, penalty: newPenalty, penalty_original: original, net_payment: newNet };
   });
 }
 

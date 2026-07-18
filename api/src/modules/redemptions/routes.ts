@@ -17,6 +17,13 @@ redemptionsRouter.post('/premature', requirePermission('redemptions:initiate'),
     res.status(201).json(await s.initiatePremature(getDb(), req.user!, input));
   }));
 
+// CXO waives / discounts the premature penalty before approving.
+redemptionsRouter.post('/:id/waive-penalty', requirePermission('approvals:check-premature'),
+  asyncHandler(async (req, res) => {
+    const input = z.object({ new_penalty: z.number().min(0), reason: z.string().min(3) }).parse(req.body);
+    res.json(await s.adjustPrematurePenalty(getDb(), req.user!, Number(req.params.id), input));
+  }));
+
 // Staff picks up a customer/app request and starts the 2-level approval.
 redemptionsRouter.post('/:id/submit-for-approval', requirePermission('redemptions:initiate'),
   asyncHandler(async (req, res) => res.status(201).json({ request: await s.submitForApproval(getDb(), req.user!, Number(req.params.id)) })));

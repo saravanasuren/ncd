@@ -109,11 +109,50 @@ function Detail({ id }: { id: number }) {
   );
 }
 
+/** CXO waive/discount of a pending premature penalty, shown on the approval card. */
+function PrematureWaive({ redemptionId, penalty, netPayment, waived, onDone }: {
+  redemptionId: number; penalty: number; netPayment: number; waived: boolean; onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [amt, setAmt] = useState('');
+  const [reason, setReason] = useState('');
+  const [err, setErr] = useState('');
+  const apply = useMutation({
+    mutationFn: (newPenalty: number) => api.post(`/api/redemptions/${redemptionId}/waive-penalty`, { new_penalty: newPenalty, reason: reason.trim() }),
+    onSuccess: () => { setOpen(false); setAmt(''); setReason(''); setErr(''); onDone(); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const inr = (n: number) => formatINR(n);
+  return (
+    <div className="px-4 pb-3 -mt-1">
+      <div className="text-xs text-text-muted">
+        Penalty <span className="font-semibold text-text mono">{inr(penalty)}</span> · Net payable <span className="font-semibold text-text mono">{inr(netPayment)}</span>
+        {waived && <span className="ml-2 text-success">· penalty adjusted</span>}
+        {' '}<button onClick={() => setOpen((s) => !s)} className="text-primary hover:underline">{open ? 'Cancel' : 'Waive / discount penalty'}</button>
+      </div>
+      {open && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 bg-bg rounded p-2.5">
+          <button disabled={apply.isPending || !reason.trim()} onClick={() => apply.mutate(0)}
+            className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Waive fully (₹0)</button>
+          <span className="text-xs text-text-muted">or set to</span>
+          <input className="w-28 px-2 py-1 text-xs border border-border-strong rounded" type="number" placeholder="₹ penalty" value={amt} onChange={(e) => setAmt(e.target.value)} />
+          <input className="flex-1 min-w-[10rem] px-2 py-1 text-xs border border-border-strong rounded" placeholder="Reason (required)" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <button disabled={apply.isPending || !amt || !reason.trim() || Number(amt) > penalty} onClick={() => apply.mutate(Number(amt))}
+            className="text-xs border border-border-strong rounded px-3 py-1.5 disabled:opacity-40 hover:border-primary">Apply discount</button>
+          {err && <span className="text-xs text-danger w-full">{err}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ApprovalsPage() {
   const qc = useQueryClient();
   const [msg, setMsg] = useState('');
   const [openId, setOpenId] = useState<number | null>(null);
   const { data, isLoading } = useQuery({ queryKey: ['approvals'], queryFn: () => api.get<{ rows: ApprovalReq[] }>('/api/approvals/queue') });
+  const uiConfig = useQuery({ queryKey: ['ui-config'], queryFn: () => api.get<{ values: Record<string, unknown> }>('/api/settings/ui-config') });
+  const waiverEnabled = uiConfig.data?.values['redemption.premature_penalty_waiver_enabled'] !== false;
 
   const act = useMutation({
     mutationFn: (v: { id: number; action: 'approve' | 'reject'; reason?: string }) =>
@@ -157,6 +196,15 @@ export function ApprovalsPage() {
                 <span className="text-xs text-text-muted italic">awaiting another checker</span>
               )}
             </div>
+            {r.canAct && r.request_type === 'premature_redemption' && waiverEnabled && (
+              <PrematureWaive
+                redemptionId={Number(r.metadata.redemption_id)}
+                penalty={Number(r.metadata.penalty ?? 0)}
+                netPayment={Number(r.metadata.net_payment ?? 0)}
+                waived={r.metadata.penalty_waived === true}
+                onDone={() => qc.invalidateQueries({ queryKey: ['approvals'] })}
+              />
+            )}
             {openId === r.id && <Detail id={r.id} />}
           </div>
         ))}

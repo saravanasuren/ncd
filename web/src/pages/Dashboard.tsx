@@ -114,9 +114,9 @@ export function Dashboard() {
                     onClick={() => pickWidget('interest-accrued', 'Interest accrued since last payout')} canDrill={canDrill} />
                   <Tile label="Redemptions" value={formatINR(f.redemptions_total)} sub={`${f.redemptions_count} in range`}
                     onClick={() => pickWidget('redemptions', 'Redemptions in range')} canDrill={canDrill} />
-                  <Tile label="Staff-wise" value={formatINR(f.money_in)} sub="New business by staff"
+                  <Tile label="Staff-wise" value={formatINR(f.money_in_staff)} sub="New business by staff"
                     onClick={() => pickWidget('staff', 'New business by staff (in range)')} canDrill={canDrill} />
-                  <Tile label="Agent-wise" value={formatINR(f.money_in)} sub="New business by agent"
+                  <Tile label="Agent-wise" value={formatINR(f.money_in_agent)} sub="New business by agent"
                     onClick={() => pickWidget('agent', 'New business by agent (in range)')} canDrill={canDrill} />
                 </div>
 

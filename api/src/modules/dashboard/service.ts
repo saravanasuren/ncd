@@ -38,11 +38,12 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
   // interest was already paid, not "accruing".
   const isCurrentPeriod = !filters.to || filters.to >= today;
 
-  const [kpis, seriesRows, districts, moneyIn, interest, accrued, redemptionRows, leadFunnel, almTiles, rateMix, todayBook] = await Promise.all([
+  const [kpis, seriesRows, districts, moneyIn, moneyBySource, interest, accrued, redemptionRows, leadFunnel, almTiles, rateMix, todayBook] = await Promise.all([
     book.kpis(db, actor, seriesFilter),                    // snapshot, but honours a selected series
     book.seriesSummary(db, actor, {}),                     // ALL series (pie + active/last-series pick)
     book.districtwise(db, actor, seriesFilter),            // snapshot (pie), honours a selected series
     book.moneyInByChannel(db, actor, filters),             // flow
+    book.moneyInBySource(db, actor, filters),              // flow (staff vs agent tiles)
     book.interestInRange(db, actor, filters),              // flow (paid vs due)
     isCurrentPeriod ? book.interestAccrued(db, actor, seriesFilter, anchor, asOf) : Promise.resolve({ total: 0 }),
     book.redemptions(db, actor, filters),                  // flow
@@ -69,6 +70,8 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
       money_in: moneyIn.total,
       money_in_locker: moneyIn.locker,
       money_in_app: moneyIn.app,
+      money_in_staff: moneyBySource.staff,
+      money_in_agent: moneyBySource.agent,
       new_investments: moneyIn.count,
       interest_paid: interest.paid,        // interest actually paid in the window (0 for the current MTD)
       interest_due: interest.total,        // paid + still-scheduled, for reference

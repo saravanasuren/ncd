@@ -43,6 +43,18 @@ describe("today's flow cards", () => {
     expect(tb.deletions.premature + tb.deletions.maturity).toBe(tb.deletions.amount);
   });
 
+  it('Paid redemptions count in the redemptions flow tile (not only Approved)', async () => {
+    const a = await admin();
+    const today = new Date().toISOString().slice(0, 10);
+    const appId = Number((await ctx.db.query('SELECT id FROM applications ORDER BY id LIMIT 1')).rows[0]!.id);
+    await ctx.db.query(
+      `INSERT INTO redemptions (redemption_no, application_id, type, principal, penalty, net_payment, broken_interest, requested_date, redemption_date, status)
+       VALUES ('RED-TEST-PAID', $1, 'premature', 50000, 0, 50000, 0, $2, $2, 'Paid')`, [appId, today]);
+    const ov = await a.get('/api/dashboard/overview');
+    expect(Number(ov.json.flow.redemptions_total)).toBeGreaterThanOrEqual(50000);
+    expect(Number(ov.json.flow.redemptions_count)).toBeGreaterThanOrEqual(1);
+  });
+
   it('a locker-flagged addition lands in the locker split', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Locker Today', phone: '9880002222' });

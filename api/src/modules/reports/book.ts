@@ -40,7 +40,20 @@ function appWhere(actor: AuthUser, filters: BookFilters, extra: string[] = []): 
   return { sql: conds.join(' AND '), params };
 }
 
-const FROM = 'FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id';
+const FROM = `FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
+  LEFT JOIN LATERAL (
+    SELECT sum(al.outstanding_amount) FILTER (WHERE al.status = 'Active') AS live
+    FROM application_lines al WHERE al.application_id = a.id
+  ) bk ON TRUE`;
+
+/**
+ * Book amount of one application: the LIVE line-level outstanding (partial
+ * premature withdrawals reduce it), falling back to the subscribed amount when
+ * no line has been touched. Wealth's book nets partials the same way — summing
+ * a.total_amount overstated the book by every partial withdrawal (₹25L found
+ * 2026-07-18: three part-redeemed investments).
+ */
+const AMT = 'COALESCE(bk.live, a.total_amount)';
 
 /**
  * Attribution (docs/06 §1). Who REFERRED the customer lives in the free-text
@@ -63,7 +76,7 @@ const REFERRER = "NULLIF(btrim(a.referred_by_text), '')";
 export async function kpis(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const active = appWhere(actor, { ...filters, status: 'active' });
   const outstanding = await db.query<{ v: string; n: string; inv: string }>(
-    `SELECT COALESCE(sum(a.total_amount),0) AS v, count(a.id)::int AS n, count(DISTINCT a.customer_id)::int AS inv ${FROM} WHERE ${active.sql}`, active.params);
+    `SELECT COALESCE(sum(${AMT}),0) AS v, count(a.id)::int AS n, count(DISTINCT a.customer_id)::int AS inv ${FROM} WHERE ${active.sql}`, active.params);
   // interest paid (net) and due, over the schedule for in-scope apps
   const scopeAll = appWhere(actor, {});
   const paid = await db.query<{ v: string }>(
@@ -90,7 +103,7 @@ export async function seriesSummary(db: Db, actor: AuthUser, filters: BookFilter
     `SELECT s.id AS series_id, s.code, s.status,
             count(a.id)::int AS investments,
             count(DISTINCT a.customer_id)::int AS investors,
-            COALESCE(sum(a.total_amount) FILTER (WHERE a.status IN (${OUTSTANDING_SQL_LIST})),0) AS outstanding,
+            COALESCE(sum(${AMT}) FILTER (WHERE a.status IN (${OUTSTANDING_SQL_LIST})),0) AS outstanding,
             COALESCE(sum(a.total_amount) FILTER (WHERE a.status = 'Redeemed'),0) AS redeemed,
             COALESCE(sum(a.total_amount),0) AS issued
      ${FROM} WHERE ${w.sql} GROUP BY s.id, s.code, s.status ORDER BY s.code`, w.params);
@@ -100,7 +113,7 @@ export async function seriesSummary(db: Db, actor: AuthUser, filters: BookFilter
 export async function depositorwise(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
   const { rows } = await db.query(
-    `SELECT c.full_name AS name, COALESCE(sum(a.total_amount),0) AS amount
+    `SELECT c.full_name AS name, COALESCE(sum(${AMT}),0) AS amount
      ${FROM} WHERE ${w.sql} GROUP BY c.full_name ORDER BY c.full_name`, w.params);
   return rows;
 }
@@ -109,7 +122,7 @@ export async function districtwise(db: Db, actor: AuthUser, filters: BookFilters
   const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
   const { rows } = await db.query(
     `SELECT COALESCE(c.district,'Unassigned') AS district, count(DISTINCT a.customer_id)::int AS investors,
-            COALESCE(sum(a.total_amount),0) AS amount
+            COALESCE(sum(${AMT}),0) AS amount
      ${FROM} WHERE ${w.sql} GROUP BY COALESCE(c.district,'Unassigned') ORDER BY amount DESC`, w.params);
   return rows;
 }
@@ -117,7 +130,7 @@ export async function districtwise(db: Db, actor: AuthUser, filters: BookFilters
 export async function agentwise(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
   const { rows } = await db.query(
-    `SELECT COALESCE(${REFERRER},'Direct') AS agent, c.full_name AS customer, COALESCE(sum(a.total_amount),0) AS amount
+    `SELECT COALESCE(${REFERRER},'Direct') AS agent, c.full_name AS customer, COALESCE(sum(${AMT}),0) AS amount
      ${FROM_ATTR}
      WHERE ${w.sql} AND sref.full_name IS NULL
      GROUP BY COALESCE(${REFERRER},'Direct'), c.full_name ORDER BY agent, customer`, w.params);
@@ -127,7 +140,7 @@ export async function agentwise(db: Db, actor: AuthUser, filters: BookFilters = 
 export async function staffwise(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
   const { rows } = await db.query(
-    `SELECT sref.full_name AS staff, c.full_name AS customer, COALESCE(sum(a.total_amount),0) AS amount
+    `SELECT sref.full_name AS staff, c.full_name AS customer, COALESCE(sum(${AMT}),0) AS amount
      ${FROM_ATTR}
      WHERE ${w.sql} AND sref.full_name IS NOT NULL
      GROUP BY sref.full_name, c.full_name ORDER BY staff, customer`, w.params);
@@ -139,7 +152,7 @@ export async function customerwise(db: Db, actor: AuthUser, filters: BookFilters
   const { rows } = await db.query(
     `SELECT c.customer_code, c.full_name AS customer, c.district,
             COALESCE(sref.full_name, ${REFERRER}, '—') AS sourced_by,
-            count(a.id)::int AS ncds, COALESCE(sum(a.total_amount),0) AS outstanding
+            count(a.id)::int AS ncds, COALESCE(sum(${AMT}),0) AS outstanding
      ${FROM_ATTR}
      WHERE ${w.sql} GROUP BY c.customer_code, c.full_name, c.district, COALESCE(sref.full_name, ${REFERRER}, '—') ORDER BY customer`, w.params);
   return rows;
@@ -276,7 +289,7 @@ export interface SegmentGroup {
 export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, filters: BookFilters = {}): Promise<SegmentGroup[]> {
   const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
   const { rows } = await db.query<any>(
-    `SELECT a.application_no, a.total_amount AS amount, a.status, a.allotment_date,
+    `SELECT a.application_no, ${AMT} AS amount, a.status, a.allotment_date,
             c.customer_code, c.full_name AS customer, COALESCE(c.district,'Unassigned') AS district,
             s.code AS series_code, s.status AS series_status,
             sref.full_name AS staff_ref, ${REFERRER} AS referrer
@@ -446,7 +459,7 @@ export async function ongoingSeriesPivot(db: Db, actor: AuthUser, seriesId: numb
   // Ongoing NCD tab: referrer → customer → amount for one series.
   const w = appWhere(actor, { seriesIds: [seriesId] });
   const { rows } = await db.query(
-    `SELECT COALESCE(${REFERRER},'Direct') AS agent, c.full_name AS customer, COALESCE(sum(a.total_amount),0) AS amount
+    `SELECT COALESCE(${REFERRER},'Direct') AS agent, c.full_name AS customer, COALESCE(sum(${AMT}),0) AS amount
      ${FROM}
      WHERE ${w.sql} GROUP BY COALESCE(${REFERRER},'Direct'), c.full_name ORDER BY agent, customer`, w.params);
   return rows;

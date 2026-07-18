@@ -116,7 +116,7 @@ export function Dashboard() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
                   {isnap && (
                     <>
-                      <Tile label="Monthly interest" value={formatINR(isnap.monthly_projected)} sub="Projected payout by the 28th"
+                      <Tile label="Monthly interest" value={formatINR(isnap.monthly_projected)} sub="Gross coupon cost / month at current book"
                         onClick={() => pickWidget('interest-month', 'This month’s interest (projected)')} canDrill={canDrill} />
                       <Tile label="Interest accrued" value={formatINR(isnap.accrued_total)} sub="Total accrued as on date"
                         onClick={() => pickWidget('interest-accrued', 'Interest accrued, as on date')} canDrill={canDrill} />

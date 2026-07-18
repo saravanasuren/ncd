@@ -196,6 +196,23 @@ export async function alm(db: Db, actor: AuthUser, asOf: string) {
 
 /** Cost-of-funds rate mix — outstanding principal grouped by coupon rate, so
  * the weighted average cost of the book is visible. Uses application_lines. */
+/**
+ * Run-rate GROSS monthly interest cost of the outstanding book:
+ * sum(live outstanding × coupon rate) / 12. Same basis as the cost-of-funds
+ * rate mix — includes ALL outstanding (funded-but-not-yet-activated too),
+ * unlike the schedule which only exists post-activation. This is the "if the
+ * book stood still, what does a month of coupon cost" figure.
+ */
+export async function monthlyInterestRunRate(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+  const w = appWhere(actor, { ...filters, status: 'active' });
+  const { rows } = await db.query<{ gross_monthly: string; annual: string }>(
+    `SELECT COALESCE(sum(al.outstanding_amount * al.coupon_rate_pct/100.0) / 12.0, 0) AS gross_monthly,
+            COALESCE(sum(al.outstanding_amount * al.coupon_rate_pct/100.0), 0) AS annual
+       ${FROM} JOIN application_lines al ON al.application_id = a.id AND al.status = 'Active'
+      WHERE ${w.sql}`, w.params);
+  return { gross_monthly: round2(Number(rows[0]!.gross_monthly)), annual: round2(Number(rows[0]!.annual)) };
+}
+
 export async function rateMix(db: Db, actor: AuthUser) {
   const w = appWhere(actor, { status: 'active' });
   const { rows } = await db.query<{ rate: string; outstanding: string; investments: string; customers: string }>(

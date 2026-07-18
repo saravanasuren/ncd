@@ -55,6 +55,19 @@ describe("today's flow cards", () => {
     expect(Number(ov.json.flow.redemptions_count)).toBeGreaterThanOrEqual(1);
   });
 
+  it('monthly interest = gross run-rate coupon of the whole outstanding book', async () => {
+    const a = await admin();
+    const ov = await a.get('/api/dashboard/overview');
+    // With one Active ₹2.5L line at the demo coupon, monthly = outstanding*rate/12.
+    const outstanding = Number(ov.json.kpis.outstanding_book);
+    const rate = Number(ov.json.rate_mix.weighted_avg_rate);
+    const expected = Math.round((outstanding * (rate / 100) / 12) * 100) / 100;
+    const shown = Number(ov.json.interest_snapshot.monthly_projected);
+    // within ₹1 of the run-rate identity (rounding across per-line vs weighted-avg)
+    expect(Math.abs(shown - expected)).toBeLessThanOrEqual(Math.max(1, expected * 0.001));
+    expect(shown).toBeGreaterThan(0);
+  });
+
   it('customer detail includes the investments list with live outstanding', async () => {
     const a = await admin();
     const custId = Number((await ctx.db.query("SELECT id FROM customers WHERE full_name='Today Investor'")).rows[0]!.id);

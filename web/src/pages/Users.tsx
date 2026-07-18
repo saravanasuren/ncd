@@ -34,6 +34,8 @@ interface EditState {
   reports_to_user_id: string;
   is_active: boolean;
   password: string; // blank = keep current
+  code: string;     // blank = no code
+  is_staff: boolean;
 }
 
 /** Admin → Users (docs/05 §21). */
@@ -80,6 +82,8 @@ export function UsersPage() {
         branch_id: e.branch_id ? Number(e.branch_id) : null,
         reports_to_user_id: e.reports_to_user_id ? Number(e.reports_to_user_id) : null,
         is_active: e.is_active,
+        code: e.code.trim() || null,
+        is_staff: e.is_staff,
         ...(e.password ? { password: e.password } : {}),
       }),
     onSuccess: () => { setEdit(null); qc.invalidateQueries({ queryKey: ['users'] }); },
@@ -124,8 +128,14 @@ export function UsersPage() {
             {branches?.rows.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
         : branchLabel(u.branch_id) },
-    { key: 'code', header: 'Code', tdClassName: 'font-mono text-xs', value: (u) => u.code ?? '', render: (u) => u.code ?? '—' },
-    { key: 'is_staff', header: 'Staff?', value: (u) => (u.is_staff ? 'Yes' : 'No'), render: (u) => (u.is_staff ? 'Yes' : 'No') },
+    { key: 'code', header: 'Code', tdClassName: 'font-mono text-xs', value: (u) => u.code ?? '',
+      render: (u) => edit?.id === u.id
+        ? <input className={`${inp} w-24`} placeholder="Code" value={edit.code} onChange={(e) => setEdit({ ...edit, code: e.target.value.toUpperCase() })} />
+        : (u.code ?? '—') },
+    { key: 'is_staff', header: 'Staff?', value: (u) => (u.is_staff ? 'Yes' : 'No'),
+      render: (u) => edit?.id === u.id
+        ? <label className="text-xs flex items-center gap-1"><input type="checkbox" checked={edit.is_staff} onChange={(e) => setEdit({ ...edit, is_staff: e.target.checked })} /> Staff</label>
+        : (u.is_staff ? 'Yes' : 'No') },
     { key: 'status', header: 'Status', value: (u) => (u.is_active ? 'Active' : 'Disabled'),
       render: (u) => edit?.id === u.id
         ? <label className="flex items-center gap-1.5 text-xs">
@@ -156,7 +166,7 @@ export function UsersPage() {
         <span className="inline-flex items-center gap-2.5 justify-end">
           {can('users:manage') && (
             <button
-              onClick={() => { setErr(''); setEdit({ id: u.id, full_name: u.full_name, role: u.role, branch_id: u.branch_id != null ? String(u.branch_id) : '', reports_to_user_id: u.reports_to_user_id != null ? String(u.reports_to_user_id) : '', is_active: u.is_active, password: '' }); }}
+              onClick={() => { setErr(''); setEdit({ id: u.id, full_name: u.full_name, role: u.role, branch_id: u.branch_id != null ? String(u.branch_id) : '', reports_to_user_id: u.reports_to_user_id != null ? String(u.reports_to_user_id) : '', is_active: u.is_active, password: '', code: u.code ?? '', is_staff: u.is_staff }); }}
               className="text-xs text-primary hover:underline">Edit</button>
           )}
           {can('users:manage') && (

@@ -156,7 +156,7 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
       return { kind: 'rows', rows: (await db.query(
         `SELECT c.full_name AS customer, s.code AS series, r.type, r.net_payment, r.redemption_date
          FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
-         WHERE r.status = 'Approved' AND to_char(r.redemption_date,'YYYY-MM') = $1 AND ${sc.sql} ORDER BY r.redemption_date`, [param, ...sc.params])).rows };
+         WHERE r.status IN ('Approved','Paid') AND to_char(r.redemption_date,'YYYY-MM') = $1 AND ${sc.sql} ORDER BY r.redemption_date`, [param, ...sc.params])).rows };
     }
     default:
       return { kind: 'rows', rows: [] };

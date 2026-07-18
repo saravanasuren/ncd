@@ -373,7 +373,7 @@ export async function redemptions(db: Db, actor: AuthUser, filters: BookFilters 
     `SELECT r.redemption_date, r.type, s.code AS series_code, c.full_name AS customer_name, r.net_payment
      FROM redemptions r JOIN applications a ON a.id = r.application_id
      JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
-     WHERE r.status = 'Approved' AND ${w.sql}${dateCond}
+     WHERE r.status IN ('Approved','Paid') AND ${w.sql}${dateCond}
      ORDER BY r.redemption_date`, params);
   return rows;
 }

@@ -185,6 +185,20 @@ describe('dashboard tiles + drill (range-aware)', () => {
     expect(Number(ov.json.flow.interest_accrued)).toBe(0);
   });
 
+  it('cost-of-funds drill: customer total is the DISTINCT active count, not the per-rate sum', async () => {
+    const a = await admin();
+    const dl = await a.get('/api/dashboard/drill/rate-mix');
+    expect(dl.json.kind).toBe('rows');
+    expect(dl.json.foot_totals).toBeTruthy();
+    const ov = await a.get('/api/dashboard/overview');
+    // The footer's customer total must equal the outstanding-book investor count
+    // (a customer spanning two coupon rates must NOT be double-counted).
+    expect(dl.json.foot_totals.customers).toBe(ov.json.kpis.active_investors);
+    // And it must be ≤ the sum of the per-rate rows.
+    const perRateSum = (dl.json.rows as any[]).reduce((s, r) => s + Number(r.customers), 0);
+    expect(dl.json.foot_totals.customers).toBeLessThanOrEqual(perRateSum);
+  });
+
   it('the series drill narrows to a single series when one is passed', async () => {
     const a = await admin();
     const sid = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);

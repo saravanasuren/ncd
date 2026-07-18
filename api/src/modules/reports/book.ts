@@ -206,7 +206,11 @@ export async function rateMix(db: Db, actor: AuthUser) {
   const mix = rows.map((r) => ({ rate: Number(r.rate), outstanding: round2(Number(r.outstanding)), investments: Number(r.investments), customers: Number(r.customers) }));
   const total = mix.reduce((s, m) => s + m.outstanding, 0);
   const weightedAvg = total > 0 ? round2(mix.reduce((s, m) => s + m.rate * m.outstanding, 0) / total) : 0;
-  return { mix, weighted_avg_rate: weightedAvg, total_outstanding: round2(total) };
+  // True distinct active customers across the whole book — NOT the sum of the
+  // per-rate counts (a customer at two rates would be double-counted there).
+  const totalCustomers = Number((await db.query<{ c: string }>(
+    `SELECT count(DISTINCT a.customer_id)::int AS c ${FROM} WHERE ${w.sql}`, w.params)).rows[0]!.c);
+  return { mix, weighted_avg_rate: weightedAvg, total_outstanding: round2(total), total_customers: totalCustomers };
 }
 
 /** Today's book — money in / out that landed today (independent of the range). */

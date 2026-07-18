@@ -172,7 +172,12 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
       // Cost-of-funds breakdown: outstanding book by coupon rate, with the
       // active-customer count per rate.
       const rm = await book.rateMix(db, actor);
-      return { kind: 'rows', rows: rm.mix.map((m: any) => ({ rate: m.rate, outstanding: m.outstanding, customers: m.customers })) };
+      return {
+        kind: 'rows',
+        rows: rm.mix.map((m: any) => ({ rate: m.rate, outstanding: m.outstanding, customers: m.customers })),
+        // True distinct customer total (not the sum of per-rate counts).
+        foot_totals: { customers: rm.total_customers },
+      };
     }
     // legacy monthly-redemption drill (kept for back-compat)
     case 'redemptions-month': {

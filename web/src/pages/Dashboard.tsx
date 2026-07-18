@@ -259,6 +259,7 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
   const kind = q.data?.kind;
   const groups: any[] = q.data?.groups ?? [];
   const rows: any[] = q.data?.rows ?? [];
+  const footTotals: Record<string, number> = q.data?.foot_totals ?? {};
   const cols = FLAT_COLS[widget] ?? [];
   const toggle = (key: string) => setOpen((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
 
@@ -318,9 +319,9 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
                         {cols.map((c, i) => (
                           <td key={c.key} className={`py-2 px-2 ${c.kind === 'money' || c.kind === 'num' ? 'text-right mono' : ''}`}>
                             {i === 0 ? firstFoot
-                              : c.kind === 'money' || c.foot === 'sum'
-                                ? (c.kind === 'money' ? formatINR(rows.reduce((s, r) => s + Number(r[c.key] || 0), 0)) : rows.reduce((s, r) => s + Number(r[c.key] || 0), 0))
-                                : ''}
+                              : c.kind === 'money' ? formatINR(rows.reduce((s, r) => s + Number(r[c.key] || 0), 0))
+                              : c.foot === 'sum' ? (footTotals[c.key] ?? rows.reduce((s, r) => s + Number(r[c.key] || 0), 0))
+                              : ''}
                           </td>
                         ))}
                       </tr></tfoot>

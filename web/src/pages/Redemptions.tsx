@@ -10,6 +10,7 @@ interface Redemption {
   id: number; redemption_no: string; type: string; status: string; source: string;
   requested_by_customer: boolean; principal: string; penalty: string; net_payment: string;
   application_no: string; customer_name: string; approval_request_id: number | null;
+  redemption_date: string | null;
 }
 
 type RedTab = 'all' | 'premature' | 'maturity';
@@ -21,7 +22,10 @@ const pill: Record<string, string> = {
 };
 
 const columns: Column<Redemption>[] = [
-  { key: 'redemption_no', header: 'Ref', tdClassName: 'font-mono text-xs' },
+  { key: 'redemption_no', header: 'Ref', tdClassName: 'font-mono text-xs whitespace-nowrap' },
+  { key: 'redemption_date', header: 'Date', tdClassName: 'whitespace-nowrap',
+    value: (r) => r.redemption_date ?? '',
+    render: (r) => r.redemption_date ? <span className="mono text-xs">{String(r.redemption_date).slice(0, 10)}</span> : '—' },
   { key: 'customer_name', header: 'Customer' },
   { key: 'type', header: 'Type' },
   { key: 'net_payment', header: 'Net', align: 'right',
@@ -94,7 +98,7 @@ export function RedemptionsPage() {
         columns={columns}
         rows={rest.filter((r) => redMatch(tab, r.type))}
         rowKey={(r) => r.id}
-        defaultSort={{ key: 'redemption_no', dir: 'desc' }}
+        defaultSort={{ key: 'redemption_date', dir: 'desc' }}
         empty="No redemptions in this view."
       />
     </div>

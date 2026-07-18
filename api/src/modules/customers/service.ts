@@ -141,7 +141,20 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
   const nominees = (await db.query('SELECT * FROM nominees WHERE customer_id = $1', [id])).rows;
   const jointHolders = (await db.query('SELECT * FROM joint_holders WHERE customer_id = $1', [id])).rows;
   const documents = (await db.query('SELECT id, doc_type, original_filename, origin, uploaded_at FROM customer_documents WHERE customer_id = $1', [id])).rows;
-  return { customer: c, bankAccounts, nominees, jointHolders, documents };
+  // The customer's investments — every application with its live outstanding
+  // (partial withdrawals reduce it), newest first.
+  const applications = (await db.query(
+    `SELECT a.id, a.application_no, s.code AS series_code, a.total_amount AS amount,
+            COALESCE(bk.live, a.total_amount) AS outstanding, a.status,
+            a.date_money_received, a.allotment_date
+     FROM applications a JOIN series s ON s.id = a.series_id
+     LEFT JOIN LATERAL (
+       SELECT sum(al.outstanding_amount) FILTER (WHERE al.status = 'Active') AS live
+       FROM application_lines al WHERE al.application_id = a.id
+     ) bk ON TRUE
+     WHERE a.customer_id = $1
+     ORDER BY a.date_money_received DESC NULLS LAST, a.id DESC`, [id])).rows;
+  return { customer: c, bankAccounts, nominees, jointHolders, documents, applications };
 }
 
 export async function addBankAccount(db: Db, actor: AuthUser, customerId: number, input: { account_number: string; ifsc: string; bank_name?: string; branch_name?: string; branch_city?: string; account_type?: string; holder_name?: string; tds_applicable?: boolean }) {

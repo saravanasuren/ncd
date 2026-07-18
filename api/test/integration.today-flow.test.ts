@@ -55,6 +55,19 @@ describe("today's flow cards", () => {
     expect(Number(ov.json.flow.redemptions_count)).toBeGreaterThanOrEqual(1);
   });
 
+  it('customer detail includes the investments list with live outstanding', async () => {
+    const a = await admin();
+    const custId = Number((await ctx.db.query("SELECT id FROM customers WHERE full_name='Today Investor'")).rows[0]!.id);
+    const detail = await a.get(`/api/customers/${custId}`);
+    expect(detail.status).toBe(200);
+    expect(Array.isArray(detail.json.applications)).toBe(true);
+    const app = detail.json.applications[0];
+    expect(app.series_code).toBe('NCD DEMO');
+    expect(Number(app.amount)).toBe(250000);
+    expect(Number(app.outstanding)).toBe(250000);
+    expect(app.application_no).toMatch(/^APP-/);
+  });
+
   it('a locker-flagged addition lands in the locker split', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Locker Today', phone: '9880002222' });

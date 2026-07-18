@@ -358,7 +358,11 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
     });
   }
   for (const [key, g] of groups) g.investors = custSets.get(key)!.size;
-  const out = [...groups.values()].sort((a, b) => b.outstanding - a.outstanding);
+  // Series view lists newest series first (NCD_28, 27, 26…); other views by amount.
+  const out = [...groups.values()].sort((a, b) =>
+    by === 'series'
+      ? String(b.key).localeCompare(String(a.key), undefined, { numeric: true, sensitivity: 'base' })
+      : b.outstanding - a.outstanding);
   for (const g of out) g.children.sort((a, b) => b.amount - a.amount);
   return out;
 }

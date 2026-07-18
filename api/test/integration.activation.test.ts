@@ -109,3 +109,28 @@ describe('activation makes an investment live before allotment', () => {
     expect(self.status).toBe(403);
   });
 });
+
+describe('closing a series with nothing pending (migrated-series case)', () => {
+  it('a 0-pending Open series can be allotted → Allotted; a re-allot is then rejected', async () => {
+    const a = await admin();
+    // A series with no un-allotted apps — like a migrated series whose apps
+    // already carry an allotment date. Insert a bare Open series directly.
+    const sid = Number((await ctx.db.query(
+      "INSERT INTO series (code, name, status, deemed_date) VALUES ('NCD CLOSE', 'NCD Close Test', 'Open', '2026-07-01') RETURNING id")).rows[0]!.id);
+    const ncd = await as('ncd@demo.local');
+
+    const batch = await ncd.post(`/api/allotments/series/${sid}`, { allotment_date: '2026-07-20' });
+    expect(batch.status).toBe(201);
+    expect(batch.json.count).toBe(0);                       // nothing pending, but allowed
+    const ok = await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+    expect(ok.status).toBe(200);
+
+    const s = (await ctx.db.query('SELECT status, allotted_at FROM series WHERE id = $1', [sid])).rows[0] as any;
+    expect(s.status).toBe('Allotted');                      // series is now closed to new money
+    expect(s.allotted_at).toBeTruthy();
+
+    // Already Allotted with nothing pending → cannot allot again.
+    const again = await ncd.post(`/api/allotments/series/${sid}`, { allotment_date: '2026-07-21' });
+    expect(again.status).toBe(422);
+  });
+});

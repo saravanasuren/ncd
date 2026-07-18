@@ -33,15 +33,23 @@ export function AllotmentsPage() {
       value: (s) => Number(s.pending_amount), render: (s) => <span className="mono">{formatINR(s.pending_amount)}</span> },
     { key: 'status', header: 'Status' },
     { key: 'actions', header: 'Actions', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
-      render: (s) => (
+      render: (s) => {
+        // Allottable = has pending investments to stamp, OR the series can still
+        // be closed (not already Allotted/Withdrawn). A 0-pending Open series is
+        // allowed → the batch just formally closes it to new money.
+        const closeOnly = s.pending_count === 0 && s.status !== 'Allotted' && s.status !== 'Withdrawn';
+        const canAllot = s.pending_count > 0 || closeOnly;
+        return (
         <span className="inline-flex gap-2 justify-end">
-          <button disabled={s.pending_count === 0 || allot.isPending} onClick={() => { setMsg(''); allot.mutate(s.series_id); }}
-            className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Allot batch</button>
+          <button disabled={!canAllot || allot.isPending} onClick={() => { setMsg(''); allot.mutate(s.series_id); }}
+            title={closeOnly ? 'No pending investments — this closes the series to new money' : undefined}
+            className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">{closeOnly ? 'Close series' : 'Allot batch'}</button>
           {can('allotments:revert') && s.status === 'Allotted' && (
             <button onClick={() => { setMsg(''); revert.mutate(s.series_id); }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">↺ Revert</button>
           )}
         </span>
-      ) },
+      );
+      } },
   ];
 
   return (

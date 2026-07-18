@@ -35,6 +35,10 @@ incentivesRouter.get('/payees/:type/:id/accruals', requirePermission('incentives
 incentivesRouter.post('/payees/:type/:id/accruals/:applicationId/pay', requirePermission('incentives:pay'),
   asyncHandler(async (req, res) => res.json(await s.payCustomerAccrual(getDb(), req.user!, req.params.type!, Number(req.params.id), Number(req.params.applicationId)))));
 
+// Revert a per-customer payment — Super Admin only (enforced in the service).
+incentivesRouter.post('/payees/:type/:id/accruals/:applicationId/revert-payment', requirePermission('incentives:pay'),
+  asyncHandler(async (req, res) => res.json(await s.revertCustomerPayment(getDb(), req.user!, req.params.type!, Number(req.params.id), Number(req.params.applicationId)))));
+
 // Agent commission eligibility (maker-checker).
 incentivesRouter.post('/agents/:id/eligibility', requirePermission('incentives:manage-eligibility'),
   asyncHandler(async (req, res) => {

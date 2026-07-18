@@ -66,6 +66,23 @@ export async function payCustomerAccrual(db: Db, actor: AuthUser, payeeType: str
   });
 }
 
+/** Revert one customer's incentive payment (Super Admin only) — un-marks the
+ * accrual paid and removes its payout ledger row, so the balance owes again. */
+export async function revertCustomerPayment(db: Db, actor: AuthUser, payeeType: string, payeeId: number, applicationId: number) {
+  if (actor.role !== 'super_admin') throw errors.forbidden('Only a Super Admin can revert a payment');
+  return db.withTx(async (tx) => {
+    const acc = (await tx.query<{ id: string; paid_at: string | null }>(
+      'SELECT id, paid_at FROM incentive_accruals WHERE payee_type = $1 AND payee_id = $2 AND application_id = $3',
+      [payeeType, payeeId, applicationId])).rows[0];
+    if (!acc) throw errors.notFound('No incentive found for this customer');
+    if (!acc.paid_at) throw errors.unprocessable('This incentive is not paid');
+    await tx.query('UPDATE incentive_accruals SET paid_at = NULL WHERE id = $1', [acc.id]);
+    await tx.query('DELETE FROM incentive_payouts WHERE payee_type = $1 AND payee_id = $2 AND application_id = $3', [payeeType, payeeId, applicationId]);
+    await writeAudit(tx, { actorId: actor.id, action: 'incentive.revert-payment', entityType: 'incentive_accruals', entityId: Number(acc.id), after: { applicationId } });
+    return payeeBalance(tx, payeeType, payeeId);
+  });
+}
+
 export async function myEarnings(db: Db, actor: AuthUser) {
   const payeeType = actor.agentId ? 'agent' : 'staff';
   const payeeId = actor.agentId ?? actor.id;

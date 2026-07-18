@@ -13,7 +13,8 @@ interface AgentRow { id: number; full_name: string; agent_code: string; commissi
 
 export function IncentivesPage() {
   const qc = useQueryClient();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
+  const canRevert = user?.role === 'super_admin';
   const [msg, setMsg] = useState('');
   const [balTab, setBalTab] = useState<'staff' | 'agent'>('staff');
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -91,7 +92,9 @@ export function IncentivesPage() {
           defaultSort={{ key: 'balance', dir: 'desc' }}
           empty={balTab === 'staff' ? 'No staff accruals yet.' : 'No agent/referrer accruals yet.'}
           renderExpanded={(p) => expanded === `${p.payee_type}-${p.payee_id}`
-            ? <PayeeAccruals p={p} canPay={can('incentives:pay')} onPaid={() => { setMsg('Incentive paid.'); qc.invalidateQueries({ queryKey: ['inc-overview'] }); }} />
+            ? <PayeeAccruals p={p} canPay={can('incentives:pay')} canRevert={canRevert}
+                onPaid={() => { setMsg('Incentive paid.'); qc.invalidateQueries({ queryKey: ['inc-overview'] }); }}
+                onReverted={() => { setMsg('Payment reverted.'); qc.invalidateQueries({ queryKey: ['inc-overview'] }); }} />
             : null}
         />
         </div>
@@ -150,13 +153,17 @@ export function IncentivesPage() {
 }
 
 /** Per-customer incentive breakdown for one payee, with pay-in-full per customer. */
-function PayeeAccruals({ p, canPay, onPaid }: { p: Payee; canPay: boolean; onPaid: () => void }) {
+function PayeeAccruals({ p, canPay, canRevert, onPaid, onReverted }: { p: Payee; canPay: boolean; canRevert: boolean; onPaid: () => void; onReverted: () => void }) {
   const qc = useQueryClient();
   const key = ['inc-accruals', p.payee_type, p.payee_id];
   const { data, isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<{ rows: Accrual[] }>(`/api/incentives/payees/${p.payee_type}/${p.payee_id}/accruals`) });
   const payOne = useMutation({
     mutationFn: (applicationId: number) => api.post(`/api/incentives/payees/${p.payee_type}/${p.payee_id}/accruals/${applicationId}/pay`, {}),
     onSuccess: () => { qc.invalidateQueries({ queryKey: key }); onPaid(); },
+  });
+  const revertOne = useMutation({
+    mutationFn: (applicationId: number) => api.post(`/api/incentives/payees/${p.payee_type}/${p.payee_id}/accruals/${applicationId}/revert-payment`, {}),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: key }); onReverted(); },
   });
   const rows = data?.rows ?? [];
   const th = 'py-1.5 px-3 text-xs font-semibold text-text-label uppercase tracking-wide';
@@ -179,9 +186,14 @@ function PayeeAccruals({ p, canPay, onPaid }: { p: Payee; canPay: boolean; onPai
                   <td className={`${td} font-mono text-xs`}>{r.application_no}</td>
                   <td className={`${td} text-right mono`}>{formatINR(r.investment_amount)}</td>
                   <td className={`${td} text-right mono font-semibold`}>{formatINR(r.incentive_amount)}</td>
-                  <td className={`${td} text-right`}>
-                    {r.paid ? <span className="text-xs text-success">Paid</span>
-                      : canPay ? <button disabled={payOne.isPending} onClick={() => payOne.mutate(r.application_id)}
+                  <td className={`${td} text-right whitespace-nowrap`}>
+                    {r.paid ? (
+                      <span className="inline-flex items-center gap-2 justify-end">
+                        <span className="text-xs text-success">Paid</span>
+                        {canRevert && <button disabled={revertOne.isPending} onClick={() => revertOne.mutate(r.application_id)}
+                          className="text-xs border border-border text-danger rounded px-2 py-1 disabled:opacity-40 hover:bg-[color:var(--danger-bg)]">Revert</button>}
+                      </span>
+                    ) : canPay ? <button disabled={payOne.isPending} onClick={() => payOne.mutate(r.application_id)}
                           className="text-xs bg-primary text-white rounded px-3 py-1 disabled:opacity-40 hover:bg-primary-hover">Pay</button>
                       : <span className="text-xs text-text-muted">Unpaid</span>}
                   </td>

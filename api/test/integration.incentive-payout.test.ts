@@ -60,4 +60,21 @@ describe('incentives — self-investment excluded, per-customer pay', () => {
     const dl = await a.get(`/api/incentives/payees/staff/${payeeUserId}/accruals`);
     expect(dl.json.rows.find((r: any) => r.application_no === 'APP-INC-1').paid).toBe(true);
   });
+
+  it('only a Super Admin can revert a payment; revert restores the balance', async () => {
+    // A plain admin (has incentives:pay) is still refused the revert.
+    const plainAdmin = new Client(ctx.base);
+    await plainAdmin.post('/api/auth/login', { email: 'admin@demo.local', password: 'Demo_1234' });
+    const denied = await plainAdmin.post(`/api/incentives/payees/staff/${payeeUserId}/accruals/${appNormalId}/revert-payment`, {});
+    expect(denied.status).toBe(403);
+
+    // Super Admin (seed admin) can — the accrual goes back to unpaid, balance owes again.
+    const sa = await admin();
+    const rev = await sa.post(`/api/incentives/payees/staff/${payeeUserId}/accruals/${appNormalId}/revert-payment`, {});
+    expect(rev.status).toBe(200);
+    expect(Number(rev.json.paid)).toBe(0);
+    expect(Number(rev.json.balance)).toBe(10000);
+    const dl = await sa.get(`/api/incentives/payees/staff/${payeeUserId}/accruals`);
+    expect(dl.json.rows.find((r: any) => r.application_no === 'APP-INC-1').paid).toBe(false);
+  });
 });

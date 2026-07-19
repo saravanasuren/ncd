@@ -433,7 +433,10 @@ export async function runMigration(
         payout_bank_account_id: r.payout_bank_account_id ?? null,
         customer_was_new_at_creation: r.customer_was_new_at_creation ?? true,
         is_locker_deposit: r.is_locker_deposit ?? false,
-        referred_by_text: r.referred_by_free_text ?? null,
+        // Wealth keeps the referrer on the CUSTOMER, not the application, so the
+        // app's own referred_by_free_text is usually blank. Fall back to the
+        // customer's — otherwise a re-import wipes attribution on every app.
+        referred_by_text: r.referred_by_free_text ?? custById.get(r.customer_id)?.referred_by_free_text ?? null,
         source: r.lockerhub_intent_no ? 'lockerhub' : 'staff',
         enrolled_by_user_id: refUser(r.enrolled_by_user_id),
         enrolled_by_agent_id: r.enrolled_by_agent_id ?? null,

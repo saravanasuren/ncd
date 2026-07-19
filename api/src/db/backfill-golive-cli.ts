@@ -63,5 +63,13 @@ for (const app of inFlight) {
 }
 console.log(`In-flight → PendingApproval (+ approval): ${gated}/${inFlight.length}${gatedFailed ? ` (${gatedFailed} failed)` : ''}`);
 
+// 3. Retire any leftover pending batch-activation approvals — that flow is gone
+//    and its apps have been taken live above, so these would only clutter the
+//    Approvals queue.
+const retired = await db.query(
+  "UPDATE approval_requests SET status = 'Rejected' WHERE request_type = 'activation_batch' AND status = 'Pending'");
+await db.query("UPDATE activation_batches SET status = 'Cancelled' WHERE status = 'PendingChecker'");
+console.log(`Retired stale activation approvals: ${retired.rowCount ?? 0}`);
+
 await db.close();
 console.log('backfill:golive done.');

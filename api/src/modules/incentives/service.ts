@@ -202,7 +202,12 @@ export async function overview(db: Db) {
             CASE ia.payee_type
               WHEN 'staff' THEN (SELECT u.full_name FROM users u WHERE u.id = ia.payee_id)
               WHEN 'agent' THEN (SELECT ag.full_name FROM agents ag WHERE ag.id = ia.payee_id)
-            END AS payee_name
+            END AS payee_name,
+            -- A user-payee counts as STAFF only when its is_staff flag is on.
+            -- A user with is_staff=false (a CXO or an agent-role user) is an
+            -- external earner and belongs under Agents, not Staff.
+            (ia.payee_type = 'staff'
+             AND COALESCE((SELECT u.is_staff FROM users u WHERE u.id = ia.payee_id), FALSE)) AS is_staff
      ${ACCRUAL_FROM}
      WHERE ${NOT_SELF}
      GROUP BY ia.payee_type, ia.payee_id`
@@ -212,6 +217,7 @@ export async function overview(db: Db) {
     return {
       payee_type: (r as any).payee_type, payee_id: Number((r as any).payee_id),
       payee_name: (r as any).payee_name ?? null,
+      is_staff: (r as any).is_staff === true,
       investment_amount: round2(Number((r as any).investment_amount)),
       accrued: round2(accrued), paid: round2(paid), balance: round2(accrued - paid),
     };

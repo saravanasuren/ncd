@@ -22,6 +22,16 @@ interface Child {
 interface Group {
   key: string; label: string; sublabel: string | null; district: string | null; sourced_by: string | null;
   investors: number; investments: number; outstanding: string; children: Child[];
+  window_from?: string | null; window_to?: string | null; issued?: string; redeemed?: string;
+}
+
+/** "Jun 2026 – Jul 2026" (or a single month) from the collection window dates. */
+function fmtWindow(from?: string | null, to?: string | null): string {
+  if (!from && !to) return '—';
+  const m = (d: string) => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+  const a = from ? m(from) : '—';
+  const b = to ? m(to) : '—';
+  return a === b ? a : `${a} – ${b}`;
 }
 
 export function SegmentsPage() {
@@ -101,7 +111,13 @@ function groupColumns(tab: Seg, expanded: Set<string>, toggle: (k: string) => vo
       { key: 'label', header: 'Series', value: (g) => g.label, render: expander },
       { key: 'status', header: 'Allotment status', value: (g) => g.sublabel ?? '',
         render: (g) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{g.sublabel ?? '—'}</span> },
-      investors, ncds, outstanding,
+      { key: 'window', header: 'Window', sortable: false, value: (g) => g.window_from ?? '',
+        render: (g) => <span className="text-xs whitespace-nowrap">{fmtWindow(g.window_from, g.window_to)}</span> },
+      investors, ncds,
+      { key: 'issued', header: 'Issued', align: 'right', value: (g) => Number(g.issued ?? 0), render: (g) => <span className="mono">{formatINR(g.issued ?? 0)}</span> },
+      { key: 'redeemed', header: 'Redeemed', align: 'right', value: (g) => Number(g.redeemed ?? 0),
+        render: (g) => Number(g.redeemed ?? 0) > 0 ? <span className="mono text-danger">{formatINR(g.redeemed ?? 0)}</span> : <span className="text-text-muted">—</span> },
+      outstanding,
     ];
   }
   if (tab === 'customer') {

@@ -345,6 +345,12 @@ export interface SegmentGroup {
   investors: number;
   investments: number;
   outstanding: number;
+  // Series-register extras (populated for the series view only): the collection
+  // window (min/max money-received), gross issued, and redeemed to date.
+  window_from?: string | null;
+  window_to?: string | null;
+  issued?: number;
+  redeemed?: number;
   children: SegmentChild[];
 }
 
@@ -398,6 +404,27 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
     });
   }
   for (const [key, g] of groups) g.investors = custSets.get(key)!.size;
+
+  // Series register: window (collection dates), gross issued and redeemed — over
+  // ALL non-active statuses too, so they mirror wealth's issue register.
+  if (by === 'series') {
+    const reg = appWhere(actor, { seriesIds: filters.seriesIds });
+    const { rows: regRows } = await db.query<any>(
+      `SELECT s.code AS series_code,
+              min(a.date_money_received) AS win_from, max(a.date_money_received) AS win_to,
+              COALESCE(sum(a.total_amount) FILTER (WHERE a.status NOT IN ('Rejected','Cancelled','Draft')),0) AS issued,
+              COALESCE(sum(a.total_amount) FILTER (WHERE a.status IN ('Redeemed','Matured','PrematureWithdrawn','RolledOver','Transferred')),0) AS redeemed
+       ${FROM} WHERE ${reg.sql} GROUP BY s.code`, reg.params);
+    const regMap = new Map<string, any>(regRows.map((r: any) => [r.series_code, r]));
+    for (const g of groups.values()) {
+      const rr = regMap.get(g.key);
+      g.window_from = rr?.win_from ? String(rr.win_from).slice(0, 10) : null;
+      g.window_to = rr?.win_to ? String(rr.win_to).slice(0, 10) : null;
+      g.issued = round2(Number(rr?.issued ?? 0));
+      g.redeemed = round2(Number(rr?.redeemed ?? 0));
+    }
+  }
+
   // Series view lists newest series first (NCD_28, 27, 26…); other views by amount.
   const out = [...groups.values()].sort((a, b) =>
     by === 'series'

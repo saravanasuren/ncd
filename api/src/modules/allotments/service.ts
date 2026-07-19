@@ -17,10 +17,16 @@ import { createApprovalRequest, registerOnFinalApprove } from '../approvals/serv
 const READY_TO_ALLOT = "a.status = 'Active' AND a.allotment_date IS NULL";
 
 export async function pendingBySeriesSummary(db: Db) {
+  // pending_* = investments still to allot (drives the Allot action).
+  // total_*   = every live (Active) investment in the series, so the page shows
+  //             each series' real investment amount instead of ₹0 when nothing
+  //             is pending (owner spec 2026-07-19).
   const { rows } = await db.query(
     `SELECT s.id AS series_id, s.code, s.name, s.status,
             count(a.id) FILTER (WHERE ${READY_TO_ALLOT})::int AS pending_count,
-            COALESCE(sum(a.total_amount) FILTER (WHERE ${READY_TO_ALLOT}),0) AS pending_amount
+            COALESCE(sum(a.total_amount) FILTER (WHERE ${READY_TO_ALLOT}),0) AS pending_amount,
+            count(a.id) FILTER (WHERE a.status = 'Active')::int AS total_count,
+            COALESCE(sum(a.total_amount) FILTER (WHERE a.status = 'Active'),0) AS total_amount
      FROM series s LEFT JOIN applications a ON a.series_id = s.id
      GROUP BY s.id, s.code, s.name, s.status ORDER BY s.code`
   );

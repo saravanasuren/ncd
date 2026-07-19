@@ -1,10 +1,11 @@
 /**
- * Workflow-alignment locks (old-app parity):
- *  - maturity redemption now requires a maker→checker approval (not immediate);
- *  - the subscription-at-creation gate is off by default but works when enabled.
+ * Workflow-alignment locks:
+ *  - maturity redemption requires a maker→checker approval (not immediate);
+ *  - every investment goes through one approval gate — PendingApproval until a
+ *    distinct checker approves, which is the go-live (Active).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -23,12 +24,10 @@ async function activeApp(a: Client, phone: string): Promise<number> {
   const cust = await a.post('/api/customers', { full_name: `Cust ${phone}`, phone });
   const cid = cust.json.id;
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: `55${phone}`, ifsc: 'ICIC0001234' });
-  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 500000 });
-  await a.post(`/api/applications/${app.json.id}/confirm-collection`, { amount_received: 500000, date_money_received: '2026-07-12', method: 'NEFT' });
+  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
   const ncd = await as('ncd@demo.local');
-  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
-  await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+  await approveInvestment(ncd, app);
   return app.json.id;
 }
 
@@ -48,25 +47,25 @@ describe('maturity redemption requires approval (old-app parity)', () => {
   });
 });
 
-describe('subscription-at-creation gate (off by default)', () => {
-  it('off by default → new application goes straight to PendingFundVerification', async () => {
+describe('every investment goes through one approval gate', () => {
+  it('new application waits in PendingApproval with an investment approval raised', async () => {
     const a = await admin();
-    const cust = await a.post('/api/customers', { full_name: 'NoGate', phone: '9300000002' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
-    expect((await a.get(`/api/applications/${app.json.id}`)).json.application.status).toBe('PendingFundVerification');
-  });
-
-  it('when enabled → application waits in PendingApproval until the subscription is approved', async () => {
-    const a = await admin();
-    await a.put('/api/settings/approvals.subscription_maker_checker', { value: true });
     const cust = await a.post('/api/customers', { full_name: 'Gated', phone: '9300000003' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
+    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12' });
     expect(app.json.subscription_request).toBeTruthy();
     expect((await a.get(`/api/applications/${app.json.id}`)).json.application.status).toBe('PendingApproval');
-    // a different checker (NCD Manager) approves → advances to PendingFundVerification
+  });
+
+  it('the maker cannot self-approve; a distinct checker approves → the NCD goes live (Active)', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'GoLive', phone: '9300000004' });
+    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12' });
+    // maker (admin, who created it) is refused
+    const self = await a.post(`/api/approvals/${app.json.subscription_request.id}/approve`);
+    expect(self.status).toBe(403);
+    // a distinct checker (NCD Manager) approves → Active
     const ncd = await as('ncd@demo.local');
-    await ncd.post(`/api/approvals/${app.json.subscription_request.id}/approve`);
-    expect((await a.get(`/api/applications/${app.json.id}`)).json.application.status).toBe('PendingFundVerification');
-    await a.put('/api/settings/approvals.subscription_maker_checker', { value: false }); // restore
+    await approveInvestment(ncd, app);
+    expect((await a.get(`/api/applications/${app.json.id}`)).json.application.status).toBe('Active');
   });
 });

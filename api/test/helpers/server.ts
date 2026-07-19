@@ -33,6 +33,18 @@ export async function startTestServer(): Promise<TestCtx> {
   };
 }
 
+/**
+ * Take a just-created application live via the investment approval (the new
+ * one-gate go-live). `create` is the POST /api/applications response; `checker`
+ * must be a DISTINCT user from the app's maker (maker ≠ checker rule). Returns
+ * the approval response so callers can assert on it.
+ */
+export async function approveInvestment(checker: Client, create: { json: { subscription_request?: { id: number } } }) {
+  const reqId = create.json.subscription_request?.id;
+  if (!reqId) throw new Error('create response had no subscription_request to approve');
+  return checker.post(`/api/approvals/${reqId}/approve`);
+}
+
 /** Minimal cookie jar over fetch. Sends X-Requested-With for CSRF. */
 export class Client {
   private cookies: Record<string, string> = {};

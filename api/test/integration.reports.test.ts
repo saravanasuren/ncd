@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import ExcelJS from 'exceljs';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -30,19 +30,19 @@ async function makeActiveApp(a: Client, name: string, amount: number) {
   const cust = await a.post('/api/customers', { full_name: name, phone: `9${Math.floor(amount)}` });
   const cid = cust.json.id;
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: `1111${amount}`, ifsc: 'ICIC0001111' });
-  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount });
-  await a.post(`/api/applications/${app.json.id}/confirm-collection`, { amount_received: amount, date_money_received: '2026-07-10', method: 'NEFT' });
+  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-10' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
+  return app;
 }
 
 async function buildActiveBook() {
   const a = await admin();
-  await makeActiveApp(a, 'Investor One', 500000);
-  await makeActiveApp(a, 'Investor Two', 300000);
-  // activate the funded apps: NCD Manager maker, admin checker (two people)
   const ncd = await as('ncd@demo.local');
-  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
-  await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+  const a1 = await makeActiveApp(a, 'Investor One', 500000);
+  const a2 = await makeActiveApp(a, 'Investor Two', 300000);
+  // approve each investment (distinct checker) so it goes live
+  await approveInvestment(ncd, a1);
+  await approveInvestment(ncd, a2);
 }
 
 describe('dashboard', () => {

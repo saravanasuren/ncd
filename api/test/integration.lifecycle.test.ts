@@ -1,8 +1,9 @@
 /**
  * Phase 4 integration — full investment lifecycle (PGlite HTTP):
- * customer → application → collection → eSign → batch allot → schedule
- * materialised → interest batch paid → premature redemption closes the app →
- * incentives accrued + paid. Every approval needs a second person.
+ * customer → application (PendingApproval) → investment approval = go-live →
+ * schedule materialised → batch allotment stamps the date → interest batch paid
+ * → premature redemption closes the app → incentives accrued + paid. Every
+ * approval needs a second person.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, type TestCtx } from './helpers/server.js';
@@ -12,6 +13,7 @@ let seriesId: number;
 let schemeId: number;
 let customerId: number;
 let appId: number;
+let subReqId: number;
 
 beforeAll(async () => {
   ctx = await startTestServer();
@@ -36,45 +38,39 @@ describe('build an Active investment', () => {
     // add a verified bank account so the schedule has a payee
     await a.post(`/api/customers/${customerId}/bank-accounts`, { account_number: '55550001111', ifsc: 'ICIC0004321' });
 
-    const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 500000 });
+    // Staff enter the money-credited date at enrolment; the app waits in the
+    // one approval gate with an investment approval raised.
+    const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-15', collection_method: 'NEFT', collection_reference: 'UTR123' });
     expect(app.status).toBe(201);
     appId = app.json.id;
+    subReqId = app.json.subscription_request.id;
+    expect((await a.get(`/api/applications/${appId}`)).json.application.status).toBe('PendingApproval');
   });
 
-  it('collection → pending activation (eSign is non-gating)', async () => {
+  it('eSign is non-gating: the app stays PendingApproval', async () => {
     const a = await admin();
-    const col = await a.post(`/api/applications/${appId}/confirm-collection`, { amount_received: 500000, date_money_received: '2026-07-15', method: 'NEFT', reference: 'UTR123' });
-    expect(col.status).toBe(200);
-    // interest starts from the receipt date (after deemed 2026-07-01)
-    expect(col.json.interest_start_date).toBe('2026-07-15');
-    const detail = await a.get(`/api/applications/${appId}`);
-    expect(detail.json.application.status).toBe('PendingActivation');
-    // eSign records completion but does NOT change the lifecycle status
     const es = await a.post(`/api/applications/${appId}/mark-esigned`);
     expect(es.status).toBe(200);
     const after = await a.get(`/api/applications/${appId}`);
-    expect(after.json.application.status).toBe('PendingActivation');
+    expect(after.json.application.status).toBe('PendingApproval');
     expect(after.json.application.esigned_at).toBeTruthy();
   });
 
-  it('batch activation needs two people, then activates + builds the schedule', async () => {
-    // NCD Manager is the maker
-    const ncd = await as('ncd@demo.local');
-    const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
-    expect(batch.status).toBe(201);
-    const reqId = batch.json.request.id;
-
-    // maker cannot approve their own activation
-    const self = await ncd.post(`/api/approvals/${reqId}/approve`);
+  it('the investment approval needs two people, then goes live + builds the schedule', async () => {
+    // maker (admin, who created the app) cannot approve their own investment
+    const a = await admin();
+    const self = await a.post(`/api/approvals/${subReqId}/approve`);
     expect(self.status).toBe(403);
 
-    // admin (a different checker) approves
-    const a = await admin();
-    const ok = await a.post(`/api/approvals/${reqId}/approve`);
+    // a different checker (NCD Manager) approves → the NCD goes live
+    const ncd = await as('ncd@demo.local');
+    const ok = await ncd.post(`/api/approvals/${subReqId}/approve`);
     expect(ok.status).toBe(200);
 
     const detail = await a.get(`/api/applications/${appId}`);
     expect(detail.json.application.status).toBe('Active');
+    // interest starts from the staff-entered credit date (after deemed 2026-07-01)
+    expect(detail.json.application.interest_start_date).toBe('2026-07-15');
     // active before allotment — allotment_date is still null
     expect(detail.json.application.allotment_date).toBeNull();
     // schedule materialised: first row on the 28th, actual/365

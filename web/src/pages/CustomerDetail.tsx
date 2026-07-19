@@ -273,6 +273,7 @@ function NewInvestment({ customerId }: { customerId: number }) {
   const [seriesId, setSeriesId] = useState('');
   const [schemeId, setSchemeId] = useState('');
   const [amount, setAmount] = useState('');
+  const [dateReceived, setDateReceived] = useState('');
   const [clubWith, setClubWith] = useState('');
   const [lockerDeposit, setLockerDeposit] = useState(false);
   const [err, setErr] = useState('');
@@ -288,6 +289,7 @@ function NewInvestment({ customerId }: { customerId: number }) {
   const create = useMutation({
     mutationFn: () => api.post<{ id: number }>('/api/applications', {
       customer_id: customerId, series_id: Number(seriesId), scheme_id: Number(schemeId), amount: Number(amount),
+      ...(dateReceived ? { date_money_received: dateReceived } : {}),
       ...(clubWith ? { club_with_application_id: Number(clubWith) } : {}),
       ...(lockerDeposit ? { is_locker_deposit: true } : {}),
     }),
@@ -309,6 +311,9 @@ function NewInvestment({ customerId }: { customerId: number }) {
           {(schemes.data?.rows ?? []).map((s) => <option key={s.id} value={s.id}>{s.code} ({s.coupon_rate_pct}%)</option>)}
         </select>
         <input className={sel} placeholder="Amount" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <label className="text-xs flex items-center gap-1.5" title="Date the money was credited to Dhanam's account — interest starts from here once approved">
+          Credited <input className={sel} type="date" value={dateReceived} onChange={(e) => setDateReceived(e.target.value)} />
+        </label>
         <label className="text-xs flex items-center gap-1.5" title="Money came from a locker (LockerHub-originated deposits flag themselves automatically)">
           <input type="checkbox" checked={lockerDeposit} onChange={(e) => setLockerDeposit(e.target.checked)} /> Locker deposit
         </label>

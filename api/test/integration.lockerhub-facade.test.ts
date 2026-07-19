@@ -4,7 +4,7 @@
  * (customer reads L1–L10, auth LA1–LA4, writes, agent auth + webview session).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number, customerId: number;
@@ -51,11 +51,9 @@ beforeAll(async () => {
   await ncd.post(`/api/approvals/${submit.json.request.id}/approve`);
   await a.post(`/api/customers/${customerId}/bank-accounts`, { account_number: '55550009999', ifsc: 'HDFC0005555' });
   await a.put(`/api/customers/${customerId}/nominees`, { nominees: [{ full_name: 'Facade Nominee', share_pct: 100 }] });
-  const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 400000 });
-  await a.post(`/api/applications/${app.json.id}/confirm-collection`, { amount_received: 400000, date_money_received: '2026-07-12', method: 'NEFT' });
+  const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
-  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
-  await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+  await approveInvestment(ncd, app);
   // Allot so the investment carries an allotment_date (bond certificate exists).
   const allot = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
   await a.post(`/api/approvals/${allot.json.request.id}/approve`);
@@ -351,7 +349,7 @@ describe('customer writes', () => {
 
     const flag = (await ctx.db.query('SELECT is_locker_deposit, status FROM applications WHERE lockerhub_intent_no = $1', ['LHPAY-DEP-1'])).rows[0] as any;
     expect(flag.is_locker_deposit).toBe(true);
-    expect(flag.status).toBe('PendingActivation');
+    expect(flag.status).toBe('PendingApproval'); // integration money waits in the one approval gate
 
     const missing = await integ('GET', '/api/integration/ncd/locker-deposit-status?deposit_reference=NOPE');
     expect(missing.status).toBe(404);

@@ -16,7 +16,8 @@
     "seed": "node dist/db/seed-cli.js",
     "seed:dev": "tsx src/db/seed-cli.ts",
     "migrate:legacy": "node dist/migrate-legacy/run.js",
-    "migrate:legacy:dev": "tsx src/migrate-legacy/run.ts"
+    "migrate:legacy:dev": "tsx src/migrate-legacy/run.ts",
+    "recompute-accruals": "node dist/scripts/recompute-accruals.js"
   },
   "dependencies": {
     "@aws-sdk/client-ses": "^3.1088.0",

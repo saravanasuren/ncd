@@ -160,6 +160,20 @@ describe('incentive accrual routing', () => {
     expect(acc.find((r) => r.payee_type === 'staff')).toBeUndefined(); // newWithReferrer = 0
   });
 
+  it('a user-payee with is_staff=false is NOT classified as staff in the ledger', async () => {
+    const a = await admin();
+    // Demo NCD Manager is is_staff true by seed; flip a copy to false and ensure
+    // any staff-type accrual for a non-staff user reports is_staff=false.
+    await ctx.db.query("UPDATE users SET is_staff = FALSE WHERE email = 'ncd@demo.local'");
+    const led = await a.get('/api/incentives/overview');
+    const rows = led.json.rows as Array<{ payee_type: string; payee_id: number; is_staff: boolean }>;
+    const uid = Number((await ctx.db.query("SELECT id FROM users WHERE email='ncd@demo.local'")).rows[0].id);
+    for (const r of rows) {
+      if (r.payee_type === 'staff' && r.payee_id === uid) expect(r.is_staff).toBe(false);
+    }
+    await ctx.db.query("UPDATE users SET is_staff = TRUE WHERE email = 'ncd@demo.local'"); // restore
+  });
+
   it('the payees ledger resolves names (no raw "type #id")', async () => {
     const a = await admin();
     const led = await a.get('/api/incentives/overview');

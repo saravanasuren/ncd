@@ -6,7 +6,7 @@ import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { Tabs, type TabDef } from '../components/Tabs.js';
 
-interface Payee { payee_type: string; payee_id: number; payee_name: string | null; investment_amount: string; accrued: string; paid: string; balance: string; }
+interface Payee { payee_type: string; payee_id: number; payee_name: string | null; is_staff: boolean; investment_amount: string; accrued: string; paid: string; balance: string; }
 interface Accrual { application_id: number; application_no: string; customer: string; customer_code: string; series_code: string; date_money_received: string | null; investment_amount: string; incentive_amount: string; paid: boolean; }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -47,8 +47,10 @@ export function IncentivesPage() {
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Balances</h2>
       {(() => {
         const all = overview.data?.rows ?? [];
-        // Staff tab = internal staff; Agent tab = external earners (agents).
-        const isStaff = (p: Payee) => p.payee_type === 'staff';
+        // Staff tab = internal staff (users flagged is_staff). A user-payee whose
+        // is_staff flag is off (a CXO or an agent-role user) is an external
+        // earner → Agent tab, matching the segments split.
+        const isStaff = (p: Payee) => p.is_staff === true;
         const staffRows = all.filter(isStaff);
         const agentRows = all.filter((p) => !isStaff(p));
         const balTabs: TabDef<'staff' | 'agent'>[] = [

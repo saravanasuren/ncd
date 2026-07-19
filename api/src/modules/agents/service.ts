@@ -92,7 +92,8 @@ export async function searchPayees(db: Db, q: string) {
     `SELECT 'agent' AS kind, id, agent_code AS code, full_name FROM agents
      WHERE is_active = TRUE AND (full_name ILIKE $1 OR agent_code ILIKE $1) ORDER BY full_name LIMIT 10`, [like])).rows;
   const staff = (await db.query(
-    `SELECT 'staff' AS kind, u.id, u.code, u.full_name FROM users u JOIN roles r ON r.id = u.role_id
+    `SELECT CASE WHEN u.is_staff THEN 'staff' ELSE 'agent' END AS kind, u.id, u.code, u.full_name
+       FROM users u JOIN roles r ON r.id = u.role_id
      WHERE u.is_active = TRUE AND r.name <> 'customer' AND (u.full_name ILIKE $1 OR u.code ILIKE $1)
      ORDER BY u.full_name LIMIT 10`, [like])).rows;
   return [...agents, ...staff];

@@ -45,6 +45,18 @@ async function buildBook() {
 const keys = (groups: Array<{ key: string }>) => groups.map((g) => g.key);
 
 describe('agent/staff attribution by referred-by', () => {
+  it('series segment carries window/issued/redeemed register fields', async () => {
+    const a = await admin();
+    const seg = await a.get('/api/reports/segments/series');
+    expect(seg.status).toBe(200);
+    const demo = (seg.json.groups as any[]).find((g) => g.key === 'NCD DEMO');
+    expect(demo).toBeTruthy();
+    expect(demo).toHaveProperty('issued');
+    expect(demo).toHaveProperty('redeemed');
+    expect(Number(demo.issued)).toBeGreaterThanOrEqual(Number(demo.outstanding)); // issued >= outstanding
+    expect(demo.window_to).toBeTruthy(); // a collection window exists
+  });
+
   it('an agent-name referrer shows Agent-wise, not Staff-wise', async () => {
     const a = await admin();
     const agent = await a.get('/api/reports/segments/agent');

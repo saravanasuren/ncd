@@ -14,10 +14,9 @@ function fyStartYear(d: Date): number {
 }
 function monthStart(d: Date): Date { return new Date(d.getFullYear(), d.getMonth(), 1); }
 
-/** Build the default range: 1st of this month → today (MTD). */
+/** Default landing view: All — the whole book till date (no date window). */
 function defaultRange(): Range {
-  const now = new Date();
-  return { from: iso(monthStart(now)), to: iso(now), series: null, label: 'This month' };
+  return { from: '', to: '', series: null, label: 'All' };
 }
 
 /** Date-based quick ranges (series picks are added separately once data loads). */

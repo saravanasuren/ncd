@@ -3,7 +3,7 @@
  * relations/KYC (joint holders, nominees, deceased, docs, DigiLocker, mirror).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -60,12 +60,11 @@ describe('applications — receipt upload', () => {
 });
 
 async function activeApp(a: Client, cid: number, amount = 500000) {
-  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount });
-  await a.post(`/api/applications/${app.json.id}/confirm-collection`, { amount_received: amount, date_money_received: '2026-07-12', method: 'NEFT' });
-  // Activation (money credited + maker-checker) is what makes it Active + builds the schedule.
+  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-12' });
+  // Approving the investment (money credited + maker-checker) is what makes it
+  // Active + builds the schedule. A distinct checker approves.
   const ncd = await as('ncd@demo.local');
-  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
-  await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+  await approveInvestment(ncd, app);
   return app.json.id as number;
 }
 async function allot(payoutDate = '2026-07-20') {

@@ -21,7 +21,7 @@ applicationsRouter.get('/:id', requirePermission('customers:read'),
 
 applicationsRouter.post('/', requirePermission('applications:create'),
   asyncHandler(async (req, res) => {
-    const input = z.object({ customer_id: z.number(), series_id: z.number(), scheme_id: z.number(), amount: z.number().positive(), club_with_application_id: z.number().optional(), is_locker_deposit: z.boolean().optional() }).parse(req.body);
+    const input = z.object({ customer_id: z.number(), series_id: z.number(), scheme_id: z.number(), amount: z.number().positive(), date_money_received: z.string().optional(), collection_method: z.string().optional(), collection_reference: z.string().optional(), club_with_application_id: z.number().optional(), is_locker_deposit: z.boolean().optional() }).parse(req.body);
     res.status(201).json(await s.createApplication(getDb(), req.user!, input));
   }));
 
@@ -53,12 +53,6 @@ applicationsRouter.get('/:id/receipt', requirePermission('customers:read', 'appr
     res.setHeader('Content-Type', h.type);
     res.setHeader('Content-Disposition', h.disposition);
     res.end(r.buffer);
-  }));
-
-applicationsRouter.post('/:id/confirm-collection', requirePermission('applications:confirm-collection'),
-  asyncHandler(async (req, res) => {
-    const input = z.object({ amount_received: z.number().positive(), date_money_received: z.string(), method: z.string(), reference: z.string().optional() }).parse(req.body);
-    res.json(await s.confirmCollection(getDb(), req.user!, Number(req.params.id), input));
   }));
 
 applicationsRouter.post('/:id/locker-deposit', requirePermission('applications:update'),

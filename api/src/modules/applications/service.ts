@@ -11,8 +11,7 @@ import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { nextCode } from '../../lib/sequences.js';
-import { assertTransition, isTerminal } from '../../lib/statusMachine.js';
-import { toISODate } from '../../lib/dates.js';
+import { isTerminal } from '../../lib/statusMachine.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
 import { getSettingsMap } from '../settings/service.js';
 import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
@@ -28,6 +27,11 @@ export interface CreateApplicationInput {
   series_id: number;
   scheme_id: number;
   amount: number;
+  // Date the money hit Dhanam's account, entered by staff at enrolment. Stored
+  // now; interest starts from it once the investment is approved (go-live).
+  date_money_received?: string;
+  collection_method?: string;
+  collection_reference?: string;
   club_with_application_id?: number; // append this line to an in-flight app
   receipt?: { file_path: string; original_filename: string; mime: string };
   is_locker_deposit?: boolean; // staff-keyed locker money; the LockerHub flow sets its own flag
@@ -67,37 +71,34 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
     const isNew = priorCount === 0;
     const appNo = await nextCode(tx, 'application', appFmt);
 
-    // Optional subscription approval gate (old-app parity, off by default).
-    const subGate = settings['approvals.subscription_maker_checker'] === true;
-    const initialStatus = subGate ? 'PendingApproval' : 'PendingFundVerification';
-
+    // Every staff-enrolled investment goes through one gate: it lands in
+    // PendingApproval and an investment approval is raised. The admin verifies
+    // the money is in Dhanam's account and approves — that approval is the
+    // go-live (Active + schedule + incentives). Staff record the credit date
+    // here so interest can start from it (owner spec 2026-07-19).
     const { rows } = await tx.query<{ id: string }>(
-      `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, receipt_file_path, receipt_original_filename, receipt_mime, is_locker_deposit)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'staff',$8,$9,$10,$11,$12,$13) RETURNING id`,
-      [appNo, input.customer_id, input.series_id, initialStatus, input.amount, isNew, customer.referred_by_text ?? null, actor.id, actor.agentId,
+      `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, receipt_file_path, receipt_original_filename, receipt_mime, is_locker_deposit, date_money_received, collection_method, collection_reference)
+       VALUES ($1,$2,$3,'PendingApproval',$4,$5,$6,'staff',$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+      [appNo, input.customer_id, input.series_id, input.amount, isNew, customer.referred_by_text ?? null, actor.id, actor.agentId,
        input.receipt?.file_path ?? null, input.receipt?.original_filename ?? null, input.receipt?.mime ?? null,
-       input.is_locker_deposit ?? false]
+       input.is_locker_deposit ?? false, input.date_money_received ?? null, input.collection_method ?? null, input.collection_reference ?? null]
     );
     const appId = Number(rows[0]!.id);
     await addLine(tx, appId, scheme, input.amount);
-    let subscriptionRequest;
-    if (subGate) {
-      subscriptionRequest = await createApprovalRequest(tx, { type: 'subscription', entityType: 'applications', entityId: appId, makerUserId: actor.id, metadata: { application_no: appNo } });
-    }
-    await writeAudit(tx, { actorId: actor.id, action: 'application.create', entityType: 'applications', entityId: appId, after: { appNo, amount: input.amount, isNew, gated: subGate } });
-    return { id: appId, application_no: appNo, clubbed: false, ...(subscriptionRequest ? { subscription_request: subscriptionRequest } : {}) };
+    const subscriptionRequest = await createApprovalRequest(tx, { type: 'subscription', entityType: 'applications', entityId: appId, makerUserId: actor.id, metadata: { application_no: appNo } });
+    await writeAudit(tx, { actorId: actor.id, action: 'application.create', entityType: 'applications', entityId: appId, after: { appNo, amount: input.amount, isNew } });
+    return { id: appId, application_no: appNo, clubbed: false, subscription_request: subscriptionRequest };
   });
 }
 
-// Subscription approval (only used when the gate setting is on) → advances the
-// application from PendingApproval to PendingFundVerification.
+// Investment approval = go-live. The admin has verified the money is in
+// Dhanam's account; approving takes the NCD live (Active + schedule +
+// incentives) using the credit date staff recorded at enrolment.
 registerOnFinalApprove('subscription', async (tx, req) => {
   if (!req.entity_id) return;
   const appId = Number(req.entity_id);
-  const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [appId])).rows[0];
-  if (app?.status === 'PendingApproval') {
-    await tx.query("UPDATE applications SET status = 'PendingFundVerification', updated_at = now() WHERE id = $1", [appId]);
-  }
+  const { activateApplication } = await import('./activate.js');
+  await activateApplication(tx, appId, { confirmedByUserId: req.maker_user_id });
 });
 
 /** Clubbing candidates — in-flight apps in a series for a customer. */
@@ -123,29 +124,6 @@ export async function setPayoutAccount(db: Db, actor: AuthUser, appId: number, b
       [bank.account_number, bank.ifsc, appId]);
     await writeAudit(tx, { actorId: actor.id, action: 'application.payout-account', entityType: 'applications', entityId: appId, after: { bankAccountId } });
     return { ok: true };
-  });
-}
-
-export async function confirmCollection(db: Db, actor: AuthUser, appId: number, input: { amount_received: number; date_money_received: string; method: string; reference?: string }) {
-  return db.withTx(async (tx) => {
-    const app = (await tx.query<{ status: string; series_id: string }>('SELECT status, series_id FROM applications WHERE id = $1', [appId])).rows[0];
-    if (!app) throw errors.notFound('Application not found');
-    // Money is in Dhanam's account → the app is ready for the activation
-    // approval. eSign and allotment happen later and do not gate this.
-    assertTransition('application', app.status, 'PendingActivation');
-    const series = (await tx.query<{ deemed_date: string | null }>('SELECT deemed_date FROM series WHERE id = $1', [app.series_id])).rows[0];
-    const deemed = toISODate(series?.deemed_date ?? null);
-    // interest_start_date = max(receipt date, series deemed date)
-    const isd = deemed && deemed > input.date_money_received ? deemed : input.date_money_received;
-    const colNo = await nextCode(tx, 'collection', 'COL-{yyyy}-{seq:6}');
-    await tx.query('INSERT INTO collections (collection_no, application_id, amount, method, reference, collection_date, confirmed_by_user_id) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [colNo, appId, input.amount_received, input.method, input.reference ?? null, input.date_money_received, actor.id]);
-    await tx.query(
-      `UPDATE applications SET status = 'PendingActivation', amount_received = $1, date_money_received = $2, collection_method = $3, collection_reference = $4, interest_start_date = $5, updated_at = now() WHERE id = $6`,
-      [input.amount_received, input.date_money_received, input.method, input.reference ?? null, isd, appId]
-    );
-    await writeAudit(tx, { actorId: actor.id, action: 'application.confirm-collection', entityType: 'applications', entityId: appId, after: { interest_start_date: isd } });
-    return { interest_start_date: isd };
   });
 }
 

@@ -24,12 +24,7 @@ const checkPremature: Permission = 'approvals:check-premature';
 export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
   subscription: {
     type: 'subscription',
-    label: 'Application / Subscription',
-    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
-  },
-  activation_batch: {
-    type: 'activation_batch',
-    label: 'Batch Activation',
+    label: 'Investment approval',
     levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
   allotment_batch: {

@@ -3,7 +3,7 @@
  * plus rollover / transfer / transformation. PGlite HTTP.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -29,11 +29,9 @@ async function activeInvestment(name: string, phone: string, amount = 500000) {
   const ncd = await as('ncd@demo.local');
   await ncd.post(`/api/approvals/${sub.json.request.id}/approve`);
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: `88${phone}`, ifsc: 'ICIC0001234' });
-  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount });
-  await a.post(`/api/applications/${app.json.id}/confirm-collection`, { amount_received: amount, date_money_received: '2026-07-12', method: 'NEFT' });
+  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
-  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
-  await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+  await approveInvestment(ncd, app);
   const detail = await a.get(`/api/applications/${app.json.id}`);
   return { customerId: cid, appId: app.json.id, appNo: detail.json.application.application_no };
 }

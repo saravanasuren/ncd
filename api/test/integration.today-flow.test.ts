@@ -2,7 +2,7 @@
  * cards need per-row detail + a channel/type split, not just aggregate totals.
  * Isolated server so the added app doesn't perturb the shared reports suite. */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -22,9 +22,12 @@ describe("today's flow cards", () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Today Investor', phone: '9880001111' });
     await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '2222333344', ifsc: 'ICIC0001111' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 250000 });
     const today = new Date().toISOString().slice(0, 10);
-    await a.post(`/api/applications/${app.json.id}/confirm-collection`, { amount_received: 250000, date_money_received: today, method: 'NEFT' });
+    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 250000, date_money_received: today, collection_method: 'NEFT' });
+    // Approve (distinct checker) → the NCD goes live with today's credit date.
+    const ncd = new Client(ctx.base);
+    await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
+    await approveInvestment(ncd, app);
 
     const tb = (await a.get('/api/dashboard/overview')).json.today_book;
     expect(Array.isArray(tb.additions.rows)).toBe(true);
@@ -96,7 +99,9 @@ describe("today's flow cards", () => {
     const a = await admin();
     const ncd = new Client(ctx.base);
     await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
-    const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
+    // Allotment batches carry the "covered applications" detail (the live apps
+    // being allotted). The Today Investor app from the first test is Active.
+    const batch = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
     const reqId = Number(batch.json.request.id);
     const det = await a.get(`/api/approvals/${reqId}`);
     expect(det.status).toBe(200);
@@ -114,9 +119,8 @@ describe("today's flow cards", () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Locker Today', phone: '9880002222' });
     await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '5555666677', ifsc: 'ICIC0001111' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, is_locker_deposit: true });
     const today = new Date().toISOString().slice(0, 10);
-    await a.post(`/api/applications/${app.json.id}/confirm-collection`, { amount_received: 100000, date_money_received: today, method: 'Cash' });
+    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, is_locker_deposit: true, date_money_received: today, collection_method: 'Cash' });
 
     const tb = (await a.get('/api/dashboard/overview')).json.today_book;
     const row = tb.additions.rows.find((r: any) => r.application_no === app.json.application_no);

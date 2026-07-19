@@ -1,6 +1,6 @@
 /** Portal + staff document PDFs: bond certificate, allotment letter, SOA. */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
 let appId: number, customerId: number;
@@ -15,11 +15,9 @@ beforeAll(async () => {
   const submit = await a.post(`/api/customers/${customerId}/submit-for-approval`);
   const ncd = new Client(ctx.base); await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
   await ncd.post(`/api/approvals/${submit.json.request.id}/approve`);
-  const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 400000 });
+  const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
   appId = app.json.id;
-  await a.post(`/api/applications/${appId}/confirm-collection`, { amount_received: 400000, date_money_received: '2026-07-12', method: 'NEFT' });
-  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
-  await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+  await approveInvestment(ncd, app);
   const allot = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
   await a.post(`/api/approvals/${allot.json.request.id}/approve`);
 });

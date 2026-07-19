@@ -23,7 +23,11 @@ export const STATUS_MACHINES = {
     Draft: { label: 'Draft', next: ['PendingApproval', 'PendingFundVerification', 'Cancelled'] },
     PendingApproval: {
       label: 'Pending Approval',
-      next: ['PendingFundVerification', 'PendingEsign', 'PendingActivation', 'PendingAllotment', 'Cancelled', 'Rejected'],
+      // Approving the investment IS the go-live: money is verified and the NCD
+      // becomes Active in one step (owner spec 2026-07-19). The older
+      // PendingFundVerification/PendingActivation legs remain for in-flight and
+      // integration data but are no longer part of the staff-enrolment flow.
+      next: ['Active', 'PendingFundVerification', 'PendingEsign', 'PendingActivation', 'PendingAllotment', 'Cancelled', 'Rejected'],
     },
     PendingFundVerification: {
       label: 'Pending Fund Verification',

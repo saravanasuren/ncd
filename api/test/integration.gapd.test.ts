@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import ExcelJS from 'exceljs';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number, customerId: number, appId: number;
@@ -28,12 +28,10 @@ async function build() {
   const ncd = await as('ncd@demo.local');
   await ncd.post(`/api/approvals/${sub.json.request.id}/approve`);
   await a.post(`/api/customers/${customerId}/bank-accounts`, { account_number: '44440001111', ifsc: 'ICIC0001234' });
-  const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 500000 });
+  const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-12' });
   appId = app.json.id;
-  await a.post(`/api/applications/${appId}/confirm-collection`, { amount_received: 500000, date_money_received: '2026-07-12', method: 'NEFT' });
   await a.post(`/api/applications/${appId}/mark-esigned`);
-  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
-  await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+  await approveInvestment(ncd, app);
 }
 
 describe('universal search + drill', () => {
@@ -114,7 +112,7 @@ describe('funded subscription (integration)', () => {
     expect(again.json.already_processed).toBe(true);
     expect(again.json.wealth_subscription_id).toBe(first.json.wealth_subscription_id);
     const st = (await ctx.db.query('SELECT status FROM applications WHERE lockerhub_intent_no = $1', ['LH-INTENT-1'])).rows[0] as any;
-    expect(st.status).toBe('PendingActivation');
+    expect(st.status).toBe('PendingApproval'); // integration money waits in the one approval gate
 
     // an unknown phone auto-creates a Draft stub customer (money never 404s)
     const stubPost = await fetch(ctx.base + '/api/integration/subscription-payments/from-lockerhub', {

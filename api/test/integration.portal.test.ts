@@ -3,7 +3,7 @@
  * DhanamFin integration façade (key auth + contract shapes). PGlite HTTP.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -45,12 +45,10 @@ async function buildActiveCustomer() {
   const ncd0 = await as('ncd@demo.local');
   await ncd0.post(`/api/approvals/${submit.json.request.id}/approve`);
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '77770001111', ifsc: 'HDFC0009999' });
-  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 400000 });
-  await a.post(`/api/applications/${app.json.id}/confirm-collection`, { amount_received: 400000, date_money_received: '2026-07-12', method: 'NEFT' });
+  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
   const ncd = await as('ncd@demo.local');
-  const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
-  await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+  await approveInvestment(ncd, app);
 }
 
 describe('customer portal — OTP login', () => {

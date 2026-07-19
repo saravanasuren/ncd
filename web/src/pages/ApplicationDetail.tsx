@@ -120,8 +120,6 @@ export function ApplicationDetailPage() {
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
   const run = (p: Promise<unknown>) => p.then(() => { setMsg(''); invalidate(); }).catch((e) => setMsg(e instanceof ApiError ? e.message : 'Failed'));
 
-  const confirm = useMutation({ mutationFn: () => api.post(`/api/applications/${id}/confirm-collection`, { amount_received: Number(data.application.total_amount), date_money_received: new Date().toISOString().slice(0, 10), method: 'NEFT' }), onSuccess: () => { setMsg(''); invalidate(); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
-
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Application not found or out of scope.</div>;
   const a = data.application;
@@ -138,8 +136,8 @@ export function ApplicationDetailPage() {
       {note && <div className="text-xs text-primary mt-2">{note}</div>}
 
       <div className="flex gap-2 mt-3 items-center flex-wrap">
-        {can('applications:confirm-collection') && a.status === 'PendingFundVerification' && (
-          <button onClick={() => confirm.mutate()} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Confirm collection</button>
+        {a.status === 'PendingApproval' && (
+          <span className="text-xs text-text-muted">Awaiting investment approval — approve in Approvals to take it live.</span>
         )}
         {can('applications:mark-esigned') && !a.esigned_at && ['PendingActivation', 'PendingEsign', 'Active'].includes(a.status) && (
           <>

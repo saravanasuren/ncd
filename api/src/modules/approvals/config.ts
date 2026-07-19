@@ -27,6 +27,15 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Investment approval',
     levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
+  // App/LockerHub investment that already went live for the customer — this is a
+  // notice, not a gate. It surfaces on the Approvals page so the admin knows app
+  // money landed and can assign a staff/agent when the referral code is missing.
+  // "Approving" it just acknowledges/clears the notice (no side-effect handler).
+  app_investment: {
+    type: 'app_investment',
+    label: 'App investment (live)',
+    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
+  },
   allotment_batch: {
     type: 'allotment_batch',
     label: 'Batch Allotment',

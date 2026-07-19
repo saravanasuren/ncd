@@ -31,6 +31,14 @@ applicationsRouter.post('/:id/payout-account', requirePermission('applications:u
     res.json(await s.setPayoutAccount(getDb(), req.user!, Number(req.params.id), bank_account_id));
   }));
 
+// Assign the referrer staff/agent on an app-channel investment (no referral
+// code was given) and re-accrue the referrer incentive.
+applicationsRouter.post('/:id/attribute-referrer', requirePermission('incentives:manage-eligibility'),
+  asyncHandler(async (req, res) => {
+    const { payee } = z.object({ payee: z.string().min(1) }).parse(req.body);
+    res.json(await s.attributeReferrer(getDb(), req.user!, Number(req.params.id), payee));
+  }));
+
 // Start a Digio eSign session for this application (returns the sign URL).
 // Stub/sandbox until DIGIO_* creds are in SSM; eSign is off the critical path.
 applicationsRouter.post('/:id/esign/initiate', requirePermission('applications:mark-esigned'),

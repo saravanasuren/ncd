@@ -139,3 +139,23 @@ export async function ensurePendingAgentForName(tx: Db, actor: AuthUser, name: s
   await writeAudit(tx, { actorId: actor.id, action: 'agent.create-from-referral', entityType: 'agents', entityId: id, after: { code, name: norm } });
   return id;
 }
+
+/**
+ * System path (no actor): ensure a single agent exists for a referred-by name
+ * during accrual, when the name matched no known payee at enrol time. Deduped
+ * by normalized full_name so a name can never yield two agents — the guarantee
+ * that referrers no longer double up as separate rows. Unlike
+ * ensurePendingAgentForName this raises no approval request (accrual is a
+ * background step); commission is granted later via the eligibility flow.
+ */
+export async function ensureReferralAgent(tx: Db, name: string): Promise<number> {
+  const norm = name.trim().replace(/\s+/g, ' ');
+  const existing = (await tx.query<{ id: string }>(
+    'SELECT id FROM agents WHERE lower(btrim(full_name)) = lower($1) LIMIT 1', [norm])).rows[0];
+  if (existing) return Number(existing.id);
+  const code = `AG-${String(await nextSeq(tx, 'agent')).padStart(4, '0')}`;
+  const { rows } = await tx.query<{ id: string }>(
+    `INSERT INTO agents (agent_code, full_name, source, commission_status, is_active)
+     VALUES ($1,$2,'referral','PendingApproval',TRUE) RETURNING id`, [code, norm]);
+  return Number(rows[0]!.id);
+}

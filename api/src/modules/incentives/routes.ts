@@ -47,12 +47,3 @@ incentivesRouter.post('/agents/:id/eligibility', requirePermission('incentives:m
   }));
 incentivesRouter.post('/agents/:id/eligibility/revoke', requirePermission('incentives:manage-eligibility'),
   asyncHandler(async (req, res) => { await s.revokeAgentEligibility(getDb(), req.user!, Number(req.params.id)); res.json({ ok: true }); }));
-
-// Referrer eligibility (direct approve/revoke).
-incentivesRouter.get('/referrers', requirePermission('incentives:manage-eligibility'),
-  asyncHandler(async (_req, res) => res.json({ rows: await s.listReferrers(getDb()) })));
-incentivesRouter.post('/referrers/:id/eligibility', requirePermission('incentives:manage-eligibility'),
-  asyncHandler(async (req, res) => {
-    const { status } = z.object({ status: z.enum(['Approved', 'Revoked']) }).parse(req.body);
-    res.json(await s.setReferrerEligibility(getDb(), req.user!, Number(req.params.id), status));
-  }));

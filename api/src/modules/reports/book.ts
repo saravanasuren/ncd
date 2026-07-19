@@ -56,22 +56,40 @@ const FROM = `FROM applications a JOIN customers c ON c.id = a.customer_id JOIN 
 const AMT = 'COALESCE(bk.live, a.total_amount)';
 
 /**
- * Attribution (docs/06 §1). Who REFERRED the customer lives in the free-text
- * `referred_by_text` (imported from wealth) — NOT the structured enroller
- * columns. `sref.full_name` is the referrer matched to a STAFF user (a
- * non-customer `users` row, by name): such referrers show Staff-wise; every
- * other non-blank referrer shows Agent-wise by their typed name; blank → Direct.
- * (Phase 2 replaces the name match with a code + is_staff lookup.)
+ * Attribution (docs/06 §1). The referrer is resolved to a stable PAYEE:
+ *
+ *  1. Effective referrer text = the app's own referred_by_text, falling back to
+ *     the CUSTOMER's referred_by_text. This makes attribution resilient to a
+ *     legacy re-import wiping the app-level copy (the customer copy survives).
+ *  2. That text is matched to a payee by CODE first (users.code / agents
+ *     .agent_code — stable, rename-proof, spelling-proof), then by name as a
+ *     legacy fallback for un-coded historical referrers.
+ *  3. A match to an is_staff user → Staff-wise (display = the user's CURRENT
+ *     name); a match to an agent → Agent-wise (agent's current name); an
+ *     unmatched non-blank referrer → Agent-wise by its raw text; blank → Direct.
+ *
+ * Going forward the enrol form stores the payee CODE, so renames/spelling
+ * variants never break attribution again.
  */
+const EFF_REF = "COALESCE(NULLIF(btrim(a.referred_by_text), ''), NULLIF(btrim(c.referred_by_text), ''))";
 const FROM_ATTR = `${FROM}
   LEFT JOIN LATERAL (
     SELECT u.full_name FROM users u JOIN roles r ON r.id = u.role_id
     WHERE r.name <> 'customer' AND u.is_staff = TRUE
-      AND (lower(btrim(u.full_name)) = lower(btrim(a.referred_by_text))
-           OR upper(btrim(u.code)) = upper(btrim(a.referred_by_text)))
+      AND (upper(btrim(u.code)) = upper(${EFF_REF})
+           OR lower(btrim(u.full_name)) = lower(${EFF_REF}))
+    ORDER BY (upper(btrim(u.code)) = upper(${EFF_REF})) DESC
     LIMIT 1
-  ) sref ON TRUE`;
-const REFERRER = "NULLIF(btrim(a.referred_by_text), '')";
+  ) sref ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT ag.full_name FROM agents ag
+    WHERE (upper(btrim(ag.agent_code)) = upper(${EFF_REF})
+           OR lower(btrim(ag.full_name)) = lower(${EFF_REF}))
+    ORDER BY (upper(btrim(ag.agent_code)) = upper(${EFF_REF})) DESC
+    LIMIT 1
+  ) aref ON TRUE`;
+// Display referrer: resolved staff name → resolved agent name → raw text.
+const REFERRER = `COALESCE(sref.full_name, aref.full_name, ${EFF_REF})`;
 
 export async function kpis(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const active = appWhere(actor, { ...filters, status: 'active' });
@@ -526,7 +544,7 @@ export async function ongoingSeriesPivot(db: Db, actor: AuthUser, seriesId: numb
   const w = appWhere(actor, { seriesIds: [seriesId] });
   const { rows } = await db.query(
     `SELECT COALESCE(${REFERRER},'Direct') AS agent, c.full_name AS customer, COALESCE(sum(${AMT}),0) AS amount
-     ${FROM}
+     ${FROM_ATTR}
      WHERE ${w.sql} GROUP BY COALESCE(${REFERRER},'Direct'), c.full_name ORDER BY agent, customer`, w.params);
   return rows;
 }
@@ -536,7 +554,7 @@ export async function masterClient(db: Db, actor: AuthUser) {
   const { rows } = await db.query(
     `SELECT DISTINCT c.pan, c.customer_code, COALESCE(${REFERRER}, '—') AS agent_code,
             c.full_name AS name, c.phone, c.district, c.address
-     ${FROM}
+     ${FROM_ATTR}
      WHERE ${w.sql} ORDER BY c.full_name`, w.params);
   return rows;
 }

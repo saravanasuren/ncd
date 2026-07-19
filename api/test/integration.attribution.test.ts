@@ -84,4 +84,36 @@ describe('agent/staff attribution by referred-by', () => {
     const agent = await a.get('/api/reports/segments/agent');
     expect(keys(agent.json.groups)).toContain('Direct');
   });
+  it('resolves a referrer by CODE and stays correct after the staff is renamed', async () => {
+    const a = await admin();
+    // Give the seeded staff user a stable code, refer a customer by that code.
+    await ctx.db.query("UPDATE users SET code = 'STAFF1' WHERE email = 'ncd@demo.local'");
+    await fund(a, 'Coded Ref Cust', 120000, 'STAFF1');
+    const ncd = await as('ncd@demo.local');
+    const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
+    await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+
+    const before = await a.get('/api/reports/segments/staff');
+    const name = (await ctx.db.query("SELECT full_name FROM users WHERE email='ncd@demo.local'")).rows[0].full_name as string;
+    expect(keys(before.json.groups)).toContain(name); // shows under current name via code
+
+    // Rename the staff user — code-based match must survive.
+    await ctx.db.query("UPDATE users SET full_name = 'Renamed Manager X' WHERE email = 'ncd@demo.local'");
+    const after = await a.get('/api/reports/segments/staff');
+    expect(keys(after.json.groups)).toContain('Renamed Manager X'); // resolved to NEW name, attribution intact
+  });
+
+  it('falls back to the customer referrer when the app-level copy is wiped', async () => {
+    const a = await admin();
+    await fund(a, 'Wipe Test Cust', 90000, 'Gokul');
+    const ncd = await as('ncd@demo.local');
+    const batch = await ncd.post(`/api/activations/series/${seriesId}`, {});
+    await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+    // Simulate a re-import wiping the app-level referrer (customer keeps it).
+    await ctx.db.query("UPDATE applications a SET referred_by_text = NULL FROM customers c WHERE c.id = a.customer_id AND c.full_name = 'Wipe Test Cust'");
+    const agent = await a.get('/api/reports/segments/agent');
+    // still attributed to Gokul via the customer fallback — not dropped to Direct
+    const gokul = (agent.json.groups as Array<{ key: string; children: Array<{ customer: string }> }>).find((g) => g.key === 'Gokul');
+    expect(gokul?.children.some((ch) => ch.customer === 'Wipe Test Cust')).toBe(true);
+  });
 });

@@ -57,6 +57,18 @@ describe('users: code + staff flag', () => {
 });
 
 describe('agents admin + payee search', () => {
+  it('payee-search labels a non-staff user (is_staff=false) as agent, not staff', async () => {
+    const a = await admin();
+    // ncd@demo.local is a user; flip is_staff off → it should surface as kind=agent.
+    await ctx.db.query("UPDATE users SET is_staff = FALSE, code = 'NSF1' WHERE email = 'ncd@demo.local'");
+    const r = await a.get('/api/agents/payee-search?q=NSF1');
+    const row = (r.json.rows as Array<{ kind: string; code: string }>).find((x) => x.code === 'NSF1');
+    expect(row?.kind).toBe('agent');
+    await ctx.db.query("UPDATE users SET is_staff = TRUE WHERE email = 'ncd@demo.local'");
+    const r2 = await a.get('/api/agents/payee-search?q=NSF1');
+    expect((r2.json.rows as Array<{ kind: string; code: string }>).find((x) => x.code === 'NSF1')?.kind).toBe('staff');
+  });
+
   it('creates a manual agent (auto code) and finds both kinds in payee-search', async () => {
     const a = await admin();
     const ag = await a.post('/api/agents', { full_name: 'Field Agent Gokul' });

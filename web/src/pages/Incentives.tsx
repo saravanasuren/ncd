@@ -68,7 +68,7 @@ export function IncentivesPage() {
               render: (p) => (
                 <span>
                   <span className="font-medium">{p.payee_name ?? `${p.payee_type} #${p.payee_id}`}</span>{' '}
-                  <span className="text-xs text-text-muted capitalize">{p.payee_type}</span>
+                  <span className="text-xs text-text-muted">{p.is_staff ? 'Staff' : 'Agent'}</span>
                 </span>
               ) },
             { key: 'investment_amount', header: 'Investment', align: 'right', value: (p) => Number(p.investment_amount), render: (p) => <span className="mono">{formatINR(p.investment_amount)}</span> },

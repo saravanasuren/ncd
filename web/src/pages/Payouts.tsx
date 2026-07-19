@@ -35,7 +35,7 @@ export function PayoutsPage() {
   return (
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Interest payouts (NEFT)</h1>
-      <p className="text-sm text-text-muted mt-1 mb-4">Batch the interest due up to a date; a checker approves, then it's marked paid.</p>
+      <p className="text-sm text-text-muted mt-1 mb-4">Pull the NEFT sheet for any date — it pays each investment the interest accrued since it was last paid, up to that date. A checker approves; marking it paid settles that period and the next one starts fresh.</p>
       <div className="flex items-center gap-2 mb-4">
         <label className="text-sm text-text-label">Up to date</label>
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="px-2.5 py-1.5 text-sm border border-border-strong rounded" />
@@ -45,7 +45,7 @@ export function PayoutsPage() {
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
       {preview.data && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5 text-sm">
-          <span className="font-semibold">{preview.data.count}</span> interest rows due · net <span className="mono font-semibold">{formatINR(preview.data.totals.net)}</span>
+          <span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'} with interest accrued to this date · net <span className="mono font-semibold">{formatINR(preview.data.totals.net)}</span>
         </div>
       )}
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Recent batches</h2>

@@ -160,6 +160,18 @@ describe('incentive accrual routing', () => {
     expect(acc.find((r) => r.payee_type === 'staff')).toBeUndefined(); // newWithReferrer = 0
   });
 
+  it('every payee in the dashboard staff-incentive drill is is_staff=true', async () => {
+    const a = await admin();
+    const drill = await a.get('/api/dashboard/drill/staff-incentive');
+    expect(drill.status).toBe(200);
+    const groups = (drill.json.groups ?? []) as Array<{ payee_type: string; payee_id: number }>;
+    for (const g of groups) {
+      expect(g.payee_type, 'staff drill should only contain user-payees').toBe('staff');
+      const flag = (await ctx.db.query('SELECT is_staff FROM users WHERE id = $1', [g.payee_id])).rows[0]?.is_staff;
+      expect(flag, `payee ${g.payee_id} in staff drill must be is_staff=true`).toBe(true);
+    }
+  });
+
   it('a user-payee with is_staff=false is NOT classified as staff in the ledger', async () => {
     const a = await admin();
     // Demo NCD Manager is is_staff true by seed; flip a copy to false and ensure

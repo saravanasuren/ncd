@@ -90,14 +90,16 @@ export async function incentiveTotals(db: Db) {
     const t = rows.filter(pred).reduce((s, r: any) => ({ earned: s.earned + r.accrued, paid: s.paid + r.paid, pending: s.pending + r.balance }), { earned: 0, paid: 0, pending: 0 });
     return { earned: round2(t.earned), paid: round2(t.paid), pending: round2(t.pending) };
   };
-  return { staff: agg((r) => r.payee_type === 'staff'), agent: agg((r) => r.payee_type !== 'staff') };
+  // Staff = user-payees flagged is_staff; everyone else (agents + non-staff
+  // user-payees like a CXO) is an external earner. Matches the Incentives page.
+  return { staff: agg((r) => r.is_staff === true), agent: agg((r) => r.is_staff !== true) };
 }
 
 /** Dashboard drill: every Staff (or Agent) payee with earned/paid/pending and
  * their per-customer breakdown as children. Self-investments already excluded. */
 export async function dashboardIncentives(db: Db, which: 'staff' | 'agent') {
   const all = await overview(db);
-  const payees = all.filter((r: any) => (which === 'staff' ? r.payee_type === 'staff' : r.payee_type !== 'staff'));
+  const payees = all.filter((r: any) => (which === 'staff' ? r.is_staff === true : r.is_staff !== true));
   const groups = [];
   for (const p of payees as any[]) {
     const children = await payeeAccruals(db, p.payee_type, p.payee_id);

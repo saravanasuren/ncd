@@ -8,18 +8,16 @@ import { round2 } from '../../lib/dates.js';
 
 /**
  * A "self-investment": the payee is the same person as the customer, so no
- * incentive is owed (owner rule 2026-07-18). Staff/agent → phone match
- * (digits-only); referrer (free-text name) → name match. Evaluated per accrual
- * `ia`, which must be joined to application `a` and customer `c`. Wrapped in
- * COALESCE(...,false) at the call site so a NULL never mis-excludes a row.
+ * incentive is owed (owner rule 2026-07-18). Staff and agents match by phone
+ * (digits-only). Evaluated per accrual `ia`, which must be joined to
+ * application `a` and customer `c`. Wrapped in COALESCE(...,false) at the call
+ * site so a NULL never mis-excludes a row.
  */
 const SELF_INVESTMENT = `(
   (ia.payee_type = 'staff'    AND c.phone IS NOT NULL AND regexp_replace(c.phone,'\\D','','g') <> ''
      AND regexp_replace(c.phone,'\\D','','g') = (SELECT regexp_replace(u.phone,'\\D','','g') FROM users u WHERE u.id = ia.payee_id))
   OR (ia.payee_type = 'agent' AND c.phone IS NOT NULL AND regexp_replace(c.phone,'\\D','','g') <> ''
      AND regexp_replace(c.phone,'\\D','','g') = (SELECT regexp_replace(ag.phone,'\\D','','g') FROM agents ag WHERE ag.id = ia.payee_id))
-  OR (ia.payee_type = 'referrer'
-     AND lower(btrim(c.full_name)) = (SELECT lower(btrim(rf.display_name)) FROM referrers rf WHERE rf.id = ia.payee_id))
 )`;
 const NOT_SELF = `NOT COALESCE(${SELF_INVESTMENT}, false)`;
 const ACCRUAL_FROM = `FROM incentive_accruals ia
@@ -85,7 +83,7 @@ export async function revertCustomerPayment(db: Db, actor: AuthUser, payeeType: 
   });
 }
 
-/** Dashboard incentive totals, split Staff vs Agent (agent = agents + referrers). */
+/** Dashboard incentive totals, split Staff vs Agent (agent = every non-staff payee). */
 export async function incentiveTotals(db: Db) {
   const rows = await overview(db);
   const agg = (pred: (r: any) => boolean) => {
@@ -164,17 +162,6 @@ export async function revokeAgentEligibility(db: Db, actor: AuthUser, agentId: n
   await writeAudit(db, { actorId: actor.id, action: 'commission.eligibility.revoke', entityType: 'agents', entityId: agentId });
 }
 
-// ── Referrer eligibility (direct approve by CXO+) ──
-export async function listReferrers(db: Db) {
-  return (await db.query('SELECT id, display_name, eligibility_status FROM referrers ORDER BY display_name')).rows;
-}
-export async function setReferrerEligibility(db: Db, actor: AuthUser, referrerId: number, status: 'Approved' | 'Revoked') {
-  const upd = await db.query('UPDATE referrers SET eligibility_status = $1 WHERE id = $2', [status, referrerId]);
-  if (!upd.rowCount) throw errors.notFound('Referrer not found');
-  await writeAudit(db, { actorId: actor.id, action: 'referrer.eligibility', entityType: 'referrers', entityId: referrerId, after: { status } });
-  return { ok: true };
-}
-
 /** Staff/agent incentive statement PDF (docs/00 §7). */
 export async function statementPdf(db: Db, payeeType: string, payeeId: number): Promise<Buffer> {
   const bal = await payeeBalance(db, payeeType, payeeId);
@@ -204,7 +191,7 @@ export async function statementPdf(db: Db, payeeType: string, payeeId: number): 
   });
 }
 
-/** Overview for managers: every staff/agent/referrer, self-investments excluded.
+/** Overview for managers: every staff + agent payee, self-investments excluded.
  * `investment_amount` = the investments underlying their eligible incentive. */
 export async function overview(db: Db) {
   const { rows } = await db.query(
@@ -215,7 +202,6 @@ export async function overview(db: Db) {
             CASE ia.payee_type
               WHEN 'staff' THEN (SELECT u.full_name FROM users u WHERE u.id = ia.payee_id)
               WHEN 'agent' THEN (SELECT ag.full_name FROM agents ag WHERE ag.id = ia.payee_id)
-              WHEN 'referrer' THEN (SELECT rf.display_name FROM referrers rf WHERE rf.id = ia.payee_id)
             END AS payee_name
      ${ACCRUAL_FROM}
      WHERE ${NOT_SELF}

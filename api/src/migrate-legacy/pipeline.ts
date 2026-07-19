@@ -140,7 +140,7 @@ const SEQ_TABLES = [
   'branches', 'users', 'agents', 'banks', 'tds_rules', 'schemes', 'series',
   'investor_leads', 'customers', 'customer_bank_accounts', 'nominees',
   'joint_holders', 'applications', 'application_lines', 'disbursement_schedule',
-  'redemptions', 'referrers', 'incentive_accruals',
+  'redemptions', 'incentive_accruals',
 ];
 
 /** setval each table's id sequence to max(id) (is_called=true), or to 1/uncalled
@@ -613,33 +613,38 @@ export async function runMigration(
     tables.push({ table: 'redemptions (maturity backfill)', source: maturityRedRows.length, loaded: matRes.loaded, failed: matRes.failed });
     progress(`redemptions (maturity backfill): ${matRes.loaded}/${maturityRedRows.length}`);
 
-    // ── incentive accruals (staff + agent + referrer, normalised) ────────
-    // referrers first (so referrer accruals have a payee row)
+    // ── incentive accruals (staff + agent, normalised) ───────────────────
+    // Legacy referrers are just agents (owner: "agents and referrers are the
+    // same"). Create one agent per unique referrer name — ids sit above the
+    // migrated agents' max so they can't collide — and accrue as payee_type
+    // 'agent'. Kept as a separate report row so `agents` counts the source
+    // rows and this counts the folded-in referrers.
     const refByNorm = new Map<string, number>();
-    let refSeq = 1;
+    let nextAgentId = Number((await tx.query<{ m: string }>('SELECT COALESCE(MAX(id),0) AS m FROM agents')).rows[0]?.m ?? 0);
+    let refLoaded = 0, refFailed = 0;
     for (const inc of oldIncentives) {
       if (inc._payee_type === 'referrer' && inc._payee_ref && !refByNorm.has(inc._payee_ref)) {
-        const id = refSeq++;
+        const id = ++nextAgentId;
         refByNorm.set(inc._payee_ref, id);
         try {
-          await withSavepoint(tx, () => insertRow(tx, 'referrers', {
-            id, normalized_name: inc._payee_ref,
-            display_name: inc.referrer_name_display ?? inc._payee_ref,
-            eligibility_status: 'Approved',
+          await withSavepoint(tx, () => insertRow(tx, 'agents', {
+            id, agent_code: `AG-R${id}`, full_name: inc.referrer_name_display ?? inc._payee_ref,
+            source: 'referral', commission_status: 'Approved', is_active: true,
           }));
-        } catch { /* dup name → ignore */ }
+          refLoaded++;
+        } catch { refFailed++; /* dup name/code → ignore */ }
       }
     }
+    tables.push({ table: 'agents (from referrers)', source: refByNorm.size, loaded: refLoaded, failed: refFailed });
     await load('incentive_accruals', oldIncentives, (r) => {
-      let payeeId: any = null;
-      if (r._payee_type === 'referrer') payeeId = refByNorm.get(r._payee_ref);
-      else payeeId = r._payee_ref;
+      const payeeType = r._payee_type === 'referrer' ? 'agent' : r._payee_type;
+      const payeeId = r._payee_type === 'referrer' ? refByNorm.get(r._payee_ref) : r._payee_ref;
       // staff payee on a dropped user → no valid payee, skip the accrual
       if (r._payee_type === 'staff' && droppedUserIds.has(payeeId)) return null;
       if (!payeeId || !r.application_id) return null;
       const rate = num(r.applied_pct ?? r.rate_pct);
       return {
-        application_id: r.application_id, payee_type: r._payee_type, payee_id: payeeId,
+        application_id: r.application_id, payee_type: payeeType, payee_id: payeeId,
         matrix_cell: null, rate_mode: 'pct', rate_value: rate,
         amount: num(r.amount), accrual_date: d(r.accrual_date ?? r.accrued_date ?? r.created_at) ?? anchor,
         paid_at: r.paid_at ?? null,

@@ -15,7 +15,6 @@ function monthLabel(d: string | null): string {
   const [y, m] = d.slice(0, 7).split('-');
   return `${MONTHS[Number(m) - 1] ?? m} ${y}`;
 }
-interface Referrer { id: number; display_name: string; eligibility_status: string; }
 interface AgentRow { id: number; full_name: string; agent_code: string; commission_status: string; commission_rate_pct: number | null; }
 
 export function IncentivesPage() {
@@ -26,7 +25,6 @@ export function IncentivesPage() {
   const [balTab, setBalTab] = useState<'staff' | 'agent'>('staff');
   const [expanded, setExpanded] = useState<string | null>(null);
   const overview = useQuery({ queryKey: ['inc-overview'], queryFn: () => api.get<{ rows: Payee[] }>('/api/incentives/overview') });
-  const referrers = useQuery({ queryKey: ['inc-referrers'], queryFn: () => api.get<{ rows: Referrer[] }>('/api/incentives/referrers') });
   const agents = useQuery({ queryKey: ['inc-agents'], queryFn: () => api.get<{ rows: AgentRow[] }>('/api/incentives/agents'), enabled: can('incentives:manage-eligibility') });
   const [rate, setRate] = useState<Record<number, string>>({});
   const grantAgent = useMutation({
@@ -40,22 +38,16 @@ export function IncentivesPage() {
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
 
-  const setRef = useMutation({
-    mutationFn: (v: { id: number; status: string }) => api.post(`/api/incentives/referrers/${v.id}/eligibility`, { status: v.status }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['inc-referrers'] }),
-    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
-  });
-
   return (
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Incentives & commissions</h1>
-      <p className="text-sm text-text-muted mt-1 mb-5">Balances owed to staff, agents and referrers.</p>
+      <p className="text-sm text-text-muted mt-1 mb-5">Balances owed to staff and agents.</p>
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Balances</h2>
       {(() => {
         const all = overview.data?.rows ?? [];
-        // Staff tab = internal staff; Agent tab = external earners (agents + referrers).
+        // Staff tab = internal staff; Agent tab = external earners (agents).
         const isStaff = (p: Payee) => p.payee_type === 'staff';
         const staffRows = all.filter(isStaff);
         const agentRows = all.filter((p) => !isStaff(p));
@@ -97,7 +89,7 @@ export function IncentivesPage() {
           rows={shown}
           rowKey={(p) => `${p.payee_type}-${p.payee_id}`}
           defaultSort={{ key: 'balance', dir: 'desc' }}
-          empty={balTab === 'staff' ? 'No staff accruals yet.' : 'No agent/referrer accruals yet.'}
+          empty={balTab === 'staff' ? 'No staff accruals yet.' : 'No agent accruals yet.'}
           renderExpanded={(p) => expanded === `${p.payee_type}-${p.payee_id}`
             ? <PayeeAccruals p={p} canPay={can('incentives:pay')} canRevert={canRevert}
                 onPaid={() => { setMsg('Incentive paid.'); qc.invalidateQueries({ queryKey: ['inc-overview'] }); }}
@@ -139,22 +131,6 @@ export function IncentivesPage() {
         </>
       )}
 
-      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Referrers</h2>
-      <div className="bg-surface border border-border rounded-lg shadow-card divide-y divide-border">
-        {(referrers.data?.rows ?? []).map((r) => (
-          <div key={r.id} className="p-4 flex items-center gap-3 text-sm">
-            <span className="font-medium">{r.display_name}</span>
-            <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{r.eligibility_status}</span>
-            {can('incentives:manage-eligibility') && (
-              <div className="ml-auto flex gap-2">
-                {r.eligibility_status !== 'Approved' && <button onClick={() => setRef.mutate({ id: r.id, status: 'Approved' })} className="text-xs bg-primary text-white rounded px-3 py-1.5">Approve</button>}
-                {r.eligibility_status === 'Approved' && <button onClick={() => setRef.mutate({ id: r.id, status: 'Revoked' })} className="text-xs border border-border text-danger rounded px-3 py-1.5">Revoke</button>}
-              </div>
-            )}
-          </div>
-        ))}
-        {(referrers.data?.rows ?? []).length === 0 && <div className="p-6 text-center text-text-muted">No referrers yet.</div>}
-      </div>
     </div>
   );
 }

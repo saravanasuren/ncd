@@ -30,6 +30,7 @@ const TYPE_LABELS: Record<string, string> = {
   activation_batch: 'Activation',
   allotment_batch: 'Allotment',
   user_verification: 'User Verification',
+  app_investment: 'App investment (live)',
 };
 
 /** Human title for a request card, e.g. "NCD_27 · Activation" for a batch. */
@@ -146,6 +147,57 @@ function PrematureWaive({ redemptionId, penalty, netPayment, waived, onDone }: {
   );
 }
 
+/** App/LockerHub investment notice: already live — lets the admin assign a
+ * staff/agent when the customer gave no referral code. */
+function AppInvestmentNotice({ appId, amount, needsAttribution, referredBy, onDone }: {
+  appId: number; amount: number | null; needsAttribution: boolean; referredBy: string | null; onDone: () => void;
+}) {
+  const [q, setQ] = useState('');
+  const [err, setErr] = useState('');
+  const [assigned, setAssigned] = useState<string | null>(null);
+  const search = useQuery({
+    queryKey: ['payee-search', q],
+    queryFn: () => api.get<{ rows: Array<{ kind: string; id: number; code: string; full_name: string }> }>(`/api/agents/payee-search?q=${encodeURIComponent(q.trim())}`),
+    enabled: q.trim().length >= 2,
+  });
+  const assign = useMutation({
+    mutationFn: (payee: string) => api.post(`/api/applications/${appId}/attribute-referrer`, { payee }),
+    onSuccess: (_r, payee) => { setAssigned(payee); setQ(''); setErr(''); onDone(); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const showAssign = (needsAttribution || !referredBy) && !assigned;
+  return (
+    <div className="px-4 pb-3 -mt-1">
+      <div className="text-xs text-text-muted">
+        {amount != null && <span>Live for the customer · <span className="font-semibold text-text mono">{formatINR(amount)}</span>. </span>}
+        {assigned ? <span className="text-success">Assigned to {assigned}.</span>
+          : referredBy ? <span>Referred by <span className="font-mono">{referredBy}</span>.</span>
+          : <span className="text-danger">No referral code — assign a staff/agent, then acknowledge.</span>}
+      </div>
+      {showAssign && (
+        <div className="mt-2 bg-bg rounded p-2.5">
+          <input className="w-full px-2 py-1 text-xs border border-border-strong rounded" placeholder="Search staff or agent by name / code…"
+            value={q} onChange={(e) => setQ(e.target.value)} />
+          {q.trim().length >= 2 && (search.data?.rows.length ?? 0) > 0 && (
+            <div className="mt-1.5 flex flex-col gap-1 max-h-40 overflow-y-auto">
+              {search.data!.rows.map((p) => (
+                <button key={`${p.kind}-${p.id}`} disabled={assign.isPending} onClick={() => assign.mutate(p.code)}
+                  className="text-left text-xs px-2 py-1 rounded hover:bg-surface border border-transparent hover:border-border">
+                  {p.full_name} <span className="font-mono text-text-muted">{p.code}</span> <span className="text-text-muted">· {p.kind}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {q.trim().length >= 2 && (search.data?.rows.length ?? 0) === 0 && !search.isLoading && (
+            <div className="text-xs text-text-muted mt-1">No staff or agent matches “{q.trim()}”.</div>
+          )}
+          {err && <div className="text-xs text-danger mt-1">{err}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ApprovalsPage() {
   const qc = useQueryClient();
   const [msg, setMsg] = useState('');
@@ -186,11 +238,15 @@ export function ApprovalsPage() {
               </button>
               {r.canAct ? (
                 <div className="flex gap-2">
-                  <button onClick={() => act.mutate({ id: r.id, action: 'approve' })} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Approve</button>
-                  <button onClick={() => {
-                    const reason = window.prompt('Reason for rejection:');
-                    if (reason && reason.trim().length >= 2) act.mutate({ id: r.id, action: 'reject', reason: reason.trim() });
-                  }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">Reject</button>
+                  <button onClick={() => act.mutate({ id: r.id, action: 'approve' })} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">
+                    {r.request_type === 'app_investment' ? 'Acknowledge' : 'Approve'}
+                  </button>
+                  {r.request_type !== 'app_investment' && (
+                    <button onClick={() => {
+                      const reason = window.prompt('Reason for rejection:');
+                      if (reason && reason.trim().length >= 2) act.mutate({ id: r.id, action: 'reject', reason: reason.trim() });
+                    }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">Reject</button>
+                  )}
                 </div>
               ) : (
                 <span className="text-xs text-text-muted italic">awaiting another checker</span>
@@ -202,6 +258,15 @@ export function ApprovalsPage() {
                 penalty={Number(r.metadata.penalty ?? 0)}
                 netPayment={Number(r.metadata.net_payment ?? 0)}
                 waived={r.metadata.penalty_waived === true}
+                onDone={() => qc.invalidateQueries({ queryKey: ['approvals'] })}
+              />
+            )}
+            {r.canAct && r.request_type === 'app_investment' && r.entity_id && (
+              <AppInvestmentNotice
+                appId={Number(r.entity_id)}
+                amount={r.metadata.amount != null ? Number(r.metadata.amount) : null}
+                needsAttribution={r.metadata.needs_attribution === true}
+                referredBy={r.metadata.referred_by ? String(r.metadata.referred_by) : null}
                 onDone={() => qc.invalidateQueries({ queryKey: ['approvals'] })}
               />
             )}

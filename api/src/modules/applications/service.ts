@@ -101,6 +101,35 @@ registerOnFinalApprove('subscription', async (tx, req) => {
   await activateApplication(tx, appId, { confirmedByUserId: req.maker_user_id });
 });
 
+/**
+ * Assign (or reassign) the referrer staff/agent on an investment and re-accrue
+ * the referrer incentive. Used for app-channel investments where the customer
+ * gave no referral code — the admin picks the payee from the App-investment
+ * notice on the Approvals page. Idempotent per (app, payee): a clean unpaid
+ * re-accrual, paid rows are never touched.
+ */
+export async function attributeReferrer(db: Db, actor: AuthUser, appId: number, payee: string) {
+  const text = payee.trim();
+  if (!text) throw errors.badRequest('Pick a staff or agent to assign');
+  return db.withTx(async (tx) => {
+    const app = (await tx.query<{ id: string }>('SELECT id FROM applications WHERE id = $1', [appId])).rows[0];
+    if (!app) throw errors.notFound('Application not found');
+    // Drop any existing UNPAID referrer accrual so a re-assignment lands cleanly.
+    await tx.query("DELETE FROM incentive_accruals WHERE application_id = $1 AND matrix_cell = 'referrer' AND paid_at IS NULL", [appId]);
+    await tx.query('UPDATE applications SET referred_by_text = $1, updated_at = now() WHERE id = $2', [text, appId]);
+    const { accrueForApplication } = await import('../incentives/accrual.js');
+    await accrueForApplication(tx, appId);
+    // Mark the App-investment notice resolved so the queue reflects it.
+    await tx.query(
+      `UPDATE approval_requests
+         SET metadata = jsonb_set(jsonb_set(metadata, '{needs_attribution}', 'false'), '{referred_by}', to_jsonb($1::text))
+       WHERE request_type = 'app_investment' AND entity_type = 'applications' AND entity_id = $2 AND status = 'Pending'`,
+      [text, String(appId)]);
+    await writeAudit(tx, { actorId: actor.id, action: 'application.attribute-referrer', entityType: 'applications', entityId: appId, after: { referred_by_text: text } });
+    return { ok: true };
+  });
+}
+
 /** Clubbing candidates — in-flight apps in a series for a customer. */
 export async function clubbingCandidates(db: Db, customerId: number, seriesId: number) {
   return (await db.query(

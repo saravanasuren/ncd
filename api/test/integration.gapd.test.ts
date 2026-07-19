@@ -89,7 +89,7 @@ describe('report documents', () => {
 });
 
 describe('funded subscription (integration)', () => {
-  it('creates a PendingApproval app; wealth wire shape; idempotent', async () => {
+  it('creates a live app; wealth wire shape; idempotent', async () => {
     // The live LockerHub payload sends customer_phone + numeric series/scheme ids.
     const body = {
       customer_phone: '9400000001', customer_name: 'Funded Cust',
@@ -112,7 +112,11 @@ describe('funded subscription (integration)', () => {
     expect(again.json.already_processed).toBe(true);
     expect(again.json.wealth_subscription_id).toBe(first.json.wealth_subscription_id);
     const st = (await ctx.db.query('SELECT status FROM applications WHERE lockerhub_intent_no = $1', ['LH-INTENT-1'])).rows[0] as any;
-    expect(st.status).toBe('PendingApproval'); // integration money waits in the one approval gate
+    expect(st.status).toBe('Active'); // app payment is reconciled → goes live instantly
+    // …and a notice lands on the Approvals page so the admin knows app money came in
+    const notice = (await ctx.db.query(
+      "SELECT status FROM approval_requests WHERE request_type = 'app_investment' AND entity_type = 'applications' AND entity_id = (SELECT id::text FROM applications WHERE lockerhub_intent_no = $1)", ['LH-INTENT-1'])).rows[0] as any;
+    expect(notice?.status).toBe('Pending');
 
     // an unknown phone auto-creates a Draft stub customer (money never 404s)
     const stubPost = await fetch(ctx.base + '/api/integration/subscription-payments/from-lockerhub', {

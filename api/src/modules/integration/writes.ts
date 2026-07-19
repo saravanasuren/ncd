@@ -650,6 +650,10 @@ interface LandInput {
   collectionReference: string;
   isLockerDeposit: boolean;
   referredBy: string | null;
+  // App payments are already reconciled by the payment integration → go live
+  // immediately (customer sees it live) and surface a notice on the Approvals
+  // page. Locker deposits (requires_approval) stay gated in PendingApproval.
+  instantLive: boolean;
   ip?: string;
   auditAction: string;
   auditExtra: Record<string, unknown>;
@@ -720,12 +724,22 @@ async function landFundedApplication(db: Db, b: LandInput): Promise<{ appId: num
        VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active')`,
       [appId, scheme.id, scheme.coupon_rate_pct, scheme.tenure_months, scheme.payout_frequency, scheme.day_count_convention, b.amount]
     );
-    // Integration money (app / LockerHub) goes through the same one gate as
-    // staff enrolment: it waits in PendingApproval with an investment approval
-    // raised (system maker), and the admin's approval is the go-live. (Path B —
-    // instant-live for app payments — lands in a later change.)
     const { createApprovalRequest } = await import('../approvals/service.js');
-    await createApprovalRequest(tx, { type: 'subscription', entityType: 'applications', entityId: appId, makerUserId: null, metadata: { application_no: appNo, source: 'dhanamfin' } });
+    if (b.instantLive) {
+      // App payment: already reconciled → go live now (customer sees it live),
+      // and raise a NOTICE on the Approvals page (not a gate). If the customer
+      // gave no referral code, the notice lets the admin assign a staff/agent.
+      const { activateApplication } = await import('../applications/activate.js');
+      await activateApplication(tx, appId, { dateMoneyReceived: b.paidAt, amountReceived: b.amount, method: 'Other', reference: b.collectionReference });
+      await createApprovalRequest(tx, {
+        type: 'app_investment', entityType: 'applications', entityId: appId, makerUserId: null,
+        metadata: { application_no: appNo, source: 'dhanamfin', amount: b.amount, referred_by: b.referredBy ?? null, needs_attribution: !b.referredBy },
+      });
+    } else {
+      // Locker deposit (requires approval): waits in the one approval gate; the
+      // admin's approval is the go-live.
+      await createApprovalRequest(tx, { type: 'subscription', entityType: 'applications', entityId: appId, makerUserId: null, metadata: { application_no: appNo, source: 'dhanamfin' } });
+    }
 
     await writeAudit(tx, {
       actorId: null,
@@ -816,6 +830,7 @@ customerWritesRouter.post('/subscription-payments/from-lockerhub', asyncHandler(
       collectionReference: String(b.provider_ref || intentNo),
       isLockerDeposit: b.is_locker_deposit === true,
       referredBy: typeof b.referred_by === 'string' ? b.referred_by.trim() || null : null,
+      instantLive: true, // app payment — reconciled, so it goes live immediately
       ip: req.ip,
       auditAction: 'LOCKERHUB_PAYMENT_RECEIVED',
       auditExtra: {
@@ -901,6 +916,7 @@ customerWritesRouter.post('/locker-deposits', asyncHandler(async (req, res) => {
       collectionReference: ref,
       isLockerDeposit: true,
       referredBy: null,
+      instantLive: false, // locker deposit — requires approval before going live
       ip: req.ip,
       auditAction: 'LOCKERHUB_LOCKER_DEPOSIT_RECEIVED',
       auditExtra: {

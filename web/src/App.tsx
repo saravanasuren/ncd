@@ -28,6 +28,7 @@ import { ReportsPage } from './pages/Reports.js';
 import { SystemPage } from './pages/System.js';
 import { MastersPage } from './pages/Masters.js';
 import { EventsPage } from './pages/Events.js';
+import { MyDashboardPage } from './pages/MyDashboard.js';
 import { PortalLogin } from './portal/PortalLogin.js';
 import { PortalHome } from './portal/PortalHome.js';
 import type { ReactNode } from 'react';
@@ -45,6 +46,13 @@ function RequirePortal({ children }: { children: ReactNode }) {
   if (loading) return <div className="p-8 text-text-muted">Loading…</div>;
   if (!user) return <Navigate to="/portal" replace />;
   return <>{children}</>;
+}
+
+/** Land on the dashboard the user actually holds — branch staff have
+ * dashboard:view-own (My Dashboard), not the company-wide dashboard:view. */
+function HomeRedirect() {
+  const { can } = useAuth();
+  return <Navigate to={can('dashboard:view') ? '/app/dashboard' : '/app/my-dashboard'} replace />;
 }
 
 export function App() {
@@ -65,8 +73,9 @@ export function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Navigate to="/app/dashboard" replace />} />
+          <Route index element={<HomeRedirect />} />
           <Route path="dashboard" element={<Suspense fallback={<div className="text-text-muted">Loading dashboard…</div>}><Dashboard /></Suspense>} />
+          <Route path="my-dashboard" element={<MyDashboardPage />} />
           <Route path="segments" element={<SegmentsPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="system" element={<SystemPage />} />

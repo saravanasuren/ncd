@@ -218,3 +218,50 @@ export async function monthlyRedemptions(db: Db, actor: AuthUser) {
   }
   return [...byMonth.values()].sort((a, b) => (a.month < b.month ? 1 : -1));
 }
+
+/**
+ * "My Dashboard" for branch staff (owner spec 2026-07-20). Branch staff don't
+ * see the company-wide NCD Portfolio — they see only what THEY brought in,
+ * i.e. applications they enrolled (enrolled_by_user_id), which is the same
+ * ownership rule `scopeFor('branch_staff')` already applies everywhere else.
+ *
+ * Cancelled/Rejected/Draft are excluded — those never became business. Money is
+ * the application's total_amount; the month bucket is the money-received date
+ * (falling back to created_at for anything not yet funded).
+ */
+export async function myBook(db: Db, actor: AuthUser) {
+  const MINE = `a.enrolled_by_user_id = $1 AND a.status NOT IN ('Cancelled','Rejected','Draft')`;
+
+  const totals = (await db.query<{ investments: number; customers: number; amount: string }>(
+    `SELECT count(*)::int AS investments,
+            count(DISTINCT a.customer_id)::int AS customers,
+            COALESCE(sum(a.total_amount),0) AS amount
+       FROM applications a WHERE ${MINE}`, [actor.id])).rows[0]!;
+
+  const bySeries = (await db.query(
+    `SELECT s.code AS series_code, s.name AS series_name,
+            count(*)::int AS investments,
+            count(DISTINCT a.customer_id)::int AS customers,
+            COALESCE(sum(a.total_amount),0) AS amount
+       FROM applications a JOIN series s ON s.id = a.series_id
+      WHERE ${MINE}
+      GROUP BY s.code, s.name ORDER BY s.code DESC`, [actor.id])).rows;
+
+  const byMonth = (await db.query(
+    `SELECT to_char(COALESCE(a.date_money_received, a.created_at::date), 'YYYY-MM') AS month,
+            count(*)::int AS investments,
+            count(DISTINCT a.customer_id)::int AS customers,
+            COALESCE(sum(a.total_amount),0) AS amount
+       FROM applications a WHERE ${MINE}
+      GROUP BY 1 ORDER BY 1 DESC`, [actor.id])).rows;
+
+  return {
+    totals: {
+      investments: Number(totals.investments),
+      customers: Number(totals.customers),
+      amount: Number(totals.amount),
+    },
+    by_series: bySeries,
+    by_month: byMonth,
+  };
+}

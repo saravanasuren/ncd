@@ -58,6 +58,7 @@ export const PERMISSIONS = [
   'earnings:read-own',
   // dashboard / reports
   'dashboard:view', // scoped
+  'dashboard:view-own', // only my own book (branch staff "My Dashboard")
   'dashboard:drilldown',
   'reports:download', // scoped
   // admin
@@ -158,7 +159,9 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'approvals:check-handover', // repeat-customer handover (any one of Admin/CXO/BM)
   ],
 
-  branch_staff: [...STAFF_FUNNEL],
+  // Branch staff don't see the company-wide NCD Portfolio dashboard at all —
+  // they get "My Dashboard" (their own enrolled book) instead (owner 2026-07-20).
+  branch_staff: [...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view'), 'dashboard:view-own'],
 
   agent: [...STAFF_FUNNEL],
 

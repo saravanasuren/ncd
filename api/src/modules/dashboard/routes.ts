@@ -21,6 +21,10 @@ function filtersFromQuery(q: Record<string, unknown>): BookFilters {
 dashboardRouter.get('/overview', requirePermission('dashboard:view'),
   asyncHandler(async (req, res) => res.json(await s.overview(getDb(), req.user!, filtersFromQuery(req.query)))));
 
+// "My Dashboard" — only the caller's own enrolled book (branch staff).
+dashboardRouter.get('/my', requirePermission('dashboard:view-own', 'dashboard:view'),
+  asyncHandler(async (req, res) => res.json(await s.myBook(getDb(), req.user!))));
+
 dashboardRouter.get('/monthly-redemptions', requirePermission('dashboard:view'),
   asyncHandler(async (req, res) => res.json({ rows: await s.monthlyRedemptions(getDb(), req.user!) })));
 

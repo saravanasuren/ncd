@@ -7,7 +7,7 @@
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
-import { round2 } from '../../lib/dates.js';
+import { round2, toISODate } from '../../lib/dates.js';
 import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
 
 /** SQL list literal for the outstanding-book status set, e.g. 'Active','PendingAllotment',… */
@@ -405,21 +405,29 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
   }
   for (const [key, g] of groups) g.investors = custSets.get(key)!.size;
 
-  // Series register: window (collection dates), gross issued and redeemed — over
-  // ALL non-active statuses too, so they mirror wealth's issue register.
+  // Series register: window (collection dates), gross issued and redeemed —
+  // including exited statuses (Redeemed/Matured/…) so the register shows what
+  // the series raised over its life, not just what is still outstanding.
+  // PendingApproval is excluded: an unapproved subscription has no money in yet
+  // (same rule as OUTSTANDING_APPLICATION_STATUSES), so it must not inflate
+  // "issued" — since the go-live change that is where every new investment
+  // waits, and it was making NCD_28 read ₹15L against ₹10L outstanding.
   if (by === 'series') {
     const reg = appWhere(actor, { seriesIds: filters.seriesIds });
     const { rows: regRows } = await db.query<any>(
       `SELECT s.code AS series_code,
               min(a.date_money_received) AS win_from, max(a.date_money_received) AS win_to,
-              COALESCE(sum(a.total_amount) FILTER (WHERE a.status NOT IN ('Rejected','Cancelled','Draft')),0) AS issued,
+              COALESCE(sum(a.total_amount) FILTER (WHERE a.status NOT IN ('Rejected','Cancelled','Draft','PendingApproval')),0) AS issued,
               COALESCE(sum(a.total_amount) FILTER (WHERE a.status IN ('Redeemed','Matured','PrematureWithdrawn','RolledOver','Transferred')),0) AS redeemed
        ${FROM} WHERE ${reg.sql} GROUP BY s.code`, reg.params);
     const regMap = new Map<string, any>(regRows.map((r: any) => [r.series_code, r]));
     for (const g of groups.values()) {
       const rr = regMap.get(g.key);
-      g.window_from = rr?.win_from ? String(rr.win_from).slice(0, 10) : null;
-      g.window_to = rr?.win_to ? String(rr.win_to).slice(0, 10) : null;
+      // The driver hands back a JS Date for these aggregates, and
+      // String(date).slice(0,10) yields "Sat Jul 18" — which the UI then parses
+      // as Invalid Date. toISODate normalises Date | string → 'YYYY-MM-DD'.
+      g.window_from = toISODate(rr?.win_from ?? null);
+      g.window_to = toISODate(rr?.win_to ?? null);
       g.issued = round2(Number(rr?.issued ?? 0));
       g.redeemed = round2(Number(rr?.redeemed ?? 0));
     }

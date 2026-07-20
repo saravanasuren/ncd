@@ -2,8 +2,12 @@
  * Generic maker-checker engine (docs/03 §4, docs/08 core rule).
  *
  * 🔒 Rule zero: nobody approves their own submission, and no single person
- * appears twice in a multi-level chain — enforced here for EVERY role,
- * including Super Admin. Two distinct humans minimum per approval.
+ * appears twice in a multi-level chain — two distinct humans per approval.
+ * ONE documented exception (owner decision 2026-07-20): a Super Admin may
+ * approve their OWN submission, but only with a written reason, which is stored
+ * on the request and written as its own `approval.self-approve` audit entry.
+ * Every other role is refused outright, and the no-acting-twice rule holds for
+ * everyone including Super Admin. See assertDistinctChecker.
  *
  * Callbacks: modules register `onFinalApprove(type, cb)` / `onReject(type, cb)`;
  * they run INSIDE the approval transaction so side-effects commit atomically.

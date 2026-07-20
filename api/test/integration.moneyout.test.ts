@@ -122,3 +122,28 @@ describe('redemption report', () => {
     expect(wb.worksheets[0]!.name).toBe('Redemptions');
   });
 });
+
+describe('NEFT sheet: settings-driven debit account + email, dd/mm/yyyy value date', () => {
+  it('uses the Settings debit account, fallback email, and today as dd/mm/yyyy', async () => {
+    const a = await admin();
+    await a.put('/api/settings/payouts.neft_debit_account', { value: '99887766554433' });
+    await a.put('/api/settings/payouts.neft_beneficiary_email', { value: 'payouts@dhanam.finance' });
+    const batchId = await approvedInterestBatch('2026-11-28');
+    const dl = await a.raw(`/api/payouts/${batchId}/download.xlsx`);
+    expect(dl.status).toBe(200);
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(dl.buffer);
+    const ws = wb.worksheets[0]!;
+    const row = ws.getRow(2);
+    expect(String(row.getCell(2).value)).toBe('99887766554433');      // debit account from Settings
+    const today = new Date();
+    const dd = String(today.getDate()).padStart(2, '0');
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    expect(String(row.getCell(4).value)).toBe(`${dd}/${mm}/${today.getFullYear()}`); // value date = today, dd/mm/yyyy
+    expect(String(row.getCell(8).value)).toBeTruthy();                 // beneficiary email filled
+    // restore so later tests see the bank-master account again
+    await a.put('/api/settings/payouts.neft_debit_account', { value: '' });
+    await a.put('/api/settings/payouts.neft_beneficiary_email', { value: '' });
+  });
+});

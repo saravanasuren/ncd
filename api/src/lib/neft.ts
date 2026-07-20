@@ -22,6 +22,8 @@ export interface NeftRow {
 export interface NeftHeader {
   debitAccount: string;
   sheetName?: string;
+  /** Value date stamped on every row — the day the sheet is generated. */
+  valueDate?: string | Date;
 }
 
 const COLUMNS = [
@@ -30,9 +32,16 @@ const COLUMNS = [
   'Beneficiary ID', 'Credit Remarks', 'Debit Remarks', 'Unique Customer Reference Number',
 ];
 
-function ddmmyyyy(iso: string): string {
-  const [y, m, d] = iso.slice(0, 10).split('-');
-  return `${d}-${m}-${y}`;
+/** dd/mm/yyyy for the bank. Accepts an ISO string OR a Date (pg returns DATE
+ * columns as Date objects — String()ing those produced the old
+ * "undefined-undefined-Mon…" cells). */
+function ddmmyyyy(value: string | Date): string {
+  const iso = value instanceof Date
+    ? new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+    : String(value).slice(0, 10);
+  const [y, m, d] = iso.split('-');
+  if (!y || !m || !d) return String(value);
+  return `${d}/${m}/${y}`;
 }
 
 export async function buildNeftSheet(header: NeftHeader, rows: NeftRow[]): Promise<Buffer> {
@@ -42,7 +51,7 @@ export async function buildNeftSheet(header: NeftHeader, rows: NeftRow[]): Promi
   head.eachCell((c) => { c.font = { bold: true }; });
   for (const r of rows) {
     const row = ws.addRow([
-      'NEFT', header.debitAccount, r.amount, ddmmyyyy(r.valueDate),
+      'NEFT', header.debitAccount, r.amount, ddmmyyyy(header.valueDate ?? r.valueDate),
       r.beneAccount, r.beneName, r.ifsc, r.email ?? '', r.beneId ?? '',
       (r.creditRemark ?? '').slice(0, 35), r.debitRemark ?? '', r.reference ?? '',
     ]);

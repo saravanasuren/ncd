@@ -195,6 +195,13 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
 /** Federal Bank NEFT sheet for approved (unpaid) redemptions. */
 export async function redemptionNeft(db: Db): Promise<Buffer> {
   const debit = (await db.query<{ account_number: string }>("SELECT account_number FROM banks WHERE is_disbursement_account = TRUE AND is_active = TRUE ORDER BY id LIMIT 1")).rows[0];
+  const neftSettings = await getSettingsMap(db);
+  const asText = (v: unknown): string => {
+    const t = (v === null || v === undefined ? '' : String(v)).trim();
+    return t === 'null' || t === 'undefined' ? '' : t;
+  };
+  const debitSetting = asText(neftSettings['payouts.neft_debit_account']);
+  const fallbackEmail = asText(neftSettings['payouts.neft_beneficiary_email']);
   const rows = (await db.query<Record<string, unknown>>(
     `SELECT r.redemption_no, r.net_payment, r.redemption_date, c.full_name AS name, c.email,
             cba.account_number AS payee_account, cba.ifsc AS payee_ifsc
@@ -203,11 +210,13 @@ export async function redemptionNeft(db: Db): Promise<Buffer> {
      WHERE r.status = 'Approved' AND r.utr IS NULL ORDER BY c.full_name`)).rows;
   const { buildNeftSheet } = await import('../../lib/neft.js');
   return buildNeftSheet(
-    { debitAccount: debit?.account_number ?? 'DISBURSEMENT-ACCT', sheetName: 'Redemptions' },
+    { debitAccount: debitSetting || debit?.account_number || 'DISBURSEMENT-ACCT',
+      sheetName: 'Redemptions',
+      valueDate: new Date() },   // value date = the day the sheet is generated
     rows.map((r) => ({
       amount: Number(r.net_payment), valueDate: String(r.redemption_date ?? new Date().toISOString().slice(0, 10)),
       beneAccount: String(r.payee_account ?? ''), beneName: String(r.name), ifsc: String(r.payee_ifsc ?? ''),
-      email: (r.email as string) ?? '', creditRemark: `NCD redemption ${r.redemption_no}`, reference: String(r.redemption_no),
+      email: ((r.email as string) || fallbackEmail) ?? '', creditRemark: `NCD redemption ${r.redemption_no}`, reference: String(r.redemption_no),
     }))
   );
 }

@@ -14,13 +14,15 @@ interface ApprovalReq {
   status: string;
   metadata: Record<string, unknown>;
   canAct: boolean;
+  subject?: string;
+  amount?: number | null;
 }
 
 const TYPE_LABELS: Record<string, string> = {
   customer_creation: 'New Customer',
   customer_correction: 'Customer Correction',
   customer_reassignment: 'Customer Handover',
-  subscription: 'Application',
+  subscription: 'Investment',
   premature_redemption: 'Premature Redemption',
   redemption: 'Redemption',
   rollover: 'Rollover',
@@ -31,6 +33,8 @@ const TYPE_LABELS: Record<string, string> = {
   allotment_batch: 'Allotment',
   user_verification: 'User Verification',
   app_investment: 'App investment (live)',
+  commission_eligibility: 'Agent Commission',
+  interest_batch: 'Interest Payout',
 };
 
 /** Human title for a request card, e.g. "NCD_27 · Activation" for a batch. */
@@ -49,12 +53,13 @@ interface CoveredRow {
 function Detail({ id }: { id: number }) {
   const { data, isLoading } = useQuery({
     queryKey: ['approval', id],
-    queryFn: () => api.get<{ request: Record<string, unknown>; covered: CoveredRow[] | null }>(`/api/approvals/${id}`),
+    queryFn: () => api.get<{ request: Record<string, unknown>; covered: CoveredRow[] | null; detail: { subject: string; amount: number | null; facts: Array<{ label: string; value: string }> } }>(`/api/approvals/${id}`),
   });
   const [showRaw, setShowRaw] = useState(false);
   if (isLoading) return <div className="text-xs text-text-muted px-4 pb-3">Loading detail…</div>;
   const r = data?.request ?? {};
   const covered = data?.covered ?? null;
+  const facts = data?.detail?.facts ?? [];
   const skip = new Set(['id', 'canAct']);
   const entries = Object.entries(r).filter(([k, v]) => !skip.has(k) && v != null && v !== '');
   const total = (covered ?? []).reduce((s, c) => s + Number(c.amount), 0);
@@ -96,8 +101,23 @@ function Detail({ id }: { id: number }) {
           </button>
         </div>
       )}
-      {(!covered || showRaw) && (
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs bg-bg rounded p-3">
+      {facts.length > 0 && (
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-xs bg-bg rounded p-3 mb-2">
+          {facts.map((f) => (
+            <span key={f.label} className="contents">
+              <dt className="text-text-muted">{f.label}</dt>
+              <dd className="m-0 font-medium break-words">{f.value}</dd>
+            </span>
+          ))}
+        </dl>
+      )}
+      {!covered && (
+        <button onClick={() => setShowRaw(!showRaw)} className="text-xs text-text-muted hover:text-primary">
+          {showRaw ? 'Hide request record' : 'Show request record'}
+        </button>
+      )}
+      {showRaw && (
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs bg-bg rounded p-3 mt-2">
           {entries.map(([k, v]) => (
             <span key={k} className="contents">
               <dt className="text-text-muted">{k}</dt>
@@ -220,18 +240,23 @@ export function ApprovalsPage() {
       <h1 className="text-xl font-bold tracking-tight m-0">Approvals</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Requests waiting on a checker. You can't approve your own submissions.</p>
       {msg && <div className="text-xs text-danger mb-3">{msg}</div>}
-      <div className="bg-surface border border-border rounded-lg shadow-card divide-y divide-border">
-        {data!.rows.map((r) => (
+      {groupsOf(data!.rows).map(([type, rows]) => (
+      <div key={type} className="mb-5">
+        <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">
+          {TYPE_LABELS[type] ?? type} <span className="text-text-muted">({rows.length})</span>
+        </h2>
+        <div className="bg-surface border border-border rounded-lg shadow-card divide-y divide-border">
+        {rows.map((r) => (
           <div key={r.id}>
             <div className="p-4 flex items-center gap-4">
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold">{requestTitle(r)}
-                  {r.max_levels > 1 && <span className="text-xs text-text-muted font-normal"> · level {r.level} of {r.max_levels}</span>}
+                <div className="text-sm font-semibold flex items-center gap-2 flex-wrap">
+                  <span>{requestTitle(r)}</span>
+                  {r.amount != null && <span className="mono text-primary">{formatINR(r.amount)}</span>}
+                  {r.max_levels > 1 && <span className="text-xs text-text-muted font-normal">level {r.level} of {r.max_levels}</span>}
                 </div>
-                <div className="text-xs text-text-muted font-mono">{r.request_no}
-                  {r.metadata.customerName ? ` · ${String(r.metadata.customerName)}` : ''}
-                  {r.request_type === 'user_verification' ? ` · ${String(r.metadata.name ?? '')} (${String(r.metadata.kind ?? '')}) · ${String(r.metadata.mobile ?? '')}` : ''}
-                </div>
+                {r.subject && <div className="text-sm text-text mt-0.5 truncate">{r.subject}</div>}
+                <div className="text-xs text-text-muted font-mono mt-0.5">{r.request_no}</div>
               </div>
               <button onClick={() => setOpenId(openId === r.id ? null : r.id)} className="text-xs text-primary hover:underline">
                 {openId === r.id ? 'Hide' : 'Details'}
@@ -273,8 +298,26 @@ export function ApprovalsPage() {
             {openId === r.id && <Detail id={r.id} />}
           </div>
         ))}
-        {data!.rows.length === 0 && <div className="p-6 text-center text-text-muted">Nothing awaiting your approval.</div>}
+        </div>
       </div>
+      ))}
+      {data!.rows.length === 0 && (
+        <div className="bg-surface border border-border rounded-lg shadow-card p-6 text-center text-text-muted">
+          Nothing awaiting your approval.
+        </div>
+      )}
     </div>
   );
+}
+
+/** Queue grouped by request type so it's obvious what kinds of approval are
+ * pending and how many of each. Order follows the queue (newest first). */
+function groupsOf(rows: ApprovalReq[]): Array<[string, ApprovalReq[]]> {
+  const by = new Map<string, ApprovalReq[]>();
+  for (const r of rows) {
+    const g = by.get(r.request_type) ?? [];
+    g.push(r);
+    by.set(r.request_type, g);
+  }
+  return [...by.entries()];
 }

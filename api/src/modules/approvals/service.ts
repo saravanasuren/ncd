@@ -195,18 +195,21 @@ export async function reject(db: Db, user: AuthUser, id: number, reason: string)
 
 /** Queue for the user: pending requests they can currently act on, plus a
  * `canAct` flag (own submissions are shown but not actionable). */
-export async function getQueue(db: Db, user: AuthUser): Promise<Array<ApprovalRow & { canAct: boolean }>> {
+export async function getQueue(db: Db, user: AuthUser): Promise<Array<ApprovalRow & { canAct: boolean; subject: string; amount: number | null }>> {
   const { rows } = await db.query<Record<string, unknown>>(
     "SELECT * FROM approval_requests WHERE status = 'Pending' ORDER BY created_at DESC"
   );
-  const out: Array<ApprovalRow & { canAct: boolean }> = [];
+  const out: Array<ApprovalRow & { canAct: boolean; subject: string; amount: number | null }> = [];
   for (const r of rows) {
     const req = rowToApproval(r);
     const hasPerm = user.permissions.includes(checkerPermFor(req));
     if (!hasPerm) continue; // not their queue at all
     const prior = await priorApprovers(db, req.id);
     const canAct = req.maker_user_id !== user.id && !prior.includes(user.id);
-    out.push({ ...req, canAct });
+    // Carry the subject so the queue can say WHAT each request is about
+    // instead of just its type + request number.
+    const desc = await describeRequest(db, req);
+    out.push({ ...req, canAct, subject: desc.subject, amount: desc.amount });
   }
   return out;
 }
@@ -235,4 +238,167 @@ export async function coveredApplications(db: Db, request: { request_type?: stri
      WHERE a.series_id = $1 AND ${cond}
      ORDER BY a.total_amount DESC, a.application_no`, [seriesId]);
   return rows;
+}
+
+/**
+ * A human description of what a request is actually about, so the Approvals
+ * queue can show the subject up front and the detail panel can show real
+ * information instead of the raw request record. Resolved from the entity the
+ * request points at, falling back to its metadata for types with no row of
+ * their own.
+ */
+export interface RequestDescription {
+  subject: string;            // "Ramesh Kumar · APP-2026-000784"
+  amount: number | null;      // the ₹ figure that matters, when there is one
+  facts: Array<{ label: string; value: string }>;
+}
+
+const money = (v: unknown) => (v == null ? null : Number(v));
+const fact = (label: string, value: unknown): { label: string; value: string } | null =>
+  value == null || value === '' ? null : { label, value: String(value) };
+const clean = (xs: Array<{ label: string; value: string } | null>) => xs.filter((x): x is { label: string; value: string } => !!x);
+const dateOnly = (v: unknown) => (v == null ? null : String(toISO(v)));
+const toISO = (v: unknown) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
+
+export async function describeRequest(db: Db, req: ApprovalRow): Promise<RequestDescription> {
+  const id = req.entity_id ? Number(req.entity_id) : null;
+  const meta = req.metadata ?? {};
+
+  if (id && req.entity_type === 'applications') {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT a.application_no, a.total_amount, a.status, a.date_money_received, a.referred_by_text,
+              c.full_name AS customer, c.customer_code, s.code AS series_code,
+              u.full_name AS enrolled_by
+         FROM applications a JOIN customers c ON c.id = a.customer_id
+         JOIN series s ON s.id = a.series_id
+         LEFT JOIN users u ON u.id = a.enrolled_by_user_id
+        WHERE a.id = $1`, [id])).rows[0];
+    if (r) return {
+      subject: `${r.customer} · ${r.application_no}`,
+      amount: money(r.total_amount),
+      facts: clean([
+        fact('Customer', `${r.customer} (${r.customer_code})`),
+        fact('Application', r.application_no),
+        fact('Series', r.series_code),
+        fact('Money received', dateOnly(r.date_money_received) ?? 'not recorded'),
+        fact('Referred by', r.referred_by_text ?? 'Direct'),
+        fact('Enrolled by', r.enrolled_by),
+        fact('Current status', r.status),
+      ]),
+    };
+  }
+
+  if (id && req.entity_type === 'redemptions') {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT r.redemption_no, r.type, r.principal, r.penalty, r.net_payment, r.redemption_date,
+              a.application_no, c.full_name AS customer
+         FROM redemptions r JOIN applications a ON a.id = r.application_id
+         JOIN customers c ON c.id = a.customer_id
+        WHERE r.id = $1`, [id])).rows[0];
+    if (r) return {
+      subject: `${r.customer} · ${r.application_no}`,
+      amount: money(r.net_payment),
+      facts: clean([
+        fact('Customer', r.customer),
+        fact('Application', r.application_no),
+        fact('Redemption', `${r.redemption_no} (${r.type})`),
+        fact('Principal', r.principal),
+        fact('Penalty', r.penalty),
+        fact('Net payable', r.net_payment),
+        fact('Redemption date', dateOnly(r.redemption_date)),
+      ]),
+    };
+  }
+
+  if (id && req.entity_type === 'customers') {
+    const r = (await db.query<Record<string, unknown>>(
+      'SELECT full_name, customer_code, phone, pan FROM customers WHERE id = $1', [id])).rows[0];
+    if (r) {
+      const changes = meta.changes ? JSON.stringify(meta.changes) : null;
+      let toUser: string | null = null;
+      if (meta.toUserId) {
+        toUser = String((await db.query<{ full_name: string }>('SELECT full_name FROM users WHERE id = $1', [Number(meta.toUserId)])).rows[0]?.full_name ?? '');
+      }
+      return {
+        subject: `${r.full_name}${r.customer_code ? ` · ${r.customer_code}` : ''}`,
+        amount: null,
+        facts: clean([
+          fact('Customer', `${r.full_name}${r.customer_code ? ` (${r.customer_code})` : ''}`),
+          fact('Phone', r.phone), fact('PAN', r.pan),
+          fact('Hand over to', toUser),
+          fact('Reason', meta.reason),
+          fact('Changes', changes),
+        ]),
+      };
+    }
+  }
+
+  if (id && req.entity_type === 'payout_batches') {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT b.payout_date, b.total_net, b.status,
+              (SELECT count(*)::int FROM disbursement_schedule d WHERE d.batch_id = b.id) AS rows
+         FROM payout_batches b WHERE b.id = $1`, [id])).rows[0];
+    if (r) return {
+      subject: `Interest payout · ${dateOnly(r.payout_date)}`,
+      amount: money(r.total_net),
+      facts: clean([
+        fact('Payout date', dateOnly(r.payout_date)),
+        fact('Payments in batch', r.rows),
+        fact('Net amount', r.total_net),
+        fact('UTR', meta.utr),
+        fact('Batch status', r.status),
+      ]),
+    };
+  }
+
+  if (req.request_type === 'allotment_batch') {
+    return {
+      subject: `${meta.series_code ?? 'Series'} · allotment`,
+      amount: null,
+      facts: clean([
+        fact('Series', meta.series_code),
+        fact('Allotment date', meta.allotment_date),
+        fact('ISIN', meta.isin),
+        fact('Investments covered', meta.count),
+      ]),
+    };
+  }
+
+  if (id && req.entity_type === 'agents') {
+    const r = (await db.query<Record<string, unknown>>(
+      'SELECT full_name, agent_code, commission_status, commission_rate_pct FROM agents WHERE id = $1', [id])).rows[0];
+    if (r) return {
+      subject: `${r.full_name} · ${r.agent_code}`,
+      amount: null,
+      facts: clean([
+        fact('Agent', `${r.full_name} (${r.agent_code})`),
+        fact('Commission status', r.commission_status),
+        fact('Requested rate %', meta.rate_pct ?? r.commission_rate_pct),
+        fact('Payout mode', meta.payout_mode),
+      ]),
+    };
+  }
+
+  if (id && req.entity_type === 'users') {
+    const r = (await db.query<Record<string, unknown>>(
+      'SELECT full_name, email, phone, code FROM users WHERE id = $1', [id])).rows[0];
+    if (r) return {
+      subject: `${r.full_name}${meta.kind ? ` · ${meta.kind}` : ''}`,
+      amount: null,
+      facts: clean([
+        fact('Name', r.full_name), fact('Kind', meta.kind),
+        fact('Mobile', meta.mobile ?? r.phone), fact('Email', r.email),
+        fact('Employee ID', meta.employee_id), fact('Agent code', meta.agent_code),
+      ]),
+    };
+  }
+
+  // Fallback: no dedicated row — surface the metadata readably rather than the
+  // raw request record.
+  return {
+    subject: String(meta.application_no ?? meta.series_code ?? meta.name ?? req.request_no),
+    amount: money(meta.net_payment ?? meta.amount ?? null),
+    facts: clean(Object.entries(meta).map(([k, v]) =>
+      fact(k.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()), typeof v === 'object' ? JSON.stringify(v) : v))),
+  };
 }

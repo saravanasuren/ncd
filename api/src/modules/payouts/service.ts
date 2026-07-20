@@ -7,36 +7,89 @@ import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
-import { round2 } from '../../lib/dates.js';
+import { round2, toISODate, daysBetween } from '../../lib/dates.js';
+import { denominatorFor, type DayCountConvention } from '../../lib/interest.js';
+import { computeTds } from '../../lib/tds.js';
+import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
 import { nextCode } from '../../lib/sequences.js';
 import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
 
 const DUE_TYPES = "('Interest','BrokenInterest')";
+const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((x) => `'${x}'`).join(',');
 
+/**
+ * Interest due up to `payoutDate`, computed PRO-RATA (owner decision 2026-07-20):
+ * the sheet can be pulled on ANY date and pays each live line the interest it has
+ * accrued since it was last paid, up to that date — not a fixed 28th-of-month row.
+ *
+ *   gross = outstanding x rate/100 x days(paid_through -> payoutDate) / dayCount
+ *
+ * `paid_through` is the line's watermark: the last Paid Interest/BrokenInterest
+ * due_date, else the application's interest start. Because every batch starts at
+ * the watermark and paying advances it, a period can never be paid twice, and the
+ * next run always starts fresh from the date you just paid.
+ */
 export async function previewDue(db: Db, payoutDate: string) {
-  const { rows } = await db.query(
-    `SELECT ds.id, ds.application_id, ds.due_date, ds.due_type, ds.gross_amount, ds.tds_amount, ds.net_amount,
-            a.application_no, c.full_name AS customer_name
-     FROM disbursement_schedule ds
-     JOIN applications a ON a.id = ds.application_id
-     JOIN customers c ON c.id = a.customer_id
-     WHERE ds.status = 'Scheduled' AND ds.batch_id IS NULL AND ds.due_type IN ${DUE_TYPES} AND ds.due_date <= $1
-     ORDER BY ds.due_date`,
-    [payoutDate]
-  );
+  const { rows: lines } = await db.query<Record<string, unknown>>(
+    `SELECT l.id AS line_id, l.application_id, l.outstanding_amount, l.coupon_rate_pct,
+            l.day_count_convention, l.payout_frequency, l.amount AS line_amount,
+            l.scheme_id,
+            a.application_no, a.interest_start_date, a.payout_bank_account_id, a.customer_id,
+            c.full_name AS customer_name, c.is_nri, c.tds_applicable AS cust_tds,
+            c.tax_form, c.tax_form_expires_on,
+            COALESCE((SELECT max(ds.due_date) FROM disbursement_schedule ds
+                       WHERE ds.line_id = l.id AND ds.status = 'Paid'
+                         AND ds.due_type IN ${DUE_TYPES}),
+                     a.interest_start_date) AS paid_through
+       FROM application_lines l
+       JOIN applications a ON a.id = l.application_id
+       JOIN customers c ON c.id = a.customer_id
+      WHERE l.status = 'Active' AND a.status IN (${OUTSTANDING_SQL_LIST})
+      ORDER BY c.full_name`);
+
+  const out: Record<string, unknown>[] = [];
   const totals = { gross: 0, tds: 0, net: 0 };
-  for (const r of rows) {
-    totals.gross += Number(r.gross_amount);
-    totals.tds += Number(r.tds_amount);
-    totals.net += Number(r.net_amount);
+  for (const l of lines) {
+    const paidThrough = toISODate(l.paid_through as string | null);
+    if (!paidThrough || payoutDate <= paidThrough) continue;   // nothing accrued yet
+    const days = daysBetween(paidThrough, payoutDate);
+    if (days <= 0) continue;
+    const principal = Number(l.outstanding_amount);
+    if (!(principal > 0)) continue;
+
+    const denom = denominatorFor(l.day_count_convention as DayCountConvention, paidThrough);
+    const gross = round2((principal * Number(l.coupon_rate_pct)) / 100 * days / denom);
+    if (gross <= 0) continue;
+
+    const tdsRule = l.scheme_id
+      ? (await db.query<{ rate_pct: number }>(
+          'SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [l.scheme_id])).rows[0] ?? null
+      : null;
+    const tds = computeTds(
+      tdsRule,
+      { is_nri: l.is_nri as boolean, tds_applicable: l.cust_tds as boolean,
+        tax_form: l.tax_form as string | null, tax_form_expires_on: toISODate(l.tax_form_expires_on as string | null) },
+      { payout_frequency: l.payout_frequency as string, amount: Number(l.line_amount) },
+      { due_type: 'Interest', gross_amount: gross, due_date: payoutDate }
+    );
+    const net = round2(gross - tds);
+
+    totals.gross += gross; totals.tds += tds; totals.net += net;
+    out.push({
+      line_id: Number(l.line_id), application_id: Number(l.application_id),
+      application_no: l.application_no, customer_name: l.customer_name,
+      due_date: payoutDate, due_type: 'Interest',
+      from_date: paidThrough, days,
+      gross_amount: gross, tds_amount: tds, net_amount: net,
+    });
   }
-  return { rows, totals: { gross: round2(totals.gross), tds: round2(totals.tds), net: round2(totals.net) }, count: rows.length };
+  return { rows: out, totals: { gross: round2(totals.gross), tds: round2(totals.tds), net: round2(totals.net) }, count: out.length };
 }
 
 export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: string) {
   return db.withTx(async (tx) => {
     const due = await previewDue(tx, payoutDate);
-    if (due.count === 0) throw errors.unprocessable('No interest is due on or before that date');
+    if (due.count === 0) throw errors.unprocessable('No interest has accrued up to that date');
     const batchNo = await nextCode(tx, 'redemption', 'NEFT-{yyyy}-{seq:6}');
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO payout_batches (batch_no, kind, payout_date, total_gross, total_tds, total_net, status, created_by_user_id)
@@ -44,10 +97,39 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
       [batchNo, payoutDate, due.totals.gross, due.totals.tds, due.totals.net, actor.id]
     );
     const batchId = Number(rows[0]!.id);
-    await tx.query(
-      `UPDATE disbursement_schedule SET batch_id = $1 WHERE status = 'Scheduled' AND batch_id IS NULL AND due_type IN ${DUE_TYPES} AND due_date <= $2`,
-      [batchId, payoutDate]
-    );
+
+    // Materialise each pro-rata amount as a schedule row at the payout date and
+    // attach it to the batch. Downstream (approve -> Paid, NEFT sheet,
+    // reconciliation) already works off batch_id, so it needs no change. Paying
+    // the row advances the line's paid-through watermark, so the next sheet
+    // starts fresh from this date.
+    for (const r of due.rows as Record<string, unknown>[]) {
+      const bank = (await tx.query<{ account_number: string; ifsc: string }>(
+        `SELECT COALESCE(pb.account_number, cb.account_number) AS account_number,
+                COALESCE(pb.ifsc, cb.ifsc) AS ifsc
+           FROM applications a
+           LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
+           LEFT JOIN customer_bank_accounts cb ON cb.customer_id = a.customer_id AND cb.is_active = TRUE
+          WHERE a.id = $1 LIMIT 1`, [r.application_id])).rows[0];
+      await tx.query(
+        `INSERT INTO disbursement_schedule
+           (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount,
+            status, batch_id, payee_account, payee_ifsc)
+         VALUES ($1,$2,$3,'Interest',$4,$5,$6,'Scheduled',$7,$8,$9)
+         ON CONFLICT (line_id, due_date, due_type) DO UPDATE
+           SET gross_amount = EXCLUDED.gross_amount, tds_amount = EXCLUDED.tds_amount,
+               net_amount = EXCLUDED.net_amount, batch_id = EXCLUDED.batch_id`,
+        [r.line_id, r.application_id, payoutDate, r.gross_amount, r.tds_amount, r.net_amount,
+         batchId, bank?.account_number ?? null, bank?.ifsc ?? null]
+      );
+      // Supersede any still-unpaid projected rows already covered by this
+      // settlement (due on/before the payout date) so they can never be paid twice.
+      await tx.query(
+        `UPDATE disbursement_schedule SET status = 'Skipped'
+          WHERE line_id = $1 AND due_type IN ${DUE_TYPES} AND status = 'Scheduled'
+            AND batch_id IS NULL AND due_date <= $2`, [r.line_id, payoutDate]);
+    }
+
     const req = await createApprovalRequest(tx, {
       type: 'interest_batch', entityType: 'payout_batches', entityId: batchId, makerUserId: actor.id,
       metadata: { batch_id: batchId, payout_date: payoutDate, net: due.totals.net, count: due.count },

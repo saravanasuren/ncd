@@ -80,7 +80,7 @@ export interface ScheduleRow {
   is_broken_period: boolean;
 }
 
-function denominatorFor(convention: DayCountConvention, fromDate?: ISODate): number {
+export function denominatorFor(convention: DayCountConvention, fromDate?: ISODate): number {
   switch (convention) {
     case 'Actual360':
       return 360;

@@ -92,26 +92,24 @@ describe('build an Active investment', () => {
 });
 
 describe('interest payout', () => {
-  it('interest batch: maker creates + downloads the sheet, marks paid, checker approves = settled', async () => {
-    const ncd = await as('ncd@demo.local');
-    const batch = await ncd.post('/api/payouts', { payout_date: '2026-07-28' });
-    expect(batch.status).toBe(201);
-    expect(batch.json.count).toBeGreaterThan(0);
-    const batchId = batch.json.batch_id;
-
+  it('sheet is free + stateless; claiming paid raises approval; approval settles', async () => {
     const a = await admin();
-    // The NEFT sheet is usable immediately — you need it to make the transfer.
-    const sheet = await a.get(`/api/payouts/${batchId}/download.xlsx`);
-    expect(sheet.status).toBe(200);
+    // Pull the sheet for any date, repeatedly — writes nothing.
+    for (const d of ['2026-07-20', '2026-07-28', '2026-07-20']) {
+      const sheet = await a.raw(`/api/payouts/sheet.xlsx?date=${d}`);
+      expect(sheet.status, `sheet ${d}`).toBe(200);
+    }
+    expect((await a.get('/api/payouts')).json.rows.length).toBe(0);   // still no batches
 
-    // Maker claims payment → goes to a checker (not settled yet).
-    const claim = await a.post(`/api/payouts/${batchId}/mark-paid`, { utr: 'NEFTUTR' });
-    expect(claim.status).toBe(200);
+    // Claiming payment creates the batch AND raises the approval; nothing settled yet.
+    const ncd = await as('ncd@demo.local');
+    const claim = await ncd.post('/api/payouts', { payout_date: '2026-07-28', utr: 'NEFTUTR' });
+    expect(claim.status).toBe(201);
     let detail = await a.get(`/api/applications/${appId}`);
     expect(detail.json.schedule.find((r: any) => r.due_date === '2026-07-28').status).toBe('Scheduled');
 
     // A different person approves → that settles it.
-    await ncd.post(`/api/approvals/${claim.json.request.id}/approve`);
+    await a.post(`/api/approvals/${claim.json.request.id}/approve`);
     detail = await a.get(`/api/applications/${appId}`);
     expect(detail.json.schedule.find((r: any) => r.due_date === '2026-07-28').status).toBe('Paid');
   });

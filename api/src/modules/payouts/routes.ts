@@ -11,13 +11,23 @@ export const payoutsRouter = Router();
 payoutsRouter.get('/preview', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => res.json(await s.previewDue(getDb(), String(req.query.date ?? new Date().toISOString().slice(0, 10))))));
 
+// Stateless: pull the sheet for ANY date, as often as you like. Writes nothing.
+payoutsRouter.get('/sheet.xlsx', requirePermission('payouts:generate'),
+  asyncHandler(async (req, res) => {
+    const date = String(req.query.date ?? new Date().toISOString().slice(0, 10));
+    const buffer = await s.neftSheetForDate(getDb(), date);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="NEFT-interest-upto-${date}.xlsx"`);
+    res.send(buffer);
+  }));
+
 payoutsRouter.get('/', requirePermission('payouts:generate'),
   asyncHandler(async (_req, res) => res.json({ rows: await s.listBatches(getDb()) })));
 
 payoutsRouter.post('/', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {
-    const { payout_date } = z.object({ payout_date: z.string() }).parse(req.body);
-    res.status(201).json(await s.createInterestBatch(getDb(), req.user!, payout_date));
+    const { payout_date, utr } = z.object({ payout_date: z.string(), utr: z.string().optional() }).parse(req.body);
+    res.status(201).json(await s.createInterestBatch(getDb(), req.user!, payout_date, utr));
   }));
 
 payoutsRouter.post('/:id/mark-paid', requirePermission('payouts:mark-paid-manual'),

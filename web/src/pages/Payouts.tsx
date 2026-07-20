@@ -15,7 +15,7 @@ export function PayoutsPage() {
   const batches = useQuery({ queryKey: ['payout-batches'], queryFn: () => api.get<{ rows: any[] }>('/api/payouts') });
   const statements = useQuery({ queryKey: ['bank-statements'], queryFn: () => api.get<{ rows: any[] }>('/api/bank-statements') });
 
-  const create = useMutation({ mutationFn: () => api.post('/api/payouts', { payout_date: date }), onSuccess: () => { setMsg('Batch created — download the NEFT sheet, make the transfer, then Mark paid.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); qc.invalidateQueries({ queryKey: ['payout-preview', date] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
+  const create = useMutation({ mutationFn: () => api.post('/api/payouts', { payout_date: date }), onSuccess: () => { setMsg('Sent to the approvals queue — a checker confirms it, which settles the period and resets interest.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); qc.invalidateQueries({ queryKey: ['payout-preview', date] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
   const markPaid = useMutation({ mutationFn: (batchId: number) => api.post(`/api/payouts/${batchId}/mark-paid`, {}), onSuccess: () => { setMsg('Sent to the approvals queue — a checker confirms the payment, which settles the period.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
 
   const [stmt, setStmt] = useState('');
@@ -35,12 +35,15 @@ export function PayoutsPage() {
   return (
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Interest payouts (NEFT)</h1>
-      <p className="text-sm text-text-muted mt-1 mb-4">Pull the NEFT sheet for any date — it pays each investment the interest accrued since it was last paid, up to that date. A checker approves; marking it paid settles that period and the next one starts fresh.</p>
+      <p className="text-sm text-text-muted mt-1 mb-4">Download the NEFT sheet for any date, as often as you like — it shows each investment's interest accrued since it was last paid, up to that date. Nothing is recorded by downloading. Only when you mark a date as paid does it go to a checker; on approval that period is settled and interest starts fresh.</p>
       <div className="flex items-center gap-2 mb-4">
         <label className="text-sm text-text-label">Up to date</label>
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="px-2.5 py-1.5 text-sm border border-border-strong rounded" />
-        <button disabled={!preview.data || preview.data.count === 0 || create.isPending} onClick={() => { setMsg(''); create.mutate(); }}
-          className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Create batch</button>
+        <a href={`/api/payouts/sheet.xlsx?date=${date}`}
+           className={`text-xs border border-border-strong rounded px-3 py-1.5 no-underline ${!preview.data || preview.data.count === 0 ? 'pointer-events-none opacity-40' : 'hover:bg-bg'}`}>↓ NEFT sheet</a>
+        <button disabled={!preview.data || preview.data.count === 0 || create.isPending}
+          onClick={() => { if (window.confirm(`Confirm the interest up to ${date} has actually been paid out?\n\nThis sends it to a checker; on approval the period is settled and interest resets.`)) { setMsg(''); create.mutate(); } }}
+          className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Mark as paid…</button>
       </div>
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
       {preview.data && (
@@ -59,9 +62,6 @@ export function PayoutsPage() {
             render: (b) => (
               <span className="inline-flex gap-2 justify-end">
                 <a href={`/api/payouts/${b.id}/download.xlsx`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ NEFT sheet</a>
-                {can('payouts:mark-paid-manual') && b.status === 'Generated' && (
-                  <button onClick={() => markPaid.mutate(b.id)} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Mark paid</button>
-                )}
                 {b.status === 'PendingChecker' && <span className="text-xs text-text-muted italic">awaiting checker</span>}
               </span>
             ) },

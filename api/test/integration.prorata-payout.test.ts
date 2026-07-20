@@ -65,10 +65,8 @@ describe('pro-rata interest payout on any date', () => {
     // sheet is downloadable straight away (before any approval)
     const sheet = await a.get(`/api/payouts/${b1.json.batch_id}/download.xlsx`);
     expect(sheet.status).toBe(200);
-    // maker claims it's paid -> goes to a checker; approval is what settles it
-    const mp = await a.post(`/api/payouts/${b1.json.batch_id}/mark-paid`, {});
-    expect(mp.status).toBe(200);
-    await ncd.post(`/api/approvals/${mp.json.request.id}/approve`);
+    // creating the batch IS the "this was paid" claim → a checker approves it, which settles
+    await ncd.post(`/api/approvals/${b1.json.request.id}/approve`);
 
     // next sheet on 21 Jul must bill only 11 -> 21 (10 days), NOT 1 -> 21 (20 days)
     const p2 = await a.get('/api/payouts/preview?date=2026-07-21');
@@ -77,6 +75,22 @@ describe('pro-rata interest payout on any date', () => {
     expect(row2.from_date).toBe('2026-07-11'); // watermark moved to the paid date
     expect(Number(row2.gross_amount)).toBeCloseTo(expectedGross(10), 0);
     expect(Number(row2.gross_amount)).toBeLessThan(expectedGross(20)); // no double-pay
+  });
+
+  it('the sheet is stateless: pull it for many dates, many times, nothing is reserved', async () => {
+    const a = await admin();
+    const before = await a.get('/api/payouts');
+    const beforeCount = (before.json.rows as any[]).length;
+    for (const d of ['2026-07-15', '2026-07-18', '2026-07-15', '2026-07-19']) {
+      const sheet = await a.raw(`/api/payouts/sheet.xlsx?date=${d}`);
+      expect(sheet.status, `sheet for ${d}`).toBe(200);
+      expect(sheet.buffer.length).toBeGreaterThan(0);
+    }
+    // no batches created, and the accrual for a given date is unchanged
+    const after = await a.get('/api/payouts');
+    expect((after.json.rows as any[]).length).toBe(beforeCount);
+    const p = await a.get('/api/payouts/preview?date=2026-07-19');
+    expect(mine(p.json.rows).length).toBe(1);
   });
 
   it('nothing accrues for a date already settled', async () => {

@@ -4,7 +4,7 @@ import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 
-interface Totals { investments: number; customers: number; amount: number }
+interface Totals { investments: number; customers: number; amount: number; incentives_paid: number }
 interface SeriesRow { series_code: string; series_name: string; investments: number; customers: number; amount: string }
 interface MonthRow { month: string; investments: number; customers: number; amount: string }
 interface MyBook { totals: Totals; by_series: SeriesRow[]; by_month: MonthRow[] }
@@ -58,6 +58,7 @@ export function MyDashboardPage() {
         <Tile label="Investments brought in" value={formatINR(d.totals.amount)} sub={`${d.totals.investments} application${d.totals.investments === 1 ? '' : 's'}`} />
         <Tile label="Applications" value={String(d.totals.investments)} sub="Investments you keyed in" />
         <Tile label="Customers" value={String(d.totals.customers)} sub="Investors you enrolled" />
+        <Tile label="Incentive earned" value={formatINR(d.totals.incentives_paid)} sub="Paid to you till date" />
       </div>
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Series-wise</h2>

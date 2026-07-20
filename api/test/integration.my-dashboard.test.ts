@@ -69,6 +69,37 @@ describe('branch staff — My Dashboard', () => {
     expect(Number(month.amount)).toBe(500000);
   });
 
+  it('branch staff cannot open My Earnings; the dashboard shows only PAID incentive', async () => {
+    const staff = await as('staff@demo.local');
+    // The My Earnings page is gone for branch staff.
+    expect((await staff.get('/api/incentives/my-earnings')).status).toBe(403);
+
+    const staffId = Number((await ctx.db.query("SELECT id FROM users WHERE email='staff@demo.local'")).rows[0]!.id);
+    const appId = Number((await ctx.db.query(
+      "SELECT id FROM applications WHERE enrolled_by_user_id=$1 ORDER BY id LIMIT 1", [staffId])).rows[0]!.id);
+
+    // Two accruals for this staff member: one PAID, one still unpaid.
+    await ctx.db.query(
+      `INSERT INTO incentive_accruals (application_id, payee_type, payee_id, matrix_cell, rate_mode, rate_value, amount, accrual_date, paid_at)
+       VALUES ($1,'staff',$2,'staff_new','pct',2,7000,'2026-07-10', now())
+       ON CONFLICT (application_id, payee_type, payee_id) DO UPDATE SET amount = 7000, paid_at = now()`, [appId, staffId]);
+    const appId2 = Number((await ctx.db.query(
+      "SELECT id FROM applications WHERE enrolled_by_user_id=$1 ORDER BY id DESC LIMIT 1", [staffId])).rows[0]!.id);
+    if (appId2 !== appId) {
+      await ctx.db.query(
+        `INSERT INTO incentive_accruals (application_id, payee_type, payee_id, matrix_cell, rate_mode, rate_value, amount, accrual_date, paid_at)
+         VALUES ($1,'staff',$2,'staff_new','pct',2,5000,'2026-07-10', NULL)
+         ON CONFLICT (application_id, payee_type, payee_id) DO UPDATE SET amount = 5000, paid_at = NULL`, [appId2, staffId]);
+    }
+
+    const r = await staff.get('/api/dashboard/my');
+    expect(r.status).toBe(200);
+    // Only the PAID ₹7,000 — the unpaid ₹5,000 is deliberately not surfaced.
+    expect(Number(r.json.totals.incentives_paid)).toBe(7000);
+    expect(r.json.totals).not.toHaveProperty('incentives_accrued');
+    expect(r.json.totals).not.toHaveProperty('incentives_balance');
+  });
+
   it('a cancelled investment drops out of the staff book', async () => {
     const staff = await as('staff@demo.local');
     const before = Number((await staff.get('/api/dashboard/my')).json.totals.amount);

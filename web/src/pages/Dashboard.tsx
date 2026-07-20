@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
@@ -272,6 +272,13 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
   });
   const kind = q.data?.kind;
   const groups: any[] = q.data?.groups ?? [];
+  // A drill that resolves to a single group (e.g. Active series → that one
+  // series) has nothing to choose between — open it so the tile lands straight
+  // on the customers instead of making you click the row open.
+  const soleKey = groups.length === 1 ? String(groups[0].key ?? groups[0].name ?? '') : null;
+  useEffect(() => {
+    if (soleKey) setOpen(new Set([soleKey]));
+  }, [soleKey]);
   const rows: any[] = q.data?.rows ?? [];
   const incTotals = q.data?.totals as { earned: number; paid: number; pending: number } | undefined;
   const footTotals: Record<string, number> = q.data?.foot_totals ?? {};

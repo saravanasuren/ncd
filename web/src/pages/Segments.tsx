@@ -16,7 +16,7 @@ const TABS: { key: Seg; label: string }[] = [
 const TAB_KEYS = TABS.map((t) => t.key);
 
 interface Child {
-  application_no: string; customer: string; customer_code: string;
+  application_no: string; customer_id: number; customer: string; customer_code: string;
   series_code: string; amount: string; status: string; allotment_date: string | null;
 }
 interface Group {
@@ -54,6 +54,8 @@ export function SegmentsPage() {
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [openKey, isLoading, tab]);
 
+  const [profile, setProfile] = useState<{ id: number; name: string } | null>(null);
+
   const switchTab = (t: Seg) => {
     setTab(t);
     setExpanded(new Set());
@@ -84,9 +86,96 @@ export function SegmentsPage() {
           // the numeric-aware sort reads the embedded number in the code.
           defaultSort={tab === 'series' ? { key: 'label', dir: 'desc' } : { key: 'outstanding', dir: 'desc' }}
           empty="No data."
-          renderExpanded={(g) => (expanded.has(g.key) ? <ChildTable tab={tab} rows={g.children} /> : null)}
+          renderExpanded={(g) => (expanded.has(g.key) ? <ChildTable tab={tab} rows={g.children} onPickCustomer={(c) => setProfile({ id: c.customer_id, name: c.customer })} /> : null)}
         />
       )}
+      {profile && <CustomerProfileModal id={profile.id} name={profile.name} onClose={() => setProfile(null)} />}
+    </div>
+  );
+}
+
+/** Customer profile popup — opened by clicking a customer in an expanded row. */
+function CustomerProfileModal({ id, name, onClose }: { id: number; name: string; onClose: () => void }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['customer-profile', id],
+    queryFn: () => api.get<any>(`/api/customers/${id}`),
+  });
+  const c = data?.customer;
+  const apps: any[] = data?.applications ?? [];
+  const invested = apps.reduce((s, a) => s + Number(a.amount ?? 0), 0);
+  const live = apps.reduce((s, a) => s + Number(a.outstanding ?? 0), 0);
+  const Field = ({ label, value }: { label: string; value: unknown }) => (
+    <span className="contents">
+      <dt className="text-text-muted">{label}</dt>
+      <dd className="m-0 font-medium break-words">{value == null || value === '' ? '—' : String(value)}</dd>
+    </span>
+  );
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/40 flex items-start justify-center overflow-y-auto py-8 px-4" onClick={onClose}>
+      <div className="bg-surface border border-border rounded-lg shadow-lg w-full max-w-3xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-border sticky top-0 bg-surface">
+          <div>
+            <h2 className="text-base font-bold m-0">{c?.full_name ?? name}</h2>
+            <div className="text-xs text-text-muted mt-0.5 font-mono">{c?.customer_code ?? ''}</div>
+          </div>
+          <button onClick={onClose} className="text-text-muted hover:text-text text-lg leading-none" aria-label="Close">✕</button>
+        </div>
+        <div className="p-4 max-h-[70vh] overflow-y-auto">
+          {isLoading ? <div className="text-sm text-text-muted">Loading…</div>
+            : error ? <div className="text-sm text-danger">Couldn't load this customer (they may be outside your scope).</div>
+            : (
+            <>
+              <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-sm bg-bg rounded p-3 mb-4">
+                <Field label="Phone" value={c?.phone} />
+                <Field label="Email" value={c?.email} />
+                <Field label="PAN" value={c?.pan} />
+                <Field label="District" value={c?.district} />
+                <Field label="KYC" value={c?.kyc_status} />
+                <Field label="Referred by" value={c?.referred_by_text} />
+              </dl>
+              <div className="flex gap-3 mb-3 text-sm">
+                <div className="flex-1 bg-bg rounded p-3">
+                  <div className="text-xs text-text-muted uppercase tracking-wide">Invested</div>
+                  <div className="mono font-bold">{formatINR(invested)}</div>
+                </div>
+                <div className="flex-1 bg-bg rounded p-3">
+                  <div className="text-xs text-text-muted uppercase tracking-wide">Outstanding</div>
+                  <div className="mono font-bold text-primary">{formatINR(live)}</div>
+                </div>
+                <div className="flex-1 bg-bg rounded p-3">
+                  <div className="text-xs text-text-muted uppercase tracking-wide">Investments</div>
+                  <div className="mono font-bold">{apps.length}</div>
+                </div>
+              </div>
+              <h3 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Investments</h3>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-text-muted border-b border-border">
+                    <th className="py-1 pr-3 font-medium">App no.</th>
+                    <th className="py-1 pr-3 font-medium">Series</th>
+                    <th className="py-1 pr-3 font-medium">Status</th>
+                    <th className="py-1 pr-3 font-medium">Received</th>
+                    <th className="py-1 text-right font-medium">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {apps.map((a) => (
+                    <tr key={a.id} className="border-b border-border/60 last:border-0">
+                      <td className="py-1 pr-3 font-mono">{a.application_no}</td>
+                      <td className="py-1 pr-3">{a.series_code}</td>
+                      <td className="py-1 pr-3">{a.status}</td>
+                      <td className="py-1 pr-3">{a.date_money_received ? String(a.date_money_received).slice(0, 10) : '—'}</td>
+                      <td className="py-1 text-right mono">{formatINR(a.amount)}</td>
+                    </tr>
+                  ))}
+                  {apps.length === 0 && <tr><td colSpan={5} className="py-2 text-center text-text-muted">No investments.</td></tr>}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -133,7 +222,7 @@ function groupColumns(tab: Seg, expanded: Set<string>, toggle: (k: string) => vo
   return [{ key: 'label', header: label, value: (g) => g.label, render: expander }, investors, ncds, outstanding];
 }
 
-function ChildTable({ tab, rows }: { tab: Seg; rows: Child[] }) {
+function ChildTable({ tab, rows, onPickCustomer }: { tab: Seg; rows: Child[]; onPickCustomer: (c: Child) => void }) {
   // Per-tab detail columns (besides Amount, always last, right-aligned).
   const cols: [string, keyof Child][] =
     tab === 'customer' ? [['Series', 'series_code'], ['App no.', 'application_no'], ['Status', 'status'], ['Allotted', 'allotment_date']]
@@ -153,7 +242,13 @@ function ChildTable({ tab, rows }: { tab: Seg; rows: Child[] }) {
             <tr key={i} className="border-t border-border/60">
               {cols.map(([, k]) => (
                 <td key={k} className="py-1 pr-4">
-                  {k === 'application_no' ? <span className="font-mono">{r[k]}</span> : (r[k] ?? '—')}
+                  {k === 'application_no' ? <span className="font-mono">{r[k]}</span>
+                    : k === 'customer' ? (
+                      <button onClick={() => onPickCustomer(r)} className="text-primary hover:underline text-left">
+                        {r.customer}
+                      </button>
+                    )
+                    : (r[k] ?? '—')}
                 </td>
               ))}
               <td className="py-1 text-right mono">{formatINR(r.amount)}</td>

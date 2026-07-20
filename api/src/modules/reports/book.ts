@@ -329,6 +329,7 @@ export type SegmentBy = 'series' | 'customer' | 'district' | 'agent' | 'staff';
 
 export interface SegmentChild {
   application_no: string;
+  customer_id: number;
   customer: string;
   customer_code: string;
   series_code: string;
@@ -364,7 +365,7 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
   const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
   const { rows } = await db.query<any>(
     `SELECT a.application_no, ${AMT} AS amount, a.status, a.allotment_date,
-            c.customer_code, c.full_name AS customer, COALESCE(c.district,'Unassigned') AS district,
+            c.id AS customer_id, c.customer_code, c.full_name AS customer, COALESCE(c.district,'Unassigned') AS district,
             s.code AS series_code, s.status AS series_status,
             sref.full_name AS staff_ref, ${REFERRER} AS referrer
      ${FROM_ATTR}
@@ -398,7 +399,7 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
     g.outstanding = round2(g.outstanding + Number(r.amount));
     custSets.get(key)!.add(r.customer_code);
     g.children.push({
-      application_no: r.application_no, customer: r.customer, customer_code: r.customer_code,
+      application_no: r.application_no, customer_id: Number(r.customer_id), customer: r.customer, customer_code: r.customer_code,
       series_code: r.series_code, amount: round2(Number(r.amount)), status: r.status,
       allotment_date: r.allotment_date ?? null,
     });

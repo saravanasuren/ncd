@@ -117,16 +117,69 @@ export async function dashboardIncentives(db: Db, which: 'staff' | 'agent') {
   return { groups, totals };
 }
 
+/**
+ * My Earnings — the self-service view, for every role (owner spec 2026-07-20).
+ *
+ * Money: ONLY what Dhanam has actually PAID. Accrued and pending balance are
+ * deliberately never returned, so nobody can see what they are still owed
+ * (not even via the network response).
+ *
+ * Book: what this person brought in — the investments they enrolled, plus
+ * series-wise and month-wise breakdowns. An agent-linked user is measured by
+ * enrolled_by_agent_id, everyone else by enrolled_by_user_id, mirroring how
+ * their incentive payee is resolved above. Cancelled/Rejected/Draft never
+ * counted; the month bucket is the money-received date (falling back to
+ * created_at for anything not yet funded).
+ */
 export async function myEarnings(db: Db, actor: AuthUser) {
   const payeeType = actor.agentId ? 'agent' : 'staff';
   const payeeId = actor.agentId ?? actor.id;
   const bal = await payeeBalance(db, payeeType, payeeId);
-  const accruals = (await db.query(
-    `SELECT ia.amount, ia.rate_mode, ia.rate_value, ia.accrual_date, ia.paid_at, a.application_no
+
+  const paidItems = (await db.query(
+    `SELECT ia.amount, ia.accrual_date, ia.paid_at, a.application_no
      ${ACCRUAL_FROM}
-     WHERE ia.payee_type = $1 AND ia.payee_id = $2 AND ${NOT_SELF} ORDER BY ia.accrual_date DESC`, [payeeType, payeeId])).rows;
-  const payouts = (await db.query('SELECT amount, reference, paid_at FROM incentive_payouts WHERE payee_type = $1 AND payee_id = $2 ORDER BY paid_at DESC', [payeeType, payeeId])).rows;
-  return { ...bal, accruals, payouts };
+     WHERE ia.payee_type = $1 AND ia.payee_id = $2 AND ia.paid_at IS NOT NULL AND ${NOT_SELF}
+     ORDER BY ia.paid_at DESC`, [payeeType, payeeId])).rows;
+
+  const ownerCol = actor.agentId ? 'a.enrolled_by_agent_id' : 'a.enrolled_by_user_id';
+  const ownerId = actor.agentId ?? actor.id;
+  const MINE = `${ownerCol} = $1 AND a.status NOT IN ('Cancelled','Rejected','Draft')`;
+
+  const totals = (await db.query<{ investments: number; customers: number; amount: string }>(
+    `SELECT count(*)::int AS investments,
+            count(DISTINCT a.customer_id)::int AS customers,
+            COALESCE(sum(a.total_amount),0) AS amount
+       FROM applications a WHERE ${MINE}`, [ownerId])).rows[0]!;
+
+  const bySeries = (await db.query(
+    `SELECT s.code AS series_code, s.name AS series_name,
+            count(*)::int AS investments,
+            count(DISTINCT a.customer_id)::int AS customers,
+            COALESCE(sum(a.total_amount),0) AS amount
+       FROM applications a JOIN series s ON s.id = a.series_id
+      WHERE ${MINE}
+      GROUP BY s.code, s.name ORDER BY s.code DESC`, [ownerId])).rows;
+
+  const byMonth = (await db.query(
+    `SELECT to_char(COALESCE(a.date_money_received, a.created_at::date), 'YYYY-MM') AS month,
+            count(*)::int AS investments,
+            count(DISTINCT a.customer_id)::int AS customers,
+            COALESCE(sum(a.total_amount),0) AS amount
+       FROM applications a WHERE ${MINE}
+      GROUP BY 1 ORDER BY 1 DESC`, [ownerId])).rows;
+
+  return {
+    paid: bal.paid, // paid-to-date only — never accrued/balance
+    paid_items: paidItems,
+    totals: {
+      investments: Number(totals.investments),
+      customers: Number(totals.customers),
+      amount: Number(totals.amount),
+    },
+    by_series: bySeries,
+    by_month: byMonth,
+  };
 }
 
 // ── Agent commission eligibility (maker-checker) ──

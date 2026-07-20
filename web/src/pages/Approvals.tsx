@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
+import { ReferredByPicker } from '../components/ReferredByPicker.js';
 
 interface ApprovalReq {
   id: number;
@@ -367,8 +368,13 @@ function EditableInvestment({ ed, id, canAct, actionLabel, onDone }: { ed: Edita
         {FIELD_LABELS.map(([key, label, type]) => (
           <label key={key} className="text-xs">
             <span className="block text-text-muted mb-0.5">{label}</span>
-            <input className={inp} type={type} value={String(f[key] ?? '')}
-              onChange={(e) => setF({ ...f, [key]: type === 'number' ? Number(e.target.value) : e.target.value })} />
+            {key === 'referred_by_text' ? (
+              <ReferredByPicker className={inp} value={String(f.referred_by_text ?? '')}
+                onChange={(v) => setF({ ...f, referred_by_text: v })} />
+            ) : (
+              <input className={inp} type={type} value={String(f[key] ?? '')}
+                onChange={(e) => setF({ ...f, [key]: type === 'number' ? Number(e.target.value) : e.target.value })} />
+            )}
           </label>
         ))}
       </div>

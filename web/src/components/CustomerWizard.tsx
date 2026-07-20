@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
+import { ReferredByPicker } from './ReferredByPicker.js';
 
 /**
  * Staff customer-enrolment wizard (modal). Mirrors the old app's 6-section
@@ -71,41 +72,6 @@ function FilePick({ label, hint, file, onPick }: { label: string; hint?: string;
   );
 }
 
-
-interface Payee { kind: 'agent' | 'staff'; id: number; code: string | null; full_name: string }
-
-/** Referred-by combo: searchable agent/staff dropdown, free text allowed.
- * Picking a payee stores their CODE (falls back to name when no code). */
-function ReferredByPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const q = value.trim();
-  const search = useQuery({
-    queryKey: ['payee-search', q],
-    queryFn: () => api.get<{ rows: Payee[] }>(`/api/agents/payee-search?q=${encodeURIComponent(q)}`),
-    enabled: open && q.length >= 2,
-  });
-  const rows = search.data?.rows ?? [];
-  return (
-    <span className="relative block">
-      <input className="w-full px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary"
-        value={value} placeholder="Code or name…"
-        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)} />
-      {open && rows.length > 0 && (
-        <span className="absolute top-full left-0 right-0 mt-1 bg-surface border border-border rounded shadow-card z-20 block max-h-44 overflow-auto">
-          {rows.map((r) => (
-            <button key={`${r.kind}-${r.id}`} type="button" className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg block"
-              onMouseDown={(e) => { e.preventDefault(); onChange(r.code || r.full_name); setOpen(false); }}>
-              {r.full_name} <span className="font-mono text-text-muted">{r.code ?? ''}</span>
-              <span className={`float-right text-[10px] rounded px-1 ${r.kind === 'staff' ? 'bg-bg' : 'bg-[color:var(--warn-bg)]'}`}>{r.kind}</span>
-            </button>
-          ))}
-        </span>
-      )}
-    </span>
-  );
-}
 
 export function CustomerWizard({ onClose }: { onClose: () => void }) {
   const nav = useNavigate();

@@ -18,7 +18,10 @@ export function LoginPage() {
     setBusy(true);
     try {
       await login(email, password);
-      nav('/app/dashboard');
+      // Land on /app and let the app route by permission — branch staff have no
+      // company dashboard, so sending everyone to /app/dashboard showed them a
+      // "Failed to load dashboard" page.
+      nav('/app');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Sign in failed');
     } finally {

@@ -31,6 +31,7 @@ import { EventsPage } from './pages/Events.js';
 import { PortalLogin } from './portal/PortalLogin.js';
 import { PortalHome } from './portal/PortalHome.js';
 import type { ReactNode } from 'react';
+import type { Permission } from '@new-wealth/shared';
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -47,11 +48,21 @@ function RequirePortal({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Land somewhere the user can actually open — branch staff don't hold
- * dashboard:view, so they go straight to My Earnings. */
+/** Land somewhere the user can actually open. Branch staff don't hold
+ * dashboard:view — they work the funnel, so Leads is their landing page. */
 function HomeRedirect() {
   const { can } = useAuth();
-  return <Navigate to={can('dashboard:view') ? '/app/dashboard' : '/app/my-earnings'} replace />;
+  if (can('dashboard:view')) return <Navigate to="/app/dashboard" replace />;
+  if (can('leads:read')) return <Navigate to="/app/leads" replace />;
+  return <Navigate to="/app/my-earnings" replace />;
+}
+
+/** Guard a route by permission — a stale bookmark or typed URL bounces to the
+ * user's own landing page instead of rendering a page that just fails. */
+function RequirePerm({ perm, children }: { perm: Permission; children: ReactNode }) {
+  const { can, loading } = useAuth();
+  if (loading) return <div className="p-8 text-text-muted">Loading…</div>;
+  return can(perm) ? <>{children}</> : <HomeRedirect />;
 }
 
 export function App() {
@@ -73,7 +84,7 @@ export function App() {
           }
         >
           <Route index element={<HomeRedirect />} />
-          <Route path="dashboard" element={<Suspense fallback={<div className="text-text-muted">Loading dashboard…</div>}><Dashboard /></Suspense>} />
+          <Route path="dashboard" element={<RequirePerm perm="dashboard:view"><Suspense fallback={<div className="text-text-muted">Loading dashboard…</div>}><Dashboard /></Suspense></RequirePerm>} />
           <Route path="segments" element={<SegmentsPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="system" element={<SystemPage />} />

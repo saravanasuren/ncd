@@ -26,11 +26,12 @@ approvalsRouter.get(
   asyncHandler(async (req, res) => {
     const row = await service.getById(getDb(), Number(req.params.id));
     if (!row) throw errors.notFound('Approval request not found');
-    const [covered, detail] = await Promise.all([
+    const [covered, editable, detail] = await Promise.all([
       service.coveredApplications(getDb(), row),
+      service.editableForRequest(getDb(), row),
       service.describeRequest(getDb(), row),
     ]);
-    res.json({ request: row, covered, detail });
+    res.json({ request: row, covered, detail, editable });
   })
 );
 

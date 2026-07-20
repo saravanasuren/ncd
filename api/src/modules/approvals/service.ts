@@ -130,6 +130,27 @@ export async function approve(
     if (!user.permissions.includes(checkerPermFor(req))) {
       throw errors.forbidden('You are not a checker for this level');
     }
+    // An approver may correct the maker's input at the moment of approval; only
+    // whitelisted fields are applied, and the change is audited.
+    const edits = (extra?.edits ?? null) as Record<string, unknown> | null;
+    if (edits && req.entity_type === 'applications' && req.entity_id) {
+      const sets: string[] = []; const params: unknown[] = [];
+      for (const f of EDITABLE_APPLICATION_FIELDS) {
+        if (!(f in edits)) continue;
+        const raw = edits[f];
+        const val = raw === '' || raw === undefined ? null : raw;
+        params.push(f === 'total_amount' && val !== null ? Number(val) : val);
+        sets.push(`${f} = $${params.length}`);
+      }
+      if (sets.length) {
+        params.push(Number(req.entity_id));
+        await tx.query(`UPDATE applications SET ${sets.join(', ')}, updated_at = now() WHERE id = $${params.length}`, params);
+        await writeAudit(tx, {
+          actorId: user.id, action: 'approval.edit-on-approve',
+          entityType: 'applications', entityId: Number(req.entity_id), after: edits,
+        });
+      }
+    }
     const prior = await priorApprovers(tx, id);
     assertDistinctChecker(req, user, prior);
 
@@ -224,6 +245,55 @@ export async function getById(db: Db, id: number): Promise<ApprovalRow | null> {
  * the on-approve handler uses (activation: PendingActivation in the series;
  * allotment: Active and not yet allotted). Snapshot at read time.
  */
+/** Fields an approver may correct while approving an investment request. Only
+ * these are accepted from the client — anything else in the payload is ignored. */
+export const EDITABLE_APPLICATION_FIELDS = [
+  'total_amount', 'date_money_received', 'collection_method',
+  'collection_reference', 'referred_by_text', 'interest_start_date',
+] as const;
+
+/** The maker's input, pre-filled so the approver sees (and can correct) exactly
+ * what was entered. Null for request types with no application behind them. */
+export async function editableForRequest(db: Db, req: { entity_type?: string | null; entity_id?: string | null }) {
+  if (req.entity_type !== 'applications' || !req.entity_id) return null;
+  const r = (await db.query<Record<string, unknown>>(
+    `SELECT a.id, a.application_no, a.total_amount, a.date_money_received, a.collection_method,
+            a.collection_reference, a.referred_by_text, a.interest_start_date, a.created_at,
+            a.status, s.code AS series_code, sc.code AS scheme_code,
+            sc.coupon_rate_pct, sc.tenure_months,
+            c.full_name AS customer, c.customer_code, c.pan
+       FROM applications a
+       JOIN customers c ON c.id = a.customer_id
+       JOIN series s ON s.id = a.series_id
+       LEFT JOIN application_lines l ON l.application_id = a.id
+       LEFT JOIN schemes sc ON sc.id = l.scheme_id
+      WHERE a.id = $1 LIMIT 1`, [Number(req.entity_id)])).rows[0];
+  if (!r) return null;
+  const d = (v: unknown) => (v ? String(v).slice(0, 10) : '');
+  return {
+    application_id: Number(r.id),
+    readonly: {
+      customer: `${r.customer} (${r.customer_code})`,
+      pan: r.pan ?? '—',
+      application_no: r.application_no,
+      series: r.series_code,
+      scheme: r.scheme_code ?? '—',
+      rate: r.coupon_rate_pct != null ? `${Number(r.coupon_rate_pct)}%` : '—',
+      tenure: r.tenure_months != null ? `${r.tenure_months} months` : '—',
+      created_at: d(r.created_at),
+      status: r.status,
+    },
+    fields: {
+      total_amount: Number(r.total_amount),
+      date_money_received: d(r.date_money_received),
+      collection_method: (r.collection_method ?? '') as string,
+      collection_reference: (r.collection_reference ?? '') as string,
+      referred_by_text: (r.referred_by_text ?? '') as string,
+      interest_start_date: d(r.interest_start_date),
+    },
+  };
+}
+
 export async function coveredApplications(db: Db, request: { request_type?: string; metadata?: Record<string, unknown> }) {
   const type = String(request.request_type ?? '');
   const seriesId = Number((request.metadata as Record<string, unknown> | undefined)?.series_id ?? 0);

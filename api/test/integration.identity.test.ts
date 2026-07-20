@@ -130,6 +130,38 @@ describe('enrol: duplicate PAN → handover offer; free text → pending agent',
 });
 
 describe('handover approval — any one of Admin / CXO / Branch Manager', () => {
+  it('approval detail is pre-filled from the maker, and an approver can correct it while approving', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Edit On Approve', phone: '9700088123' });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '4141414141', ifsc: 'ICIC0001111' });
+    const app = await a.post('/api/applications', {
+      customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000,
+      date_money_received: '2026-07-02', collection_method: 'NEFT', collection_reference: 'WRONG-REF',
+    });
+    const reqId = app.json.subscription_request.id;
+
+    // Detail is pre-filled with exactly what the maker entered.
+    const det = await a.get(`/api/approvals/${reqId}`);
+    expect(det.status).toBe(200);
+    expect(det.json.editable.fields.collection_reference).toBe('WRONG-REF');
+    expect(det.json.editable.fields.date_money_received).toBe('2026-07-02');
+    expect(det.json.editable.readonly.application_no).toBeTruthy();
+
+    // A checker corrects the reference + date, and approves in one go.
+    const ncd = new Client(ctx.base);
+    await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
+    const ok = await ncd.post(`/api/approvals/${reqId}/approve`, {
+      extra: { edits: { collection_reference: 'UTR-CORRECTED', date_money_received: '2026-07-03' } },
+    });
+    expect(ok.status).toBe(200);
+
+    const after = (await ctx.db.query(
+      'SELECT collection_reference, date_money_received, status FROM applications WHERE id = $1', [app.json.id])).rows[0] as any;
+    expect(after.collection_reference).toBe('UTR-CORRECTED');
+    expect(String(after.date_money_received).slice(0, 10)).toBe('2026-07-03');
+    expect(after.status).toBe('Active');   // and it still went live
+  });
+
   it('CXO can approve a handover request', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Handover Cust', phone: '9811110004' });

@@ -53,15 +53,14 @@ interface CoveredRow {
 function Detail({ id }: { id: number }) {
   const { data, isLoading } = useQuery({
     queryKey: ['approval', id],
-    queryFn: () => api.get<{ request: Record<string, unknown>; covered: CoveredRow[] | null; detail: { subject: string; amount: number | null; facts: Array<{ label: string; value: string }> } }>(`/api/approvals/${id}`),
+    queryFn: () => api.get<{ request: Record<string, unknown>; covered: CoveredRow[] | null;
+      detail: { subject: string; amount: number | null; facts: Array<{ label: string; value: string }> };
+      editable: Editable | null }>(`/api/approvals/${id}`),
   });
-  const [showRaw, setShowRaw] = useState(false);
   if (isLoading) return <div className="text-xs text-text-muted px-4 pb-3">Loading detail…</div>;
   const r = data?.request ?? {};
   const covered = data?.covered ?? null;
   const facts = data?.detail?.facts ?? [];
-  const skip = new Set(['id', 'canAct']);
-  const entries = Object.entries(r).filter(([k, v]) => !skip.has(k) && v != null && v !== '');
   const total = (covered ?? []).reduce((s, c) => s + Number(c.amount), 0);
   return (
     <div className="px-4 pb-4">
@@ -96,9 +95,6 @@ function Detail({ id }: { id: number }) {
               </table>
             </div>
           )}
-          <button onClick={() => setShowRaw(!showRaw)} className="text-xs text-text-muted hover:text-primary mt-2">
-            {showRaw ? 'Hide request record' : 'Show request record'}
-          </button>
         </div>
       )}
       {facts.length > 0 && (
@@ -111,21 +107,7 @@ function Detail({ id }: { id: number }) {
           ))}
         </dl>
       )}
-      {!covered && (
-        <button onClick={() => setShowRaw(!showRaw)} className="text-xs text-text-muted hover:text-primary">
-          {showRaw ? 'Hide request record' : 'Show request record'}
-        </button>
-      )}
-      {showRaw && (
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs bg-bg rounded p-3 mt-2">
-          {entries.map(([k, v]) => (
-            <span key={k} className="contents">
-              <dt className="text-text-muted">{k}</dt>
-              <dd className="m-0 font-mono break-all">{typeof v === 'object' ? JSON.stringify(v, null, 1) : String(v)}</dd>
-            </span>
-          ))}
-        </dl>
-      )}
+      {data?.editable && <EditableInvestment ed={data.editable} id={id} />}
     </div>
   );
 }
@@ -320,4 +302,75 @@ function groupsOf(rows: ApprovalReq[]): Array<[string, ApprovalReq[]]> {
     by.set(r.request_type, g);
   }
   return [...by.entries()];
+}
+
+interface Editable {
+  application_id: number;
+  readonly: Record<string, string>;
+  fields: {
+    total_amount: number; date_money_received: string; collection_method: string;
+    collection_reference: string; referred_by_text: string; interest_start_date: string;
+  };
+}
+
+const RO_LABELS: Array<[string, string]> = [
+  ['customer', 'Customer'], ['pan', 'PAN'], ['application_no', 'Reference no.'],
+  ['series', 'Series'], ['scheme', 'Scheme'], ['rate', 'Rate'], ['tenure', 'Tenure'],
+  ['created_at', 'Entered on'], ['status', 'Current status'],
+];
+const FIELD_LABELS: Array<[keyof Editable['fields'], string, string]> = [
+  ['total_amount', 'Investment amount', 'number'],
+  ['date_money_received', 'Money received on', 'date'],
+  ['interest_start_date', 'Interest starts', 'date'],
+  ['collection_method', 'Payment method', 'text'],
+  ['collection_reference', 'Payment reference / UTR', 'text'],
+  ['referred_by_text', 'Referred by (code or name)', 'text'],
+];
+
+/** The maker's input, pre-filled and correctable by the approver. Approving with
+ * corrections applies them to the investment first, then approves. */
+function EditableInvestment({ ed, id }: { ed: Editable; id: number }) {
+  const qc = useQueryClient();
+  const [f, setF] = useState(ed.fields);
+  const [err, setErr] = useState('');
+  const dirty = (Object.keys(ed.fields) as Array<keyof Editable['fields']>).some((k) => String(f[k] ?? '') !== String(ed.fields[k] ?? ''));
+  const approveWithEdits = useMutation({
+    mutationFn: () => api.post(`/api/approvals/${id}/approve`, { extra: { edits: f } }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['approvals'] }); qc.invalidateQueries({ queryKey: ['approval', id] }); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to approve'),
+  });
+  const inp = 'px-2.5 py-1.5 text-xs border border-border-strong rounded outline-none focus:border-primary w-full';
+  return (
+    <div className="bg-bg rounded p-3">
+      <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Investment details</div>
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-xs mb-3">
+        {RO_LABELS.filter(([k]) => ed.readonly[k]).map(([k, label]) => (
+          <span key={k} className="contents">
+            <dt className="text-text-muted">{label}</dt>
+            <dd className="m-0 font-medium break-words">{ed.readonly[k]}</dd>
+          </span>
+        ))}
+      </dl>
+      <div className="text-xs text-text-muted mb-2">Entered by the maker — correct anything that's wrong before approving.</div>
+      <div className="grid grid-cols-2 gap-2">
+        {FIELD_LABELS.map(([key, label, type]) => (
+          <label key={key} className="text-xs">
+            <span className="block text-text-muted mb-0.5">{label}</span>
+            <input className={inp} type={type} value={String(f[key] ?? '')}
+              onChange={(e) => setF({ ...f, [key]: type === 'number' ? Number(e.target.value) : e.target.value })} />
+          </label>
+        ))}
+      </div>
+      {err && <div className="text-xs text-danger mt-2">{err}</div>}
+      {dirty && (
+        <div className="flex gap-2 items-center mt-3">
+          <button onClick={() => approveWithEdits.mutate()} disabled={approveWithEdits.isPending}
+            className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
+            Approve with these corrections
+          </button>
+          <button onClick={() => { setErr(''); setF(ed.fields); }} className="text-xs text-text-muted hover:underline">Undo changes</button>
+        </div>
+      )}
+    </div>
+  );
 }

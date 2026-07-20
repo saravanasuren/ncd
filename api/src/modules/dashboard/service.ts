@@ -255,11 +255,17 @@ export async function myBook(db: Db, actor: AuthUser) {
        FROM applications a WHERE ${MINE}
       GROUP BY 1 ORDER BY 1 DESC`, [actor.id])).rows;
 
+  // Incentive actually PAID to this person to date. Deliberately only the paid
+  // figure — branch staff don't see accrued/pending here (owner 2026-07-20).
+  // Reuses the incentives ledger so this can never disagree with Incentives.
+  const bal = await incentives.payeeBalance(db, 'staff', actor.id);
+
   return {
     totals: {
       investments: Number(totals.investments),
       customers: Number(totals.customers),
       amount: Number(totals.amount),
+      incentives_paid: bal.paid,
     },
     by_series: bySeries,
     by_month: byMonth,

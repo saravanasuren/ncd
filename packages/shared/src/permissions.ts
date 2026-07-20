@@ -161,7 +161,12 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
 
   // Branch staff don't see the company-wide NCD Portfolio dashboard at all —
   // they get "My Dashboard" (their own enrolled book) instead (owner 2026-07-20).
-  branch_staff: [...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view'), 'dashboard:view-own'],
+  // They also lose the My Earnings page: My Dashboard carries a single tile with
+  // the incentive they have actually been PAID to date (not accrued/pending).
+  branch_staff: [
+    ...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view' && p !== 'earnings:read-own'),
+    'dashboard:view-own',
+  ],
 
   agent: [...STAFF_FUNNEL],
 

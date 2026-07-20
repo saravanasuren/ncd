@@ -58,7 +58,6 @@ export const PERMISSIONS = [
   'earnings:read-own',
   // dashboard / reports
   'dashboard:view', // scoped
-  'dashboard:view-own', // only my own book (branch staff "My Dashboard")
   'dashboard:drilldown',
   'reports:download', // scoped
   // admin
@@ -159,14 +158,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'approvals:check-handover', // repeat-customer handover (any one of Admin/CXO/BM)
   ],
 
-  // Branch staff don't see the company-wide NCD Portfolio dashboard at all —
-  // they get "My Dashboard" (their own enrolled book) instead (owner 2026-07-20).
-  // They also lose the My Earnings page: My Dashboard carries a single tile with
-  // the incentive they have actually been PAID to date (not accrued/pending).
-  branch_staff: [
-    ...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view' && p !== 'earnings:read-own'),
-    'dashboard:view-own',
-  ],
+  // Branch staff don't see the company-wide NCD Portfolio dashboard (owner
+  // 2026-07-20). Everything they need — what they brought in and what they've
+  // been paid — lives on My Earnings, so they keep earnings:read-own and land
+  // there instead.
+  branch_staff: [...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view')],
 
   agent: [...STAFF_FUNNEL],
 

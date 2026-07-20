@@ -28,7 +28,6 @@ import { ReportsPage } from './pages/Reports.js';
 import { SystemPage } from './pages/System.js';
 import { MastersPage } from './pages/Masters.js';
 import { EventsPage } from './pages/Events.js';
-import { MyDashboardPage } from './pages/MyDashboard.js';
 import { PortalLogin } from './portal/PortalLogin.js';
 import { PortalHome } from './portal/PortalHome.js';
 import type { ReactNode } from 'react';
@@ -48,11 +47,11 @@ function RequirePortal({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Land on the dashboard the user actually holds — branch staff have
- * dashboard:view-own (My Dashboard), not the company-wide dashboard:view. */
+/** Land somewhere the user can actually open — branch staff don't hold
+ * dashboard:view, so they go straight to My Earnings. */
 function HomeRedirect() {
   const { can } = useAuth();
-  return <Navigate to={can('dashboard:view') ? '/app/dashboard' : '/app/my-dashboard'} replace />;
+  return <Navigate to={can('dashboard:view') ? '/app/dashboard' : '/app/my-earnings'} replace />;
 }
 
 export function App() {
@@ -75,7 +74,6 @@ export function App() {
         >
           <Route index element={<HomeRedirect />} />
           <Route path="dashboard" element={<Suspense fallback={<div className="text-text-muted">Loading dashboard…</div>}><Dashboard /></Suspense>} />
-          <Route path="my-dashboard" element={<MyDashboardPage />} />
           <Route path="segments" element={<SegmentsPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="system" element={<SystemPage />} />
@@ -96,7 +94,8 @@ export function App() {
           <Route path="settings" element={<SettingsPage />} />
           <Route path="users" element={<UsersPage />} />
         </Route>
-        <Route path="*" element={<Navigate to="/app/dashboard" replace />} />
+        {/* Unknown path → /app, which routes each user to a page they can open. */}
+        <Route path="*" element={<Navigate to="/app" replace />} />
       </Routes>
     </AuthProvider>
   );

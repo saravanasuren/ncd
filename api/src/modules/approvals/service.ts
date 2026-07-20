@@ -94,13 +94,27 @@ async function priorApprovers(db: Db, requestId: number): Promise<number[]> {
   return rows.map((r) => Number(r.approver_user_id));
 }
 
-function assertDistinctChecker(req: ApprovalRow, user: AuthUser, prior: number[]): void {
+/**
+ * Rule zero: maker ≠ checker. A Super Admin may override this on their OWN
+ * submission, but only with a written reason — it is stored on the request and
+ * audited as a self-approval (owner decision 2026-07-20). Every other role is
+ * refused outright, and nobody may act twice in a multi-level chain.
+ * Returns true when the approval was a Super Admin self-approval.
+ */
+function assertDistinctChecker(req: ApprovalRow, user: AuthUser, prior: number[], selfReason?: string): boolean {
   if (req.maker_user_id === user.id) {
-    throw errors.forbidden('You cannot approve your own submission');
+    if (user.role !== 'super_admin') {
+      throw errors.forbidden('You cannot approve your own submission');
+    }
+    if (!selfReason || selfReason.trim().length < 3) {
+      throw errors.forbidden('You submitted this — a Super Admin self-approval needs a written reason');
+    }
+    return true;
   }
   if (prior.includes(user.id)) {
     throw errors.forbidden('You already acted on this request at an earlier level');
   }
+  return false;
 }
 
 function checkerPermFor(req: ApprovalRow): Permission {
@@ -152,7 +166,8 @@ export async function approve(
       }
     }
     const prior = await priorApprovers(tx, id);
-    assertDistinctChecker(req, user, prior);
+    const selfReason = typeof extra?.self_approval_reason === 'string' ? extra.self_approval_reason.trim() : undefined;
+    const selfApproved = assertDistinctChecker(req, user, prior, selfReason);
 
     await tx.query(
       'INSERT INTO approval_actions (approval_request_id, level, approver_user_id, action) VALUES ($1,$2,$3,$4)',
@@ -173,12 +188,24 @@ export async function approve(
       const cb = onFinalApproveReg.get(req.request_type);
       if (cb) await cb(tx, req);
     }
+    // A Super Admin approving their own submission is the one break in the
+    // two-person rule — audit it separately and loudly, not buried in the
+    // ordinary approve entry.
+    if (selfApproved) {
+      await writeAudit(tx, {
+        actorId: user.id,
+        action: 'approval.self-approve',
+        entityType: 'approval_requests',
+        entityId: id,
+        after: { request_no: req.request_no, request_type: req.request_type, reason: selfReason },
+      });
+    }
     await writeAudit(tx, {
       actorId: user.id,
       action: 'approval.approve',
       entityType: 'approval_requests',
       entityId: id,
-      after: { level: req.level, status: req.status },
+      after: { level: req.level, status: req.status, self_approved: selfApproved },
     });
     return req;
   });
@@ -193,7 +220,9 @@ export async function reject(db: Db, user: AuthUser, id: number, reason: string)
       throw errors.forbidden('You are not a checker for this level');
     }
     const prior = await priorApprovers(tx, id);
-    assertDistinctChecker(req, user, prior);
+    // Rejecting your OWN submission is withdrawing it — the mandatory reason
+    // doubles as the self-action justification, so a Super Admin can do it.
+    const selfRejected = assertDistinctChecker(req, user, prior, reason);
 
     await tx.query(
       'INSERT INTO approval_actions (approval_request_id, level, approver_user_id, action, reason) VALUES ($1,$2,$3,$4,$5)',
@@ -208,7 +237,7 @@ export async function reject(db: Db, user: AuthUser, id: number, reason: string)
       action: 'approval.reject',
       entityType: 'approval_requests',
       entityId: id,
-      after: { reason },
+      after: { reason, self_rejected: selfRejected },
     });
     return req;
   });
@@ -216,21 +245,25 @@ export async function reject(db: Db, user: AuthUser, id: number, reason: string)
 
 /** Queue for the user: pending requests they can currently act on, plus a
  * `canAct` flag (own submissions are shown but not actionable). */
-export async function getQueue(db: Db, user: AuthUser): Promise<Array<ApprovalRow & { canAct: boolean; subject: string; amount: number | null }>> {
+export async function getQueue(db: Db, user: AuthUser): Promise<Array<ApprovalRow & { canAct: boolean; selfApproval: boolean; subject: string; amount: number | null }>> {
   const { rows } = await db.query<Record<string, unknown>>(
     "SELECT * FROM approval_requests WHERE status = 'Pending' ORDER BY created_at DESC"
   );
-  const out: Array<ApprovalRow & { canAct: boolean; subject: string; amount: number | null }> = [];
+  const out: Array<ApprovalRow & { canAct: boolean; selfApproval: boolean; subject: string; amount: number | null }> = [];
   for (const r of rows) {
     const req = rowToApproval(r);
     const hasPerm = user.permissions.includes(checkerPermFor(req));
     if (!hasPerm) continue; // not their queue at all
     const prior = await priorApprovers(db, req.id);
-    const canAct = req.maker_user_id !== user.id && !prior.includes(user.id);
+    // Super Admin may act on their own submission, but the UI must collect a
+    // reason first (enforced server-side in assertDistinctChecker).
+    const isMaker = req.maker_user_id === user.id;
+    const selfApproval = isMaker && user.role === 'super_admin';
+    const canAct = (!isMaker || selfApproval) && !prior.includes(user.id);
     // Carry the subject so the queue can say WHAT each request is about
     // instead of just its type + request number.
     const desc = await describeRequest(db, req);
-    out.push({ ...req, canAct, subject: desc.subject, amount: desc.amount });
+    out.push({ ...req, canAct, selfApproval, subject: desc.subject, amount: desc.amount });
   }
   return out;
 }

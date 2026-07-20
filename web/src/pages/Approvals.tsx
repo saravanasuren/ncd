@@ -14,6 +14,7 @@ interface ApprovalReq {
   status: string;
   metadata: Record<string, unknown>;
   canAct: boolean;
+  selfApproval?: boolean;
   subject?: string;
   amount?: number | null;
 }
@@ -50,7 +51,7 @@ interface CoveredRow {
   amount: string; date_money_received: string | null; series_code: string;
 }
 
-function Detail({ id, canAct, actionLabel, onDone }: { id: number; canAct: boolean; actionLabel: string; onDone: () => void }) {
+function Detail({ id, canAct, selfApproval, actionLabel, onDone }: { id: number; canAct: boolean; selfApproval?: boolean; actionLabel: string; onDone: () => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ['approval', id],
     queryFn: () => api.get<{ request: Record<string, unknown>; covered: CoveredRow[] | null;
@@ -108,8 +109,8 @@ function Detail({ id, canAct, actionLabel, onDone }: { id: number; canAct: boole
         </dl>
       )}
       {data?.editable
-        ? <EditableInvestment ed={data.editable} id={id} canAct={canAct} actionLabel={actionLabel} onDone={onDone} />
-        : canAct && <ConfirmApproval id={id} label={actionLabel} onDone={onDone} />}
+        ? <EditableInvestment ed={data.editable} id={id} canAct={canAct} selfApproval={selfApproval} actionLabel={actionLabel} onDone={onDone} />
+        : canAct && <ConfirmApproval id={id} label={actionLabel} selfApproval={selfApproval} onDone={onDone} />}
     </div>
   );
 }
@@ -283,7 +284,7 @@ export function ApprovalsPage() {
               />
             )}
             {openId === r.id && (
-              <Detail id={r.id} canAct={r.canAct}
+              <Detail id={r.id} canAct={r.canAct} selfApproval={r.selfApproval}
                 actionLabel={r.request_type === 'app_investment' ? 'Confirm acknowledgement' : 'Confirm approval'}
                 onDone={() => { setOpenId(null); qc.invalidateQueries({ queryKey: ['approvals'] }); }} />
             )}
@@ -337,13 +338,15 @@ const FIELD_LABELS: Array<[keyof Editable['fields'], string, string]> = [
 
 /** The maker's input, pre-filled and correctable by the approver. Approving with
  * corrections applies them to the investment first, then approves. */
-function EditableInvestment({ ed, id, canAct, actionLabel, onDone }: { ed: Editable; id: number; canAct: boolean; actionLabel: string; onDone: () => void }) {
+function EditableInvestment({ ed, id, canAct, selfApproval, actionLabel, onDone }: { ed: Editable; id: number; canAct: boolean; selfApproval?: boolean; actionLabel: string; onDone: () => void }) {
   const qc = useQueryClient();
   const [f, setF] = useState(ed.fields);
   const [err, setErr] = useState('');
+  const [selfReason, setSelfReason] = useState('');
+  const blocked = !!selfApproval && selfReason.trim().length < 3;
   const dirty = (Object.keys(ed.fields) as Array<keyof Editable['fields']>).some((k) => String(f[k] ?? '') !== String(ed.fields[k] ?? ''));
   const approveWithEdits = useMutation({
-    mutationFn: () => api.post(`/api/approvals/${id}/approve`, { extra: { edits: f } }),
+    mutationFn: () => api.post(`/api/approvals/${id}/approve`, { extra: { edits: f, ...(selfApproval ? { self_approval_reason: selfReason.trim() } : {}) } }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['approval', id] }); onDone(); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to approve'),
   });
@@ -373,9 +376,10 @@ function EditableInvestment({ ed, id, canAct, actionLabel, onDone }: { ed: Edita
         ))}
       </div>
       {err && <div className="text-xs text-danger mt-2">{err}</div>}
+      {canAct && selfApproval && <SelfApprovalReason value={selfReason} onChange={setSelfReason} />}
       {canAct && (
         <div className="flex gap-2 items-center mt-3 border-t border-border pt-3">
-          <button onClick={() => approveWithEdits.mutate()} disabled={approveWithEdits.isPending}
+          <button onClick={() => approveWithEdits.mutate()} disabled={approveWithEdits.isPending || blocked}
             className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
             {dirty ? `${actionLabel} (with corrections)` : actionLabel}
           </button>
@@ -387,21 +391,41 @@ function EditableInvestment({ ed, id, canAct, actionLabel, onDone }: { ed: Edita
   );
 }
 
+/** Super Admin overriding the two-person rule on their own submission: the
+ * reason is mandatory and is stored on the request + audit trail. */
+function SelfApprovalReason({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="mt-2 bg-[color:var(--danger-bg)] border border-danger/40 rounded p-2.5">
+      <div className="text-xs text-danger font-semibold mb-1">You submitted this request</div>
+      <div className="text-xs text-text-muted mb-1.5">
+        Approving your own submission bypasses the two-person rule. A reason is required and is recorded in the audit trail.
+      </div>
+      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="Reason for self-approval (required)"
+        className="w-full px-2.5 py-1.5 text-xs border border-border-strong rounded outline-none focus:border-primary" />
+    </div>
+  );
+}
+
 /** Two-step confirm for requests that have no editable investment form. */
-function ConfirmApproval({ id, label, onDone }: { id: number; label: string; onDone: () => void }) {
+function ConfirmApproval({ id, label, selfApproval, onDone }: { id: number; label: string; selfApproval?: boolean; onDone: () => void }) {
   const qc = useQueryClient();
   const [err, setErr] = useState('');
+  const [selfReason, setSelfReason] = useState('');
+  const blocked = !!selfApproval && selfReason.trim().length < 3;
   const go = useMutation({
-    mutationFn: () => api.post(`/api/approvals/${id}/approve`, {}),
+    mutationFn: () => api.post(`/api/approvals/${id}/approve`, selfApproval ? { extra: { self_approval_reason: selfReason.trim() } } : {}),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['approval', id] }); onDone(); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to approve'),
   });
   return (
-    <div className="mt-2 border-t border-border pt-3 flex gap-2 items-center">
-      <button onClick={() => go.mutate()} disabled={go.isPending}
+    <div className="mt-2 border-t border-border pt-3">
+      {selfApproval && <SelfApprovalReason value={selfReason} onChange={setSelfReason} />}
+      <div className="flex gap-2 items-center mt-2">
+      <button onClick={() => go.mutate()} disabled={go.isPending || blocked}
         className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">{label}</button>
       <span className="text-xs text-text-muted">Check the details above before confirming.</span>
       {err && <span className="text-xs text-danger">{err}</span>}
+      </div>
     </div>
   );
 }

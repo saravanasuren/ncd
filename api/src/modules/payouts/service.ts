@@ -93,7 +93,7 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
     const batchNo = await nextCode(tx, 'redemption', 'NEFT-{yyyy}-{seq:6}');
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO payout_batches (batch_no, kind, payout_date, total_gross, total_tds, total_net, status, created_by_user_id)
-       VALUES ($1,'interest',$2,$3,$4,$5,'PendingChecker',$6) RETURNING id`,
+       VALUES ($1,'interest',$2,$3,$4,$5,'Generated',$6) RETURNING id`,
       [batchNo, payoutDate, due.totals.gross, due.totals.tds, due.totals.net, actor.id]
     );
     const batchId = Number(rows[0]!.id);
@@ -130,31 +130,44 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
             AND batch_id IS NULL AND due_date <= $2`, [r.line_id, payoutDate]);
     }
 
-    const req = await createApprovalRequest(tx, {
-      type: 'interest_batch', entityType: 'payout_batches', entityId: batchId, makerUserId: actor.id,
-      metadata: { batch_id: batchId, payout_date: payoutDate, net: due.totals.net, count: due.count },
-    });
-    await tx.query('UPDATE payout_batches SET approval_request_id = $1 WHERE id = $2', [req.id, batchId]);
     await writeAudit(tx, { actorId: actor.id, action: 'payout.batch.create', entityType: 'payout_batches', entityId: batchId, after: { batchNo, net: due.totals.net } });
-    return { batch_id: batchId, batch_no: batchNo, request: req, ...due };
+    // No approval here: the sheet must be downloadable immediately so the transfer
+    // can actually be made. The maker-checker gate sits on "mark paid" instead.
+    return { batch_id: batchId, batch_no: batchNo, ...due };
   });
 }
 
+// Approving the payment claim is what actually settles the batch: its rows flip to
+// Paid, which advances each line's paid-through watermark, so the next NEFT sheet
+// starts fresh from this payout date.
 registerOnFinalApprove('interest_batch', async (tx, req) => {
   const batchId = req.metadata.batch_id ? Number(req.metadata.batch_id) : null;
-  if (batchId) await tx.query("UPDATE payout_batches SET status = 'Approved' WHERE id = $1", [batchId]);
+  if (!batchId) return;
+  const batch = (await tx.query<{ payout_date: string }>('SELECT payout_date FROM payout_batches WHERE id = $1', [batchId])).rows[0];
+  const utr = (req.metadata.utr as string | null) ?? null;
+  await tx.query(
+    "UPDATE disbursement_schedule SET status = 'Paid', paid_at = $1, utr = COALESCE(utr, $2) WHERE batch_id = $3 AND status = 'Scheduled'",
+    [batch?.payout_date ?? null, utr, batchId]);
+  await tx.query("UPDATE payout_batches SET status = 'Paid' WHERE id = $1", [batchId]);
 });
 
-export async function markBatchPaid(db: Db, actor: AuthUser, batchId: number, utrPrefix?: string) {
+/** Maker states "this batch has been paid out" — that claim goes to a checker.
+ * Settlement (rows -> Paid, watermark advance) happens on approval, not here. */
+export async function markBatchPaid(db: Db, actor: AuthUser, batchId: number, utr?: string) {
   return db.withTx(async (tx) => {
-    const batch = (await tx.query<{ status: string; payout_date: string }>('SELECT status, payout_date FROM payout_batches WHERE id = $1', [batchId])).rows[0];
+    const batch = (await tx.query<{ status: string; payout_date: string; batch_no: string; total_net: string }>(
+      'SELECT status, payout_date, batch_no, total_net FROM payout_batches WHERE id = $1', [batchId])).rows[0];
     if (!batch) throw errors.notFound('Batch not found');
-    if (batch.status !== 'Approved') throw errors.conflict('Batch must be Approved before it can be marked paid');
-    const upd = await tx.query("UPDATE disbursement_schedule SET status = 'Paid', paid_at = $1, utr = COALESCE(utr, $2) WHERE batch_id = $3 AND status = 'Scheduled'",
-      [batch.payout_date, utrPrefix ?? null, batchId]);
-    await tx.query("UPDATE payout_batches SET status = 'Reconciled' WHERE id = $1", [batchId]);
-    await writeAudit(tx, { actorId: actor.id, action: 'payout.batch.paid', entityType: 'payout_batches', entityId: batchId, after: { rows: upd.rowCount } });
-    return { paid: upd.rowCount };
+    if (batch.status === 'Paid') throw errors.conflict('Batch is already settled');
+    if (batch.status === 'PendingChecker') throw errors.conflict('Batch is already awaiting a checker');
+
+    const req = await createApprovalRequest(tx, {
+      type: 'interest_batch', entityType: 'payout_batches', entityId: batchId, makerUserId: actor.id,
+      metadata: { batch_id: batchId, payout_date: batch.payout_date, net: Number(batch.total_net), utr: utr ?? null },
+    });
+    await tx.query("UPDATE payout_batches SET status = 'PendingChecker', approval_request_id = $1 WHERE id = $2", [req.id, batchId]);
+    await writeAudit(tx, { actorId: actor.id, action: 'payout.batch.mark-paid-request', entityType: 'payout_batches', entityId: batchId, after: { utr: utr ?? null } });
+    return { batch_id: batchId, status: 'PendingChecker', request: req };
   });
 }
 
@@ -166,7 +179,8 @@ export async function listBatches(db: Db) {
 export async function neftForBatch(db: Db, batchId: number): Promise<{ buffer: Buffer; batchNo: string }> {
   const batch = (await db.query<{ batch_no: string; status: string; payout_date: string }>('SELECT batch_no, status, payout_date FROM payout_batches WHERE id = $1', [batchId])).rows[0];
   if (!batch) throw errors.notFound('Batch not found');
-  if (!['Approved', 'Downloaded', 'Reconciled'].includes(batch.status)) throw errors.conflict('Batch must be approved before download');
+  // Downloadable as soon as the batch exists — you need the sheet to make the
+  // transfer. (Rows are still 'Scheduled' until the payment claim is approved.)
   const debit = (await db.query<{ account_number: string }>("SELECT account_number FROM banks WHERE is_disbursement_account = TRUE AND is_active = TRUE ORDER BY id LIMIT 1")).rows[0];
   const rows = (await db.query<Record<string, unknown>>(
     `SELECT ds.net_amount, ds.due_date, ds.payee_account, ds.payee_ifsc, c.full_name AS name, c.email, a.application_no

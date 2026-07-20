@@ -62,8 +62,13 @@ describe('pro-rata interest payout on any date', () => {
     expect(b1.status).toBe(201);
     const paidGross = Number(mine(b1.json.rows)[0].gross_amount);
     expect(paidGross).toBeCloseTo(expectedGross(10), 0);
-    await ncd.post(`/api/approvals/${b1.json.request.id}/approve`);
-    await a.post(`/api/payouts/${b1.json.batch_id}/mark-paid`, {});
+    // sheet is downloadable straight away (before any approval)
+    const sheet = await a.get(`/api/payouts/${b1.json.batch_id}/download.xlsx`);
+    expect(sheet.status).toBe(200);
+    // maker claims it's paid -> goes to a checker; approval is what settles it
+    const mp = await a.post(`/api/payouts/${b1.json.batch_id}/mark-paid`, {});
+    expect(mp.status).toBe(200);
+    await ncd.post(`/api/approvals/${mp.json.request.id}/approve`);
 
     // next sheet on 21 Jul must bill only 11 -> 21 (10 days), NOT 1 -> 21 (20 days)
     const p2 = await a.get('/api/payouts/preview?date=2026-07-21');

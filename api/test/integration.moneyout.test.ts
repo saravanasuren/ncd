@@ -35,14 +35,13 @@ async function buildActive(): Promise<number> {
   return app.json.id;
 }
 
-// Each call uses a distinct month so it batches one fresh interest row
-// (a batch grabs everything due ≤ its date that isn't already batched).
+// Each call uses a distinct date so it batches a fresh accrual slice.
+// The sheet is downloadable as soon as the batch exists — approval now sits on
+// the "mark paid" claim, not on creation.
 async function approvedInterestBatch(payoutDate: string): Promise<number> {
   const ncd = await as('ncd@demo.local');
   const batch = await ncd.post('/api/payouts', { payout_date: payoutDate });
   if (batch.status !== 201) throw new Error(`batch create failed: ${batch.status}`);
-  const a = await admin();
-  await a.post(`/api/approvals/${batch.json.request.id}/approve`);
   return batch.json.batch_id;
 }
 

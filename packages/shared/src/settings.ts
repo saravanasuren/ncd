@@ -26,6 +26,25 @@ export interface SettingDef {
 }
 
 export const SETTINGS_CATALOG: SettingDef[] = [
+  // ── NEFT payout sheet (owner-confirmed 2026-07-20) ──
+  {
+    key: 'payouts.neft_debit_account',
+    group: 'Payouts',
+    label: 'NEFT debit account number',
+    description: "Company account the bank debits for every NEFT row. Blank falls back to the bank master's disbursement account.",
+    type: 'string',
+    default: '',
+    editableBy: 'admin',
+  },
+  {
+    key: 'payouts.neft_beneficiary_email',
+    group: 'Payouts',
+    label: 'NEFT beneficiary email (fallback)',
+    description: "Used in the sheet's Beneficiary Email ID column when a customer has no email on file. Blank leaves the cell empty.",
+    type: 'string',
+    default: '',
+    editableBy: 'admin',
+  },
   // ── Interest engine (owner-confirmed 2026-07-16) ──
   {
     key: 'interest.payout_day_of_month',

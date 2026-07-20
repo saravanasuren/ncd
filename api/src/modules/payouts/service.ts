@@ -13,6 +13,7 @@ import { computeTds } from '../../lib/tds.js';
 import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
 import { nextCode } from '../../lib/sequences.js';
 import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
+import { getSettingsMap } from '../settings/service.js';
 
 const DUE_TYPES = "('Interest','BrokenInterest')";
 const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((x) => `'${x}'`).join(',');
@@ -38,8 +39,9 @@ export async function previewDue(db: Db, payoutDate: string) {
             c.full_name AS customer_name, c.is_nri, c.tds_applicable AS cust_tds,
             c.tax_form, c.tax_form_expires_on,
             COALESCE((SELECT max(ds.due_date) FROM disbursement_schedule ds
-                       WHERE ds.line_id = l.id AND ds.status = 'Paid'
-                         AND ds.due_type IN ${DUE_TYPES}),
+                       WHERE ds.line_id = l.id AND ds.due_type IN ${DUE_TYPES}
+                         AND (ds.status = 'Paid'
+                              OR (ds.status = 'Scheduled' AND ds.batch_id IS NOT NULL))),
                      a.interest_start_date) AS paid_through
        FROM application_lines l
        JOIN applications a ON a.id = l.application_id
@@ -181,6 +183,15 @@ export async function neftForBatch(db: Db, batchId: number): Promise<{ buffer: B
   if (!batch) throw errors.notFound('Batch not found');
   // Downloadable as soon as the batch exists — you need the sheet to make the
   // transfer. (Rows are still 'Scheduled' until the payment claim is approved.)
+  // Debit account + fallback beneficiary email are settings-driven (Admin → Settings),
+  // falling back to the bank master's disbursement account.
+  const settings = await getSettingsMap(db);
+  const asText = (v: unknown): string => {
+    const t = (v === null || v === undefined ? '' : String(v)).trim();
+    return t === 'null' || t === 'undefined' ? '' : t;
+  };
+  const debitSetting = asText(settings['payouts.neft_debit_account']);
+  const fallbackEmail = asText(settings['payouts.neft_beneficiary_email']);
   const debit = (await db.query<{ account_number: string }>("SELECT account_number FROM banks WHERE is_disbursement_account = TRUE AND is_active = TRUE ORDER BY id LIMIT 1")).rows[0];
   const rows = (await db.query<Record<string, unknown>>(
     `SELECT ds.net_amount, ds.due_date, ds.payee_account, ds.payee_ifsc, c.full_name AS name, c.email, a.application_no
@@ -188,11 +199,13 @@ export async function neftForBatch(db: Db, batchId: number): Promise<{ buffer: B
      WHERE ds.batch_id = $1 AND ds.status = 'Scheduled' ORDER BY c.full_name`, [batchId])).rows;
   const { buildNeftSheet } = await import('../../lib/neft.js');
   const buffer = await buildNeftSheet(
-    { debitAccount: debit?.account_number ?? 'DISBURSEMENT-ACCT', sheetName: 'Interest' },
+    { debitAccount: debitSetting || debit?.account_number || 'DISBURSEMENT-ACCT',
+      sheetName: 'Interest',
+      valueDate: new Date() },   // value date = the day the sheet is generated
     rows.map((r) => ({
       amount: Number(r.net_amount), valueDate: String(r.due_date),
       beneAccount: String(r.payee_account ?? ''), beneName: String(r.name), ifsc: String(r.payee_ifsc ?? ''),
-      email: (r.email as string) ?? '', creditRemark: `NCD interest ${r.application_no}`, reference: batch.batch_no,
+      email: ((r.email as string) || fallbackEmail) ?? '', creditRemark: `NCD interest ${r.application_no}`, reference: batch.batch_no,
     }))
   );
   if (batch.status === 'Approved') await db.query("UPDATE payout_batches SET status = 'Downloaded' WHERE id = $1", [batchId]);

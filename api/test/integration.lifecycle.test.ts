@@ -92,23 +92,28 @@ describe('build an Active investment', () => {
 });
 
 describe('interest payout', () => {
-  it('interest batch: maker creates, checker approves, admin marks paid', async () => {
+  it('interest batch: maker creates + downloads the sheet, marks paid, checker approves = settled', async () => {
     const ncd = await as('ncd@demo.local');
     const batch = await ncd.post('/api/payouts', { payout_date: '2026-07-28' });
     expect(batch.status).toBe(201);
     expect(batch.json.count).toBeGreaterThan(0);
-    const reqId = batch.json.request.id;
     const batchId = batch.json.batch_id;
 
     const a = await admin();
-    await a.post(`/api/approvals/${reqId}/approve`);
-    const paid = await a.post(`/api/payouts/${batchId}/mark-paid`, { utr: 'NEFTUTR' });
-    expect(paid.status).toBe(200);
-    expect(paid.json.paid).toBeGreaterThan(0);
+    // The NEFT sheet is usable immediately — you need it to make the transfer.
+    const sheet = await a.get(`/api/payouts/${batchId}/download.xlsx`);
+    expect(sheet.status).toBe(200);
 
-    const detail = await a.get(`/api/applications/${appId}`);
-    const julyRow = detail.json.schedule.find((r: any) => r.due_date === '2026-07-28');
-    expect(julyRow.status).toBe('Paid');
+    // Maker claims payment → goes to a checker (not settled yet).
+    const claim = await a.post(`/api/payouts/${batchId}/mark-paid`, { utr: 'NEFTUTR' });
+    expect(claim.status).toBe(200);
+    let detail = await a.get(`/api/applications/${appId}`);
+    expect(detail.json.schedule.find((r: any) => r.due_date === '2026-07-28').status).toBe('Scheduled');
+
+    // A different person approves → that settles it.
+    await ncd.post(`/api/approvals/${claim.json.request.id}/approve`);
+    detail = await a.get(`/api/applications/${appId}`);
+    expect(detail.json.schedule.find((r: any) => r.due_date === '2026-07-28').status).toBe('Paid');
   });
 });
 

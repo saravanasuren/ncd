@@ -50,7 +50,7 @@ interface CoveredRow {
   amount: string; date_money_received: string | null; series_code: string;
 }
 
-function Detail({ id }: { id: number }) {
+function Detail({ id, canAct, actionLabel, onDone }: { id: number; canAct: boolean; actionLabel: string; onDone: () => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ['approval', id],
     queryFn: () => api.get<{ request: Record<string, unknown>; covered: CoveredRow[] | null;
@@ -107,7 +107,9 @@ function Detail({ id }: { id: number }) {
           ))}
         </dl>
       )}
-      {data?.editable && <EditableInvestment ed={data.editable} id={id} />}
+      {data?.editable
+        ? <EditableInvestment ed={data.editable} id={id} canAct={canAct} actionLabel={actionLabel} onDone={onDone} />
+        : canAct && <ConfirmApproval id={id} label={actionLabel} onDone={onDone} />}
     </div>
   );
 }
@@ -240,13 +242,16 @@ export function ApprovalsPage() {
                 {r.subject && <div className="text-sm text-text mt-0.5 truncate">{r.subject}</div>}
                 <div className="text-xs text-text-muted font-mono mt-0.5">{r.request_no}</div>
               </div>
-              <button onClick={() => setOpenId(openId === r.id ? null : r.id)} className="text-xs text-primary hover:underline">
-                {openId === r.id ? 'Hide' : 'Details'}
-              </button>
+              {!r.canAct && (
+                <button onClick={() => setOpenId(openId === r.id ? null : r.id)} className="text-xs text-primary hover:underline">
+                  {openId === r.id ? 'Hide' : 'Details'}
+                </button>
+              )}
               {r.canAct ? (
                 <div className="flex gap-2">
-                  <button onClick={() => act.mutate({ id: r.id, action: 'approve' })} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">
-                    {r.request_type === 'app_investment' ? 'Acknowledge' : 'Approve'}
+                  <button onClick={() => setOpenId(openId === r.id ? null : r.id)}
+                    className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">
+                    {openId === r.id ? 'Close' : (r.request_type === 'app_investment' ? 'Review & acknowledge' : 'Review & approve')}
                   </button>
                   {r.request_type !== 'app_investment' && (
                     <button onClick={() => {
@@ -277,7 +282,11 @@ export function ApprovalsPage() {
                 onDone={() => qc.invalidateQueries({ queryKey: ['approvals'] })}
               />
             )}
-            {openId === r.id && <Detail id={r.id} />}
+            {openId === r.id && (
+              <Detail id={r.id} canAct={r.canAct}
+                actionLabel={r.request_type === 'app_investment' ? 'Confirm acknowledgement' : 'Confirm approval'}
+                onDone={() => { setOpenId(null); qc.invalidateQueries({ queryKey: ['approvals'] }); }} />
+            )}
           </div>
         ))}
         </div>
@@ -329,14 +338,14 @@ const FIELD_LABELS: Array<[keyof Editable['fields'], string, string]> = [
 
 /** The maker's input, pre-filled and correctable by the approver. Approving with
  * corrections applies them to the investment first, then approves. */
-function EditableInvestment({ ed, id }: { ed: Editable; id: number }) {
+function EditableInvestment({ ed, id, canAct, actionLabel, onDone }: { ed: Editable; id: number; canAct: boolean; actionLabel: string; onDone: () => void }) {
   const qc = useQueryClient();
   const [f, setF] = useState(ed.fields);
   const [err, setErr] = useState('');
   const dirty = (Object.keys(ed.fields) as Array<keyof Editable['fields']>).some((k) => String(f[k] ?? '') !== String(ed.fields[k] ?? ''));
   const approveWithEdits = useMutation({
     mutationFn: () => api.post(`/api/approvals/${id}/approve`, { extra: { edits: f } }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['approvals'] }); qc.invalidateQueries({ queryKey: ['approval', id] }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['approval', id] }); onDone(); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to approve'),
   });
   const inp = 'px-2.5 py-1.5 text-xs border border-border-strong rounded outline-none focus:border-primary w-full';
@@ -362,15 +371,35 @@ function EditableInvestment({ ed, id }: { ed: Editable; id: number }) {
         ))}
       </div>
       {err && <div className="text-xs text-danger mt-2">{err}</div>}
-      {dirty && (
-        <div className="flex gap-2 items-center mt-3">
+      {canAct && (
+        <div className="flex gap-2 items-center mt-3 border-t border-border pt-3">
           <button onClick={() => approveWithEdits.mutate()} disabled={approveWithEdits.isPending}
-            className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
-            Approve with these corrections
+            className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
+            {dirty ? `${actionLabel} (with corrections)` : actionLabel}
           </button>
-          <button onClick={() => { setErr(''); setF(ed.fields); }} className="text-xs text-text-muted hover:underline">Undo changes</button>
+          {dirty && <button onClick={() => { setErr(''); setF(ed.fields); }} className="text-xs text-text-muted hover:underline">Undo changes</button>}
+          <span className="text-xs text-text-muted">Check the details above before confirming.</span>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Two-step confirm for requests that have no editable investment form. */
+function ConfirmApproval({ id, label, onDone }: { id: number; label: string; onDone: () => void }) {
+  const qc = useQueryClient();
+  const [err, setErr] = useState('');
+  const go = useMutation({
+    mutationFn: () => api.post(`/api/approvals/${id}/approve`, {}),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['approval', id] }); onDone(); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to approve'),
+  });
+  return (
+    <div className="mt-2 border-t border-border pt-3 flex gap-2 items-center">
+      <button onClick={() => go.mutate()} disabled={go.isPending}
+        className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">{label}</button>
+      <span className="text-xs text-text-muted">Check the details above before confirming.</span>
+      {err && <span className="text-xs text-danger">{err}</span>}
     </div>
   );
 }

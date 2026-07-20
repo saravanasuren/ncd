@@ -247,9 +247,13 @@ export async function getById(db: Db, id: number): Promise<ApprovalRow | null> {
  */
 /** Fields an approver may correct while approving an investment request. Only
  * these are accepted from the client — anything else in the payload is ignored. */
+// NB: interest_start_date is deliberately NOT here. Interest starts when the
+// money is received — activateApplication derives it as
+// max(date_money_received, series deemed date) at go-live, so accepting it
+// separately would be both redundant and a lie (go-live overwrites it).
 export const EDITABLE_APPLICATION_FIELDS = [
   'total_amount', 'date_money_received', 'collection_method',
-  'collection_reference', 'referred_by_text', 'interest_start_date',
+  'collection_reference', 'referred_by_text',
 ] as const;
 
 /** The maker's input, pre-filled so the approver sees (and can correct) exactly
@@ -281,6 +285,7 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
       rate: r.coupon_rate_pct != null ? `${Number(r.coupon_rate_pct)}%` : '—',
       tenure: r.tenure_months != null ? `${r.tenure_months} months` : '—',
       created_at: d(r.created_at),
+      interest_start: d(r.interest_start_date) || 'from the money-received date',
       status: r.status,
     },
     fields: {
@@ -289,7 +294,6 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
       collection_method: (r.collection_method ?? '') as string,
       collection_reference: (r.collection_reference ?? '') as string,
       referred_by_text: (r.referred_by_text ?? '') as string,
-      interest_start_date: d(r.interest_start_date),
     },
   };
 }

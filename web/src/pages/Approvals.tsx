@@ -318,19 +318,18 @@ interface Editable {
   readonly: Record<string, string>;
   fields: {
     total_amount: number; date_money_received: string; collection_method: string;
-    collection_reference: string; referred_by_text: string; interest_start_date: string;
+    collection_reference: string; referred_by_text: string;
   };
 }
 
 const RO_LABELS: Array<[string, string]> = [
   ['customer', 'Customer'], ['pan', 'PAN'], ['application_no', 'Reference no.'],
   ['series', 'Series'], ['scheme', 'Scheme'], ['rate', 'Rate'], ['tenure', 'Tenure'],
-  ['created_at', 'Entered on'], ['status', 'Current status'],
+  ['created_at', 'Entered on'], ['interest_start', 'Interest starts'], ['status', 'Current status'],
 ];
 const FIELD_LABELS: Array<[keyof Editable['fields'], string, string]> = [
   ['total_amount', 'Investment amount', 'number'],
   ['date_money_received', 'Money received on', 'date'],
-  ['interest_start_date', 'Interest starts', 'date'],
   ['collection_method', 'Payment method', 'text'],
   ['collection_reference', 'Payment reference / UTR', 'text'],
   ['referred_by_text', 'Referred by (code or name)', 'text'],
@@ -360,7 +359,10 @@ function EditableInvestment({ ed, id, canAct, actionLabel, onDone }: { ed: Edita
           </span>
         ))}
       </dl>
-      <div className="text-xs text-text-muted mb-2">Entered by the maker — correct anything that's wrong before approving.</div>
+      <div className="text-xs text-text-muted mb-2">
+        Entered by the maker — correct anything that's wrong before approving.
+        Interest starts from the money-received date (or the series deemed date, whichever is later).
+      </div>
       <div className="grid grid-cols-2 gap-2">
         {FIELD_LABELS.map(([key, label, type]) => (
           <label key={key} className="text-xs">

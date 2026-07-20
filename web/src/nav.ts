@@ -17,6 +17,9 @@ export interface NavItem {
 
 export const NAV: NavItem[] = [
   { to: '/app/dashboard', label: 'Dashboard', anyOf: ['dashboard:view'], group: 'Overview' },
+  // Branch staff hold dashboard:view-own instead of dashboard:view, so they see
+  // this and never the company-wide dashboard above.
+  { to: '/app/my-dashboard', label: 'My Dashboard', anyOf: ['dashboard:view-own'], group: 'Overview' },
   { to: '/app/segments', label: 'Segments', anyOf: ['reports:download', 'dashboard:drilldown'], group: 'Overview' },
   { to: '/app/leads', label: 'Leads', anyOf: ['leads:read'], group: 'Daily' },
   { to: '/app/customers', label: 'Customers', anyOf: ['customers:read'], group: 'Daily' },

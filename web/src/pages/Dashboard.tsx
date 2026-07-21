@@ -280,7 +280,7 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
     if (soleKey) setOpen(new Set([soleKey]));
   }, [soleKey]);
   const rows: any[] = q.data?.rows ?? [];
-  const incTotals = q.data?.totals as { earned: number; paid: number; pending: number } | undefined;
+  const incTotals = q.data?.totals as { investment: number; earned: number; paid: number; pending: number } | undefined;
   const footTotals: Record<string, number> = q.data?.foot_totals ?? {};
   const cols = FLAT_COLS[widget] ?? [];
   const toggle = (key: string) => setOpen((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
@@ -302,7 +302,7 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
                 groups.length === 0 ? <Empty /> : (
                   <table className="w-full text-sm border-collapse">
                     <thead><tr className="text-left text-xs text-text-label uppercase tracking-wide border-b border-border">
-                      <th className="py-2 pr-3">Payee</th><th className="py-2 px-3 text-right">Earned</th>
+                      <th className="py-2 pr-3">Payee</th><th className="py-2 px-3 text-right">Investment</th><th className="py-2 px-3 text-right">Earned</th>
                       <th className="py-2 px-3 text-right">Paid</th><th className="py-2 pl-3 text-right">Pending</th>
                     </tr></thead>
                     <tbody>
@@ -314,6 +314,7 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
                     {incTotals && (
                       <tfoot><tr className="border-t-2 border-border font-semibold">
                         <td className="py-2 pr-3">Total ({groups.length})</td>
+                        <td className="py-2 px-3 text-right mono">{formatINR(incTotals.investment)}</td>
                         <td className="py-2 px-3 text-right mono">{formatINR(incTotals.earned)}</td>
                         <td className="py-2 px-3 text-right mono">{formatINR(incTotals.paid)}</td>
                         <td className="py-2 pl-3 text-right mono">{formatINR(incTotals.pending)}</td>
@@ -415,17 +416,19 @@ function IncentiveRows({ g, open, onToggle }: { g: any; open: boolean; onToggle:
           <span className="inline-block w-4 text-text-muted">{open ? '▾' : '▸'}</span>
           {g.name} <span className="text-text-muted text-xs">({g.children.length})</span>
         </td>
+        <td className="py-2 px-3 text-right mono">{formatINR(g.investment)}</td>
         <td className="py-2 px-3 text-right mono">{formatINR(g.earned)}</td>
         <td className="py-2 px-3 text-right mono text-text-muted">{formatINR(g.paid)}</td>
         <td className="py-2 pl-3 text-right mono font-semibold">{formatINR(g.pending)}</td>
       </tr>
       {open && (g.children.length === 0
-        ? <tr className="bg-bg/50 text-xs"><td colSpan={4} className="py-1.5 pl-8 text-text-muted">No eligible customers.</td></tr>
+        ? <tr className="bg-bg/50 text-xs"><td colSpan={5} className="py-1.5 pl-8 text-text-muted">No eligible customers.</td></tr>
         : g.children.map((ch: any) => (
           <tr key={ch.application_no} className="bg-bg/50 text-xs">
             <td className="py-1 pl-8 pr-3">{ch.customer} <span className="text-text-muted font-mono">{ch.customer_code}</span> · <span className="text-text-muted">{ch.series_code}</span></td>
-            <td className="py-1 px-3 text-right text-text-muted" title="Investment">{formatINR(ch.investment_amount)}</td>
+            <td className="py-1 px-3 text-right text-text-muted">{formatINR(ch.investment_amount)}</td>
             <td className="py-1 px-3 text-right mono">{formatINR(ch.incentive_amount)}</td>
+            <td className="py-1 px-3 text-right text-text-muted">—</td>
             <td className="py-1 pl-3 text-right">{ch.paid ? <span className="text-success">Paid</span> : <span className="text-text-muted">Pending</span>}</td>
           </tr>
         )))}

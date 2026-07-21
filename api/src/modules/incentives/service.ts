@@ -105,7 +105,7 @@ export async function dashboardIncentives(db: Db, which: 'staff' | 'agent') {
     const children = await payeeAccruals(db, p.payee_type, p.payee_id);
     groups.push({
       payee_type: p.payee_type, payee_id: p.payee_id, name: p.payee_name ?? `${p.payee_type} #${p.payee_id}`,
-      earned: p.accrued, paid: p.paid, pending: p.balance,
+      investment: p.investment_amount, earned: p.accrued, paid: p.paid, pending: p.balance,
       children: (children as any[]).map((c) => ({
         customer: c.customer, customer_code: c.customer_code, application_no: c.application_no,
         series_code: c.series_code, investment_amount: c.investment_amount, incentive_amount: c.incentive_amount, paid: c.paid,
@@ -113,7 +113,7 @@ export async function dashboardIncentives(db: Db, which: 'staff' | 'agent') {
     });
   }
   groups.sort((a, b) => b.earned - a.earned);
-  const totals = groups.reduce((t, g) => ({ earned: round2(t.earned + g.earned), paid: round2(t.paid + g.paid), pending: round2(t.pending + g.pending) }), { earned: 0, paid: 0, pending: 0 });
+  const totals = groups.reduce((t, g) => ({ investment: round2(t.investment + g.investment), earned: round2(t.earned + g.earned), paid: round2(t.paid + g.paid), pending: round2(t.pending + g.pending) }), { investment: 0, earned: 0, paid: 0, pending: 0 });
   return { groups, totals };
 }
 

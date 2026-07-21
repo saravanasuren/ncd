@@ -75,8 +75,10 @@ describe('incentives — self-investment excluded, per-customer pay', () => {
     expect(g).toBeTruthy();
     expect(Array.isArray(g.children)).toBe(true);
     expect(g.children.some((c: any) => c.application_no === 'APP-INC-1')).toBe(true); // per-customer breakdown
-    // totals present
+    // totals present, incl. the investment column; group carries its investment total
     expect(dl.json.totals).toHaveProperty('earned');
+    expect(dl.json.totals).toHaveProperty('investment');
+    expect(Number(g.investment)).toBeGreaterThan(0);
   });
 
   it('CXO can also see the incentive tiles + drill (read-only)', async () => {

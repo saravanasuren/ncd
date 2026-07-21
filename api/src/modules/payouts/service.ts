@@ -15,6 +15,7 @@ import { nextCode } from '../../lib/sequences.js';
 import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
 import { getSettingsMap } from '../settings/service.js';
+import { enqueue } from '../notifications/service.js';
 
 const DUE_TYPES = "('Interest','BrokenInterest')";
 const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((x) => `'${x}'`).join(',');
@@ -165,7 +166,40 @@ registerOnFinalApprove('interest_batch', async (tx, req) => {
   const paidApps = (await tx.query<{ application_id: string }>(
     'SELECT DISTINCT application_id FROM disbursement_schedule WHERE batch_id = $1', [batchId])).rows;
   for (const a of paidApps) await emitForApplication(tx, 'interest.paid', Number(a.application_id), `batch:${batchId}`);
+  // Notify each paid customer on WhatsApp (approved ncd_interest_final template),
+  // queued now + drained by the cron. Defensive — a notification hiccup must
+  // never roll back a settled payout.
+  try {
+    await enqueueInterestWhatsapp(tx, batchId, batch?.payout_date ?? null);
+  } catch (e) {
+    console.warn(`[whatsapp] interest notify enqueue failed for batch ${batchId}: ${(e as Error).message}`);
+  }
 });
+
+/** Queue one WhatsApp per customer paid in a settled batch — their TOTAL net
+ * interest for the batch's cut-off. Skips customers with no phone on file. */
+async function enqueueInterestWhatsapp(tx: Db, batchId: number, payoutDate: string | null): Promise<void> {
+  if (!payoutDate) return;
+  const { rows } = await tx.query<{ full_name: string; phone: string | null; interest: string; month_credit: string; credit_date: string }>(
+    `SELECT c.full_name, c.phone,
+            SUM(ds.net_amount)::numeric        AS interest,
+            to_char($2::date, 'FMMonth YYYY')  AS month_credit,
+            to_char($2::date, 'DD-Mon-YYYY')   AS credit_date
+       FROM disbursement_schedule ds
+       JOIN applications a ON a.id = ds.application_id
+       JOIN customers c    ON c.id = a.customer_id
+      WHERE ds.batch_id = $1 AND ds.due_type IN ${DUE_TYPES} AND ds.status = 'Paid'
+      GROUP BY c.id, c.full_name, c.phone`,
+    [batchId, payoutDate]);
+  for (const r of rows) {
+    if (!r.phone) continue; // no usable number → nothing to send
+    const amount = Number(r.interest).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    await enqueue(tx, {
+      channel: 'whatsapp', template: 'interest_paid', to: r.phone,
+      payload: { name: r.full_name, amount, month: r.month_credit, date: r.credit_date },
+    });
+  }
+}
 
 // On REJECT of an interest batch: reverse the materialisation so the interest
 // period is billable again. Without this the rows kept their batch_id, the

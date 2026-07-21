@@ -44,6 +44,7 @@ const schema = z.object({
   WAPPCLOUD_API_KEY: z.string().optional(),
   WAPPCLOUD_ENDPOINT: z.string().optional(),
   WAPPCLOUD_OTP_TEMPLATE: z.string().optional(),
+  WAPPCLOUD_INTEREST_TEMPLATE: z.string().optional(), // approved interest-paid template (default 'ncd_interest_final')
   WHATSAPP_TEST_PHONE: z.string().optional(), // redirects ALL WhatsApp sends while set
   // ── LockerHub outbound (cutover-gated; see ops/CUTOVER-LOCKERHUB.md) ──
   // Agent-event webhooks fire ONLY when both URL + secret are set in SSM.

@@ -28,9 +28,21 @@ export function formatPhone(raw: string): string | null {
   return '+' + d;
 }
 
-function templateFor(meta: SendMeta | undefined): { name: string; variables: Record<string, string> } | null {
+// Map a queue template + payload to a registered WappCloud template + its
+// positional {{n}} variables. Exported for unit tests. Returns null when no
+// approved template covers the queue template (the send then fails clearly).
+export function templateFor(meta: SendMeta | undefined): { name: string; variables: Record<string, string> } | null {
   if (meta?.template === 'portal_otp' && config.WAPPCLOUD_OTP_TEMPLATE) {
     return { name: config.WAPPCLOUD_OTP_TEMPLATE, variables: { '1': String(meta.payload?.otp ?? '') } };
+  }
+  // Interest credited for a settled payout batch. ncd_interest_final:
+  //   {{1}} name  {{2}} amount  {{3}} month  {{4}} date
+  if (meta?.template === 'interest_paid') {
+    const p = meta.payload ?? {};
+    return {
+      name: config.WAPPCLOUD_INTEREST_TEMPLATE || 'ncd_interest_final',
+      variables: { '1': String(p.name ?? ''), '2': String(p.amount ?? ''), '3': String(p.month ?? ''), '4': String(p.date ?? '') },
+    };
   }
   return null;
 }

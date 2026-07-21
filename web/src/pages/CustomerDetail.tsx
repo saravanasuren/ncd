@@ -323,7 +323,11 @@ function NewInvestment({ customerId }: { customerId: number }) {
         <label className="text-xs flex items-center gap-1.5" title="Date the money was credited to Dhanam's account — interest starts from here once approved">
           Credited <input className={sel} type="date" value={dateReceived} onChange={(e) => setDateReceived(e.target.value)} />
         </label>
-        <input className={sel} placeholder="Payment method (NEFT/Cheque/Cash…)" value={method} onChange={(e) => setMethod(e.target.value)} />
+        <select className={sel} value={method} onChange={(e) => setMethod(e.target.value)}>
+          <option value="">Payment method…</option>
+          <option value="NEFT/RTGS">NEFT/RTGS</option>
+          <option value="Cheque">Cheque</option>
+        </select>
         <input className={sel} placeholder="Reference / cheque no." value={reference} onChange={(e) => setReference(e.target.value)} />
         <label className="text-xs flex items-center gap-1.5 cursor-pointer border border-border-strong rounded px-2.5 py-1.5" title="Receipt / cheque photo (image or PDF, under 4 MB)">
           {receipt ? `📎 ${receipt.name.length > 18 ? receipt.name.slice(0, 15) + '…' : receipt.name}` : '📎 Receipt photo'}

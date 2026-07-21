@@ -15,7 +15,7 @@ import { nextCode } from '../../lib/sequences.js';
 import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
 import { getSettingsMap } from '../settings/service.js';
-import { enqueue } from '../notifications/service.js';
+import { enqueue, drainOnce } from '../notifications/service.js';
 
 const DUE_TYPES = "('Interest','BrokenInterest')";
 const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((x) => `'${x}'`).join(',');
@@ -166,21 +166,25 @@ registerOnFinalApprove('interest_batch', async (tx, req) => {
   const paidApps = (await tx.query<{ application_id: string }>(
     'SELECT DISTINCT application_id FROM disbursement_schedule WHERE batch_id = $1', [batchId])).rows;
   for (const a of paidApps) await emitForApplication(tx, 'interest.paid', Number(a.application_id), `batch:${batchId}`);
-  // Notify each paid customer on WhatsApp (approved ncd_interest_final template),
-  // queued now + drained by the cron. Defensive — a notification hiccup must
-  // never roll back a settled payout.
-  try {
-    await enqueueInterestWhatsapp(tx, batchId, batch?.payout_date ?? null);
-  } catch (e) {
-    console.warn(`[whatsapp] interest notify enqueue failed for batch ${batchId}: ${(e as Error).message}`);
-  }
+  // WhatsApp interest-credit messages are NOT sent here: settling a batch fans
+  // out one message per paid customer, so it's an explicit staff action instead
+  // (POST /payouts/:id/whatsapp-interest → notifyInterestOnWhatsapp) rather than
+  // an automatic side effect of the approval.
 });
 
-/** Queue one WhatsApp per customer paid in a settled batch — their TOTAL net
- * interest for the batch's cut-off. Skips customers with no phone on file. */
-async function enqueueInterestWhatsapp(tx: Db, batchId: number, payoutDate: string | null): Promise<void> {
-  if (!payoutDate) return;
-  const { rows } = await tx.query<{ full_name: string; phone: string | null; interest: string; month_credit: string; credit_date: string }>(
+/**
+ * Queue + send one WhatsApp per customer paid in a SETTLED batch — their TOTAL
+ * net interest for the cut-off (approved ncd_interest_final template). Staff
+ * trigger (a settled batch can fan out hundreds of sends, so it's a deliberate
+ * click, not an approval side effect). Skips customers with no phone on file.
+ */
+export async function notifyInterestOnWhatsapp(db: Db, batchId: number): Promise<{ queued: number; skipped: number; sent: number }> {
+  const batch = (await db.query<{ status: string; payout_date: string }>(
+    'SELECT status, payout_date FROM payout_batches WHERE id = $1', [batchId])).rows[0];
+  if (!batch) throw errors.notFound('Batch not found');
+  if (batch.status !== 'Paid') throw errors.conflict('Batch is not settled yet — settle it before notifying customers.');
+
+  const { rows } = await db.query<{ full_name: string; phone: string | null; interest: string; month_credit: string; credit_date: string }>(
     `SELECT c.full_name, c.phone,
             SUM(ds.net_amount)::numeric        AS interest,
             to_char($2::date, 'FMMonth YYYY')  AS month_credit,
@@ -190,15 +194,22 @@ async function enqueueInterestWhatsapp(tx: Db, batchId: number, payoutDate: stri
        JOIN customers c    ON c.id = a.customer_id
       WHERE ds.batch_id = $1 AND ds.due_type IN ${DUE_TYPES} AND ds.status = 'Paid'
       GROUP BY c.id, c.full_name, c.phone`,
-    [batchId, payoutDate]);
+    [batchId, batch.payout_date]);
+  const ids: number[] = [];
+  let skipped = 0;
   for (const r of rows) {
-    if (!r.phone) continue; // no usable number → nothing to send
+    if (!r.phone) { skipped++; continue; } // no usable number
     const amount = Number(r.interest).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-    await enqueue(tx, {
+    ids.push(await enqueue(db, {
       channel: 'whatsapp', template: 'interest_paid', to: r.phone,
       payload: { name: r.full_name, amount, month: r.month_credit, date: r.credit_date },
-    });
+    }));
   }
+  if (ids.length) await drainOnce(db, ids.length + 5); // send now rather than waiting for the cron
+  const sent = ids.length
+    ? Number((await db.query<{ n: string }>("SELECT count(*)::int n FROM notifications_queue WHERE id = ANY($1) AND status = 'Sent'", [ids])).rows[0]!.n)
+    : 0;
+  return { queued: ids.length, skipped, sent };
 }
 
 // On REJECT of an interest batch: reverse the materialisation so the interest

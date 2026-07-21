@@ -41,25 +41,43 @@ describe('WhatsApp interest-credit notification', () => {
     const phone = '9765400001';
     await activeInvestment('Interest Notify Cust', phone);
     const ncd = await as('ncd@demo.local');
+    const a = await admin();
 
     // Create + settle a batch whose cut-off is after the first interest is due.
     const batch = await ncd.post('/api/payouts', { payout_date: '2026-09-28' });
     expect(batch.status).toBe(201);
     expect(batch.json.count).toBeGreaterThan(0);
-    const appr = await (await admin()).post(`/api/approvals/${batch.json.request.id}/approve`);
-    expect(appr.status).toBe(200);
+    const batchId = batch.json.batch_id;
+    expect((await a.post(`/api/approvals/${batch.json.request.id}/approve`)).status).toBe(200);
 
-    // A WhatsApp interest notification is queued for the customer, with the
-    // template's four display fields — total net interest, month, cut-off date.
+    // Settling does NOT send anything — the fan-out is an explicit staff action.
+    const pendingAfterSettle = (await ctx.db.query(
+      "SELECT count(*)::int n FROM notifications_queue WHERE channel = 'whatsapp' AND template = 'interest_paid' AND to_address = $1", [phone])).rows[0] as any;
+    expect(Number(pendingAfterSettle.n)).toBe(0);
+
+    // The staff "Notify customers" action fans out one message per paid customer.
+    const notify = await a.post(`/api/payouts/${batchId}/whatsapp-interest`);
+    expect(notify.status).toBe(200);
+    expect(notify.json.queued).toBeGreaterThanOrEqual(1);
+    expect(notify.json.sent).toBeGreaterThanOrEqual(1);
+
+    // The customer's message carries the template's four display fields.
     const q = (await ctx.db.query(
       "SELECT to_address, payload FROM notifications_queue WHERE channel = 'whatsapp' AND template = 'interest_paid' AND to_address = $1 ORDER BY id DESC LIMIT 1",
       [phone])).rows[0] as any;
-    expect(q).toBeTruthy();
     expect(q.to_address).toBe(phone);
     expect(q.payload.name).toBe('Interest Notify Cust');
     expect(String(q.payload.amount).length).toBeGreaterThan(0);
     expect(q.payload.month).toBe('September 2026');
     expect(q.payload.date).toBe('28-Sep-2026');
+  });
+
+  it('cannot notify for a batch that is not settled yet', async () => {
+    await activeInvestment('Unsettled Notify', '9765400002');
+    const ncd = await as('ncd@demo.local');
+    const batch = await ncd.post('/api/payouts', { payout_date: '2026-09-28' }); // created, not approved
+    const r = await (await admin()).post(`/api/payouts/${batch.json.batch_id}/whatsapp-interest`);
+    expect(r.status).toBe(409);
   });
 
   it('the WappCloud provider maps interest_paid → ncd_interest_final with {{1..4}}', () => {

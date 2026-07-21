@@ -317,6 +317,7 @@ function groupsOf(rows: ApprovalReq[]): Array<[string, ApprovalReq[]]> {
 
 interface Editable {
   application_id: number;
+  has_receipt: boolean;
   readonly: Record<string, string>;
   fields: {
     total_amount: number; date_money_received: string; collection_method: string;
@@ -363,6 +364,11 @@ function EditableInvestment({ ed, id, canAct, selfApproval, actionLabel, onDone 
           </span>
         ))}
       </dl>
+      <div className="mb-2 text-xs">
+        {ed.has_receipt
+          ? <a href={`/api/applications/${ed.application_id}/receipt`} target="_blank" rel="noreferrer" className="text-primary hover:underline">📎 View receipt / cheque photo</a>
+          : <span className="text-text-muted">No receipt attached.</span>}
+      </div>
       <div className="text-xs text-text-muted mb-2">
         Entered by the maker — correct anything that's wrong before approving.
         Interest starts from the money-received date (or the series deemed date, whichever is later).

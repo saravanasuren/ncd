@@ -267,6 +267,9 @@ function NewInvestment({ customerId }: { customerId: number }) {
   const [dateReceived, setDateReceived] = useState('');
   const [clubWith, setClubWith] = useState('');
   const [lockerDeposit, setLockerDeposit] = useState(false);
+  const [method, setMethod] = useState('');
+  const [reference, setReference] = useState('');
+  const [receipt, setReceipt] = useState<File | null>(null);
   const [err, setErr] = useState('');
   const series = useQuery({ queryKey: ['series'], queryFn: () => api.get<{ rows: any[] }>('/api/series') });
   const schemes = useQuery({ queryKey: ['schemes'], queryFn: () => api.get<{ rows: any[] }>('/api/schemes') });
@@ -277,13 +280,27 @@ function NewInvestment({ customerId }: { customerId: number }) {
     queryFn: () => api.get<{ rows: any[] }>(`/api/applications/clubbing-candidates?customer_id=${customerId}&series_id=${seriesId}`),
     enabled: !!seriesId,
   });
+  const readFileB64 = (file: File) => new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] ?? '');
+    r.onerror = reject; r.readAsDataURL(file);
+  });
   const create = useMutation({
-    mutationFn: () => api.post<{ id: number }>('/api/applications', {
-      customer_id: customerId, series_id: Number(seriesId), scheme_id: Number(schemeId), amount: Number(amount),
-      ...(dateReceived ? { date_money_received: dateReceived } : {}),
-      ...(clubWith ? { club_with_application_id: Number(clubWith) } : {}),
-      ...(lockerDeposit ? { is_locker_deposit: true } : {}),
-    }),
+    mutationFn: async () => {
+      const r = await api.post<{ id: number }>('/api/applications', {
+        customer_id: customerId, series_id: Number(seriesId), scheme_id: Number(schemeId), amount: Number(amount),
+        ...(dateReceived ? { date_money_received: dateReceived } : {}),
+        ...(method.trim() ? { collection_method: method.trim() } : {}),
+        ...(reference.trim() ? { collection_reference: reference.trim() } : {}),
+        ...(clubWith ? { club_with_application_id: Number(clubWith) } : {}),
+        ...(lockerDeposit ? { is_locker_deposit: true } : {}),
+      });
+      if (receipt) {
+        if (receipt.size > 4 * 1024 * 1024) throw new ApiError('too_large', 400, 'Receipt must be under 4 MB');
+        await api.post(`/api/applications/${r.id}/receipt`, { filename: receipt.name, mime: receipt.type || 'application/octet-stream', data_base64: await readFileB64(receipt) });
+      }
+      return r;
+    },
     onSuccess: (r) => nav(`/app/applications/${r.id}`),
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
@@ -305,6 +322,12 @@ function NewInvestment({ customerId }: { customerId: number }) {
         <input className={sel} placeholder="Amount" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
         <label className="text-xs flex items-center gap-1.5" title="Date the money was credited to Dhanam's account — interest starts from here once approved">
           Credited <input className={sel} type="date" value={dateReceived} onChange={(e) => setDateReceived(e.target.value)} />
+        </label>
+        <input className={sel} placeholder="Payment method (NEFT/Cheque/Cash…)" value={method} onChange={(e) => setMethod(e.target.value)} />
+        <input className={sel} placeholder="Reference / cheque no." value={reference} onChange={(e) => setReference(e.target.value)} />
+        <label className="text-xs flex items-center gap-1.5 cursor-pointer border border-border-strong rounded px-2.5 py-1.5" title="Receipt / cheque photo (image or PDF, under 4 MB)">
+          {receipt ? `📎 ${receipt.name.length > 18 ? receipt.name.slice(0, 15) + '…' : receipt.name}` : '📎 Receipt photo'}
+          <input type="file" accept="image/*,.pdf" className="hidden" onChange={(e) => setReceipt(e.target.files?.[0] ?? null)} />
         </label>
         <label className="text-xs flex items-center gap-1.5" title="Money came from a locker (LockerHub-originated deposits flag themselves automatically)">
           <input type="checkbox" checked={lockerDeposit} onChange={(e) => setLockerDeposit(e.target.checked)} /> Locker deposit

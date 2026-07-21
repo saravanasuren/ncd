@@ -28,6 +28,26 @@ export function verifyAccess(token: string): AccessClaims | null {
   }
 }
 
+// ── File-fetch tokens ────────────────────────────────────────────────────
+// A short-lived, path-scoped token that lets an external fetcher (WappCloud
+// pulling a WhatsApp document header) retrieve ONE document without a session.
+// Signed with the app secret → unforgeable; bound to (kind, appId) → can't be
+// swapped to another document; 6h covers the fetch + a couple of retries.
+const FILE_TTL = '6h';
+
+export function signFileToken(kind: string, appId: number): string {
+  return jwt.sign({ scope: 'file', kind, appId }, config.JWT_ACCESS_SECRET, { expiresIn: FILE_TTL });
+}
+
+export function verifyFileToken(token: string, kind: string, appId: number): boolean {
+  try {
+    const d = jwt.verify(token, config.JWT_ACCESS_SECRET) as jwt.JwtPayload;
+    return d.scope === 'file' && d.kind === kind && Number(d.appId) === appId;
+  } catch {
+    return false;
+  }
+}
+
 export function generateRefresh(): { raw: string; hash: string } {
   const raw = randomBytes(32).toString('hex');
   return { raw, hash: hashToken(raw) };

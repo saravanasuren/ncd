@@ -16,6 +16,10 @@ import { scopeFor, scopeWhere } from '../../lib/scope.js';
 import { getSettingsMap } from '../settings/service.js';
 import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
+import { enqueue, drainOnce } from '../notifications/service.js';
+import { signFileToken } from '../auth/tokens.js';
+import { formatPhone } from '../../integrations/notify/wappcloud.js';
+import { config } from '../../config.js';
 
 const SCOPE_COLS = {
   userCol: 'a.enrolled_by_user_id',
@@ -242,4 +246,32 @@ export async function getApplicationDetail(db: Db, actor: AuthUser, appId: numbe
   const lines = (await db.query('SELECT * FROM application_lines WHERE application_id = $1', [appId])).rows;
   const schedule = (await db.query('SELECT id, due_date, due_type, gross_amount, tds_amount, net_amount, status, paid_at FROM disbursement_schedule WHERE application_id = $1 ORDER BY due_date', [appId])).rows;
   return { application: app, lines, schedule };
+}
+
+/**
+ * Send the acknowledgement PDF to the customer on WhatsApp (approved `ncd_akn`
+ * template, which carries a Document header). The PDF is handed to WappCloud as
+ * a short-lived, path-scoped `?vt=` URL its servers fetch — never a public
+ * link. Queued through the shared notifications queue then drained now (one
+ * click), so the caller gets the real send status back.
+ */
+export async function sendWhatsappAck(db: Db, appId: number): Promise<{ ok: boolean; status: string; error: string | null; phone: string }> {
+  const row = (await db.query<{ full_name: string; phone: string | null }>(
+    'SELECT c.full_name, c.phone FROM applications a JOIN customers c ON c.id = a.customer_id WHERE a.id = $1', [appId])).rows[0];
+  if (!row) throw errors.notFound('Application not found');
+  const phone = formatPhone(row.phone ?? '');
+  if (!phone) throw errors.badRequest("Customer has no valid phone number on file — can't send on WhatsApp.");
+  if (!config.PUBLIC_BASE_URL) throw errors.badRequest('PUBLIC_BASE_URL is not set — add it to SSM so WappCloud can fetch the ack PDF.');
+
+  const path = `/api/reports/acknowledgment/${appId}.pdf`;
+  const documentUrl = `${config.PUBLIC_BASE_URL.replace(/\/$/, '')}${path}?vt=${encodeURIComponent(signFileToken('acknowledgment', appId))}`;
+  const documentName = `${(row.full_name || 'Customer').trim()} - NCD Acknowledgment.pdf`;
+
+  const id = await enqueue(db, {
+    channel: 'whatsapp', template: 'acknowledgment', to: phone,
+    payload: { name: row.full_name ?? '', documentUrl, documentName },
+  });
+  await drainOnce(db, 5); // send now (one click) rather than waiting for the cron
+  const st = (await db.query<{ status: string; error: string | null }>('SELECT status, error FROM notifications_queue WHERE id = $1', [id])).rows[0];
+  return { ok: st?.status === 'Sent', status: st?.status ?? 'Pending', error: st?.error ?? null, phone };
 }

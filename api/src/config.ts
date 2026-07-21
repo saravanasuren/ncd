@@ -45,7 +45,11 @@ const schema = z.object({
   WAPPCLOUD_ENDPOINT: z.string().optional(),
   WAPPCLOUD_OTP_TEMPLATE: z.string().optional(),
   WAPPCLOUD_INTEREST_TEMPLATE: z.string().optional(), // approved interest-paid template (default 'ncd_interest_final')
+  WAPPCLOUD_ACK_TEMPLATE: z.string().optional(),      // approved acknowledgement template (default 'ncd_akn')
   WHATSAPP_TEST_PHONE: z.string().optional(), // redirects ALL WhatsApp sends while set
+  // Public origin WappCloud fetches WhatsApp document headers from (e.g. the ack
+  // PDF). Required for the WhatsApp acknowledgement; no default — set in SSM.
+  PUBLIC_BASE_URL: z.string().optional(),
   // ── LockerHub outbound (cutover-gated; see ops/CUTOVER-LOCKERHUB.md) ──
   // Agent-event webhooks fire ONLY when both URL + secret are set in SSM.
   LOCKERHUB_WEBHOOK_URL: z.string().optional(),

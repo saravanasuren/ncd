@@ -10,6 +10,9 @@ import { writeAudit } from '../../lib/audit.js';
 import { nextCode } from '../../lib/sequences.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
 import { getSettingsMap } from '../settings/service.js';
+import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
+
+const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((s) => `'${s}'`).join(',');
 import { kycProvider } from '../../integrations/kyc/index.js';
 import {
   createApprovalRequest,
@@ -150,7 +153,12 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
   // (partial withdrawals reduce it), newest first.
   const applications = (await db.query(
     `SELECT a.id, a.application_no, s.code AS series_code, a.total_amount AS amount,
-            COALESCE(bk.live, a.total_amount) AS outstanding, a.status,
+            -- Outstanding is 0 once the investment has exited (Redeemed/Matured/…);
+            -- the COALESCE fallback to total_amount is only for a live app whose
+            -- lines were never materialised. Without the status guard a redeemed
+            -- app wrongly showed its original amount as outstanding.
+            CASE WHEN a.status IN (${OUTSTANDING_SQL_LIST}) THEN COALESCE(bk.live, a.total_amount) ELSE 0 END AS outstanding,
+            a.status,
             a.date_money_received, a.allotment_date
      FROM applications a JOIN series s ON s.id = a.series_id
      LEFT JOIN LATERAL (

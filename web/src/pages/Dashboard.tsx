@@ -90,6 +90,13 @@ export function Dashboard() {
         : overview.error ? <div className="text-danger mt-6">Failed to load dashboard.</div>
           : (() => {
             const k = overview.data.kpis, f = overview.data.flow, isnap = overview.data.interest_snapshot;
+            // Selected series (if any) — drives the two redemption readings.
+            const selSeriesId: number | null = range.series?.[0] ?? null;
+            const seriesList2: { series_id: number; code: string }[] = overview.data.series ?? [];
+            const selSeriesCode = selSeriesId == null ? null
+              : seriesList2.find((s) => s.series_id === selSeriesId)?.code ?? `Series ${selSeriesId}`;
+            const win = f.redemptions_window as { from: string; to: string } | null;
+            const winLabel = win ? `${win.from} → ${win.to}` : null;
             return (
               <>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mt-5 mb-6">
@@ -104,8 +111,14 @@ export function Dashboard() {
                     onClick={() => pickWidget('locker', 'Locker deposits in range')} canDrill={canDrill} />
                   <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub="Money in · app"
                     onClick={() => pickWidget('app', 'DhanamFin app investments in range')} canDrill={canDrill} />
-                  <Tile label="Redemptions" value={formatINR(f.redemptions_total)} sub={`${f.redemptions_count} in range`}
-                    onClick={() => pickWidget('redemptions', 'Redemptions in range')} canDrill={canDrill} />
+                  <Tile label={selSeriesCode ? 'Redeemed in window' : 'Redemptions'} value={formatINR(f.redemptions_total)}
+                    sub={selSeriesCode ? `${f.redemptions_count} redeemed · ${winLabel ?? selSeriesCode} window` : `${f.redemptions_count} in range`}
+                    onClick={() => pickWidget('redemptions', selSeriesCode ? `Redeemed during ${selSeriesCode} window${winLabel ? ` (${winLabel})` : ''}` : 'Redemptions in range')} canDrill={canDrill} />
+                  {selSeriesCode && f.redemptions_of_series_total != null && (
+                    <Tile label={`Redemptions of ${selSeriesCode}`} value={formatINR(f.redemptions_of_series_total)}
+                      sub={`${f.redemptions_of_series_count} redeemed · this series`}
+                      onClick={() => pickWidget('redemptions-of-series', `Redemptions of ${selSeriesCode}`)} canDrill={canDrill} />
+                  )}
                   <Tile label="Staff-wise" value={formatINR(f.money_in_staff)} sub="New business by staff"
                     onClick={() => pickWidget('staff', 'New business by staff (in range)')} canDrill={canDrill} />
                   <Tile label="Agent-wise" value={formatINR(f.money_in_agent)} sub="New business by agent"
@@ -242,6 +255,11 @@ const FLAT_COLS: Record<string, FlatCol[]> = {
     { key: 'days', header: 'Days', kind: 'num' }, { key: 'amount', header: 'Accrued', kind: 'money' },
   ],
   redemptions: [
+    { key: 'redemption_date', header: 'Date', kind: 'date' }, { key: 'customer_name', header: 'Customer' },
+    { key: 'series_code', header: 'Series' }, { key: 'type', header: 'Type' },
+    { key: 'net_payment', header: 'Net paid', kind: 'money' },
+  ],
+  'redemptions-of-series': [
     { key: 'redemption_date', header: 'Date', kind: 'date' }, { key: 'customer_name', header: 'Customer' },
     { key: 'series_code', header: 'Series' }, { key: 'type', header: 'Type' },
     { key: 'net_payment', header: 'Net paid', kind: 'money' },
@@ -428,8 +446,8 @@ function IncentiveRows({ g, open, onToggle }: { g: any; open: boolean; onToggle:
             <td className="py-1 pl-8 pr-3">{ch.customer} <span className="text-text-muted font-mono">{ch.customer_code}</span> · <span className="text-text-muted">{ch.series_code}</span></td>
             <td className="py-1 px-3 text-right text-text-muted">{formatINR(ch.investment_amount)}</td>
             <td className="py-1 px-3 text-right mono">{formatINR(ch.incentive_amount)}</td>
-            <td className="py-1 px-3 text-right text-text-muted">—</td>
-            <td className="py-1 pl-3 text-right">{ch.paid ? <span className="text-success">Paid</span> : <span className="text-text-muted">Pending</span>}</td>
+            <td className="py-1 px-3 text-right text-text-muted">{formatINR(ch.paid ? ch.incentive_amount : 0)}</td>
+            <td className="py-1 pl-3 text-right mono">{ch.paid ? formatINR(0) : formatINR(ch.incentive_amount)}</td>
           </tr>
         )))}
     </>

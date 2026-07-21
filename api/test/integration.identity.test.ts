@@ -130,6 +130,26 @@ describe('enrol: duplicate PAN → handover offer; free text → pending agent',
 });
 
 describe('handover approval — any one of Admin / CXO / Branch Manager', () => {
+  it('maker payment method + reference + receipt reach the approval detail pre-filled', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Pay Details Cust', phone: '9700099234' });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '4242424242', ifsc: 'ICIC0001111' });
+    const app = await a.post('/api/applications', {
+      customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 150000,
+      date_money_received: '2026-07-05', collection_method: 'Cheque', collection_reference: 'CHQ-99881',
+    });
+    // attach a receipt (tiny base64 png)
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const up = await a.post(`/api/applications/${app.json.id}/receipt`, { filename: 'r.png', mime: 'image/png', data_base64: png });
+    expect(up.status).toBe(201);
+
+    const reqId = app.json.subscription_request.id;
+    const det = await a.get(`/api/approvals/${reqId}`);
+    expect(det.json.editable.fields.collection_method).toBe('Cheque');
+    expect(det.json.editable.fields.collection_reference).toBe('CHQ-99881');
+    expect(det.json.editable.has_receipt).toBe(true);
+  });
+
   it('approval detail is pre-filled from the maker, and an approver can correct it while approving', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Edit On Approve', phone: '9700088123' });

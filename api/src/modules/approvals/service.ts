@@ -300,6 +300,7 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
   const r = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.application_no, a.total_amount, a.date_money_received, a.collection_method,
             a.collection_reference, a.referred_by_text, a.interest_start_date, a.created_at,
+            (a.receipt_file_path IS NOT NULL) AS has_receipt,
             a.status, s.code AS series_code, sc.code AS scheme_code,
             sc.coupon_rate_pct, sc.tenure_months,
             c.full_name AS customer, c.customer_code, c.pan
@@ -313,6 +314,7 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
   const d = (v: unknown) => (v ? String(v).slice(0, 10) : '');
   return {
     application_id: Number(r.id),
+    has_receipt: r.has_receipt === true,
     readonly: {
       customer: `${r.customer} (${r.customer_code})`,
       pan: r.pan ?? '—',

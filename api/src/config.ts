@@ -82,3 +82,26 @@ export type Config = z.infer<typeof schema>;
 export const config: Config = schema.parse(process.env);
 
 export const isProd = config.NODE_ENV === 'production';
+
+// Fail CLOSED in production: the schema supplies dev fallbacks so local dev and
+// tests boot with zero setup, but if a real secret is ever missing/misnamed in
+// SSM the app must NOT boot signing JWTs (or accepting the integration key) with
+// a publicly-known default — that would let anyone forge a super_admin session.
+if (isProd) {
+  const insecureDefaults: Record<string, string> = {
+    JWT_ACCESS_SECRET: 'dev_access_secret_change_me_16chars',
+    JWT_REFRESH_SECRET: 'dev_refresh_secret_change_me_16chars',
+    LOCKERHUB_INTEGRATION_KEY: 'dev-integration-key',
+    SEED_ADMIN_PASSWORD: 'ChangeMe_Dev_123',
+  };
+  const stillDefault = Object.entries(insecureDefaults)
+    .filter(([k, def]) => (config as Record<string, unknown>)[k] === def)
+    .map(([k]) => k);
+  if (stillDefault.length) {
+    throw new Error(
+      `Refusing to boot in production with default secret(s): ${stillDefault.join(', ')}. ` +
+      `Set them in SSM (/dhanam/newwealth/*) before starting.`,
+    );
+  }
+  if (!config.DATABASE_URL) throw new Error('DATABASE_URL is required in production.');
+}

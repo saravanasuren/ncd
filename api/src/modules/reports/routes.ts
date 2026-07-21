@@ -42,6 +42,8 @@ reportsRouter.get('/ncd-book.xlsx', requirePermission('reports:download'),
 
 reportsRouter.get('/soa/:customerId.pdf', requirePermission('reports:download', 'customers:read'),
   asyncHandler(async (req, res) => {
+    const { assertCustomerVisible } = await import('../../lib/visibility.js');
+    await assertCustomerVisible(getDb(), req.user!, Number(req.params.customerId));
     const { soaPdf } = await import('./documents.js');
     const buf = await soaPdf(getDb(), Number(req.params.customerId));
     res.setHeader('Content-Type', 'application/pdf');
@@ -52,6 +54,8 @@ reportsRouter.get('/soa/:customerId.pdf', requirePermission('reports:download', 
 // Staff-facing bond certificate / allotment letter for one application.
 reportsRouter.get('/bond/:applicationId.pdf', requirePermission('customers:read'),
   asyncHandler(async (req, res) => {
+    const { assertApplicationVisible } = await import('../../lib/visibility.js');
+    await assertApplicationVisible(getDb(), req.user!, Number(req.params.applicationId));
     const { bondCertificatePdf } = await import('./documents.js');
     const buf = await bondCertificatePdf(getDb(), Number(req.params.applicationId));
     res.setHeader('Content-Type', 'application/pdf');
@@ -60,6 +64,8 @@ reportsRouter.get('/bond/:applicationId.pdf', requirePermission('customers:read'
   }));
 reportsRouter.get('/allotment/:applicationId.pdf', requirePermission('customers:read'),
   asyncHandler(async (req, res) => {
+    const { assertApplicationVisible } = await import('../../lib/visibility.js');
+    await assertApplicationVisible(getDb(), req.user!, Number(req.params.applicationId));
     const { allotmentLetterPdf } = await import('./documents.js');
     const buf = await allotmentLetterPdf(getDb(), Number(req.params.applicationId));
     res.setHeader('Content-Type', 'application/pdf');

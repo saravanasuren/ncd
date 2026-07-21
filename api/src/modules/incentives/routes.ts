@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
+import { errors } from '../../lib/errors.js';
 import * as s from './service.js';
 
 export const incentivesRouter = Router();
@@ -19,7 +20,15 @@ incentivesRouter.get('/my-earnings', requirePermission('earnings:read-own'),
 
 incentivesRouter.get('/payees/:type/:id/statement.pdf', requirePermission('incentives:manage-eligibility', 'earnings:read-own'),
   asyncHandler(async (req, res) => {
-    const buf = await s.statementPdf(getDb(), req.params.type!, Number(req.params.id));
+    const type = req.params.type!, id = Number(req.params.id);
+    // A caller with only earnings:read-own (no manage-eligibility) may pull ONLY
+    // their own statement — otherwise any agent could read anyone's earnings.
+    if (!req.user!.permissions.includes('incentives:manage-eligibility')) {
+      const ownType = req.user!.agentId ? 'agent' : 'staff';
+      const ownId = req.user!.agentId ?? req.user!.id;
+      if (type !== ownType || id !== ownId) throw errors.forbidden('You can only view your own statement');
+    }
+    const buf = await s.statementPdf(getDb(), type, id);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="incentive-statement.pdf"`);
     res.end(buf);

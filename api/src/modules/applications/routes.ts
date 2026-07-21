@@ -55,6 +55,8 @@ applicationsRouter.post('/:id/receipt', requirePermission('applications:create',
 
 applicationsRouter.get('/:id/receipt', requirePermission('customers:read', 'approvals:check'),
   asyncHandler(async (req, res) => {
+    const { assertApplicationVisible } = await import('../../lib/visibility.js');
+    await assertApplicationVisible(getDb(), req.user!, Number(req.params.id));
     const r = await s.getReceipt(getDb(), Number(req.params.id));
     if (!r) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No receipt' } }); return; }
     const h = serveHeaders(r.mime, r.filename, 'receipt');

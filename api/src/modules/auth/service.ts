@@ -28,6 +28,17 @@ export async function issueSession(
   return { accessToken: signAccess({ sub: user.id, role: user.role }), refreshRaw: raw };
 }
 
+/** Block a self-signup that hasn't been verified within 30 days. Enforced at
+ * login AND on every refresh (see refresh()). */
+async function assertNotExpiredUnverified(db: Db, userId: number): Promise<void> {
+  const r = (await db.query<{ is_self_signup: boolean; verified_at: string | null; created_at: string }>(
+    'SELECT is_self_signup, verified_at, created_at FROM users WHERE id = $1', [userId])).rows[0];
+  if (r && r.is_self_signup && !r.verified_at) {
+    const ageDays = (Date.now() - new Date(r.created_at).getTime()) / 86_400_000;
+    if (ageDays > 30) throw errors.forbidden('Your account has not been verified within 30 days. Please contact an administrator.');
+  }
+}
+
 export async function login(
   db: Db,
   identifier: string,
@@ -146,6 +157,11 @@ export async function refresh(
   }
   const user = await findAuthUserById(db, Number(row.user_id));
   if (!user) throw errors.unauthorized('Session invalid');
+  // Re-check the 30-day unverified block on EVERY refresh (not just login) —
+  // otherwise a self-signup who logged in once kept rolling a fresh session
+  // forever and was never blocked. Access tokens are 15-min, so this bites
+  // within one refresh cycle of the 30-day mark.
+  await assertNotExpiredUnverified(db, Number(row.user_id));
   // Rotate: revoke old, issue new.
   await db.query('UPDATE sessions SET revoked_at = now() WHERE id = $1', [row.id]);
   const tokens = await issueSession(db, user, meta);

@@ -2,8 +2,22 @@
 import pg from 'pg';
 import type { Db, QueryResult } from './types.js';
 
-// numeric/bigint/date come back as strings by default in node-postgres — we
-// keep it that way on purpose (docs/01 §4: money numbers are strings).
+// numeric/bigint come back as strings by default in node-postgres, and we keep
+// them that way on purpose (docs/01 §4: money numbers are strings).
+//
+// DATE/TIMESTAMP are the exception: node-pg's DEFAULT parsers turn them into JS
+// Date objects, but the whole codebase (and the PGlite test adapter, which
+// returns strings) assumes plain strings — e.g. `String(col).slice(0,10)`. On a
+// Date object that yields "Wed Jun 01 2026 …" instead of "2026-06-01", which
+// then crashed the dashboard and mangled report/export/PDF dates in PROD only
+// (tests never saw it). Register string parsers for date(1082),
+// timestamp(1114) and timestamptz(1184) so prod matches tests and the
+// String()/slice assumptions hold everywhere. This is process-global, which is
+// fine — there is a single pool.
+const asString = (v: string): string => v;
+pg.types.setTypeParser(1082, asString); // date        -> 'YYYY-MM-DD'
+pg.types.setTypeParser(1114, asString); // timestamp   -> 'YYYY-MM-DD HH:MM:SS(.ms)'
+pg.types.setTypeParser(1184, asString); // timestamptz -> 'YYYY-MM-DD HH:MM:SS(.ms)+TZ'
 
 export class PgDb implements Db {
   private pool: pg.Pool;

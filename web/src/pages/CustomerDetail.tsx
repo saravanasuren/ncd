@@ -131,6 +131,8 @@ export function CustomerDetailPage() {
         />
       </div>
 
+      <Demat customerId={Number(id)} customer={c} canEdit={can('customers:update')} onChange={invalidate} onError={setMsg} />
+
       <RelationsKyc customerId={Number(id)} data={data} onChange={invalidate} can={can} />
 
       {can('applications:create') && c.creation_status === 'Approved' && <NewInvestment customerId={Number(id)} />}
@@ -353,6 +355,65 @@ function NewInvestment({ customerId }: { customerId: number }) {
 
 function Field({ label, value }: { label: string; value: unknown }) {
   return (<><dt className="text-text-muted">{label}</dt><dd className="font-medium">{value ? String(value) : '—'}</dd></>);
+}
+
+/**
+ * Demat account — the depository account the NCDs are credited to. Backed by the
+ * customers table (demat_dp_id / demat_client_id / depository) via PUT /:id/demat.
+ * DP ID + Client ID together form the 16-char BO ID.
+ */
+function Demat({ customerId, customer, canEdit, onChange, onError }: {
+  customerId: number; customer: any; canEdit: boolean; onChange: () => void; onError: (m: string) => void;
+}) {
+  const [dpId, setDpId] = useState(customer.demat_dp_id ?? '');
+  const [clientId, setClientId] = useState(customer.demat_client_id ?? '');
+  const [depository, setDepository] = useState(customer.depository ?? '');
+  const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
+
+  const has = !!(customer.demat_dp_id || customer.demat_client_id);
+  const dirty = dpId.trim() !== (customer.demat_dp_id ?? '')
+    || clientId.trim() !== (customer.demat_client_id ?? '')
+    || (depository || '') !== (customer.depository ?? '');
+
+  const save = useMutation({
+    mutationFn: () => api.put(`/api/customers/${customerId}/demat`, {
+      dp_id: dpId.trim(), client_id: clientId.trim(), depository: depository.trim() || null,
+    }),
+    onSuccess: onChange,
+    onError: (e) => onError(e instanceof ApiError ? e.message : 'Failed'),
+  });
+
+  return (
+    <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
+      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Demat account</h2>
+      {has ? (
+        <dl className="grid grid-cols-2 gap-y-2 text-sm mb-3">
+          <Field label="DP ID" value={customer.demat_dp_id} />
+          <Field label="Client ID" value={customer.demat_client_id} />
+          <Field label="Depository" value={customer.depository} />
+        </dl>
+      ) : (
+        <div className="text-sm text-text-muted mb-3">No demat details on file.</div>
+      )}
+      {canEdit && (
+        <div className="flex gap-2 items-center flex-wrap">
+          <input className={inp} placeholder="DP ID" value={dpId} maxLength={16}
+            onChange={(e) => setDpId(e.target.value.toUpperCase().replace(/\s/g, ''))} />
+          <input className={inp} placeholder="Client ID" value={clientId} maxLength={16}
+            onChange={(e) => setClientId(e.target.value.replace(/\s/g, ''))} />
+          <select className={inp} value={depository} onChange={(e) => setDepository(e.target.value)}>
+            <option value="">Depository…</option>
+            <option value="NSDL">NSDL</option>
+            <option value="CDSL">CDSL</option>
+          </select>
+          <button disabled={!dpId.trim() || !clientId.trim() || !dirty || save.isPending} onClick={() => save.mutate()}
+            className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
+            {has ? 'Update' : '+ Save'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**

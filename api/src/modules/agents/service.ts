@@ -141,6 +141,44 @@ export async function ensurePendingAgentForName(tx: Db, actor: AuthUser, name: s
   return id;
 }
 
+/** Active agents for staff "add agent" pickers (contract B24). */
+export async function activeAgents(db: Db, limit = 100): Promise<{ id: number; agent_code: string; full_name: string }[]> {
+  const lim = Math.min(Math.max(Number.isFinite(limit) ? limit : 100, 1), 500);
+  const { rows } = await db.query<{ id: string; agent_code: string; full_name: string }>(
+    'SELECT id, agent_code, full_name FROM agents WHERE is_active = TRUE ORDER BY full_name LIMIT $1', [lim]);
+  return rows.map((r) => ({ id: Number(r.id), agent_code: r.agent_code, full_name: r.full_name }));
+}
+
+/**
+ * Integration path (staff console via LockerHub, contract B24): propose a new
+ * agent → PendingApproval agent + an agent_registration approval. No user actor
+ * (makerUserId null). Deduped by normalized full_name — a repeat proposal
+ * returns the existing agent with created:false.
+ */
+export async function proposeAgent(
+  db: Db, input: { full_name: string; phone?: string | null; email?: string | null; proposed_by?: string | null }
+): Promise<{ agent_id: number; agent_code: string; created: boolean }> {
+  const norm = input.full_name.trim().replace(/\s+/g, ' ');
+  if (!norm) throw errors.badRequest('full_name required');
+  return db.withTx(async (tx) => {
+    const existing = (await tx.query<{ id: string; agent_code: string }>(
+      'SELECT id, agent_code FROM agents WHERE lower(btrim(full_name)) = lower($1) LIMIT 1', [norm])).rows[0];
+    if (existing) return { agent_id: Number(existing.id), agent_code: existing.agent_code, created: false };
+    const code = `AG-${String(await nextSeq(tx, 'agent')).padStart(4, '0')}`;
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO agents (agent_code, full_name, phone, email, source, commission_status, is_active)
+       VALUES ($1,$2,$3,$4,'manual','PendingApproval',FALSE) RETURNING id`,
+      [code, norm, input.phone ?? null, input.email ?? null]);
+    const id = Number(rows[0]!.id);
+    await createApprovalRequest(tx, {
+      type: 'agent_registration', entityType: 'agents', entityId: id,
+      makerUserId: null, metadata: { agent_code: code, full_name: norm, origin: input.proposed_by ?? 'staff_propose' },
+    });
+    await writeAudit(tx, { actorId: null, action: 'agent.propose', entityType: 'agents', entityId: id, after: { code, name: norm } });
+    return { agent_id: id, agent_code: code, created: true };
+  });
+}
+
 /**
  * System path (no actor): ensure a single agent exists for a referred-by name
  * during accrual, when the name matched no known payee at enrol time. Deduped

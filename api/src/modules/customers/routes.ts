@@ -13,7 +13,7 @@ export const customersRouter = Router();
 customersRouter.get('/', requirePermission('customers:read'),
   asyncHandler(async (req, res) => {
     const filters = { status: req.query.status as string, district: req.query.district as string, q: req.query.q as string, showArchived: req.query.showArchived === 'true' };
-    res.json({ rows: await s.listCustomers(getDb(), req.user!, filters) });
+    res.json(await s.listCustomers(getDb(), req.user!, filters));
   }));
 
 const createSchema = z.object({
@@ -32,6 +32,7 @@ const createSchema = z.object({
   father_name: z.string().optional(),
   occupation: z.string().optional(),
   aadhaar_last4: z.string().optional(),
+  aadhaar: z.string().optional(), // full 12-digit; last4 is derived from it
   phone_secondary: z.string().optional(),
   investor_category: z.string().optional(),
   ckyc_number: z.string().optional(),

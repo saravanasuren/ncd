@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { ReferredByPicker } from '../components/ReferredByPicker.js';
+import { APPROVAL_TYPE_LABELS as TYPE_LABELS } from '../labels.js';
 
 interface ApprovalReq {
   id: number;
@@ -19,25 +20,6 @@ interface ApprovalReq {
   subject?: string;
   amount?: number | null;
 }
-
-const TYPE_LABELS: Record<string, string> = {
-  customer_creation: 'New Customer',
-  customer_correction: 'Customer Correction',
-  customer_reassignment: 'Customer Handover',
-  subscription: 'Investment',
-  premature_redemption: 'Premature Redemption',
-  redemption: 'Redemption',
-  rollover: 'Rollover',
-  ncd_transfer: 'Holder Transfer',
-  ncd_transformation: 'Transformation',
-  agent_registration: 'Agent Registration',
-  activation_batch: 'Activation',
-  allotment_batch: 'Allotment',
-  user_verification: 'User Verification',
-  app_investment: 'App investment (live)',
-  commission_eligibility: 'Agent Commission',
-  interest_batch: 'Interest Payout',
-};
 
 /** Human title for a request card, e.g. "NCD_27 · Activation" for a batch. */
 function requestTitle(r: ApprovalReq): string {
@@ -59,11 +41,17 @@ function Detail({ id, canAct, selfApproval, actionLabel, onDone }: { id: number;
       detail: { subject: string; amount: number | null; facts: Array<{ label: string; value: string }> };
       editable: Editable | null }>(`/api/approvals/${id}`),
   });
+  // Allotment date is editable at approval time (backdatable). null = "use the
+  // maker's date" until the approver changes it.
+  const [allotDateOverride, setAllotDateOverride] = useState<string | null>(null);
   if (isLoading) return <div className="text-xs text-text-muted px-4 pb-3">Loading detail…</div>;
   const r = data?.request ?? {};
   const covered = data?.covered ?? null;
   const facts = data?.detail?.facts ?? [];
   const total = (covered ?? []).reduce((s, c) => s + Number(c.amount), 0);
+  const isAllotment = String(r.request_type ?? '') === 'allotment_batch';
+  const metaAllotDate = String((r.metadata as Record<string, unknown> | undefined)?.allotment_date ?? '').slice(0, 10);
+  const allotDate = allotDateOverride ?? metaAllotDate;
   return (
     <div className="px-4 pb-4">
       {covered && (
@@ -99,8 +87,14 @@ function Detail({ id, canAct, selfApproval, actionLabel, onDone }: { id: number;
           )}
         </div>
       )}
-      {facts.length > 0 && (
+      {(facts.length > 0 || covered) && (
         <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-xs bg-bg rounded p-3 mb-2">
+          {covered && (
+            <span className="contents">
+              <dt className="text-text-muted">Total amount</dt>
+              <dd className="m-0 font-semibold break-words mono">{formatINR(total)}</dd>
+            </span>
+          )}
           {facts.map((f) => (
             <span key={f.label} className="contents">
               <dt className="text-text-muted">{f.label}</dt>
@@ -109,9 +103,18 @@ function Detail({ id, canAct, selfApproval, actionLabel, onDone }: { id: number;
           ))}
         </dl>
       )}
+      {isAllotment && canAct && (
+        <div className="mb-2 bg-bg rounded p-3">
+          <label className="block text-xs font-semibold text-text-label mb-1">Allotment date</label>
+          <input type="date" value={allotDate} onChange={(e) => setAllotDateOverride(e.target.value)}
+            className="px-2 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary" />
+          <p className="text-[11px] text-text-muted mt-1">You can set a past date — e.g. the date the series was actually allotted.</p>
+        </div>
+      )}
       {data?.editable
         ? <EditableInvestment ed={data.editable} id={id} canAct={canAct} selfApproval={selfApproval} actionLabel={actionLabel} onDone={onDone} />
-        : canAct && <ConfirmApproval id={id} label={actionLabel} selfApproval={selfApproval} onDone={onDone} />}
+        : canAct && <ConfirmApproval id={id} label={actionLabel} selfApproval={selfApproval}
+            extraFields={isAllotment ? { allotment_date: allotDate } : undefined} onDone={onDone} />}
     </div>
   );
 }
@@ -208,7 +211,7 @@ export function ApprovalsPage() {
   const qc = useQueryClient();
   const [msg, setMsg] = useState('');
   const [openId, setOpenId] = useState<number | null>(null);
-  const { data, isLoading } = useQuery({ queryKey: ['approvals'], queryFn: () => api.get<{ rows: ApprovalReq[] }>('/api/approvals/queue') });
+  const { data, isLoading, error } = useQuery({ queryKey: ['approvals'], queryFn: () => api.get<{ rows: ApprovalReq[] }>('/api/approvals/queue') });
   const uiConfig = useQuery({ queryKey: ['ui-config'], queryFn: () => api.get<{ values: Record<string, unknown> }>('/api/settings/ui-config') });
   const waiverEnabled = uiConfig.data?.values['redemption.premature_penalty_waiver_enabled'] !== false;
 
@@ -220,6 +223,7 @@ export function ApprovalsPage() {
   });
 
   if (isLoading) return <div className="text-text-muted">Loading approvals…</div>;
+  if (error) return <div className="text-danger">Failed to load approvals.</div>;
 
   return (
     <div className="w-full">
@@ -418,14 +422,20 @@ function SelfApprovalReason({ value, onChange }: { value: string; onChange: (v: 
   );
 }
 
-/** Two-step confirm for requests that have no editable investment form. */
-function ConfirmApproval({ id, label, selfApproval, onDone }: { id: number; label: string; selfApproval?: boolean; onDone: () => void }) {
+/** Two-step confirm for requests that have no editable investment form.
+ * `extraFields` are merged into the approve payload (e.g. an overridden
+ * allotment date). */
+function ConfirmApproval({ id, label, selfApproval, extraFields, onDone }: { id: number; label: string; selfApproval?: boolean; extraFields?: Record<string, unknown>; onDone: () => void }) {
   const qc = useQueryClient();
   const [err, setErr] = useState('');
   const [selfReason, setSelfReason] = useState('');
   const blocked = !!selfApproval && selfReason.trim().length < 3;
   const go = useMutation({
-    mutationFn: () => api.post(`/api/approvals/${id}/approve`, selfApproval ? { extra: { self_approval_reason: selfReason.trim() } } : {}),
+    mutationFn: () => {
+      const extra: Record<string, unknown> = { ...(extraFields ?? {}) };
+      if (selfApproval) extra.self_approval_reason = selfReason.trim();
+      return api.post(`/api/approvals/${id}/approve`, Object.keys(extra).length ? { extra } : {});
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['approval', id] }); onDone(); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to approve'),
   });

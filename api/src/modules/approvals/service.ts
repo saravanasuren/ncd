@@ -16,6 +16,7 @@ import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import type { Permission } from '@new-wealth/shared';
 import { errors } from '../../lib/errors.js';
+import { toISODate } from '../../lib/dates.js';
 import { writeAudit } from '../../lib/audit.js';
 import { nextCode } from '../../lib/sequences.js';
 import { typeDef, type ChainLevel } from './config.js';
@@ -311,7 +312,10 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
        LEFT JOIN schemes sc ON sc.id = l.scheme_id
       WHERE a.id = $1 LIMIT 1`, [Number(req.entity_id)])).rows[0];
   if (!r) return null;
-  const d = (v: unknown) => (v ? String(v).slice(0, 10) : '');
+  // DB dates arrive as JS Date objects (node-postgres) or strings (PGlite);
+  // a bare String(Date) yields "Sat Jul 11 2026 …", not YYYY-MM-DD — which the
+  // <input type="date"> field silently rejects. toISODate normalises both.
+  const d = (v: unknown) => toISODate(v as string | Date | null | undefined) ?? '';
   return {
     application_id: Number(r.id),
     has_receipt: r.has_receipt === true,
@@ -472,7 +476,7 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
         fact('Series', meta.series_code),
         fact('Allotment date', meta.allotment_date),
         fact('ISIN', meta.isin),
-        fact('Investments covered', meta.count),
+        fact('Number of Investments', meta.count),
       ]),
     };
   }

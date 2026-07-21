@@ -22,3 +22,7 @@ allotmentsRouter.post('/series/:id/revert', requirePermission('allotments:revert
     const { reason } = z.object({ reason: z.string().min(3) }).parse(req.body);
     res.json(await s.revertSeriesAllotment(getDb(), req.user!, Number(req.params.id), reason));
   }));
+
+// Cancel a still-pending allotment approval (Revert while awaiting a checker).
+allotmentsRouter.post('/series/:id/cancel-pending', requirePermission('allotments:execute'),
+  asyncHandler(async (req, res) => res.json(await s.cancelPendingAllotment(getDb(), req.user!, Number(req.params.id)))));

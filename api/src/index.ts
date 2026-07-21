@@ -6,7 +6,21 @@
  */
 import { loadSecretsFromSsm } from './secrets.js';
 
+/** Canary for a stale @new-wealth/shared build. The source deliberately EXCLUDES
+ * 'PendingApproval' from the outstanding book (unfunded money must not inflate
+ * it); a stale compiled dist re-includes it and silently corrupts every
+ * portfolio total. Fail fast at boot rather than serve wrong numbers — the
+ * deploy rebuilds shared via `npm run build`, so this only fires on a partial
+ * build (npm ci without build, api-only build, stale local dist). */
+async function assertSharedBuildFresh(): Promise<void> {
+  const { OUTSTANDING_APPLICATION_STATUSES } = await import('@new-wealth/shared');
+  if ((OUTSTANDING_APPLICATION_STATUSES as readonly string[]).includes('PendingApproval')) {
+    throw new Error('Stale @new-wealth/shared build (OUTSTANDING_APPLICATION_STATUSES includes PendingApproval). Run `npm run build` to rebuild the shared package before starting.');
+  }
+}
+
 async function bootstrapDb(): Promise<void> {
+  await assertSharedBuildFresh();
   const { config } = await import('./config.js');
   const { getDb } = await import('./db/index.js');
   const usingPglite = !process.env.DATABASE_URL || !process.env.DATABASE_URL.startsWith('postgres');
@@ -35,6 +49,12 @@ async function startCrons(): Promise<void> {
   const { dispatchPending } = await import('./integrations/lockerhub/dispatcher.js');
   setInterval(() => {
     void dispatchPending(getDb()).catch((e) => console.warn('[cron] agent-event dispatch:', (e as Error).message));
+  }, 30_000).unref();
+
+  // Customer/subscription event webhook — no-op unless LOCKERHUB_EVENT_WEBHOOK_URL is set.
+  const { dispatchPendingCustomerEvents } = await import('./integrations/lockerhub/customerEvents.js');
+  setInterval(() => {
+    void dispatchPendingCustomerEvents(getDb()).catch((e) => console.warn('[cron] customer-event dispatch:', (e as Error).message));
   }, 30_000).unref();
 
   // Daily book-summary email (docs/00 §12) — once per IST day after 18:00 IST.

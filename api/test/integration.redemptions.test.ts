@@ -51,7 +51,11 @@ describe('customer redemption request (portal)', () => {
     const reqR = await cust.post('/api/portal/redemption-request', { application_no: inv.appNo, reason: 'Need funds' });
     expect(reqR.status).toBe(201);
     expect(reqR.json.status).toBe('Requested');
-    expect(Number(reqR.json.net_payment)).toBe(495000);
+    // net = (principal − 1% penalty) + accrued broken interest (net of TDS),
+    // now settled with the payout. The interest grows with the days elapsed
+    // since funding, so assert the stable floor rather than an exact figure.
+    expect(Number(reqR.json.net_payment)).toBeGreaterThanOrEqual(495000);
+    expect(Number(reqR.json.net_payment)).toBeLessThan(500000);
 
     // staff sees the request (not yet an approval)
     const ncd = await as('ncd@demo.local');
@@ -173,14 +177,15 @@ describe('premature penalty waiver (CXO)', () => {
     // Cannot increase the penalty.
     expect((await cxo.post(`/api/redemptions/${redId}/waive-penalty`, { new_penalty: 999999, reason: 'nope' })).status).toBe(400);
 
-    // Waive fully → penalty 0, net = principal.
+    // Waive fully → penalty 0, net = principal + accrued interest (interest is
+    // preserved across the waiver, so net ≥ principal).
     const w = await cxo.post(`/api/redemptions/${redId}/waive-penalty`, { new_penalty: 0, reason: 'genuine hardship' });
     expect(w.status).toBe(200);
     expect(Number(w.json.penalty)).toBe(0);
-    expect(Number(w.json.net_payment)).toBe(500000);
+    expect(Number(w.json.net_payment)).toBeGreaterThanOrEqual(500000);
     const row = (await ctx.db.query('SELECT penalty, net_payment, penalty_original FROM redemptions WHERE id = $1', [redId])).rows[0] as any;
     expect(Number(row.penalty)).toBe(0);
-    expect(Number(row.net_payment)).toBe(500000);
+    expect(Number(row.net_payment)).toBeGreaterThanOrEqual(500000);
     expect(Number(row.penalty_original)).toBe(5000);
 
     // Approve → app Redeemed at the waived net.

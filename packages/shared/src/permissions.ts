@@ -41,6 +41,8 @@ export const PERMISSIONS = [
   // and everything hanging off it (schedule, collections, incentives, redemptions).
   // super_admin ONLY.
   'applications:delete',
+  // locker enrollment (staff enroll a customer for a LockerHub locker; contract Part A)
+  'lockers:enroll',
   // activations (funded → Active, maker-checker)
   'activations:execute',
   // allotments
@@ -158,6 +160,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'reports:download',
     'settings:workflow-config',
     'imports:run',
+    'lockers:enroll',
   ],
 
   branch_manager: [
@@ -165,15 +168,20 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'dashboard:drilldown',
     'reports:download',
     'approvals:check-handover', // repeat-customer handover (any one of Admin/CXO/BM)
+    'lockers:enroll',
   ],
 
   // Branch staff don't see the company-wide NCD Portfolio dashboard (owner
   // 2026-07-20). Everything they need — what they brought in and what they've
   // been paid — lives on My Earnings, so they keep earnings:read-own and land
   // there instead.
-  branch_staff: [...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view')],
+  branch_staff: [...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view'), 'lockers:enroll'],
 
-  agent: [...STAFF_FUNNEL],
+  // Agents source leads and enrol, but must NOT approve KYC on customers they
+  // enrolled — that is a segregation-of-duties break on a regulated control
+  // (an external agent self-approving their own customer's verification). KYC
+  // verification stays with internal staff/managers. (Review 2026-07-21.)
+  agent: STAFF_FUNNEL.filter((p) => p !== 'kyc:verify' && p !== 'kyc:reject'),
 
   customer: ['portal:self-service'],
 };

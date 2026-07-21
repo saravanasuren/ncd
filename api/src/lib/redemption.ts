@@ -1,11 +1,14 @@
 /**
  * Premature redemption math (docs/02 §6, docs/09 §17 old-app bug note).
  *
- *   Net Payment = Principal − Penalty
+ *   Net Payment = Principal − Penalty   (this pure function's output)
  *
- * Broken-period interest (from the last regular payout to the redemption
- * date) is paid SEPARATELY in the next payout cycle — it is NEVER rolled
- * into Net Payment. Penalty is config-driven (settings
+ * This function returns principal−penalty as netPayment and the broken-period
+ * interest (last regular payout → redemption date) SEPARATELY. The redemptions
+ * SERVICE then settles both together: it folds the net-of-TDS broken interest
+ * into the premature payout (owner review 2026-07-21), because the line closes
+ * on redemption so the interest run — which only pays Active lines — could
+ * never pay it "next cycle". Penalty is config-driven (settings
  * `redemption.premature_penalty`, flat ₹ or % of principal).
  */
 import { round2, daysBetween, type ISODate } from './dates.js';

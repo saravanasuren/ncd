@@ -31,9 +31,13 @@ export async function migrate(db: Db): Promise<string[]> {
   for (const file of files) {
     if (applied.has(file)) continue;
     const sql = readFileSync(join(migrationsDir, file), 'utf8');
-    // DDL is idempotent (IF NOT EXISTS); run the script then record it.
-    await db.exec(sql);
-    await db.query('INSERT INTO schema_migrations (name) VALUES ($1)', [file]);
+    // Run the script AND record it in one transaction, so a crash between the
+    // two can't leave a migration applied-but-untracked (which would re-run it).
+    // All migrations are transactional DDL (no CONCURRENTLY) — verified.
+    await db.withTx(async (tx) => {
+      await tx.exec(sql);
+      await tx.query('INSERT INTO schema_migrations (name) VALUES ($1)', [file]);
+    });
     ran.push(file);
   }
   return ran;

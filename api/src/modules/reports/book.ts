@@ -129,7 +129,10 @@ export async function seriesSummary(db: Db, actor: AuthUser, filters: BookFilter
             count(DISTINCT a.customer_id)::int AS investors,
             COALESCE(sum(${AMT}) FILTER (WHERE a.status IN (${OUTSTANDING_SQL_LIST})),0) AS outstanding,
             COALESCE(sum(a.total_amount) FILTER (WHERE a.status = 'Redeemed'),0) AS redeemed,
-            COALESCE(sum(a.total_amount),0) AS issued
+            -- "issued" = money that actually came in over the series' life. Must
+            -- match the Segments series-register (segmentGrouped) exactly, so it
+            -- excludes never-funded statuses (Rejected/Cancelled/Draft/PendingApproval).
+            COALESCE(sum(a.total_amount) FILTER (WHERE a.status NOT IN ('Rejected','Cancelled','Draft','PendingApproval')),0) AS issued
      ${FROM} WHERE ${w.sql} GROUP BY s.id, s.code, s.status ORDER BY s.code`, w.params);
   return rows;
 }
@@ -339,7 +342,9 @@ export interface SegmentChild {
   customer: string;
   customer_code: string;
   series_code: string;
-  amount: number;
+  amount: number;       // legacy: live outstanding (active) or original (exited)
+  outstanding: number;  // current live outstanding — 0 once exited
+  redeemed: number;     // amount redeemed/exited — 0 while live
   status: string;
   allotment_date: string | null;
 }
@@ -374,9 +379,23 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
   // exact OUTSTANDING set (so summary columns are unchanged) PLUS the exited
   // statuses (children only). Reusing OUTSTANDING_SQL_LIST keeps the outstanding
   // rows byte-identical to every other book query — never hardcode the set.
-  const extra: string[] = [`a.status IN (${OUTSTANDING_SQL_LIST}, ${EXITED_STATUS_SQL_LIST})`];
-  if (by === 'lockerhub') extra.push("a.source = 'lockerhub'");
-  if (by === 'dhanamfin') extra.push("a.source = 'dhanamfin'");
+  // Funding-channel split — MUST reconcile with the Dashboard channel tiles
+  // (the owner's source of truth), so the two screens never disagree:
+  //  • Locker Hub    = locker deposits (is_locker_deposit) — the Dashboard
+  //    "Locker Deposits" tile.
+  //  • Dhanamfin App = app-sourced NCDs (dhanamfin/lockerhub), locker deposits
+  //    excluded so an investment lands in exactly one channel — the Dashboard
+  //    "DhanamFin App" tile.
+  // The same channel filter is applied to the issued/redeemed register below so
+  // its numbers are channel-specific too (Issued = Outstanding + Redeemed).
+  const channelExtra: string[] = [];
+  if (by === 'lockerhub') channelExtra.push('a.is_locker_deposit = TRUE');
+  if (by === 'dhanamfin') channelExtra.push("(a.source IN ('dhanamfin','lockerhub') AND a.is_locker_deposit = FALSE)");
+  // Show REAL investments so the expansion lists redeemed customers too: the
+  // exact OUTSTANDING set (so summary columns are unchanged) PLUS the exited
+  // statuses (children only). Reusing OUTSTANDING_SQL_LIST keeps the outstanding
+  // rows byte-identical to every other book query — never hardcode the set.
+  const extra: string[] = [`a.status IN (${OUTSTANDING_SQL_LIST}, ${EXITED_STATUS_SQL_LIST})`, ...channelExtra];
   const w = appWhere(actor, { ...filters, status: undefined }, extra);
   const { rows } = await db.query<any>(
     `SELECT a.application_no, ${AMT} AS amount, a.status, a.allotment_date,
@@ -419,10 +438,16 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
       g.outstanding = round2(g.outstanding + Number(r.amount));
       custSets.get(key)!.add(r.customer_code);
     }
+    // A child is either outstanding (live money) or exited (redeemed). AMT is the
+    // live outstanding for active apps and the original amount for exited ones,
+    // so split it into the two columns by status.
+    const live = outstandingStatus.has(r.status);
+    const amt = round2(Number(r.amount));
     g.children.push({
       application_no: r.application_no, customer_id: Number(r.customer_id), customer: r.customer, customer_code: r.customer_code,
-      series_code: r.series_code, amount: round2(Number(r.amount)), status: r.status,
-      allotment_date: toISODate(r.allotment_date ?? null),
+      series_code: r.series_code, amount: amt,
+      outstanding: live ? amt : 0, redeemed: live ? 0 : amt,
+      status: r.status, allotment_date: toISODate(r.allotment_date ?? null),
     });
   }
   for (const [key, g] of groups) g.investors = custSets.get(key)!.size;
@@ -434,8 +459,11 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
   // (same rule as OUTSTANDING_APPLICATION_STATUSES), so it must not inflate
   // "issued" — since the go-live change that is where every new investment
   // waits, and it was making NCD_28 read ₹15L against ₹10L outstanding.
-  if (by === 'series') {
-    const reg = appWhere(actor, { seriesIds: filters.seriesIds });
+  if (seriesLike) {
+    // Channel views (Locker Hub / Dhanamfin App) apply the SAME channel filter
+    // so their Issued/Redeemed are channel-specific and reconcile with the tab's
+    // Outstanding (Issued = Outstanding + Redeemed).
+    const reg = appWhere(actor, { seriesIds: filters.seriesIds }, channelExtra);
     const { rows: regRows } = await db.query<any>(
       `SELECT s.code AS series_code,
               min(a.date_money_received) AS win_from, max(a.date_money_received) AS win_to,
@@ -524,26 +552,37 @@ export async function redemptionsOfSeries(db: Db, actor: AuthUser, seriesIds: nu
 /** New-money totals for the window, split by funding channel. */
 export async function moneyInByChannel(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, { ...filters, status: 'active' });
-  const { rows } = await db.query<{ total: string; locker: string; app: string; n: string }>(
+  const { rows } = await db.query<{ total: string; locker: string; app: string; n: string; total_investors: number; locker_investors: number; app_investors: number }>(
     `SELECT COALESCE(sum(a.total_amount),0) AS total,
             COALESCE(sum(a.total_amount) FILTER (WHERE a.is_locker_deposit),0) AS locker,
             COALESCE(sum(a.total_amount) FILTER (WHERE a.source IN ('dhanamfin','lockerhub')),0) AS app,
-            count(a.id)::int AS n
+            count(a.id)::int AS n,
+            count(DISTINCT a.customer_id)::int AS total_investors,
+            count(DISTINCT a.customer_id) FILTER (WHERE a.is_locker_deposit)::int AS locker_investors,
+            count(DISTINCT a.customer_id) FILTER (WHERE a.source IN ('dhanamfin','lockerhub'))::int AS app_investors
      ${FROM} WHERE ${w.sql} AND a.date_money_received IS NOT NULL`, w.params);
   const r = rows[0]!;
-  return { total: round2(Number(r.total)), locker: round2(Number(r.locker)), app: round2(Number(r.app)), count: Number(r.n) };
+  return {
+    total: round2(Number(r.total)), locker: round2(Number(r.locker)), app: round2(Number(r.app)), count: Number(r.n),
+    total_investors: Number(r.total_investors), locker_investors: Number(r.locker_investors), app_investors: Number(r.app_investors),
+  };
 }
 
 /** Money-in for the window split by attribution: referrer matched to a staff
  * user → staff; everything else (agents, Direct) → agent. staff+agent = total. */
 export async function moneyInBySource(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, { ...filters, status: 'active' });
-  const { rows } = await db.query<{ staff: string; agent: string }>(
+  const { rows } = await db.query<{ staff: string; agent: string; staff_investors: number; agent_investors: number }>(
     `SELECT COALESCE(sum(a.total_amount) FILTER (WHERE sref.full_name IS NOT NULL),0) AS staff,
-            COALESCE(sum(a.total_amount) FILTER (WHERE sref.full_name IS NULL),0) AS agent
+            COALESCE(sum(a.total_amount) FILTER (WHERE sref.full_name IS NULL),0) AS agent,
+            count(DISTINCT a.customer_id) FILTER (WHERE sref.full_name IS NOT NULL)::int AS staff_investors,
+            count(DISTINCT a.customer_id) FILTER (WHERE sref.full_name IS NULL)::int AS agent_investors
      ${FROM_ATTR} WHERE ${w.sql} AND a.date_money_received IS NOT NULL`, w.params);
   const r = rows[0]!;
-  return { staff: round2(Number(r.staff)), agent: round2(Number(r.agent)) };
+  return {
+    staff: round2(Number(r.staff)), agent: round2(Number(r.agent)),
+    staff_investors: Number(r.staff_investors), agent_investors: Number(r.agent_investors),
+  };
 }
 
 /** New-investment list for the window; optional channel = 'locker' | 'app'. */

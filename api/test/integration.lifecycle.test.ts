@@ -135,7 +135,8 @@ describe('premature redemption closes the application (docs/17 regression)', () 
     const ncd = await as('ncd@demo.local');
     const init = await ncd.post('/api/redemptions/premature', { application_id: appId, redemption_date: '2027-01-15', reason: 'Customer request' });
     expect(init.status).toBe(201);
-    expect(Number(init.json.netPayment)).toBe(495000); // 5L − 1% penalty
+    // 5L − 1% penalty (₹495,000) + accrued broken interest now settled with it.
+    expect(Number(init.json.netPayment)).toBeGreaterThanOrEqual(495000);
     const reqId = init.json.request.id;
 
     // Single CXO approval (maker is ncd; CXO ≠ maker).

@@ -48,26 +48,6 @@ async function loadAppForDoc(db: Db, applicationId: number) {
   return { a, lines };
 }
 
-/** Bond (NCD) certificate for one allotted application. */
-export async function bondCertificatePdf(db: Db, applicationId: number): Promise<Buffer> {
-  const { a, lines } = await loadAppForDoc(db, applicationId);
-  return renderPdf((doc) => {
-    letterhead(doc, 'Non-Convertible Debenture Certificate', `${a.full_name} · ${a.customer_code}`);
-    doc.fontSize(10).font('Helvetica');
-    doc.text(`Certificate for Application No: ${a.application_no}`);
-    doc.text(`Series: ${a.series_name} (${a.series_code})${a.isin ? ` · ISIN ${a.isin}` : ''}`);
-    doc.text(`Debenture holder: ${a.full_name}   PAN: ${a.pan ?? '—'}`);
-    doc.text(`Face value / principal: ${formatINR(Number(a.total_amount))}`);
-    if (a.deemed_date) doc.text(`Deemed date of allotment: ${a.deemed_date}`);
-    if (a.allotment_date) doc.text(`Allotment date: ${a.allotment_date}`);
-    if (a.maturity_date) doc.text(`Redemption (maturity) date: ${a.maturity_date}`);
-    doc.moveDown(0.6).font('Helvetica-Bold').text('Debenture details').font('Helvetica').fontSize(9);
-    for (const l of lines) doc.text(`${l.scheme_name ?? '—'}   ${formatINR(Number(l.amount))}   ${Number(l.coupon_rate_pct)}% p.a.   ${l.tenure_months} months   ${l.payout_frequency}`);
-    if (!lines.length) doc.fillColor('#6b7380').text('None');
-    doc.moveDown(1.2).fillColor('#6b7380').fontSize(8).text('This certificate is issued by Dhanam Investment and Finance Private Limited and evidences the debentures allotted against the above application. Subject to the terms of the Debenture Trust Deed / offer document.');
-  });
-}
-
 /** Allotment letter for one allotted application. */
 export async function allotmentLetterPdf(db: Db, applicationId: number): Promise<Buffer> {
   const { a, lines } = await loadAppForDoc(db, applicationId);

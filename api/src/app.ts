@@ -31,6 +31,8 @@ import { dashboardRouter } from './modules/dashboard/routes.js';
 import { reportsRouter } from './modules/reports/routes.js';
 import { portalRouter } from './modules/portal/routes.js';
 import { integrationRouter } from './modules/integration/routes.js';
+import { myRouter, agentLeadsRouter } from './modules/integration/my.js';
+import { lockersRouter } from './modules/lockers/routes.js';
 import { webhooksRouter } from './modules/webhooks/routes.js';
 import { eventsRouter } from './modules/events/routes.js';
 import { statementsRouter } from './modules/statements/routes.js';
@@ -74,12 +76,16 @@ export function createApp(): Express {
   app.use('/api/auth/forgot-password', authLimiter);
   app.use('/api/auth/reset-password', authLimiter);
   app.use('/api/portal/otp', otpLimiter);
-  app.use('/api/integration', integrationLimiter);
+  app.use(['/api/integration', '/api/my', '/api/investor-leads'], integrationLimiter);
   app.use('/api', writeLimiter);
 
   // Integration façade: own key auth, no cookie/CSRF (LockerHub / DhanamFin).
   // Mounted BEFORE the CSRF guard so app clients don't need the browser header.
   app.use('/api/integration', integrationRouter);
+  // Agent-app surface (contract B23): X-Integration-Key + X-Acting-As-Agent, no
+  // cookie/CSRF — mounted here alongside the integration façade.
+  app.use('/api/my', myRouter);
+  app.use('/api/investor-leads', agentLeadsRouter);
   // Provider webhooks — own shared-secret auth, no cookie/CSRF (external callers).
   app.use('/api/webhooks', webhooksRouter);
 
@@ -101,6 +107,7 @@ export function createApp(): Express {
   app.use('/api/payouts', payoutsRouter);
   app.use('/api/bank-statements', statementsRouter);
   app.use('/api/redemptions', redemptionsRouter);
+  app.use('/api/lockers', lockersRouter);
   app.use('/api/ncd-events', eventsRouter);
   app.use('/api/incentives', incentivesRouter);
   app.use('/api/dashboard', dashboardRouter);

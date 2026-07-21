@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext.js';
 import { useState } from 'react';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { Tabs, type TabDef } from '../components/Tabs.js';
+import { redemptionTypeLabel } from '../labels.js';
 
 interface Redemption {
   id: number; redemption_no: string; type: string; status: string; source: string;
@@ -27,7 +28,7 @@ const columns: Column<Redemption>[] = [
     value: (r) => r.redemption_date ?? '',
     render: (r) => r.redemption_date ? <span className="mono text-xs">{String(r.redemption_date).slice(0, 10)}</span> : '—' },
   { key: 'customer_name', header: 'Customer' },
-  { key: 'type', header: 'Type' },
+  { key: 'type', header: 'Type', value: (r) => redemptionTypeLabel(r.type), render: (r) => redemptionTypeLabel(r.type) },
   { key: 'net_payment', header: 'Net', align: 'right',
     value: (r) => Number(r.net_payment), render: (r) => <span className="mono">{formatINR(r.net_payment)}</span> },
   { key: 'status', header: 'Status',
@@ -39,7 +40,7 @@ export function RedemptionsPage() {
   const { can } = useAuth();
   const [msg, setMsg] = useState('');
   const [tab, setTab] = useState<RedTab>('all');
-  const { data, isLoading } = useQuery({ queryKey: ['redemptions'], queryFn: () => api.get<{ rows: Redemption[] }>('/api/redemptions') });
+  const { data, isLoading, error } = useQuery({ queryKey: ['redemptions'], queryFn: () => api.get<{ rows: Redemption[] }>('/api/redemptions') });
 
   const submit = useMutation({
     mutationFn: (id: number) => api.post(`/api/redemptions/${id}/submit-for-approval`),
@@ -48,6 +49,7 @@ export function RedemptionsPage() {
   });
 
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
+  if (error) return <div className="text-danger">Failed to load redemptions.</div>;
   const requests = data!.rows.filter((r) => r.status === 'Requested' && !r.approval_request_id);
   const rest = data!.rows.filter((r) => !(r.status === 'Requested' && !r.approval_request_id));
 
@@ -76,7 +78,10 @@ export function RedemptionsPage() {
                   <div className="text-xs text-text-muted">Net {formatINR(r.net_payment)} · penalty {formatINR(r.penalty)} · from {r.source}{r.requested_by_customer ? ' (customer)' : ''}</div>
                 </div>
                 {can('redemptions:initiate') && (
-                  <button onClick={() => { setMsg(''); submit.mutate(r.id); }} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Send for approval</button>
+                  <button disabled={submit.isPending} onClick={() => { setMsg(''); submit.mutate(r.id); }}
+                    className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
+                    {submit.isPending ? 'Sending…' : 'Send for approval'}
+                  </button>
                 )}
               </div>
             ))}

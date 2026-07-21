@@ -33,7 +33,7 @@ export function AgentsPage() {
   const [form, setForm] = useState(EMPTY);
   const [edit, setEdit] = useState<EditState | null>(null);
   const [err, setErr] = useState('');
-  const { data, isLoading } = useQuery({ queryKey: ['agents'], queryFn: () => api.get<{ rows: AgentRow[] }>('/api/agents') });
+  const { data, isLoading, error } = useQuery({ queryKey: ['agents'], queryFn: () => api.get<{ rows: AgentRow[] }>('/api/agents') });
 
   const create = useMutation({
     mutationFn: () => api.post('/api/agents', {
@@ -69,6 +69,7 @@ export function AgentsPage() {
   });
 
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
+  if (error) return <div className="text-danger">Failed to load agents.</div>;
 
   const columns: Column<AgentRow>[] = [
     { key: 'agent_code', header: 'Code', tdClassName: 'font-mono text-xs' },

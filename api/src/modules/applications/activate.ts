@@ -13,6 +13,7 @@ import { toISODate } from '../../lib/dates.js';
 import { nextCode } from '../../lib/sequences.js';
 import { materializeForApplication } from '../schedule/materialize.js';
 import { accrueForApplication } from '../incentives/accrual.js';
+import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
 
 export interface GoLiveInput {
   /** Date the money hit Dhanam's account (staff-entered at enrolment). Falls
@@ -62,5 +63,21 @@ export async function activateApplication(tx: Db, appId: number, input: GoLiveIn
 
   await materializeForApplication(tx, appId);
   await accrueForApplication(tx, appId);
+
+  // Generate + store the Acknowledgement now that funds are received and the
+  // investment is live (owner: "generate + store"). Defensive — a PDF hiccup
+  // must never fail activation.
+  try {
+    const { acknowledgmentPdf } = await import('../reports/forms/acknowledgment.js');
+    const { saveBuffer } = await import('../../lib/storage.js');
+    const pdf = await acknowledgmentPdf(tx, appId);
+    const { path } = saveBuffer('acknowledgments', `acknowledgment-${appId}.pdf`, pdf);
+    await tx.query('UPDATE applications SET acknowledgment_pdf_path = $1, acknowledgment_generated_at = now() WHERE id = $2', [path, appId]);
+  } catch (e) {
+    console.warn(`[documents] acknowledgement generation failed for app ${appId}: ${(e as Error).message}`);
+  }
+
+  // Tell LockerHub the NCD is live (contract event). No-op unless configured.
+  await emitForApplication(tx, 'subscription.activated', appId);
   return true;
 }

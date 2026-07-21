@@ -49,9 +49,20 @@ const schema = z.object({
   // Agent-event webhooks fire ONLY when both URL + secret are set in SSM.
   LOCKERHUB_WEBHOOK_URL: z.string().optional(),
   LOCKERHUB_WEBHOOK_SECRET: z.string().optional(),
+  // Customer/subscription event webhook (NCD_INTEGRATION_CONTRACT.md). Fires
+  // ONLY when this URL is set; auth reuses the shared LOCKERHUB_INTEGRATION_KEY
+  // as an outbound X-Integration-Key. Contract target:
+  //   https://lockers.dhanamfinance.com/api/integration/wealth/webhook
+  LOCKERHUB_EVENT_WEBHOOK_URL: z.string().optional(),
   // Daily reconciliation cron runs ONLY when explicitly enabled.
   LOCKERHUB_RECONCILIATION_ENABLED: z.string().default('false'),
   LOCKERHUB_DB_PATH: z.string().default('/home/ubuntu/LockerHub/data/lockerhub.db'),
+  // Outbound locker-enrollment (contract Part A). NCD staff enroll a customer
+  // for a LOCKER by calling LockerHub. Base = …/api/integration/v1. The client
+  // is inert unless LOCKERHUB_API_URL is set; auth = LOCKERHUB_API_KEY, falling
+  // back to the shared LOCKERHUB_INTEGRATION_KEY.
+  LOCKERHUB_API_URL: z.string().optional(),
+  LOCKERHUB_API_KEY: z.string().optional(),
   // ── Payments (docs/08 §2). Collection is LockerHub/Easebuzz-side; ncd
   // receives funded payments via the façade. These wire the adapter selector
   // + webhook verification. Stub default. ──
@@ -82,3 +93,27 @@ export type Config = z.infer<typeof schema>;
 export const config: Config = schema.parse(process.env);
 
 export const isProd = config.NODE_ENV === 'production';
+
+// Fail CLOSED in production: the schema supplies dev fallbacks so local dev and
+// tests boot with zero setup, but if a real secret is ever missing/misnamed in
+// SSM the app must NOT boot signing JWTs (or accepting the integration key) with
+// a publicly-known default — that would let anyone forge a super_admin session.
+if (isProd) {
+  // Only RUNTIME security secrets fail the boot. SEED_ADMIN_PASSWORD is used
+  // once at seed time (not per request), so it must NOT block a normal boot.
+  const insecureDefaults: Record<string, string> = {
+    JWT_ACCESS_SECRET: 'dev_access_secret_change_me_16chars',
+    JWT_REFRESH_SECRET: 'dev_refresh_secret_change_me_16chars',
+    LOCKERHUB_INTEGRATION_KEY: 'dev-integration-key',
+  };
+  const stillDefault = Object.entries(insecureDefaults)
+    .filter(([k, def]) => (config as Record<string, unknown>)[k] === def)
+    .map(([k]) => k);
+  if (stillDefault.length) {
+    throw new Error(
+      `Refusing to boot in production with default secret(s): ${stillDefault.join(', ')}. ` +
+      `Set them in SSM (/dhanam/newwealth/*) before starting.`,
+    );
+  }
+  if (!config.DATABASE_URL) throw new Error('DATABASE_URL is required in production.');
+}

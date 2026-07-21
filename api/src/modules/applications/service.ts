@@ -14,7 +14,8 @@ import { nextCode } from '../../lib/sequences.js';
 import { isTerminal } from '../../lib/statusMachine.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
 import { getSettingsMap } from '../settings/service.js';
-import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
+import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
+import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
 
 const SCOPE_COLS = {
   userCol: 'a.enrolled_by_user_id',
@@ -85,6 +86,8 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
     );
     const appId = Number(rows[0]!.id);
     await addLine(tx, appId, scheme, input.amount);
+    // Tell LockerHub a subscription intent was created (contract event). No-op unless configured.
+    await emitForApplication(tx, 'subscription.created', appId);
     const subscriptionRequest = await createApprovalRequest(tx, { type: 'subscription', entityType: 'applications', entityId: appId, makerUserId: actor.id, metadata: { application_no: appNo } });
     await writeAudit(tx, { actorId: actor.id, action: 'application.create', entityType: 'applications', entityId: appId, after: { appNo, amount: input.amount, isNew } });
     return { id: appId, application_no: appNo, clubbed: false, subscription_request: subscriptionRequest };
@@ -99,6 +102,13 @@ registerOnFinalApprove('subscription', async (tx, req) => {
   const appId = Number(req.entity_id);
   const { activateApplication } = await import('./activate.js');
   await activateApplication(tx, appId, { confirmedByUserId: req.maker_user_id });
+});
+
+// A rejected subscription approval = the intent was cancelled. Emit-only (the
+// app lifecycle is unchanged here); no-op unless the event webhook is configured.
+registerOnReject('subscription', async (tx, req) => {
+  if (!req.entity_id) return;
+  await emitForApplication(tx, 'subscription.cancelled', Number(req.entity_id));
 });
 
 /**
@@ -210,14 +220,16 @@ export async function listApplications(db: Db, actor: AuthUser, filters: { statu
   if (!showArchived) conds.push('a.archived_at IS NULL');
   if (filters.status) { params.push(filters.status); conds.push(`a.status = $${params.length}`); }
   if (filters.series_id) { params.push(filters.series_id); conds.push(`a.series_id = $${params.length}`); }
+  const base = `FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
+     WHERE ${conds.join(' AND ')}`;
+  const total = Number((await db.query<{ n: number }>(`SELECT count(*)::int AS n ${base}`, params)).rows[0]!.n);
   const { rows } = await db.query(
     `SELECT a.id, a.application_no, a.status, a.total_amount, a.allotment_date, a.maturity_date, a.archived_at,
             c.full_name AS customer_name, c.customer_code, s.code AS series_code
-     FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
-     WHERE ${conds.join(' AND ')} ORDER BY a.created_at DESC LIMIT 2000`,
+     ${base} ORDER BY a.created_at DESC LIMIT 2000`,
     params
   );
-  return rows;
+  return { rows, total, truncated: total > rows.length };
 }
 
 export async function getApplicationDetail(db: Db, actor: AuthUser, appId: number) {

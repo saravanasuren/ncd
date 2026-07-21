@@ -10,6 +10,9 @@ import { writeAudit } from '../../lib/audit.js';
 import { nextCode } from '../../lib/sequences.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
 import { getSettingsMap } from '../settings/service.js';
+import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
+
+const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((s) => `'${s}'`).join(',');
 import { kycProvider } from '../../integrations/kyc/index.js';
 import {
   createApprovalRequest,
@@ -41,6 +44,7 @@ export interface CreateCustomerInput {
   father_name?: string;
   occupation?: string;
   aadhaar_last4?: string;
+  aadhaar?: string; // full 12-digit; last4 derived from it
   phone_secondary?: string;
   investor_category?: string;
   ckyc_number?: string;
@@ -50,8 +54,12 @@ export interface CreateCustomerInput {
 export async function createCustomer(db: Db, actor: AuthUser, input: CreateCustomerInput): Promise<{ id: number; customer_code: string }> {
   const settings = await getSettingsMap(db);
   const codeFmt = String(settings['numbering.customer_format'] ?? 'DHN{seq:6}');
-  // Store only the last 4 Aadhaar digits (UIDAI), whatever the client sends.
-  const aadhaar4 = input.aadhaar_last4 ? String(input.aadhaar_last4).replace(/\D/g, '').slice(-4) || null : null;
+  // Full Aadhaar (owner decision 2026-07-21 — printed on the application form)
+  // when supplied; last-4 is derived from it, otherwise from aadhaar_last4.
+  const aadhaarDigits = input.aadhaar ? String(input.aadhaar).replace(/\D/g, '') : '';
+  const aadhaarFull = aadhaarDigits.length === 12 ? aadhaarDigits : null;
+  const aadhaar4 = aadhaarFull ? aadhaarFull.slice(-4)
+    : input.aadhaar_last4 ? String(input.aadhaar_last4).replace(/\D/g, '').slice(-4) || null : null;
   return db.withTx(async (tx) => {
     if (input.pan) {
       // Repeat customer (owner spec 2026-07-18): an existing PAN is not an
@@ -70,13 +78,13 @@ export async function createCustomer(db: Db, actor: AuthUser, input: CreateCusto
     const branchId = actor.branchIds[0] ?? null;
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO customers (customer_code, full_name, pan, dob, gender, phone, email, address, city, district, state, is_nri, referred_by_text,
-        father_name, occupation, aadhaar_last4, phone_secondary, investor_category, ckyc_number, tds_applicable,
+        father_name, occupation, aadhaar_last4, aadhaar, phone_secondary, investor_category, ckyc_number, tds_applicable,
         creation_status, enrolled_by_user_id, enrolled_by_agent_id, branch_id, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'Draft',$21,$22,$23,FALSE) RETURNING id`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,'Draft',$22,$23,$24,FALSE) RETURNING id`,
       [code, input.full_name, input.pan ?? null, input.dob ?? null, input.gender ?? null, input.phone ?? null,
        input.email ?? null, input.address ?? null, input.city ?? null, input.district ?? null, input.state ?? null,
        input.is_nri ?? false, input.referred_by_text ?? null,
-       input.father_name ?? null, input.occupation ?? null, aadhaar4, input.phone_secondary ?? null,
+       input.father_name ?? null, input.occupation ?? null, aadhaar4, aadhaarFull, input.phone_secondary ?? null,
        input.investor_category ?? null, input.ckyc_number ?? null, input.tds_applicable ?? true,
        actor.id, actor.agentId, branchId]
     );
@@ -121,12 +129,17 @@ export async function listCustomers(db: Db, actor: AuthUser, filters: CustomerFi
   if (!showArchived) conds.push('c.archived_at IS NULL');
   if (filters.district) { params.push(filters.district); conds.push(`c.district = $${params.length}`); }
   if (filters.q) { params.push(`%${filters.q}%`); conds.push(`(c.full_name ILIKE $${params.length} OR c.customer_code ILIKE $${params.length} OR c.phone ILIKE $${params.length})`); }
+  const LIMIT = 2000;
+  const base = `FROM customers c WHERE ${conds.join(' AND ')}`;
+  const total = Number((await db.query<{ n: number }>(`SELECT count(*)::int AS n ${base}`, params)).rows[0]!.n);
   const { rows } = await db.query(
     `SELECT c.id, c.customer_code, c.full_name, c.phone, c.district, c.kyc_status, c.creation_status, c.is_active, c.archived_at
-     FROM customers c WHERE ${conds.join(' AND ')} ORDER BY c.created_at DESC LIMIT 2000`,
+     ${base} ORDER BY c.created_at DESC LIMIT ${LIMIT}`,
     params
   );
-  return rows;
+  // total/truncated let the UI warn "showing N of M" instead of silently
+  // dropping rows past the cap. rows stays first for back-compat.
+  return { rows, total, truncated: total > rows.length };
 }
 
 async function assertVisible(db: Db, actor: AuthUser, customerId: number): Promise<void> {
@@ -150,7 +163,12 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
   // (partial withdrawals reduce it), newest first.
   const applications = (await db.query(
     `SELECT a.id, a.application_no, s.code AS series_code, a.total_amount AS amount,
-            COALESCE(bk.live, a.total_amount) AS outstanding, a.status,
+            -- Outstanding is 0 once the investment has exited (Redeemed/Matured/…);
+            -- the COALESCE fallback to total_amount is only for a live app whose
+            -- lines were never materialised. Without the status guard a redeemed
+            -- app wrongly showed its original amount as outstanding.
+            CASE WHEN a.status IN (${OUTSTANDING_SQL_LIST}) THEN COALESCE(bk.live, a.total_amount) ELSE 0 END AS outstanding,
+            a.status,
             a.date_money_received, a.allotment_date, a.archived_at
      FROM applications a JOIN series s ON s.id = a.series_id
      LEFT JOIN LATERAL (

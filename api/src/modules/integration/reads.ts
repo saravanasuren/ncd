@@ -149,6 +149,12 @@ customerReadsRouter.get('/customers/:id/holdings', asyncHandler(async (req, res)
       nominee_name: nomineeName,
       payout_account_masked: payoutAcctMasked,
       is_locker_deposit: Boolean(l.is_locker_deposit),
+      // Integration-contract aliases (B5): LockerHub's spec names these
+      // `rate` / `nominee` / `next_payout`. Emit them alongside the richer
+      // native fields so either reader is satisfied.
+      rate: l.coupon_rate_pct != null ? Number(l.coupon_rate_pct) : null,
+      nominee: nomineeName,
+      next_payout: next ? iso(next.due_date) : null,
     });
   }
 
@@ -205,6 +211,9 @@ customerReadsRouter.get('/series/active', asyncHandler(async (_req, res) => {
       [s.id]
     )).rows[0]!;
 
+    // Headline scheme = the first (schemes are ordered by coupon_rate_pct DESC),
+    // i.e. the "Up to X% p.a." rate the product hub shows.
+    const headline = schemes[0];
     out.push({
       series_id: Number(s.id),
       code: s.code,
@@ -215,6 +224,13 @@ customerReadsRouter.get('/series/active', asyncHandler(async (_req, res) => {
       close_date: null,
       target_amount: 0,
       amount_raised: Number(raised.amount_raised || 0),
+      // Integration-contract fields (B9): LockerHub expects scheme_id /
+      // coupon_rate_pct / min_amount FLAT on the series (its product cards read
+      // the headline rate). Mirror the headline scheme up; the full per-scheme
+      // list stays in `schemes[]` for richer callers.
+      scheme_id: headline ? Number(headline.id) : null,
+      coupon_rate_pct: headline ? Number(headline.coupon_rate_pct) : null,
+      min_amount: headline ? Number(headline.min_ticket || 100000) : null,
       schemes: schemes.map((sc) => ({
         scheme_id: Number(sc.id),
         code: sc.code,
@@ -223,6 +239,7 @@ customerReadsRouter.get('/series/active', asyncHandler(async (_req, res) => {
         coupon_rate_pct: Number(sc.coupon_rate_pct),
         payout_frequency: sc.payout_frequency,
         min_ticket: Number(sc.min_ticket || 100000),
+        min_amount: Number(sc.min_ticket || 100000), // contract alias for min_ticket
         multiple_of: Number(sc.multiple_of || 100000),
         face_value: Number(sc.face_value || 100000),
       })),
@@ -588,6 +605,7 @@ customerReadsRouter.get('/stats/ncd-aum', asyncHandler(async (req, res) => {
        ROUND(COALESCE(SUM(a.total_amount),0)/1e7, 2) AS total_issued_cr,
        ROUND(COALESCE(SUM(a.total_amount) FILTER (WHERE a.status = ANY($1::text[])),0)/1e7, 2) AS total_redeemed_cr,
        ROUND(COALESCE(SUM(a.total_amount) FILTER (WHERE a.status <> ALL($1::text[])),0)/1e7, 2) AS total_outstanding_cr,
+       COALESCE(SUM(a.total_amount) FILTER (WHERE a.status <> ALL($1::text[])),0)::numeric AS total_outstanding_abs,
        COUNT(*)::int                                             AS apps_total,
        COUNT(*) FILTER (WHERE a.status <> ALL($1::text[]))::int  AS apps_active,
        COUNT(*) FILTER (WHERE a.status =  ANY($1::text[]))::int  AS apps_redeemed
@@ -622,6 +640,10 @@ customerReadsRouter.get('/stats/ncd-aum', asyncHandler(async (req, res) => {
     total_issued_cr: Number(g.total_issued_cr),
     total_redeemed_cr: Number(g.total_redeemed_cr),
     total_outstanding_cr: Number(g.total_outstanding_cr),
+    // Integration-contract aliases (B16): LockerHub's tile reads `aum` (absolute
+    // rupees) and `investors`. total_outstanding_cr is the crore form of the same.
+    aum: Number(Number(g.total_outstanding_abs).toFixed(2)),
+    investors: Number(customersTotal),
     apps_total: Number(g.apps_total),
     apps_active: Number(g.apps_active),
     apps_redeemed: Number(g.apps_redeemed),
@@ -670,11 +692,21 @@ customerReadsRouter.get('/ncd/match', asyncHandler(async (req, res) => {
     customer_code: String(r.customer_code || ''),
     holder_name: String(r.full_name || ''),
     principal: Number(r.total_amount || 0),
+    amount: Number(r.total_amount || 0), // contract alias for principal
     issue_date: iso(r.allotment_date) ?? '',
     status: String(r.status),
     already_linked_to: r.is_locker_deposit === true ? String(r.lockerhub_intent_no || 'linked') : null,
   }));
-  res.json({ found: candidates.length > 0, candidates });
+  // Integration-contract (B17) reads the top-level flat form { found, ncd_id,
+  // holder_name, amount }; the richer `candidates[]` stays for the live consumer.
+  const top = candidates[0];
+  res.json({
+    found: candidates.length > 0,
+    ncd_id: top ? top.ncd_id : null,
+    holder_name: top ? top.holder_name : null,
+    amount: top ? top.amount : null,
+    candidates,
+  });
 }));
 
 // ─── W4 · Locker-deposit approval status ─────────────────────────────────

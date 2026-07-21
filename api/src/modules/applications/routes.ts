@@ -11,7 +11,7 @@ import { serveHeaders } from '../../lib/uploads.js';
 export const applicationsRouter = Router();
 
 applicationsRouter.get('/', requirePermission('customers:read'),
-  asyncHandler(async (req, res) => res.json({ rows: await s.listApplications(getDb(), req.user!, { status: req.query.status as string, series_id: req.query.series_id ? Number(req.query.series_id) : undefined, showArchived: req.query.showArchived === 'true' }) })));
+  asyncHandler(async (req, res) => res.json(await s.listApplications(getDb(), req.user!, { status: req.query.status as string, series_id: req.query.series_id ? Number(req.query.series_id) : undefined, showArchived: req.query.showArchived === 'true' }))));
 
 // Specific paths BEFORE '/:id' so they aren't captured by the param route.
 applicationsRouter.get('/clubbing-candidates', requirePermission('applications:create'),
@@ -56,6 +56,8 @@ applicationsRouter.post('/:id/receipt', requirePermission('applications:create',
 
 applicationsRouter.get('/:id/receipt', requirePermission('customers:read', 'approvals:check'),
   asyncHandler(async (req, res) => {
+    const { assertApplicationVisible } = await import('../../lib/visibility.js');
+    await assertApplicationVisible(getDb(), req.user!, Number(req.params.id));
     const r = await s.getReceipt(getDb(), Number(req.params.id));
     if (!r) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No receipt' } }); return; }
     const h = serveHeaders(r.mime, r.filename, 'receipt');

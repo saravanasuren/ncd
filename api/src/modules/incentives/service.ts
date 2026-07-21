@@ -53,8 +53,11 @@ export async function payeeAccruals(db: Db, payeeType: string, payeeId: number) 
  * payout against the application. Idempotent (a paid accrual is a no-op). */
 export async function payCustomerAccrual(db: Db, actor: AuthUser, payeeType: string, payeeId: number, applicationId: number) {
   return db.withTx(async (tx) => {
+    // NOT_SELF: a self-investment (payee == customer) is never owed an incentive,
+    // so it must not be payable either (consistent with the balance/breakdown).
     const acc = (await tx.query<{ id: string; amount: string; paid_at: string | null }>(
-      'SELECT id, amount, paid_at FROM incentive_accruals WHERE payee_type = $1 AND payee_id = $2 AND application_id = $3',
+      `SELECT ia.id, ia.amount, ia.paid_at ${ACCRUAL_FROM}
+       WHERE ia.payee_type = $1 AND ia.payee_id = $2 AND ia.application_id = $3 AND ${NOT_SELF}`,
       [payeeType, payeeId, applicationId])).rows[0];
     if (!acc) throw errors.notFound('No incentive found for this customer');
     if (acc.paid_at) return payeeBalance(tx, payeeType, payeeId); // already paid — idempotent
@@ -223,10 +226,12 @@ export async function statementPdf(db: Db, payeeType: string, payeeId: number): 
   const name = payeeType === 'agent'
     ? (await db.query<{ full_name: string }>('SELECT full_name FROM agents WHERE id = $1', [payeeId])).rows[0]?.full_name
     : (await db.query<{ full_name: string }>('SELECT full_name FROM users WHERE id = $1', [payeeId])).rows[0]?.full_name;
+  // Exclude self-investments so the listed rows reconcile with the header
+  // Accrued/Paid/Balance (which come from payeeBalance, itself NOT_SELF-filtered).
   const accruals = (await db.query<Record<string, unknown>>(
     `SELECT ia.accrual_date, ia.amount, ia.rate_mode, ia.rate_value, a.application_no
-     FROM incentive_accruals ia JOIN applications a ON a.id = ia.application_id
-     WHERE ia.payee_type = $1 AND ia.payee_id = $2 ORDER BY ia.accrual_date`, [payeeType, payeeId])).rows;
+     ${ACCRUAL_FROM}
+     WHERE ia.payee_type = $1 AND ia.payee_id = $2 AND ${NOT_SELF} ORDER BY ia.accrual_date`, [payeeType, payeeId])).rows;
   const payouts = (await db.query<Record<string, unknown>>('SELECT paid_at, amount, reference FROM incentive_payouts WHERE payee_type = $1 AND payee_id = $2 ORDER BY paid_at', [payeeType, payeeId])).rows;
 
   const { renderPdf, letterhead } = await import('../../lib/pdf.js');

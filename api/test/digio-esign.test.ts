@@ -38,6 +38,14 @@ describe('digio esign', () => {
     expect(esigned.esigned_at).toBeNull();
   });
 
+  it('the eSign document (the application form) is generatable for the application', async () => {
+    // initiateSigning now attaches this PDF as the document Digio signs.
+    const a = new Client(ctx.base); await a.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' });
+    const r = await a.raw(`/api/reports/application-form/${appId}.pdf`);
+    expect(r.status).toBe(200);
+    expect(r.buffer.subarray(0, 4).toString('latin1')).toBe('%PDF');
+  });
+
   it('completeSigning (poller/webhook path) stamps esigned_at, idempotently', async () => {
     const { completeSigning } = await import('../src/integrations/digio/service.js');
     const reqId = (await ctx.db.query('SELECT digio_request_id FROM digio_signing_sessions WHERE application_id = $1', [appId])).rows[0] as { digio_request_id: string };

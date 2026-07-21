@@ -9,6 +9,7 @@ interface SeriesRow {
   series_id: number; code: string; name: string; status: string;
   pending_count: number; pending_amount: string;
   total_count: number; total_amount: string;
+  pending_request_id: number | null;   // an allotment approval awaiting a checker
 }
 
 // A 0-pending series is still actionable if it can be formally closed (moved to
@@ -20,7 +21,7 @@ export function AllotmentsPage() {
   const { can } = useAuth();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [msg, setMsg] = useState('');
-  const { data, isLoading } = useQuery({ queryKey: ['allot-series'], queryFn: () => api.get<{ rows: SeriesRow[] }>('/api/allotments/series') });
+  const { data, isLoading, error } = useQuery({ queryKey: ['allot-series'], queryFn: () => api.get<{ rows: SeriesRow[] }>('/api/allotments/series') });
   const allot = useMutation({
     mutationFn: (seriesId: number) => api.post(`/api/allotments/series/${seriesId}`, { allotment_date: date }),
     onSuccess: () => { setMsg('Batch submitted — a second checker must approve it on the Approvals page.'); qc.invalidateQueries({ queryKey: ['allot-series'] }); },
@@ -31,7 +32,13 @@ export function AllotmentsPage() {
     onSuccess: () => { setMsg('Allotment reverted.'); qc.invalidateQueries({ queryKey: ['allot-series'] }); },
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
+  const cancelPending = useMutation({
+    mutationFn: (seriesId: number) => api.post(`/api/allotments/series/${seriesId}/cancel-pending`, {}),
+    onSuccess: () => { setMsg('Pending allotment cancelled — you can allot again.'); qc.invalidateQueries({ queryKey: ['allot-series'] }); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
+  if (error) return <div className="text-danger">Failed to load series.</div>;
 
   const columns: Column<SeriesRow>[] = [
     { key: 'code', header: 'Series', tdClassName: 'font-semibold' },
@@ -48,20 +55,33 @@ export function AllotmentsPage() {
     { key: 'status', header: 'Status' },
     { key: 'actions', header: 'Actions', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
       render: (s) => {
+        const revertBtn = (
+          <button onClick={() => { setMsg(''); if (window.confirm(`Cancel the pending allotment request for ${s.code}?`)) cancelPending.mutate(s.series_id); }}
+            className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">↺ Revert</button>
+        );
+        // 1) Awaiting a checker → Pending approval (disabled) + Revert (cancel it).
+        if (s.pending_request_id) {
+          return (
+            <span className="inline-flex gap-2 justify-end">
+              <button disabled className="text-xs border border-border text-text-muted rounded px-3 py-1.5 cursor-default">Pending approval</button>
+              {revertBtn}
+            </span>
+          );
+        }
+        // 2) Allotted → only Revert (un-stamp; super-admin/allotments:revert).
+        if (s.status === 'Allotted') {
+          return can('allotments:revert')
+            ? <button onClick={() => { setMsg(''); revert.mutate(s.series_id); }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">↺ Revert</button>
+            : <span className="text-xs text-text-muted">—</span>;
+        }
+        // 3) Otherwise → Allot / Close (re-enabled once a pending request is cancelled/rejected).
         const closeOnly = isCloseOnly(s);
         const canAllot = s.pending_count > 0 || closeOnly;
-        return (
-        <span className="inline-flex gap-2 justify-end">
-          {canAllot && (
-            <button disabled={allot.isPending} onClick={() => { setMsg(''); allot.mutate(s.series_id); }}
+        return canAllot
+          ? <button disabled={allot.isPending} onClick={() => { setMsg(''); allot.mutate(s.series_id); }}
               title={closeOnly ? 'No pending investments — this closes the series to new money' : undefined}
               className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">{closeOnly ? 'Close series' : 'Allot batch'}</button>
-          )}
-          {can('allotments:revert') && s.status === 'Allotted' && (
-            <button onClick={() => { setMsg(''); revert.mutate(s.series_id); }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">↺ Revert</button>
-          )}
-        </span>
-      );
+          : <span className="text-xs text-text-muted">—</span>;
       } },
   ];
 

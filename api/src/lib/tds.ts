@@ -68,8 +68,10 @@ export function computeTds(
   const effective = lineFlag !== null ? lineFlag : custFlag;
   if (effective === false) return 0;
 
-  // 15G/15H exemption (residents only).
-  if (!customer.is_nri && isFormValid(customer.tax_form, customer.tax_form_expires_on)) {
+  // 15G/15H exemption (residents only), judged AS OF THE PAYOUT DATE — not the
+  // day the schedule was materialised. A form valid today but expiring before a
+  // future payout must NOT exempt that later payout (it would under-deduct TDS).
+  if (!customer.is_nri && isFormValid(customer.tax_form, customer.tax_form_expires_on, new Date(dueRec.due_date))) {
     return 0;
   }
 

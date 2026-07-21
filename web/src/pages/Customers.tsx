@@ -6,6 +6,7 @@ import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { Tabs, type TabDef } from '../components/Tabs.js';
 import { CustomerWizard } from '../components/CustomerWizard.js';
+import { statusLabel } from '../labels.js';
 
 type CustTab = 'all' | 'approved' | 'pending' | 'draft';
 const custMatch = (tab: CustTab, s: string) =>
@@ -22,6 +23,9 @@ interface CustomerRow {
   is_active: boolean;
 }
 
+// The list endpoint may return a bare array or {rows,total,truncated}. Handle both.
+type CustomerListResp = { rows: CustomerRow[]; total?: number; truncated?: boolean } | CustomerRow[];
+
 const statusPill: Record<string, string> = {
   Approved: 'bg-[color:var(--success-bg)] text-success',
   PendingApproval: 'bg-[color:var(--warn-bg)] text-warn',
@@ -34,8 +38,8 @@ const columns: Column<CustomerRow>[] = [
     render: (c) => <Link to={`/app/customers/${c.id}`} className="text-primary hover:underline">{c.full_name}</Link> },
   { key: 'district', header: 'District', value: (c) => c.district ?? '', render: (c) => c.district ?? '—' },
   { key: 'kyc_status', header: 'KYC', tdClassName: 'text-text-muted' },
-  { key: 'creation_status', header: 'Status',
-    render: (c) => <span className={`text-xs rounded px-1.5 py-0.5 ${statusPill[c.creation_status] ?? 'bg-bg'}`}>{c.creation_status}</span> },
+  { key: 'creation_status', header: 'Status', value: (c) => statusLabel(c.creation_status),
+    render: (c) => <span className={`text-xs rounded px-1.5 py-0.5 ${statusPill[c.creation_status] ?? 'bg-bg'}`}>{statusLabel(c.creation_status)}</span> },
 ];
 
 export function CustomersPage() {
@@ -46,10 +50,12 @@ export function CustomersPage() {
   const query = q.trim();
   const { data, isLoading, error } = useQuery({
     queryKey: ['customers', query],
-    queryFn: () => api.get<{ rows: CustomerRow[] }>(`/api/customers${query ? `?q=${encodeURIComponent(query)}` : ''}`),
+    queryFn: () => api.get<CustomerListResp>(`/api/customers${query ? `?q=${encodeURIComponent(query)}` : ''}`),
   });
   if (error) return <div className="text-danger">Failed to load customers.</div>;
-  const rows = data?.rows ?? [];
+  const rows = Array.isArray(data) ? data : (data?.rows ?? []);
+  const truncated = !!data && !Array.isArray(data) && data.truncated === true;
+  const total = !Array.isArray(data) && data?.total != null ? data.total : rows.length;
   const tabs: TabDef<CustTab>[] = [
     { key: 'approved', label: 'Approved', count: rows.filter((r) => custMatch('approved', r.creation_status)).length },
     { key: 'pending', label: 'Pending approval', count: rows.filter((r) => custMatch('pending', r.creation_status)).length },
@@ -76,6 +82,12 @@ export function CustomersPage() {
         placeholder="Search name, PAN, phone, code, email…"
         value={q} onChange={(e) => setQ(e.target.value)}
       />
+
+      {truncated && (
+        <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-3">
+          Showing first {rows.length.toLocaleString('en-IN')} of {total.toLocaleString('en-IN')} — refine your search to see the rest.
+        </div>
+      )}
 
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
 

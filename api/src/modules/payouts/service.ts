@@ -12,7 +12,8 @@ import { denominatorFor, type DayCountConvention } from '../../lib/interest.js';
 import { computeTds } from '../../lib/tds.js';
 import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
 import { nextCode } from '../../lib/sequences.js';
-import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
+import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
+import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
 import { getSettingsMap } from '../settings/service.js';
 
 const DUE_TYPES = "('Interest','BrokenInterest')";
@@ -125,11 +126,13 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
          batchId, bank?.account_number ?? null, bank?.ifsc ?? null]
       );
       // Supersede any still-unpaid projected rows already covered by this
-      // settlement (due on/before the payout date) so they can never be paid twice.
+      // settlement (due on/before the payout date) so they can never be paid
+      // twice. Stamp them with this batch_id so a REJECT can un-supersede exactly
+      // these rows (and no others).
       await tx.query(
-        `UPDATE disbursement_schedule SET status = 'Skipped'
+        `UPDATE disbursement_schedule SET status = 'Skipped', batch_id = $3
           WHERE line_id = $1 AND due_type IN ${DUE_TYPES} AND status = 'Scheduled'
-            AND batch_id IS NULL AND due_date <= $2`, [r.line_id, payoutDate]);
+            AND batch_id IS NULL AND due_date <= $2`, [r.line_id, payoutDate, batchId]);
     }
 
     // Creating a batch IS the maker's "this was paid" claim, so it raises the
@@ -157,6 +160,26 @@ registerOnFinalApprove('interest_batch', async (tx, req) => {
     "UPDATE disbursement_schedule SET status = 'Paid', paid_at = $1, utr = COALESCE(utr, $2) WHERE batch_id = $3 AND status = 'Scheduled'",
     [batch?.payout_date ?? null, utr, batchId]);
   await tx.query("UPDATE payout_batches SET status = 'Paid' WHERE id = $1", [batchId]);
+  // Tell LockerHub each customer's interest was paid (contract event, one per
+  // application in the batch). No-op unless the event webhook is configured.
+  const paidApps = (await tx.query<{ application_id: string }>(
+    'SELECT DISTINCT application_id FROM disbursement_schedule WHERE batch_id = $1', [batchId])).rows;
+  for (const a of paidApps) await emitForApplication(tx, 'interest.paid', Number(a.application_id), `batch:${batchId}`);
+});
+
+// On REJECT of an interest batch: reverse the materialisation so the interest
+// period is billable again. Without this the rows kept their batch_id, the
+// paid-through watermark treated them as paid, and the next batch skipped that
+// period → customers were never paid it. (Review 2026-07-21.)
+registerOnReject('interest_batch', async (tx, req) => {
+  const batchId = req.metadata.batch_id ? Number(req.metadata.batch_id) : null;
+  if (!batchId) return;
+  // 1) Un-supersede the rows this batch skipped (they carry the batch_id).
+  await tx.query("UPDATE disbursement_schedule SET status = 'Scheduled', batch_id = NULL WHERE batch_id = $1 AND status = 'Skipped'", [batchId]);
+  // 2) Drop the batch's own materialised (still-Scheduled) rows.
+  await tx.query("DELETE FROM disbursement_schedule WHERE batch_id = $1 AND status = 'Scheduled'", [batchId]);
+  // 3) Mark the batch failed.
+  await tx.query("UPDATE payout_batches SET status = 'Failed' WHERE id = $1", [batchId]);
 });
 
 /** Maker states "this batch has been paid out" — that claim goes to a checker.

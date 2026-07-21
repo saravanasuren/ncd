@@ -58,11 +58,14 @@ function HomeRedirect() {
 }
 
 /** Guard a route by permission — a stale bookmark or typed URL bounces to the
- * user's own landing page instead of rendering a page that just fails. */
-function RequirePerm({ perm, children }: { perm: Permission; children: ReactNode }) {
+ * user's own landing page instead of rendering a page that just fails. Accepts
+ * a single permission or a list (nav items are `anyOf`); access is granted when
+ * the user holds ANY of them. */
+function RequirePerm({ perm, children }: { perm: Permission | Permission[]; children: ReactNode }) {
   const { can, loading } = useAuth();
   if (loading) return <div className="p-8 text-text-muted">Loading…</div>;
-  return can(perm) ? <>{children}</> : <HomeRedirect />;
+  const perms = Array.isArray(perm) ? perm : [perm];
+  return can(...perms) ? <>{children}</> : <HomeRedirect />;
 }
 
 export function App() {
@@ -85,25 +88,25 @@ export function App() {
         >
           <Route index element={<HomeRedirect />} />
           <Route path="dashboard" element={<RequirePerm perm="dashboard:view"><Suspense fallback={<div className="text-text-muted">Loading dashboard…</div>}><Dashboard /></Suspense></RequirePerm>} />
-          <Route path="segments" element={<SegmentsPage />} />
-          <Route path="reports" element={<ReportsPage />} />
-          <Route path="system" element={<SystemPage />} />
-          <Route path="leads" element={<LeadsPage />} />
-          <Route path="customers" element={<CustomersPage />} />
-          <Route path="customers/:id" element={<CustomerDetailPage />} />
-          <Route path="applications" element={<ApplicationsPage />} />
-          <Route path="applications/:id" element={<ApplicationDetailPage />} />
-          <Route path="approvals" element={<ApprovalsPage />} />
-          <Route path="agents" element={<AgentsPage />} />
-          <Route path="allotments" element={<AllotmentsPage />} />
-          <Route path="redemptions" element={<RedemptionsPage />} />
-          <Route path="ncd-events" element={<EventsPage />} />
-          <Route path="masters" element={<MastersPage />} />
-          <Route path="payouts" element={<PayoutsPage />} />
-          <Route path="incentives" element={<IncentivesPage />} />
-          <Route path="my-earnings" element={<MyEarningsPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="users" element={<UsersPage />} />
+          <Route path="segments" element={<RequirePerm perm={['reports:download', 'dashboard:drilldown']}><SegmentsPage /></RequirePerm>} />
+          <Route path="reports" element={<RequirePerm perm="reports:download"><ReportsPage /></RequirePerm>} />
+          <Route path="system" element={<RequirePerm perm={['audit:read', 'notifications:admin']}><SystemPage /></RequirePerm>} />
+          <Route path="leads" element={<RequirePerm perm="leads:read"><LeadsPage /></RequirePerm>} />
+          <Route path="customers" element={<RequirePerm perm="customers:read"><CustomersPage /></RequirePerm>} />
+          <Route path="customers/:id" element={<RequirePerm perm="customers:read"><CustomerDetailPage /></RequirePerm>} />
+          <Route path="applications" element={<RequirePerm perm="customers:read"><ApplicationsPage /></RequirePerm>} />
+          <Route path="applications/:id" element={<RequirePerm perm="customers:read"><ApplicationDetailPage /></RequirePerm>} />
+          <Route path="approvals" element={<RequirePerm perm={['approvals:check', 'approvals:check-premature', 'approvals:check-handover']}><ApprovalsPage /></RequirePerm>} />
+          <Route path="agents" element={<RequirePerm perm="agents:manage"><AgentsPage /></RequirePerm>} />
+          <Route path="allotments" element={<RequirePerm perm="allotments:execute"><AllotmentsPage /></RequirePerm>} />
+          <Route path="redemptions" element={<RequirePerm perm="redemptions:initiate"><RedemptionsPage /></RequirePerm>} />
+          <Route path="ncd-events" element={<RequirePerm perm="redemptions:initiate"><EventsPage /></RequirePerm>} />
+          <Route path="masters" element={<RequirePerm perm="products:manage"><MastersPage /></RequirePerm>} />
+          <Route path="payouts" element={<RequirePerm perm="payouts:generate"><PayoutsPage /></RequirePerm>} />
+          <Route path="incentives" element={<RequirePerm perm="incentives:manage-eligibility"><IncentivesPage /></RequirePerm>} />
+          <Route path="my-earnings" element={<RequirePerm perm="earnings:read-own"><MyEarningsPage /></RequirePerm>} />
+          <Route path="settings" element={<RequirePerm perm={['settings:manage', 'settings:workflow-config']}><SettingsPage /></RequirePerm>} />
+          <Route path="users" element={<RequirePerm perm="users:manage"><UsersPage /></RequirePerm>} />
         </Route>
         {/* Unknown path → /app, which routes each user to a page they can open. */}
         <Route path="*" element={<Navigate to="/app" replace />} />

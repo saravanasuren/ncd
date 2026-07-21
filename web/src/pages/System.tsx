@@ -64,13 +64,14 @@ function Table({ head, rows, defaultSort }: { head: string[]; rows: (string | nu
 }
 
 function Audit() {
-  const { data } = useQuery({ queryKey: ['audit'], queryFn: () => api.get<{ rows: any[] }>('/api/audit') });
+  const { data, error } = useQuery({ queryKey: ['audit'], queryFn: () => api.get<{ rows: any[] }>('/api/audit') });
+  if (error) return <div className="text-danger">Failed to load the audit trail.</div>;
   return <Table head={['When', 'Actor', 'Action', 'Entity']} defaultSort={{ col: 0, dir: 'desc' }} rows={(data?.rows ?? []).map((r) => [String(r.created_at).slice(0, 19).replace('T', ' '), r.actor_name ?? '—', r.action, `${r.entity_type} ${r.entity_id ?? ''}`])} />;
 }
 function Notifications() {
   const qc = useQueryClient();
   const [msg, setMsg] = useState('');
-  const { data } = useQuery({ queryKey: ['sys-notif'], queryFn: () => api.get<{ rows: any[] }>('/api/system/notifications') });
+  const { data, error } = useQuery({ queryKey: ['sys-notif'], queryFn: () => api.get<{ rows: any[] }>('/api/system/notifications') });
   const drain = useMutation({
     mutationFn: () => api.post<{ sent: number; failed: number }>('/api/system/notifications/drain', {}),
     onSuccess: (r) => { setMsg(`Drained: ${r.sent ?? 0} sent, ${r.failed ?? 0} failed.`); qc.invalidateQueries({ queryKey: ['sys-notif'] }); },
@@ -83,11 +84,13 @@ function Notifications() {
           className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40">Drain queue now</button>
         {msg && <span className="text-xs text-primary">{msg}</span>}
       </div>
-      <Table head={['Channel', 'Template', 'To', 'Status']} rows={(data?.rows ?? []).map((r) => [r.channel, r.template, r.to_address, r.status])} />
+      {error ? <div className="text-danger">Failed to load the notification queue.</div>
+        : <Table head={['Channel', 'Template', 'To', 'Status']} rows={(data?.rows ?? []).map((r) => [r.channel, r.template, r.to_address, r.status])} />}
     </div>
   );
 }
 function Jobs() {
-  const { data } = useQuery({ queryKey: ['sys-jobs'], queryFn: () => api.get<{ rows: any[] }>('/api/system/jobs') });
+  const { data, error } = useQuery({ queryKey: ['sys-jobs'], queryFn: () => api.get<{ rows: any[] }>('/api/system/jobs') });
+  if (error) return <div className="text-danger">Failed to load cron runs.</div>;
   return <Table head={['Job', 'Started', 'Finished', 'OK']} rows={(data?.rows ?? []).map((r) => [r.job, String(r.started_at ?? ''), String(r.finished_at ?? ''), r.ok ? '✓' : '✗'])} />;
 }

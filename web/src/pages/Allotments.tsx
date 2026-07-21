@@ -20,7 +20,7 @@ export function AllotmentsPage() {
   const { can } = useAuth();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [msg, setMsg] = useState('');
-  const { data, isLoading } = useQuery({ queryKey: ['allot-series'], queryFn: () => api.get<{ rows: SeriesRow[] }>('/api/allotments/series') });
+  const { data, isLoading, error } = useQuery({ queryKey: ['allot-series'], queryFn: () => api.get<{ rows: SeriesRow[] }>('/api/allotments/series') });
   const allot = useMutation({
     mutationFn: (seriesId: number) => api.post(`/api/allotments/series/${seriesId}`, { allotment_date: date }),
     onSuccess: () => { setMsg('Batch submitted — a second checker must approve it on the Approvals page.'); qc.invalidateQueries({ queryKey: ['allot-series'] }); },
@@ -32,6 +32,7 @@ export function AllotmentsPage() {
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
+  if (error) return <div className="text-danger">Failed to load series.</div>;
 
   const columns: Column<SeriesRow>[] = [
     { key: 'code', header: 'Series', tdClassName: 'font-semibold' },

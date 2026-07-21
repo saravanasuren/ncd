@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { ReferredByPicker } from '../components/ReferredByPicker.js';
+import { APPROVAL_TYPE_LABELS as TYPE_LABELS } from '../labels.js';
 
 interface ApprovalReq {
   id: number;
@@ -19,25 +20,6 @@ interface ApprovalReq {
   subject?: string;
   amount?: number | null;
 }
-
-const TYPE_LABELS: Record<string, string> = {
-  customer_creation: 'New Customer',
-  customer_correction: 'Customer Correction',
-  customer_reassignment: 'Customer Handover',
-  subscription: 'Investment',
-  premature_redemption: 'Premature Redemption',
-  redemption: 'Redemption',
-  rollover: 'Rollover',
-  ncd_transfer: 'Holder Transfer',
-  ncd_transformation: 'Transformation',
-  agent_registration: 'Agent Registration',
-  activation_batch: 'Activation',
-  allotment_batch: 'Allotment',
-  user_verification: 'User Verification',
-  app_investment: 'App investment (live)',
-  commission_eligibility: 'Agent Commission',
-  interest_batch: 'Interest Payout',
-};
 
 /** Human title for a request card, e.g. "NCD_27 · Activation" for a batch. */
 function requestTitle(r: ApprovalReq): string {
@@ -208,7 +190,7 @@ export function ApprovalsPage() {
   const qc = useQueryClient();
   const [msg, setMsg] = useState('');
   const [openId, setOpenId] = useState<number | null>(null);
-  const { data, isLoading } = useQuery({ queryKey: ['approvals'], queryFn: () => api.get<{ rows: ApprovalReq[] }>('/api/approvals/queue') });
+  const { data, isLoading, error } = useQuery({ queryKey: ['approvals'], queryFn: () => api.get<{ rows: ApprovalReq[] }>('/api/approvals/queue') });
   const uiConfig = useQuery({ queryKey: ['ui-config'], queryFn: () => api.get<{ values: Record<string, unknown> }>('/api/settings/ui-config') });
   const waiverEnabled = uiConfig.data?.values['redemption.premature_penalty_waiver_enabled'] !== false;
 
@@ -220,6 +202,7 @@ export function ApprovalsPage() {
   });
 
   if (isLoading) return <div className="text-text-muted">Loading approvals…</div>;
+  if (error) return <div className="text-danger">Failed to load approvals.</div>;
 
   return (
     <div className="w-full">

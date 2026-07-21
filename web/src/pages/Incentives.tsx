@@ -165,10 +165,12 @@ function PayeeAccruals({ p, canPay, canRevert, onPaid, onReverted }: { p: Payee;
       render: (r) => r.paid ? (
         <span className="inline-flex items-center gap-2 justify-end whitespace-nowrap">
           <span className="text-xs text-success">Paid</span>
-          {canRevert && <button disabled={revertOne.isPending} onClick={() => revertOne.mutate(r.application_id)}
+          {canRevert && <button disabled={revertOne.isPending}
+            onClick={() => { if (window.confirm(`Revert the ${formatINR(r.incentive_amount)} payment to ${p.payee_name ?? 'this payee'} for ${r.customer} (${r.application_no})?`)) revertOne.mutate(r.application_id); }}
             className="text-xs border border-border text-danger rounded px-2 py-1 disabled:opacity-40 hover:bg-[color:var(--danger-bg)]">Revert</button>}
         </span>
-      ) : canPay ? <button disabled={payOne.isPending} onClick={() => payOne.mutate(r.application_id)}
+      ) : canPay ? <button disabled={payOne.isPending}
+            onClick={() => { if (window.confirm(`Pay ${formatINR(r.incentive_amount)} to ${p.payee_name ?? 'this payee'} for ${r.customer} (${r.application_no})?`)) payOne.mutate(r.application_id); }}
             className="text-xs bg-primary text-white rounded px-3 py-1 disabled:opacity-40 hover:bg-primary-hover">Pay</button>
         : <span className="text-xs text-text-muted">Unpaid</span> },
   ];

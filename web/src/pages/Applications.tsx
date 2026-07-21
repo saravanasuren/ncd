@@ -5,11 +5,15 @@ import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { Tabs, type TabDef } from '../components/Tabs.js';
+import { statusLabel } from '../labels.js';
 
 interface AppRow {
   id: number; application_no: string; status: string; total_amount: string;
   customer_name: string; customer_code: string; series_code: string; maturity_date: string | null;
 }
+
+// The list endpoint may return a bare array or {rows,total,truncated}. Handle both.
+type AppListResp = { rows: AppRow[]; total?: number; truncated?: boolean } | AppRow[];
 
 type AppTab = 'all' | 'active' | 'pending' | 'redeemed';
 const APP_PENDING = new Set(['Draft', 'PendingApproval', 'PendingFundVerification', 'PendingEsign', 'PendingAllotment', 'PendingActivation']);
@@ -33,16 +37,19 @@ const columns: Column<AppRow>[] = [
   { key: 'series_code', header: 'Series' },
   { key: 'total_amount', header: 'Amount', align: 'right',
     value: (a) => Number(a.total_amount), render: (a) => <span className="mono">{formatINR(a.total_amount)}</span> },
-  { key: 'status', header: 'Status',
-    render: (a) => <span className={`text-xs rounded px-1.5 py-0.5 ${pill[a.status] ?? 'bg-bg'}`}>{a.status}</span> },
+  { key: 'status', header: 'Status', value: (a) => statusLabel(a.status),
+    render: (a) => <span className={`text-xs rounded px-1.5 py-0.5 ${pill[a.status] ?? 'bg-bg'}`}>{statusLabel(a.status)}</span> },
 ];
 
 export function ApplicationsPage() {
   const [tab, setTab] = useState<AppTab>('active');
-  const { data, isLoading, error } = useQuery({ queryKey: ['applications'], queryFn: () => api.get<{ rows: AppRow[] }>('/api/applications') });
+  const { data, isLoading, error } = useQuery({ queryKey: ['applications'], queryFn: () => api.get<AppListResp>('/api/applications') });
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Failed to load applications.</div>;
-  const rows = data!.rows;
+  const payload = data!;
+  const rows = Array.isArray(payload) ? payload : payload.rows;
+  const truncated = !Array.isArray(payload) && payload.truncated === true;
+  const total = !Array.isArray(payload) && payload.total != null ? payload.total : rows.length;
   const tabs: TabDef<AppTab>[] = [
     { key: 'active', label: 'Active', count: rows.filter((r) => appMatch('active', r.status)).length },
     { key: 'pending', label: 'Pending', count: rows.filter((r) => appMatch('pending', r.status)).length },
@@ -53,6 +60,11 @@ export function ApplicationsPage() {
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Applications</h1>
       <p className="text-sm text-text-muted mt-1 mb-4">NCD investments in your scope.</p>
+      {truncated && (
+        <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-3">
+          Showing first {rows.length.toLocaleString('en-IN')} of {total.toLocaleString('en-IN')} — refine your search to see the rest.
+        </div>
+      )}
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
       <DataTable
         columns={columns}

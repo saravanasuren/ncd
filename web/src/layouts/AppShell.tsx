@@ -4,6 +4,7 @@ import { ROLE_LABELS } from '@new-wealth/shared';
 import { useAuth } from '../auth/AuthContext.js';
 import { api } from '../api/client.js';
 import { NAV } from '../nav.js';
+import { ErrorBoundary } from '../components/ErrorBoundary.js';
 
 /** App shell (docs/05 §2): permission-generated sidebar + topbar. Responsive:
  * fixed sidebar on desktop (≥ lg), a slide-in drawer with hamburger on smaller
@@ -103,7 +104,11 @@ export function AppShell() {
         </header>
         {pwOpen && <ChangePasswordModal onClose={() => setPwOpen(false)} />}
         <main className="p-4 lg:p-6 overflow-auto">
-          <Outlet />
+          {/* Keyed on the path so a caught error on one page clears when the
+              user navigates to another — one page's crash never kills the shell. */}
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
     </div>

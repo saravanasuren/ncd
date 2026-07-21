@@ -5,14 +5,13 @@ import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 
-type Seg = 'series' | 'customer' | 'district' | 'agent' | 'staff' | 'branch' | 'lockerhub' | 'dhanamfin';
+type Seg = 'series' | 'customer' | 'district' | 'agent' | 'staff' | 'lockerhub' | 'dhanamfin';
 const TABS: { key: Seg; label: string }[] = [
   { key: 'series', label: 'Series-wise' },
   { key: 'customer', label: 'Customer-wise' },
   { key: 'district', label: 'District-wise' },
   { key: 'agent', label: 'Agent-wise' },
   { key: 'staff', label: 'Staff-wise' },
-  { key: 'branch', label: 'Branch-wise' },
   { key: 'lockerhub', label: 'Locker Hub' },
   { key: 'dhanamfin', label: 'Dhanamfin' },
 ];
@@ -44,7 +43,7 @@ export function SegmentsPage() {
   const [tab, setTab] = useState<Seg>(paramTab && TAB_KEYS.includes(paramTab) ? paramTab : 'series');
   const [expanded, setExpanded] = useState<Set<string>>(() => (openKey ? new Set([openKey]) : new Set()));
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['segment', tab],
     queryFn: () => api.get<{ by: Seg; groups: Group[] }>(`/api/reports/segments/${tab}`),
   });
@@ -70,7 +69,7 @@ export function SegmentsPage() {
   return (
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Segments</h1>
-      <p className="text-sm text-text-muted mt-1 mb-4">The book sliced by series, customer, district, agent, staff, branch, and funding channel (Locker Hub / Dhanamfin). Click a row's <span className="font-mono">+</span> to see its individual investments (including redeemed ones).</p>
+      <p className="text-sm text-text-muted mt-1 mb-4">The book sliced by series, customer, district, agent, staff, and funding channel (Locker Hub / Dhanamfin). Click a row's <span className="font-mono">+</span> to see its individual investments (including redeemed ones).</p>
       <div className="flex gap-1 mb-4 border-b border-border">
         {TABS.map((t) => (
           <button key={t.key} onClick={() => switchTab(t.key)}
@@ -79,7 +78,7 @@ export function SegmentsPage() {
           </button>
         ))}
       </div>
-      {isLoading ? <div className="text-text-muted">Loading…</div> : (
+      {error ? <div className="text-danger">Failed to load this segment.</div> : isLoading ? <div className="text-text-muted">Loading…</div> : (
         <DataTable
           columns={groupColumns(tab, expanded, toggle)}
           rows={data!.groups}
@@ -230,7 +229,7 @@ function groupColumns(tab: Seg, expanded: Set<string>, toggle: (k: string) => vo
       investors, ncds, outstanding,
     ];
   }
-  const label = tab === 'district' ? 'District' : tab === 'branch' ? 'Branch' : tab === 'agent' ? 'Agent' : 'Staff';
+  const label = tab === 'district' ? 'District' : tab === 'agent' ? 'Agent' : 'Staff';
   return [{ key: 'label', header: label, value: (g) => g.label, render: expander }, investors, ncds, outstanding];
 }
 

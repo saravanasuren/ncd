@@ -108,7 +108,7 @@ export function LeadsPage() {
   const [creating, setCreating] = useState(false);
   const [q, setQ] = useState('');
 
-  const { data, isLoading } = useQuery({ queryKey: ['leads'], queryFn: () => api.get<{ rows: Lead[] }>('/api/leads') });
+  const { data, isLoading, error } = useQuery({ queryKey: ['leads'], queryFn: () => api.get<{ rows: Lead[] }>('/api/leads') });
   const prospects = useQuery({ queryKey: ['app-prospects'], queryFn: () => api.get<{ rows: Prospect[] }>('/api/leads/app-prospects') });
   const series = useQuery({
     queryKey: ['series'],
@@ -272,7 +272,7 @@ export function LeadsPage() {
         value={q} onChange={(e) => setQ(e.target.value)}
       />
 
-      {isLoading ? <div className="text-text-muted">Loading…</div> : (() => {
+      {error ? <div className="text-danger">Failed to load leads.</div> : isLoading ? <div className="text-text-muted">Loading…</div> : (() => {
         const columns: Column<Lead>[] = [
           { key: 'full_name', header: 'Name', tdClassName: 'font-medium' },
           { key: 'phone', header: 'Phone', tdClassName: 'text-text-muted', value: (l) => l.phone ?? '', render: (l) => l.phone ?? '—' },

@@ -321,6 +321,7 @@ function groupsOf(rows: ApprovalReq[]): Array<[string, ApprovalReq[]]> {
 
 interface Editable {
   application_id: number;
+  customer_id: number;
   has_receipt: boolean;
   readonly: Record<string, string>;
   fields: {
@@ -330,7 +331,8 @@ interface Editable {
 }
 
 const RO_LABELS: Array<[string, string]> = [
-  ['customer', 'Customer'], ['pan', 'PAN'], ['application_no', 'Reference no.'],
+  ['customer', 'Customer'], ['pan', 'PAN'], ['phone', 'Phone'], ['dob', 'Date of birth'],
+  ['application_no', 'Reference no.'],
   ['series', 'Series'], ['scheme', 'Scheme'], ['rate', 'Rate'], ['tenure', 'Tenure'],
   ['created_at', 'Entered on'], ['interest_start', 'Interest starts'], ['status', 'Current status'],
 ];
@@ -368,7 +370,8 @@ function EditableInvestment({ ed, id, canAct, selfApproval, actionLabel, onDone 
           </span>
         ))}
       </dl>
-      <div className="mb-2 text-xs">
+      <div className="mb-2 text-xs flex flex-wrap items-center gap-x-4 gap-y-1">
+        <a href={`/app/customers/${ed.customer_id}`} target="_blank" rel="noreferrer" className="text-primary hover:underline">👤 View customer profile</a>
         {ed.has_receipt
           ? <a href={`/api/applications/${ed.application_id}/receipt`} target="_blank" rel="noreferrer" className="text-primary hover:underline">📎 View receipt / cheque photo</a>
           : <span className="text-text-muted">No receipt attached.</span>}

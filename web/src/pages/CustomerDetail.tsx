@@ -62,9 +62,8 @@ export function CustomerDetailPage() {
               if (reason && reason.trim().length >= 2) wrap(api.post(`/api/customers/${id}/kyc/reject`, { reason: reason.trim() }));
             }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">✗ Reject KYC</button>
           )}
-          {can('customers:create') && c.creation_status === 'Draft' && (
-            <button onClick={() => wrap(api.post(`/api/customers/${id}/submit-for-approval`))} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Submit for approval →</button>
-          )}
+          {/* Customer creation needs no approval (owner 2026-07-21) — the customer
+              is live on creation; the only approval gate is the investment. */}
           {can('customers:correction-request') && c.creation_status !== 'Draft' && (
             <button onClick={() => setPanel(panel === 'correction' ? null : 'correction')} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Request correction</button>
           )}

@@ -27,10 +27,8 @@ const admin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
 async function activeInvestment(name: string, phone: string, amount = 500000) {
   const a = await admin();
   const cust = await a.post('/api/customers', { full_name: name, phone, email: `${phone}@ex.com` });
-  const cid = cust.json.id;
-  const sub = await a.post(`/api/customers/${cid}/submit-for-approval`);
+  const cid = cust.json.id; // customers are created live now — no approval step
   const ncd = await as('ncd@demo.local');
-  await ncd.post(`/api/approvals/${sub.json.request.id}/approve`);
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: `88${phone}`, ifsc: 'ICIC0001234' });
   const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);

@@ -10,10 +10,7 @@ beforeAll(async () => {
   const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
   const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
   const a = new Client(ctx.base); await a.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' });
-  const cust = await a.post('/api/customers', { full_name: 'Esign Cust', phone: '9990004444', email: 'es@example.com' });
-  const submit = await a.post(`/api/customers/${cust.json.id}/submit-for-approval`);
-  const ncd = new Client(ctx.base); await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
-  await ncd.post(`/api/approvals/${submit.json.request.id}/approve`);
+  const cust = await a.post('/api/customers', { full_name: 'Esign Cust', phone: '9990004444', email: 'es@example.com' }); // live on creation
   const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 400000 });
   appId = app.json.id;
 });

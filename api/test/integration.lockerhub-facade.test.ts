@@ -45,10 +45,8 @@ beforeAll(async () => {
   // One approved customer with an Active allotted investment.
   const a = await admin();
   const cust = await a.post('/api/customers', { full_name: 'Facade Customer', phone: PHONE, email: 'facade@example.com' });
-  customerId = cust.json.id;
-  const submit = await a.post(`/api/customers/${customerId}/submit-for-approval`);
+  customerId = cust.json.id; // live on creation — no approval step
   const ncd = await as('ncd@demo.local');
-  await ncd.post(`/api/approvals/${submit.json.request.id}/approve`);
   await a.post(`/api/customers/${customerId}/bank-accounts`, { account_number: '55550009999', ifsc: 'HDFC0005555' });
   await a.put(`/api/customers/${customerId}/nominees`, { nominees: [{ full_name: 'Facade Nominee', share_pct: 100 }] });
   const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });

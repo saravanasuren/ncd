@@ -304,7 +304,7 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
             (a.receipt_file_path IS NOT NULL) AS has_receipt,
             a.status, s.code AS series_code, sc.code AS scheme_code,
             sc.coupon_rate_pct, sc.tenure_months,
-            c.full_name AS customer, c.customer_code, c.pan
+            a.customer_id, c.full_name AS customer, c.customer_code, c.pan, c.phone, c.dob
        FROM applications a
        JOIN customers c ON c.id = a.customer_id
        JOIN series s ON s.id = a.series_id
@@ -318,10 +318,13 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
   const d = (v: unknown) => toISODate(v as string | Date | null | undefined) ?? '';
   return {
     application_id: Number(r.id),
+    customer_id: Number(r.customer_id), // so the approver can open the full profile
     has_receipt: r.has_receipt === true,
     readonly: {
       customer: `${r.customer} (${r.customer_code})`,
       pan: r.pan ?? '—',
+      phone: (r.phone as string) ?? '—',
+      dob: d(r.dob) || '—',
       application_no: r.application_no,
       series: r.series_code,
       scheme: r.scheme_code ?? '—',

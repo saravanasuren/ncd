@@ -45,31 +45,17 @@ describe('lead → customer → hand-off to NCD Manager queue', () => {
     expect(bank.json.pennyDrop.status).toBe('Failed');
   });
 
-  it('staff submits the customer → it appears in the NCD Manager queue', async () => {
-    const staff = await as('staff@demo.local');
-    const submit = await staff.post(`/api/customers/${customerId}/submit-for-approval`);
-    expect(submit.status).toBe(201);
-
-    const ncd = await as('ncd@demo.local');
-    const queue = await ncd.get('/api/approvals/queue');
-    expect(queue.status).toBe(200);
-    const item = queue.json.rows.find((r: any) => r.entity_id === String(customerId) && r.request_type === 'customer_creation');
-    expect(item).toBeTruthy();
-    expect(item.canAct).toBe(true);
-  });
-
-  it('NCD Manager approves → customer becomes Approved + active', async () => {
-    const ncd = await as('ncd@demo.local');
-    const queue = await ncd.get('/api/approvals/queue');
-    const item = queue.json.rows.find((r: any) => r.entity_id === String(customerId));
-    const appr = await ncd.post(`/api/approvals/${item.id}/approve`);
-    expect(appr.status).toBe(200);
-    expect(appr.json.request.status).toBe('Approved');
-
+  it('the customer is created live — no separate approval (owner 2026-07-21)', async () => {
     const a = await admin();
     const detail = await a.get(`/api/customers/${customerId}`);
+    // Live immediately: usable for investments, no customer-approval gate.
     expect(detail.json.customer.creation_status).toBe('Approved');
     expect(detail.json.customer.is_active).toBe(true);
+    // No customer_creation approval is ever raised.
+    const ncd = await as('ncd@demo.local');
+    const queue = await ncd.get('/api/approvals/queue');
+    const item = queue.json.rows.find((r: any) => r.entity_id === String(customerId) && r.request_type === 'customer_creation');
+    expect(item).toBeFalsy();
   });
 });
 
@@ -96,33 +82,39 @@ describe('scope rules', () => {
 });
 
 describe('no-self-approve rule (docs/03 rule zero)', () => {
-  it('the NCD Manager who submits cannot approve their own submission', async () => {
-    // NCD Manager both creates AND submits a customer, then tries to self-approve.
-    const ncd = await as('ncd@demo.local');
-    const created = await ncd.post('/api/customers', { full_name: 'NCD Self Test', phone: '9000000003' });
-    expect(created.status).toBe(201);
-    const submit = await ncd.post(`/api/customers/${created.json.id}/submit-for-approval`);
-    expect(submit.status).toBe(201);
-    const reqId = submit.json.request.id;
+  // Now that customer creation needs no approval, the rule is exercised via the
+  // investment (subscription) approval — the single remaining gate.
+  async function ncdIds() {
+    return {
+      seriesId: Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id),
+      schemeId: Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id),
+    };
+  }
 
-    // Same NCD Manager tries to approve → forbidden.
-    const selfApprove = await ncd.post(`/api/approvals/${reqId}/approve`);
-    expect(selfApprove.status).toBe(403);
-
-    // A different checker (Admin) can approve.
+  it('the maker of an investment cannot approve their own submission', async () => {
     const a = await admin();
-    const ok = await a.post(`/api/approvals/${reqId}/approve`);
+    const { seriesId, schemeId } = await ncdIds();
+    const cust = await a.post('/api/customers', { full_name: 'Self Test', phone: '9000000003' });
+    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
+    const reqId = app.json.subscription_request.id;
+
+    // Admin is the maker → cannot self-approve (only a Super Admin may, with a reason).
+    expect((await a.post(`/api/approvals/${reqId}/approve`)).status).toBe(403);
+
+    // A different checker (NCD Manager) can.
+    const ncd = await as('ncd@demo.local');
+    const ok = await ncd.post(`/api/approvals/${reqId}/approve`);
     expect(ok.status).toBe(200);
     expect(ok.json.request.status).toBe('Approved');
   });
 
   it('a branch staff (no checker permission) cannot approve', async () => {
-    const ncd = await as('ncd@demo.local');
-    const created = await ncd.post('/api/customers', { full_name: 'Perm Test', phone: '9000000004' });
-    const submit = await ncd.post(`/api/customers/${created.json.id}/submit-for-approval`);
+    const a = await admin();
+    const { seriesId, schemeId } = await ncdIds();
+    const cust = await a.post('/api/customers', { full_name: 'Perm Test', phone: '9000000004' });
+    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
     const staff = await as('staff@demo.local');
-    const r = await staff.post(`/api/approvals/${submit.json.request.id}/approve`);
-    expect(r.status).toBe(403);
+    expect((await staff.post(`/api/approvals/${app.json.subscription_request.id}/approve`)).status).toBe(403);
   });
 });
 

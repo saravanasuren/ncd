@@ -55,18 +55,4 @@ describe('approvals queue — readable subject + detail', () => {
     expect(labels).not.toContain('entity_id');
     expect(labels).not.toContain('chain');
   });
-
-  it('a customer approval names the customer rather than the request number', async () => {
-    const a = await admin();
-    const cust = await a.post('/api/customers', { full_name: 'Approval Named Cust', phone: '9844000002' });
-    const sub = await a.post(`/api/customers/${cust.json.id}/submit-for-approval`);
-    const reqId = Number(sub.json.request.id);
-
-    const ncd = await as('ncd@demo.local');
-    const row = ((await ncd.get('/api/approvals/queue')).json.rows as any[]).find((r) => r.id === reqId);
-    expect(row.subject).toContain('Approval Named Cust');
-
-    const det = await ncd.get(`/api/approvals/${reqId}`);
-    expect(det.json.detail.facts.map((f: any) => f.label)).toContain('Customer');
-  });
 });

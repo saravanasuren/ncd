@@ -12,6 +12,9 @@ import type { AuthUser } from '../../lib/authUser.js';
 import * as book from '../reports/book.js';
 import { getSettingsMap } from '../settings/service.js';
 import * as incentives from '../incentives/service.js';
+import { errors } from '../../lib/errors.js';
+import { round2 } from '../../lib/dates.js';
+import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
 
 /** Most recent payout-day anchor (28th by default) on/before `asOf`. Accrual runs
  * from here to `asOf`. Config-driven via settings.interest.payout_day_of_month. */
@@ -155,6 +158,51 @@ export async function search(db: Db, actor: AuthUser, q: string) {
     staff = (await db.query("SELECT u.id, u.full_name, r.name AS role FROM users u JOIN roles r ON r.id = u.role_id WHERE u.full_name ILIKE $1 AND r.name <> 'customer' ORDER BY u.full_name LIMIT 8", [like])).rows;
   }
   return { customers, applications, agents, staff };
+}
+
+/**
+ * Performance snapshot for one enroller — a branch-staff user or an agent —
+ * opened from the universal search. Management-only (dashboard:drilldown, the
+ * same gate that surfaces staff/agents in search). All-time figures: the
+ * customers + investments they sourced, the money they brought in, and their
+ * incentive ledger. Archived (soft-deleted) investments are excluded.
+ */
+const OUTSTANDING_SQL = OUTSTANDING_APPLICATION_STATUSES.map((x) => `'${x}'`).join(',');
+
+export async function personPerformance(db: Db, _actor: AuthUser, type: 'staff' | 'agent', id: number) {
+  const person = type === 'agent'
+    ? (await db.query<{ id: string; full_name: string; code: string; phone: string | null; email: string | null }>(
+        'SELECT id, full_name, agent_code AS code, phone, email FROM agents WHERE id = $1', [id])).rows[0]
+    : (await db.query<{ id: string; full_name: string; code: string; phone: string | null; email: string | null }>(
+        "SELECT u.id, u.full_name, r.name AS code, NULL::text AS phone, u.email FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1", [id])).rows[0];
+  if (!person) throw errors.notFound(`${type === 'agent' ? 'Agent' : 'Staff member'} not found`);
+
+  const col = type === 'agent' ? 'enrolled_by_agent_id' : 'enrolled_by_user_id';
+  const custN = Number((await db.query<{ n: string }>(`SELECT count(*)::int AS n FROM customers WHERE ${col} = $1`, [id])).rows[0]!.n);
+  const inv = (await db.query<{ n: string; live: string; invested: string; outstanding: string }>(
+    `SELECT count(*)::int AS n,
+            count(*) FILTER (WHERE a.status IN (${OUTSTANDING_SQL}))::int AS live,
+            COALESCE(sum(a.total_amount), 0) AS invested,
+            COALESCE(sum(a.total_amount) FILTER (WHERE a.status IN (${OUTSTANDING_SQL})), 0) AS outstanding
+       FROM applications a WHERE a.${col} = $1 AND a.archived_at IS NULL`, [id])).rows[0]!;
+  const incentiveLedger = await incentives.payeeBalance(db, type, id);
+  const investments = (await db.query(
+    `SELECT a.id, a.application_no, c.full_name AS customer, s.code AS series_code, a.total_amount, a.status, a.date_money_received
+       FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
+      WHERE a.${col} = $1 AND a.archived_at IS NULL ORDER BY a.created_at DESC LIMIT 200`, [id])).rows;
+
+  return {
+    person: { id: Number(person.id), type, full_name: person.full_name, code: person.code, phone: person.phone ?? null, email: person.email ?? null },
+    kpis: {
+      customers: custN,
+      investments: Number(inv.n),
+      live_investments: Number(inv.live),
+      invested: round2(Number(inv.invested)),
+      outstanding: round2(Number(inv.outstanding)),
+    },
+    incentives: incentiveLedger,
+    investments,
+  };
 }
 
 /**

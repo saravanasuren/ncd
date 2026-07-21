@@ -81,8 +81,19 @@ export function AppShell() {
                     <span className="text-xs text-text-muted">{a.customer} · {a.series_code} · {a.status}</span>
                   </button>
                 ))}
-                {results.agents.map((a) => <div key={`a${a.id}`} className="px-3 py-2 text-sm text-text-muted">Agent: {a.full_name} <span className="font-mono text-xs">{a.agent_code}</span></div>)}
-                {results.staff.map((s) => <div key={`s${s.id}`} className="px-3 py-2 text-sm text-text-muted">Staff: {s.full_name} ({s.role})</div>)}
+                {results.agents.map((a) => (
+                  <button key={`a${a.id}`} onClick={() => go(`/app/people/agent/${a.id}`)} className="w-full text-left px-3 py-2 text-sm hover:bg-bg flex items-center gap-2">
+                    <span className="font-medium">{a.full_name}</span>
+                    <span className="text-xs text-text-muted">Agent</span>
+                    <span className="text-xs text-text-muted font-mono ml-auto">{a.agent_code}</span>
+                  </button>
+                ))}
+                {results.staff.map((st) => (
+                  <button key={`s${st.id}`} onClick={() => go(`/app/people/staff/${st.id}`)} className="w-full text-left px-3 py-2 text-sm hover:bg-bg flex items-center gap-2">
+                    <span className="font-medium">{st.full_name}</span>
+                    <span className="text-xs text-text-muted ml-auto">Staff · {st.role}</span>
+                  </button>
+                ))}
                 {!results.customers.length && !(results.applications ?? []).length && !results.agents.length && !results.staff.length && <div className="px-3 py-3 text-sm text-text-muted">No matches.</div>}
               </div>
             )}

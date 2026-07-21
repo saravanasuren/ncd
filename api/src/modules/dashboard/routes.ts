@@ -29,3 +29,10 @@ dashboardRouter.get('/search', requirePermission('dashboard:view', 'customers:re
 
 dashboardRouter.get('/drill/:widget', requirePermission('dashboard:drilldown'),
   asyncHandler(async (req, res) => res.json(await s.drill(getDb(), req.user!, req.params.widget!, filtersFromQuery(req.query), String(req.query.param ?? '')))));
+
+// Enroller (branch-staff user or agent) performance — opened from search.
+dashboardRouter.get('/person/:type/:id', requirePermission('dashboard:drilldown'),
+  asyncHandler(async (req, res) => {
+    const type = req.params.type === 'agent' ? 'agent' : 'staff';
+    res.json(await s.personPerformance(getDb(), req.user!, type, Number(req.params.id)));
+  }));

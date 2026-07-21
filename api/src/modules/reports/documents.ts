@@ -6,11 +6,6 @@ import { renderPdf, letterhead } from '../../lib/pdf.js';
 import { formatINR } from '@new-wealth/shared';
 import { getSettingsMap } from '../settings/service.js';
 import { errors } from '../../lib/errors.js';
-import { toISODate } from '../../lib/dates.js';
-
-// pdfkit's built-in Helvetica has no ₹ (U+20B9) glyph — it renders as a stray
-// "¹". Money in generated PDFs uses an ASCII-safe "Rs " prefix instead.
-const inrPdf = (n: number): string => formatINR(n).replace('₹', 'Rs ');
 
 /** Statement of account for one customer. `customerFacing` filters the row
  * list by the display cutoff (aggregates stay full — docs/06 §5). */
@@ -91,80 +86,6 @@ export async function allotmentLetterPdf(db: Db, applicationId: number): Promise
     if (a.isin) doc.text(`ISIN: ${a.isin}`);
     doc.moveDown(1).fontSize(10).text('The corresponding debenture certificate is available in your account. Interest will be paid as per the payout schedule.', { width: 480 });
     doc.moveDown(1.5).fillColor('#6b7380').fontSize(9).text('For Dhanam Investment and Finance Private Limited');
-  });
-}
-
-/** Filled subscription application form — the applicant, investment, payment,
- * demat, bank and nominee details captured at enrolment, as a printable PDF. */
-export async function applicationFormPdf(db: Db, applicationId: number): Promise<Buffer> {
-  const a = (await db.query<Record<string, unknown>>(
-    `SELECT a.customer_id, a.application_no, a.status, a.total_amount, a.date_money_received, a.amount_received,
-            a.collection_method, a.collection_reference, a.referred_by_text, a.created_at,
-            c.full_name, c.customer_code, c.pan, c.dob, c.gender, c.father_name, c.occupation,
-            c.email, c.phone, c.phone_secondary, c.address, c.depository, c.demat_dp_id, c.demat_client_id,
-            s.code AS series_code, s.name AS series_name, s.isin
-       FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
-      WHERE a.id = $1`, [applicationId])).rows[0];
-  if (!a) throw errors.notFound('Application not found');
-  const lines = (await db.query<Record<string, unknown>>(
-    `SELECT al.amount, al.coupon_rate_pct, al.tenure_months, al.payout_frequency, sch.name AS scheme_name
-       FROM application_lines al LEFT JOIN schemes sch ON sch.id = al.scheme_id
-      WHERE al.application_id = $1 ORDER BY al.id`, [applicationId])).rows;
-  const nominees = (await db.query<Record<string, unknown>>(
-    'SELECT full_name, relationship, share_pct, dob FROM nominees WHERE customer_id = $1 ORDER BY id', [a.customer_id])).rows;
-  const bank = (await db.query<Record<string, unknown>>(
-    'SELECT holder_name, account_number, ifsc, bank_name, branch_name FROM customer_bank_accounts WHERE customer_id = $1 ORDER BY is_active DESC, id LIMIT 1', [a.customer_id])).rows[0];
-
-  return renderPdf((doc) => {
-    letterhead(doc, 'NCD Subscription Application', `${a.application_no}${a.created_at ? `  ·  ${toISODate(a.created_at as string | Date | null) ?? ''}` : ''}`);
-    const kv = (label: string, value: unknown) =>
-      doc.font('Helvetica').fontSize(9).fillColor('#1a1d23').text(`${label}:   ${value == null || value === '' ? '—' : String(value)}`, { width: 500 });
-    const section = (t: string) => { doc.moveDown(0.55).font('Helvetica-Bold').fontSize(10.5).fillColor('#0b3a6f').text(t); doc.moveDown(0.15).fillColor('#1a1d23'); };
-
-    section('Applicant');
-    kv('Name', a.full_name);
-    kv('Customer code', a.customer_code);
-    kv('PAN', a.pan);
-    kv('Date of birth', toISODate(a.dob as string | Date | null));
-    kv('Gender', a.gender);
-    kv('Father / Guardian', a.father_name);
-    kv('Occupation', a.occupation);
-    kv('Phone', [a.phone, a.phone_secondary].filter(Boolean).join(' / '));
-    kv('Email', a.email);
-    kv('Address', a.address);
-
-    section('Investment');
-    kv('Series', `${a.series_name} (${a.series_code})${a.isin ? ` · ISIN ${a.isin}` : ''}`);
-    kv('Total amount', inrPdf(Number(a.total_amount)));
-    for (const l of lines) doc.font('Helvetica').fontSize(9).text(`   •  ${l.scheme_name ?? '—'}  ·  ${inrPdf(Number(l.amount))}  ·  ${Number(l.coupon_rate_pct)}% p.a.  ·  ${l.tenure_months} months  ·  ${l.payout_frequency}`);
-    kv('Referred by', a.referred_by_text);
-
-    section('Payment');
-    kv('Amount received', a.amount_received != null ? inrPdf(Number(a.amount_received)) : '—');
-    kv('Mode', a.collection_method);
-    kv('Reference / UTR', a.collection_reference);
-    kv('Date received', toISODate(a.date_money_received as string | Date | null));
-
-    section('Demat account');
-    kv('Depository', a.depository);
-    kv('DP ID', a.demat_dp_id);
-    kv('Client ID', a.demat_client_id);
-
-    section('Bank account (for payouts)');
-    if (bank) {
-      kv('Account holder', bank.holder_name);
-      kv('Account number', bank.account_number);
-      kv('IFSC', bank.ifsc);
-      kv('Bank', [bank.bank_name, bank.branch_name].filter(Boolean).join(' · '));
-    } else doc.font('Helvetica').fillColor('#6b7380').fontSize(9).text('   Not provided').fillColor('#1a1d23');
-
-    section('Nominee(s)');
-    if (nominees.length) for (const n of nominees)
-      doc.font('Helvetica').fillColor('#1a1d23').fontSize(9).text(`   •  ${n.full_name}${n.relationship ? ` (${n.relationship})` : ''}${n.share_pct != null ? ` — ${Number(n.share_pct)}%` : ''}${n.dob ? `  ·  DOB ${toISODate(n.dob as string | Date | null)}` : ''}`);
-    else doc.font('Helvetica').fillColor('#6b7380').fontSize(9).text('   None').fillColor('#1a1d23');
-
-    doc.moveDown(1).fillColor('#6b7380').fontSize(8.5).text('Declaration: I/We hereby apply for the above Non-Convertible Debentures and confirm that the particulars stated are true and correct. I/We have read and understood the terms of the issue.', { width: 500 });
-    doc.moveDown(1.4).fillColor('#1a1d23').fontSize(9).text('Signature of applicant:  ______________________________');
   });
 }
 

@@ -88,11 +88,12 @@ export const isProd = config.NODE_ENV === 'production';
 // SSM the app must NOT boot signing JWTs (or accepting the integration key) with
 // a publicly-known default — that would let anyone forge a super_admin session.
 if (isProd) {
+  // Only RUNTIME security secrets fail the boot. SEED_ADMIN_PASSWORD is used
+  // once at seed time (not per request), so it must NOT block a normal boot.
   const insecureDefaults: Record<string, string> = {
     JWT_ACCESS_SECRET: 'dev_access_secret_change_me_16chars',
     JWT_REFRESH_SECRET: 'dev_refresh_secret_change_me_16chars',
     LOCKERHUB_INTEGRATION_KEY: 'dev-integration-key',
-    SEED_ADMIN_PASSWORD: 'ChangeMe_Dev_123',
   };
   const stillDefault = Object.entries(insecureDefaults)
     .filter(([k, def]) => (config as Record<string, unknown>)[k] === def)

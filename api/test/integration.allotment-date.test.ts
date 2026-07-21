@@ -37,6 +37,28 @@ describe('allotment date override at approval', () => {
     expect(app.allotment_date).toBe('2026-07-17');   // the override, not the maker's 2026-07-20
   });
 
+  it('a second allotment request while one is pending is blocked (409)', async () => {
+    const { seriesId } = await seedSeries('NCD-ALLOTC', '9733300003');
+    const ncd = await as('ncd@demo.local');
+    expect((await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' })).status).toBe(201);
+    expect((await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' })).status).toBe(409);
+    const list = await (await admin()).get('/api/allotments/series');
+    const row = list.json.rows.find((r: any) => r.series_id === seriesId);
+    expect(row.pending_request_id).toBeTruthy();   // page shows "Pending approval"
+  });
+
+  it('cancel-pending clears the request and re-enables allot', async () => {
+    const { seriesId } = await seedSeries('NCD-ALLOTD', '9733300004');
+    const ncd = await as('ncd@demo.local');
+    await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
+    expect((await ncd.post(`/api/allotments/series/${seriesId}/cancel-pending`, {})).status).toBe(200);
+    const list = await (await admin()).get('/api/allotments/series');
+    const row = list.json.rows.find((r: any) => r.series_id === seriesId);
+    expect(row.pending_request_id).toBeNull();      // back to allot-able
+    // and a fresh request can be raised again
+    expect((await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' })).status).toBe(201);
+  });
+
   it('an invalid override date is rejected and the apps stay un-allotted', async () => {
     const { seriesId, appId } = await seedSeries('NCD-ALLOTB', '9733300002');
     const ncd = await as('ncd@demo.local');

@@ -549,14 +549,20 @@ export async function redemptionsOfSeries(db: Db, actor: AuthUser, seriesIds: nu
 /** New-money totals for the window, split by funding channel. */
 export async function moneyInByChannel(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, { ...filters, status: 'active' });
-  const { rows } = await db.query<{ total: string; locker: string; app: string; n: string }>(
+  const { rows } = await db.query<{ total: string; locker: string; app: string; n: string; total_investors: number; locker_investors: number; app_investors: number }>(
     `SELECT COALESCE(sum(a.total_amount),0) AS total,
             COALESCE(sum(a.total_amount) FILTER (WHERE a.is_locker_deposit),0) AS locker,
             COALESCE(sum(a.total_amount) FILTER (WHERE a.source IN ('dhanamfin','lockerhub')),0) AS app,
-            count(a.id)::int AS n
+            count(a.id)::int AS n,
+            count(DISTINCT a.customer_id)::int AS total_investors,
+            count(DISTINCT a.customer_id) FILTER (WHERE a.is_locker_deposit)::int AS locker_investors,
+            count(DISTINCT a.customer_id) FILTER (WHERE a.source IN ('dhanamfin','lockerhub'))::int AS app_investors
      ${FROM} WHERE ${w.sql} AND a.date_money_received IS NOT NULL`, w.params);
   const r = rows[0]!;
-  return { total: round2(Number(r.total)), locker: round2(Number(r.locker)), app: round2(Number(r.app)), count: Number(r.n) };
+  return {
+    total: round2(Number(r.total)), locker: round2(Number(r.locker)), app: round2(Number(r.app)), count: Number(r.n),
+    total_investors: Number(r.total_investors), locker_investors: Number(r.locker_investors), app_investors: Number(r.app_investors),
+  };
 }
 
 /** Money-in for the window split by attribution: referrer matched to a staff

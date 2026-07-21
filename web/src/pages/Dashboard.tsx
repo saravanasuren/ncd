@@ -107,9 +107,9 @@ export function Dashboard() {
                     onClick={() => pickWidget('outstanding', 'Outstanding book — by series')} canDrill={canDrill} />
                   <Tile label="New investments" value={formatINR(f.money_in)} sub={`${f.new_investments} investors`}
                     onClick={() => pickWidget('new-investments', 'New investments in range')} canDrill={canDrill} />
-                  <Tile label="Locker deposits" value={formatINR(f.money_in_locker)} sub="Deposits through lockers"
+                  <Tile label="Locker deposits" value={formatINR(f.money_in_locker)} sub={`${f.money_in_locker_investors} investors`}
                     onClick={() => pickWidget('locker', 'Locker deposits in range')} canDrill={canDrill} />
-                  <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub="Deposits through Mobile App"
+                  <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub={`${f.money_in_app_investors} investors`}
                     onClick={() => pickWidget('app', 'DhanamFin app investments in range')} canDrill={canDrill} />
                   <Tile label={selSeriesCode ? 'Redeemed in window' : 'Redemptions'} value={formatINR(f.redemptions_total)}
                     sub={selSeriesCode ? `${f.redemptions_count} redeemed · ${winLabel ?? selSeriesCode} window` : `${f.redemptions_count} investors`}

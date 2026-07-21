@@ -105,23 +105,23 @@ export function Dashboard() {
                     primary onClick={() => pickWidget('series', `${activeSeries?.code ?? 'Active series'} — investments`, activeSeries?.series_id)} canDrill={canDrill && !!activeSeries} />
                   <Tile label="Outstanding book" value={formatINR(k.outstanding_book)} sub={`${k.active_investors} investors`}
                     onClick={() => pickWidget('outstanding', 'Outstanding book — by series')} canDrill={canDrill} />
-                  <Tile label="New investments" value={formatINR(f.money_in)} sub={`${f.new_investments} in range`}
+                  <Tile label="New investments" value={formatINR(f.money_in)} sub={`${f.new_investments} investors`}
                     onClick={() => pickWidget('new-investments', 'New investments in range')} canDrill={canDrill} />
-                  <Tile label="Locker deposits" value={formatINR(f.money_in_locker)} sub="Money in · locker"
+                  <Tile label="Locker deposits" value={formatINR(f.money_in_locker)} sub={`${f.money_in_locker_investors} investors`}
                     onClick={() => pickWidget('locker', 'Locker deposits in range')} canDrill={canDrill} />
-                  <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub="Money in · app"
+                  <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub={`${f.money_in_app_investors} investors`}
                     onClick={() => pickWidget('app', 'DhanamFin app investments in range')} canDrill={canDrill} />
                   <Tile label={selSeriesCode ? 'Redeemed in window' : 'Redemptions'} value={formatINR(f.redemptions_total)}
-                    sub={selSeriesCode ? `${f.redemptions_count} redeemed · ${winLabel ?? selSeriesCode} window` : `${f.redemptions_count} in range`}
+                    sub={selSeriesCode ? `${f.redemptions_count} redeemed · ${winLabel ?? selSeriesCode} window` : `${f.redemptions_count} investors`}
                     onClick={() => pickWidget('redemptions', selSeriesCode ? `Redeemed during ${selSeriesCode} window${winLabel ? ` (${winLabel})` : ''}` : 'Redemptions in range')} canDrill={canDrill} />
                   {selSeriesCode && f.redemptions_of_series_total != null && (
                     <Tile label={`Redemptions of ${selSeriesCode}`} value={formatINR(f.redemptions_of_series_total)}
                       sub={`${f.redemptions_of_series_count} redeemed · this series`}
                       onClick={() => pickWidget('redemptions-of-series', `Redemptions of ${selSeriesCode}`)} canDrill={canDrill} />
                   )}
-                  <Tile label="Staff-wise" value={formatINR(f.money_in_staff)} sub="New business by staff"
+                  <Tile label="Staff-wise" value={formatINR(f.money_in_staff)} sub={`${f.money_in_staff_investors} investors`}
                     onClick={() => pickWidget('staff', 'New business by staff (in range)')} canDrill={canDrill} />
-                  <Tile label="Agent-wise" value={formatINR(f.money_in_agent)} sub="New business by agent"
+                  <Tile label="Agent-wise" value={formatINR(f.money_in_agent)} sub={`${f.money_in_agent_investors} investors`}
                     onClick={() => pickWidget('agent', 'New business by agent (in range)')} canDrill={canDrill} />
                   {overview.data.rate_mix && (
                     <Tile label="Cost of funds" value={`${overview.data.rate_mix.weighted_avg_rate}%`}
@@ -422,7 +422,8 @@ function GroupRows({ g, open, onToggle }: { g: any; open: boolean; onToggle: () 
           <td className="py-1 pl-8 pr-3">{ch.customer} <span className="text-text-muted font-mono">{ch.application_no}</span></td>
           <td className="py-1 px-3 text-right text-text-muted">{ch.series_code}</td>
           <td className="py-1 px-3 text-right text-text-muted">{ch.status}</td>
-          <td className="py-1 pl-3 text-right mono">{formatINR(ch.amount)}</td>
+          {/* Outstanding column: 0 once redeemed (was wrongly showing the original amount). */}
+          <td className="py-1 pl-3 text-right mono">{formatINR(ch.outstanding ?? ch.amount)}</td>
         </tr>
       ))}
     </>

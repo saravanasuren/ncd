@@ -97,8 +97,12 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
       money_in: moneyIn.total,
       money_in_locker: moneyIn.locker,
       money_in_app: moneyIn.app,
+      money_in_locker_investors: moneyIn.locker_investors,
+      money_in_app_investors: moneyIn.app_investors,
       money_in_staff: moneyBySource.staff,
       money_in_agent: moneyBySource.agent,
+      money_in_staff_investors: moneyBySource.staff_investors,
+      money_in_agent_investors: moneyBySource.agent_investors,
       new_investments: moneyIn.count,
       interest_paid: interest.paid,        // interest actually paid in the window (0 for the current MTD)
       interest_due: interest.total,        // paid + still-scheduled, for reference

@@ -24,6 +24,7 @@ import { asyncHandler } from '../../middleware/error.js';
 import { writeAudit } from '../../lib/audit.js';
 import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
 import { enqueue } from '../notifications/service.js';
+import { activeAgents, proposeAgent } from '../agents/service.js';
 import { maskEmail, maskPhone, normalisePhone, phoneMatchSql, signToken, verifyToken } from './shared.js';
 
 // On agent-registration approval: activate the agent + notify.
@@ -37,6 +38,22 @@ registerOnFinalApprove('agent_registration', async (tx, req) => {
 });
 
 export const agentsRouter = Router();
+
+// ─── B24 · staff "add agent" flows ───────────────────────────────────────
+// Active agents for a picker.
+agentsRouter.get('/agents/active', asyncHandler(async (req, res) => {
+  const limit = req.query.limit != null ? parseInt(String(req.query.limit), 10) : 100;
+  res.json({ agents: await activeAgents(getDb(), limit) });
+}));
+
+// Propose a new agent → PendingApproval + agent_registration approval (idempotent by name).
+agentsRouter.post('/agents/propose', asyncHandler(async (req, res) => {
+  const b = req.body ?? {};
+  const fullName = String(b.full_name ?? '').trim();
+  if (!fullName) return res.status(400).json({ error: 'full_name required' });
+  const r = await proposeAgent(getDb(), { full_name: fullName, phone: b.phone ?? null, email: b.email ?? null, proposed_by: b.proposed_by ?? null });
+  res.status(r.created ? 201 : 200).json({ success: true, ...r });
+}));
 
 // ─── Agent self-signup mirror ────────────────────────────────────────────
 agentsRouter.post('/agents/from-lockerhub', asyncHandler(async (req, res) => {

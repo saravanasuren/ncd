@@ -57,6 +57,12 @@ const schema = z.object({
   // Daily reconciliation cron runs ONLY when explicitly enabled.
   LOCKERHUB_RECONCILIATION_ENABLED: z.string().default('false'),
   LOCKERHUB_DB_PATH: z.string().default('/home/ubuntu/LockerHub/data/lockerhub.db'),
+  // Outbound locker-enrollment (contract Part A). NCD staff enroll a customer
+  // for a LOCKER by calling LockerHub. Base = …/api/integration/v1. The client
+  // is inert unless LOCKERHUB_API_URL is set; auth = LOCKERHUB_API_KEY, falling
+  // back to the shared LOCKERHUB_INTEGRATION_KEY.
+  LOCKERHUB_API_URL: z.string().optional(),
+  LOCKERHUB_API_KEY: z.string().optional(),
   // ── Payments (docs/08 §2). Collection is LockerHub/Easebuzz-side; ncd
   // receives funded payments via the façade. These wire the adapter selector
   // + webhook verification. Stub default. ──

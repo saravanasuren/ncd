@@ -476,7 +476,7 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
         fact('Series', meta.series_code),
         fact('Allotment date', meta.allotment_date),
         fact('ISIN', meta.isin),
-        fact('Investments covered', meta.count),
+        fact('Number of Investments', meta.count),
       ]),
     };
   }

@@ -11,7 +11,7 @@ import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { canTransition } from '../../lib/statusMachine.js';
-import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
+import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 
 /** Apps ready to allot = Active in the series but not yet allotted. */
 const READY_TO_ALLOT = "a.status = 'Active' AND a.allotment_date IS NULL";
@@ -26,7 +26,12 @@ export async function pendingBySeriesSummary(db: Db) {
             count(a.id) FILTER (WHERE ${READY_TO_ALLOT})::int AS pending_count,
             COALESCE(sum(a.total_amount) FILTER (WHERE ${READY_TO_ALLOT}),0) AS pending_amount,
             count(a.id) FILTER (WHERE a.status = 'Active')::int AS total_count,
-            COALESCE(sum(a.total_amount) FILTER (WHERE a.status = 'Active'),0) AS total_amount
+            COALESCE(sum(a.total_amount) FILTER (WHERE a.status = 'Active'),0) AS total_amount,
+            -- the open allotment approval for this series (drives the "Pending
+            -- approval" state + Revert on the Allotments page)
+            (SELECT ab.approval_request_id FROM allotment_batches ab
+              WHERE ab.series_id = s.id AND ab.status = 'PendingChecker'
+              ORDER BY ab.id DESC LIMIT 1) AS pending_request_id
      FROM series s LEFT JOIN applications a ON a.series_id = s.id
      GROUP BY s.id, s.code, s.name, s.status ORDER BY s.code`
   );
@@ -37,6 +42,10 @@ export async function createAllotmentBatch(db: Db, actor: AuthUser, input: { ser
   return db.withTx(async (tx) => {
     const series = (await tx.query<{ status: string; code: string }>('SELECT status, code FROM series WHERE id = $1', [input.series_id])).rows[0];
     if (!series) throw errors.notFound('Series not found');
+    // One allotment approval per series at a time — clicking Allot twice must not
+    // stack duplicate requests (owner 2026-07-21). Cancel the pending one first.
+    const already = await tx.query("SELECT 1 FROM allotment_batches WHERE series_id = $1 AND status = 'PendingChecker'", [input.series_id]);
+    if (already.rowCount) throw errors.conflict('An allotment approval is already pending for this series');
     const n = Number((await tx.query<{ n: string }>(`SELECT count(*)::int AS n FROM applications a WHERE a.series_id = $1 AND ${READY_TO_ALLOT}`, [input.series_id])).rows[0]!.n);
     // Allow allotting a series that has nothing pending, as long as it can still
     // be moved to Allotted (Open/Closing/Closed) — this just formally closes the
@@ -81,9 +90,41 @@ export async function revertSeriesAllotment(db: Db, actor: AuthUser, seriesId: n
   });
 }
 
+/** Cancel the pending allotment approval(s) for a series (allotments:execute) —
+ * the "Revert" on the Allotments page while a request is awaiting a checker.
+ * Cancels ALL PendingChecker batches (defensive: cleans up any duplicates) and
+ * closes their approval requests, so the Allot button re-enables. */
+export async function cancelPendingAllotment(db: Db, actor: AuthUser, seriesId: number) {
+  return db.withTx(async (tx) => {
+    const batches = (await tx.query<{ id: string; approval_request_id: string | null }>(
+      "SELECT id, approval_request_id FROM allotment_batches WHERE series_id = $1 AND status = 'PendingChecker'", [seriesId])).rows;
+    if (!batches.length) throw errors.notFound('No pending allotment for this series');
+    for (const b of batches) {
+      await tx.query("UPDATE allotment_batches SET status = 'Cancelled' WHERE id = $1", [b.id]);
+      if (b.approval_request_id) {
+        await tx.query("UPDATE approval_requests SET status = 'Rejected', updated_at = now() WHERE id = $1 AND status = 'Pending'", [Number(b.approval_request_id)]);
+      }
+    }
+    await writeAudit(tx, { actorId: actor.id, action: 'allotment.cancel-pending', entityType: 'series', entityId: seriesId, after: { cancelled: batches.length } });
+    return { cancelled: batches.length };
+  });
+}
+
+// On REJECT of an allotment approval, cancel the batch so the series drops out
+// of the "pending" state and the Allot button re-enables (otherwise the batch
+// stayed PendingChecker and the Allotments page still showed Pending/Revert).
+registerOnReject('allotment_batch', async (tx, req) => {
+  const batchId = req.metadata.batch_id ? Number(req.metadata.batch_id) : null;
+  if (batchId) await tx.query("UPDATE allotment_batches SET status = 'Cancelled' WHERE id = $1", [batchId]);
+});
+
 registerOnFinalApprove('allotment_batch', async (tx, req) => {
   const seriesId = Number(req.metadata.series_id);
+  // The approver may override the maker's date at approval time (incl. a past
+  // date) — it's merged into metadata by approve(). Allotment is a data-neutral
+  // stamp (no schedule/maturity recompute), so a backdated date is safe.
   const allotmentDate = String(req.metadata.allotment_date);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(allotmentDate)) throw errors.badRequest('Invalid allotment date (expected YYYY-MM-DD)');
   const isin = (req.metadata.isin as string | null) ?? null;
   const batchId = req.metadata.batch_id ? Number(req.metadata.batch_id) : null;
 

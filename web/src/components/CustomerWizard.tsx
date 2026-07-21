@@ -292,7 +292,7 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
                 </div>
               </Field>
               <Field label="Gender"><select className={inp} value={f.gender} onChange={(e) => set({ gender: e.target.value })}><option value="">—</option>{GENDERS.map((g) => <option key={g}>{g}</option>)}</select></Field>
-              <Field label="PAN"><input className={`${inp} uppercase`} placeholder="ABCDE1234F" value={f.pan} onChange={(e) => set({ pan: e.target.value.toUpperCase() })} /></Field>
+              <Field label="PAN"><input className={`${inp} uppercase`} placeholder="ABCDE1234F" maxLength={10} value={f.pan} onChange={(e) => set({ pan: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) })} /></Field>
               <Field label="Aadhaar (12 digits)" hint="Only the last 4 digits are stored (UIDAI)."><input className={inp} inputMode="numeric" maxLength={12} placeholder="Full 12-digit Aadhaar" value={f.aadhaar} onChange={(e) => set({ aadhaar: e.target.value.replace(/\D/g, '') })} /></Field>
               <Field label="Phone (primary)"><input className={inp} inputMode="numeric" maxLength={10} value={f.phone} onChange={(e) => set({ phone: e.target.value.replace(/\D/g, '') })} /></Field>
               <Field label="Phone (secondary)"><input className={inp} inputMode="numeric" maxLength={10} value={f.phone_secondary} onChange={(e) => set({ phone_secondary: e.target.value.replace(/\D/g, '') })} /></Field>
@@ -315,8 +315,8 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
               <p className="sm:col-span-2 text-xs text-text-muted -mb-1">DP ID and Client ID are 8 characters each (NSDL/CDSL standard). Optional at this stage.</p>
               <Field label="Depository"><select className={inp} value={f.depository} onChange={(e) => set({ depository: e.target.value })}><option value="">—</option>{DEPOSITORIES.map((d) => <option key={d}>{d}</option>)}</select></Field>
               <div />
-              <Field label="DP ID (8 chars)" hint="NSDL starts with IN; 8-digit numeric = CDSL — depository auto-fills"><input className={`${inp} uppercase`} placeholder="e.g. IN300456" value={f.dp_id} onChange={(e) => { const v = e.target.value.toUpperCase(); const dep = depositoryFromDpId(v); set(dep ? { dp_id: v, depository: dep } : { dp_id: v }); }} /></Field>
-              <Field label="Client ID (8 chars)"><input className={inp} placeholder="e.g. 12345678" value={f.client_id} onChange={(e) => set({ client_id: e.target.value })} /></Field>
+              <Field label="DP ID (8 chars)" hint="NSDL starts with IN; 8-digit numeric = CDSL — depository auto-fills"><input className={`${inp} uppercase`} placeholder="e.g. IN300456" maxLength={8} value={f.dp_id} onChange={(e) => { const v = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); const dep = depositoryFromDpId(v); set(dep ? { dp_id: v, depository: dep } : { dp_id: v }); }} /></Field>
+              <Field label="Client ID (8 digits)"><input className={inp} inputMode="numeric" placeholder="e.g. 12345678" maxLength={8} value={f.client_id} onChange={(e) => set({ client_id: e.target.value.replace(/\D/g, '').slice(0, 8) })} /></Field>
               <div className="sm:col-span-2"><FilePick label="CML copy" hint="Client Master List from depository — PDF or image scan" file={files.cml} onPick={(x) => setFile('cml', x)} /></div>
             </div>
           )}

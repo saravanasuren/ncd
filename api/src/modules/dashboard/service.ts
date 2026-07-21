@@ -46,10 +46,20 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
   const isCurrentPeriod = !filters.to || filters.to >= today;
   const showIncentives = canViewIncentives(actor);
 
+  // Redemptions, when a series is selected, split into two readings:
+  //  - window: money redeemed DURING that series' active window (open → allotment,
+  //    or → today for a still-open series). Ignores which series was redeemed.
+  //  - ofSeries: redemptions that BELONG to the selected series (by ownership).
+  // With no series selected there is one reading: redemptions in the date range.
+  const seriesWindow = filters.seriesIds?.length ? await book.seriesActiveWindow(db, filters.seriesIds) : null;
+  const redemptionFilters: book.BookFilters = seriesWindow
+    ? { from: seriesWindow.from, to: seriesWindow.to }
+    : { from: filters.from, to: filters.to };
+
   // Point-in-time interest snapshots (independent of the selected window):
   //  - accrued_total    : total interest payable AS ON today (since the last payout)
   //  - monthly_projected : gross run-rate monthly coupon cost of the outstanding book
-  const [kpis, seriesRows, districts, moneyIn, moneyBySource, interest, accrued, redemptionRows, leadFunnel, almTiles, rateMix, todayBook, accruedTotal, monthlyInterest] = await Promise.all([
+  const [kpis, seriesRows, districts, moneyIn, moneyBySource, interest, accrued, redemptionRows, redemptionsOfSeriesRows, leadFunnel, almTiles, rateMix, todayBook, accruedTotal, monthlyInterest] = await Promise.all([
     book.kpis(db, actor, seriesFilter),                    // snapshot, but honours a selected series
     book.seriesSummary(db, actor, {}),                     // ALL series (pie + active/last-series pick)
     book.districtwise(db, actor, seriesFilter),            // snapshot (pie), honours a selected series
@@ -57,7 +67,8 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     book.moneyInBySource(db, actor, filters),              // flow (staff vs agent tiles)
     book.interestInRange(db, actor, filters),              // flow (paid vs due)
     isCurrentPeriod ? book.interestAccrued(db, actor, seriesFilter, anchor, asOf) : Promise.resolve({ total: 0 }),
-    book.redemptions(db, actor, filters),                  // flow
+    book.redemptions(db, actor, redemptionFilters),        // flow — by date window (series → series-active window)
+    book.redemptionsOfSeries(db, actor, filters.seriesIds ?? []), // flow — by ownership (only when a series is selected)
     book.leadFunnel(db, actor),                            // lead pipeline (snapshot)
     book.alm(db, actor, today),                            // ALM timing tiles (snapshot)
     book.rateMix(db, actor),                               // cost-of-funds rate mix (snapshot)
@@ -75,6 +86,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
   const lastSeries = closedSeries[0] ?? null;
 
   const redemptionsTotal = (redemptionRows as Array<{ net_payment: string }>).reduce((s, r) => s + Number(r.net_payment), 0);
+  const redemptionsOfSeriesTotal = (redemptionsOfSeriesRows as Array<{ net_payment: string }>).reduce((s, r) => s + Number(r.net_payment), 0);
 
   return {
     range: { from: filters.from ?? null, to: filters.to ?? null, series: filters.seriesIds ?? null, anchor },
@@ -93,6 +105,10 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
       interest_accrued: accrued.total,     // current period only; 0 for past ranges
       redemptions_total: Math.round(redemptionsTotal * 100) / 100,
       redemptions_count: redemptionRows.length,
+      // Only meaningful when a series is selected (else null → tile hidden).
+      redemptions_window: seriesWindow,                    // { from, to } | null — the series-active window used above
+      redemptions_of_series_total: seriesWindow ? Math.round(redemptionsOfSeriesTotal * 100) / 100 : null,
+      redemptions_of_series_count: seriesWindow ? redemptionsOfSeriesRows.length : null,
     },
     interest_snapshot: {
       accrued_total: accruedTotal.total,           // total interest payable as on date
@@ -173,8 +189,15 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
       const payoutDay = Number(settings['interest.payout_day_of_month'] ?? 28) || 28;
       return { kind: 'rows', rows: await book.accruedList(db, actor, seriesFilter, payoutAnchor(today, payoutDay), today) };
     }
-    case 'redemptions':
-      return { kind: 'rows', rows: await book.redemptions(db, actor, filters) };
+    case 'redemptions': {
+      // Match the tile: with a series selected, list what was redeemed during
+      // that series' active window (open → allotment/today); else the date range.
+      const win = filters.seriesIds?.length ? await book.seriesActiveWindow(db, filters.seriesIds) : null;
+      const rf: book.BookFilters = win ? { from: win.from, to: win.to } : { from: filters.from, to: filters.to };
+      return { kind: 'rows', rows: await book.redemptions(db, actor, rf) };
+    }
+    case 'redemptions-of-series':
+      return { kind: 'rows', rows: await book.redemptionsOfSeries(db, actor, filters.seriesIds ?? []) };
     case 'staff-incentive':
     case 'agent-incentive': {
       if (!canViewIncentives(actor)) return { kind: 'incentive', groups: [], totals: { earned: 0, paid: 0, pending: 0 } };

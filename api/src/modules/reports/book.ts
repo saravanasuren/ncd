@@ -458,6 +458,37 @@ export async function redemptions(db: Db, actor: AuthUser, filters: BookFilters 
   return rows;
 }
 
+/**
+ * The active window of the given series: from the earliest open date to the
+ * latest allotment date (or today, for a series not yet allotted). Open date
+ * falls back to deemed_date then created_at for legacy series with no
+ * opened_at. Returns null when no start date can be resolved.
+ */
+export async function seriesActiveWindow(db: Db, seriesIds: number[]): Promise<{ from: string; to: string } | null> {
+  if (!seriesIds?.length) return null;
+  const { rows } = await db.query<{ from: string | null; to: string | null }>(
+    `SELECT min(COALESCE(opened_at::date, deemed_date, created_at::date)) AS from,
+            max(COALESCE(allotted_at::date, CURRENT_DATE)) AS to
+       FROM series WHERE id = ANY($1)`, [seriesIds]);
+  const r = rows[0];
+  if (!r?.from) return null;
+  return { from: String(r.from).slice(0, 10), to: String(r.to ?? new Date().toISOString().slice(0, 10)).slice(0, 10) };
+}
+
+/** Redemptions that BELONG to the selected series (by ownership), regardless of
+ * when they were redeemed — the counterpart to the date-window view above. */
+export async function redemptionsOfSeries(db: Db, actor: AuthUser, seriesIds: number[]) {
+  if (!seriesIds?.length) return [];
+  const w = appWhere(actor, { seriesIds });
+  const { rows } = await db.query(
+    `SELECT r.redemption_date, r.type, s.code AS series_code, c.full_name AS customer_name, r.net_payment
+     FROM redemptions r JOIN applications a ON a.id = r.application_id
+     JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
+     WHERE r.status IN ('Approved','Paid') AND ${w.sql}
+     ORDER BY r.redemption_date`, w.params);
+  return rows;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Flow metrics (dashboard tiles). "Money in" = new investments whose
 // date_money_received falls in the selected window (filters.from/to). All

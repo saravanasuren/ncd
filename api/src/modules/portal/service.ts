@@ -151,7 +151,8 @@ export async function documentPdf(db: Db, actor: AuthUser, docId: string): Promi
   if (!m) throw errors.badRequest('Invalid document id');
   const kind = m[1]!;
   const entityId = Number(m[2]!);
-  const { bondCertificatePdf, allotmentLetterPdf, soaPdf } = await import('../reports/documents.js');
+  const { allotmentLetterPdf, soaPdf } = await import('../reports/documents.js');
+  const { bondCertificatePdf } = await import('../reports/forms/bond.js');
 
   if (kind === 'SOA') {
     if (entityId !== cid) throw errors.notFound('Document not found');

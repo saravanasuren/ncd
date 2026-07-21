@@ -56,7 +56,7 @@ reportsRouter.get('/bond/:applicationId.pdf', requirePermission('customers:read'
   asyncHandler(async (req, res) => {
     const { assertApplicationVisible } = await import('../../lib/visibility.js');
     await assertApplicationVisible(getDb(), req.user!, Number(req.params.applicationId));
-    const { bondCertificatePdf } = await import('./documents.js');
+    const { bondCertificatePdf } = await import('./forms/bond.js');
     const buf = await bondCertificatePdf(getDb(), Number(req.params.applicationId));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="bond-${req.params.applicationId}.pdf"`);

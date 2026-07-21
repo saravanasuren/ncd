@@ -6,9 +6,21 @@ import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 
 /** Customer 360 (docs/05 §5) — profile + bank accounts + KYC + hand-off. */
+/**
+ * Two-step confirm for an irreversible purge: type DELETE, then give an audit
+ * reason. Returns the reason, or null if the operator backed out. Super-admin only.
+ */
+function purgeConfirm(what: string): string | null {
+  const typed = window.prompt(`⚠️ PERMANENTLY DELETE ${what}.\n\nThis erases the record and everything linked to it (schedule, collections, incentives, redemptions). It CANNOT be undone.\n\nType DELETE to confirm:`);
+  if (typed !== 'DELETE') return null;
+  const reason = window.prompt('Reason for the audit log (required):') ?? '';
+  return reason.trim().length >= 2 ? reason.trim() : null;
+}
+
 export function CustomerDetailPage() {
   const { id } = useParams();
   const qc = useQueryClient();
+  const nav = useNavigate();
   const { can } = useAuth();
   const [msg, setMsg] = useState('');
   const [panel, setPanel] = useState<'correction' | 'handover' | null>(null);
@@ -42,7 +54,14 @@ export function CustomerDetailPage() {
         <h1 className="text-xl font-bold tracking-tight m-0">{c.full_name}</h1>
         <span className="font-mono text-xs text-text-muted">{c.customer_code}</span>
         <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{c.creation_status}</span>
+        {c.archived_at && <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger font-semibold">Archived</span>}
       </div>
+      {c.archived_at && (
+        <div className="text-xs bg-[color:var(--danger-bg)] text-danger rounded px-3 py-2 mt-2">
+          This customer is archived — hidden from the book, dashboard and lists. Their investments are archived too.
+          {can('customers:delete') && ' Restore or permanently delete below.'}
+        </div>
+      )}
       {msg && <div className="text-xs text-danger mt-2">{msg}</div>}
 
       <div className={`${card} mt-4`}>
@@ -70,6 +89,15 @@ export function CustomerDetailPage() {
           )}
           {can('customers:handover-request') && (
             <button onClick={() => setPanel(panel === 'handover' ? null : 'handover')} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Request handover</button>
+          )}
+          {/* Super-admin-only power tools (customers:delete). */}
+          {can('customers:delete') && (c.archived_at
+            ? <button onClick={() => wrap(api.post(`/api/customers/${id}/unarchive`))} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg ml-auto">♻ Restore customer</button>
+            : <button onClick={() => { const r = window.prompt('Archive this customer? It (and its investments) will be hidden from the book but stay recoverable.\n\nReason (optional):'); if (r !== null) wrap(api.post(`/api/customers/${id}/archive`, { reason: r || undefined })); }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg ml-auto">🗄 Archive</button>
+          )}
+          {can('customers:delete') && (
+            <button onClick={() => { const reason = purgeConfirm(`customer ${c.full_name} (${c.customer_code}) and ALL their investments`); if (reason) wrap(api.del(`/api/customers/${id}`, { confirm: true, reason }).then(() => nav('/app/customers'))); }}
+              className="text-xs border border-danger text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">🗑 Delete permanently</button>
           )}
         </div>
 
@@ -118,7 +146,7 @@ export function CustomerDetailPage() {
         )}
       </div>
 
-      <InvestmentsCard rows={data.applications ?? []} />
+      <InvestmentsCard rows={data.applications ?? []} customerId={Number(id)} canDelete={can('applications:delete')} onChange={invalidate} onError={setMsg} />
 
       <div className={card}>
         <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Bank accounts</h2>
@@ -148,13 +176,17 @@ const appPill: Record<string, string> = {
 
 /** The customer's investments — every application, newest first, linking to the
  * application page. LIVE statuses total into the header line. */
-function InvestmentsCard({ rows }: { rows: any[] }) {
+function InvestmentsCard({ rows, canDelete, onChange, onError }: { rows: any[]; customerId: number; canDelete: boolean; onChange: () => void; onError: (m: string) => void }) {
   const nav = useNavigate();
   const DEAD = ['Rejected', 'Cancelled', 'Redeemed', 'Matured', 'RolledOver', 'PrematureWithdrawn', 'Transferred'];
-  const live = rows.filter((r) => !DEAD.includes(r.status));
+  const live = rows.filter((r) => !DEAD.includes(r.status) && !r.archived_at);
   const outstanding = live.reduce((s, r) => s + Number(r.outstanding ?? 0), 0);
   const th = 'py-2 px-3 text-xs font-semibold text-text-label uppercase tracking-wide text-left';
   const td = 'py-2 px-3 align-middle';
+  const run = (p: Promise<unknown>) => p.then(() => { onError(''); onChange(); }).catch((e) => onError(e instanceof ApiError ? e.message : 'Failed'));
+  const archiveApp = (r: any) => { const reason = window.prompt(`Archive investment ${r.application_no}? Hidden from the book but recoverable.\n\nReason (optional):`); if (reason !== null) run(api.post(`/api/applications/${r.id}/archive`, { reason: reason || undefined })); };
+  const restoreApp = (r: any) => run(api.post(`/api/applications/${r.id}/unarchive`));
+  const purgeApp = (r: any) => { const reason = purgeConfirm(`investment ${r.application_no}`); if (reason) run(api.del(`/api/applications/${r.id}`, { confirm: true, reason })); };
   return (
     <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1">Investments</h2>
@@ -173,17 +205,29 @@ function InvestmentsCard({ rows }: { rows: any[] }) {
                   <th className={th}>Series</th><th className={th}>App no</th>
                   <th className={th}>Status</th><th className={th}>Received</th>
                   <th className={`${th} text-right`}>Invested</th><th className={`${th} text-right`}>Outstanding</th>
+                  {canDelete && <th className={`${th} text-right`}></th>}
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id} className="border-b border-border last:border-0 hover:bg-bg cursor-pointer" onClick={() => nav(`/app/applications/${r.id}`)}>
+                  <tr key={r.id} className={`border-b border-border last:border-0 hover:bg-bg cursor-pointer ${r.archived_at ? 'opacity-50' : ''}`} onClick={() => nav(`/app/applications/${r.id}`)}>
                     <td className={td}>{r.series_code}</td>
                     <td className={`${td} font-mono text-xs whitespace-nowrap`}>{r.application_no}</td>
-                    <td className={td}><span className={`text-[11px] rounded px-1.5 py-0.5 ${appPill[r.status] ?? 'bg-[color:var(--warn-bg)] text-warn'}`}>{r.status}</span></td>
+                    <td className={td}>
+                      <span className={`text-[11px] rounded px-1.5 py-0.5 ${appPill[r.status] ?? 'bg-[color:var(--warn-bg)] text-warn'}`}>{r.status}</span>
+                      {r.archived_at && <span className="ml-1 text-[11px] rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger">Archived</span>}
+                    </td>
                     <td className={`${td} text-xs whitespace-nowrap`}>{r.date_money_received ? String(r.date_money_received).slice(0, 10) : '—'}</td>
                     <td className={`${td} text-right mono`}>{formatINR(r.amount)}</td>
                     <td className={`${td} text-right mono font-medium`}>{formatINR(r.outstanding ?? 0)}</td>
+                    {canDelete && (
+                      <td className={`${td} text-right whitespace-nowrap`} onClick={(e) => e.stopPropagation()}>
+                        {r.archived_at
+                          ? <button onClick={() => restoreApp(r)} className="text-xs text-primary hover:underline mr-3">Restore</button>
+                          : <button onClick={() => archiveApp(r)} className="text-xs text-primary hover:underline mr-3">Archive</button>}
+                        <button onClick={() => purgeApp(r)} className="text-xs text-danger hover:underline">Delete</button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

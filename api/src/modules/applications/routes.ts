@@ -5,12 +5,13 @@ import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
 import * as s from './service.js';
+import * as purge from '../admin/purge.js';
 import { serveHeaders } from '../../lib/uploads.js';
 
 export const applicationsRouter = Router();
 
 applicationsRouter.get('/', requirePermission('customers:read'),
-  asyncHandler(async (req, res) => res.json(await s.listApplications(getDb(), req.user!, { status: req.query.status as string, series_id: req.query.series_id ? Number(req.query.series_id) : undefined }))));
+  asyncHandler(async (req, res) => res.json(await s.listApplications(getDb(), req.user!, { status: req.query.status as string, series_id: req.query.series_id ? Number(req.query.series_id) : undefined, showArchived: req.query.showArchived === 'true' }))));
 
 // Specific paths BEFORE '/:id' so they aren't captured by the param route.
 applicationsRouter.get('/clubbing-candidates', requirePermission('applications:create'),
@@ -73,3 +74,23 @@ applicationsRouter.post('/:id/locker-deposit', requirePermission('applications:u
 
 applicationsRouter.post('/:id/mark-esigned', requirePermission('applications:mark-esigned'),
   asyncHandler(async (req, res) => { await s.markESigned(getDb(), req.user!, Number(req.params.id)); res.json({ ok: true }); }));
+
+// ── Super-admin delete / archive (applications:delete → super_admin only) ──
+applicationsRouter.post('/:id/archive', requirePermission('applications:delete'),
+  asyncHandler(async (req, res) => {
+    const { reason } = z.object({ reason: z.string().nullish() }).parse(req.body ?? {});
+    res.json(await purge.setApplicationArchived(getDb(), req.user!, Number(req.params.id), true, reason ?? undefined));
+  }));
+
+applicationsRouter.post('/:id/unarchive', requirePermission('applications:delete'),
+  asyncHandler(async (req, res) => {
+    res.json(await purge.setApplicationArchived(getDb(), req.user!, Number(req.params.id), false));
+  }));
+
+// Permanent purge — irreversible. Requires an explicit confirm flag + a reason.
+applicationsRouter.delete('/:id', requirePermission('applications:delete'),
+  asyncHandler(async (req, res) => {
+    const { confirm, reason } = z.object({ confirm: z.literal(true), reason: z.string().min(2) }).parse(req.body ?? {});
+    void confirm;
+    res.json(await purge.hardDeleteApplication(getDb(), req.user!, Number(req.params.id), reason));
+  }));

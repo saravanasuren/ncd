@@ -107,6 +107,7 @@ export interface CustomerFilters {
   status?: string;
   district?: string;
   q?: string;
+  showArchived?: boolean;
 }
 
 export async function listCustomers(db: Db, actor: AuthUser, filters: CustomerFilters = {}) {
@@ -122,13 +123,17 @@ export async function listCustomers(db: Db, actor: AuthUser, filters: CustomerFi
   conds.push(`(c.enrolled_by_user_id IS NOT NULL
     OR c.enrolled_by_agent_id IS NOT NULL
     OR EXISTS (SELECT 1 FROM applications a WHERE a.customer_id = c.id))`);
+  // Archived (super-admin soft-deleted) customers are hidden unless a super-admin
+  // (customers:delete) explicitly asks to see them.
+  const showArchived = filters.showArchived && actor.permissions.includes('customers:delete');
+  if (!showArchived) conds.push('c.archived_at IS NULL');
   if (filters.district) { params.push(filters.district); conds.push(`c.district = $${params.length}`); }
   if (filters.q) { params.push(`%${filters.q}%`); conds.push(`(c.full_name ILIKE $${params.length} OR c.customer_code ILIKE $${params.length} OR c.phone ILIKE $${params.length})`); }
   const LIMIT = 2000;
   const base = `FROM customers c WHERE ${conds.join(' AND ')}`;
   const total = Number((await db.query<{ n: number }>(`SELECT count(*)::int AS n ${base}`, params)).rows[0]!.n);
   const { rows } = await db.query(
-    `SELECT c.id, c.customer_code, c.full_name, c.phone, c.district, c.kyc_status, c.creation_status, c.is_active
+    `SELECT c.id, c.customer_code, c.full_name, c.phone, c.district, c.kyc_status, c.creation_status, c.is_active, c.archived_at
      ${base} ORDER BY c.created_at DESC LIMIT ${LIMIT}`,
     params
   );
@@ -164,7 +169,7 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
             -- app wrongly showed its original amount as outstanding.
             CASE WHEN a.status IN (${OUTSTANDING_SQL_LIST}) THEN COALESCE(bk.live, a.total_amount) ELSE 0 END AS outstanding,
             a.status,
-            a.date_money_received, a.allotment_date
+            a.date_money_received, a.allotment_date, a.archived_at
      FROM applications a JOIN series s ON s.id = a.series_id
      LEFT JOIN LATERAL (
        SELECT sum(al.outstanding_amount) FILTER (WHERE al.status = 'Active') AS live

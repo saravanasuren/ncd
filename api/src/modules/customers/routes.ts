@@ -5,13 +5,14 @@ import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
 import * as s from './service.js';
+import * as purge from '../admin/purge.js';
 import { serveHeaders } from '../../lib/uploads.js';
 
 export const customersRouter = Router();
 
 customersRouter.get('/', requirePermission('customers:read'),
   asyncHandler(async (req, res) => {
-    const filters = { status: req.query.status as string, district: req.query.district as string, q: req.query.q as string };
+    const filters = { status: req.query.status as string, district: req.query.district as string, q: req.query.q as string, showArchived: req.query.showArchived === 'true' };
     res.json(await s.listCustomers(getDb(), req.user!, filters));
   }));
 
@@ -113,6 +114,26 @@ customersRouter.post('/:id/deceased', requirePermission('customers:deactivate'),
   asyncHandler(async (req, res) => {
     const { deceased_date } = z.object({ deceased_date: z.string() }).parse(req.body);
     res.json(await s.markDeceased(getDb(), req.user!, Number(req.params.id), deceased_date));
+  }));
+
+// ── Super-admin delete / archive (customers:delete → super_admin only) ─────
+customersRouter.post('/:id/archive', requirePermission('customers:delete'),
+  asyncHandler(async (req, res) => {
+    const { reason } = z.object({ reason: z.string().nullish() }).parse(req.body ?? {});
+    res.json(await purge.setCustomerArchived(getDb(), req.user!, Number(req.params.id), true, reason ?? undefined));
+  }));
+
+customersRouter.post('/:id/unarchive', requirePermission('customers:delete'),
+  asyncHandler(async (req, res) => {
+    res.json(await purge.setCustomerArchived(getDb(), req.user!, Number(req.params.id), false));
+  }));
+
+// Permanent purge — irreversible, cascades the customer's investments too.
+customersRouter.delete('/:id', requirePermission('customers:delete'),
+  asyncHandler(async (req, res) => {
+    const { confirm, reason } = z.object({ confirm: z.literal(true), reason: z.string().min(2) }).parse(req.body ?? {});
+    void confirm;
+    res.json(await purge.hardDeleteCustomer(getDb(), req.user!, Number(req.params.id), reason));
   }));
 
 // KYC documents

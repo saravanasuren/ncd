@@ -22,8 +22,10 @@ export const PERMISSIONS = [
   'customers:create',
   'customers:read', // scoped
   'customers:update',
-  // NOTE: no 'customers:delete' — customers are deactivated / marked deceased,
-  // never hard-deleted (financial record integrity). Deliberately absent.
+  // Super-admin-only power tool: archive (recoverable) OR permanently purge a
+  // customer and their whole record. Normal correction is deactivate / deceased;
+  // this exists for cleaning up erroneous or duplicate records. super_admin ONLY.
+  'customers:delete',
   'customers:deactivate',
   'customers:correction-request',
   'customers:handover-request',
@@ -35,6 +37,10 @@ export const PERMISSIONS = [
   'applications:update',
   'applications:confirm-collection',
   'applications:mark-esigned',
+  // Super-admin-only: archive (recoverable) OR permanently purge an investment
+  // and everything hanging off it (schedule, collections, incentives, redemptions).
+  // super_admin ONLY.
+  'applications:delete',
   // locker enrollment (staff enroll a customer for a LockerHub locker; contract Part A)
   'lockers:enroll',
   // activations (funded → Active, maker-checker)
@@ -103,13 +109,16 @@ const STAFF_FUNNEL: Permission[] = [
 
 /**
  * Seed map role → permissions (docs/03 §3 matrix). Admin-editable at runtime.
- * super_admin gets everything; admin gets everything except the two delete
- * permissions.
+ * super_admin gets everything; admin gets everything except the destructive
+ * delete permissions (users / customers / applications) — only the Super Admin
+ * may delete or purge people and money records.
  */
+const SUPER_ADMIN_ONLY: Permission[] = ['users:delete', 'customers:delete', 'applications:delete'];
+
 export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   super_admin: ALL,
 
-  admin: ALL.filter((p) => p !== 'users:delete'),
+  admin: ALL.filter((p) => !SUPER_ADMIN_ONLY.includes(p)),
 
   cxo: [
     'customers:read',

@@ -75,7 +75,7 @@ export class Client {
   get(p: string) { return this.req('GET', p); }
   post(p: string, b?: unknown) { return this.req('POST', p, b ?? {}); }
   put(p: string, b?: unknown) { return this.req('PUT', p, b ?? {}); }
-  del(p: string) { return this.req('DELETE', p); }
+  del(p: string, b?: unknown) { return this.req('DELETE', p, b); }
 
   /** Fetch raw bytes (for binary downloads like xlsx). */
   async raw(path: string): Promise<{ status: number; buffer: Buffer; headers: Headers }> {

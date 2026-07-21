@@ -209,18 +209,22 @@ export async function markESigned(db: Db, actor: AuthUser, appId: number) {
   });
 }
 
-export async function listApplications(db: Db, actor: AuthUser, filters: { status?: string; series_id?: number } = {}) {
+export async function listApplications(db: Db, actor: AuthUser, filters: { status?: string; series_id?: number; showArchived?: boolean } = {}) {
   const conds: string[] = [];
   const params: unknown[] = [];
   const sc = scopeWhere(scopeFor(actor), SCOPE_COLS, 0);
   conds.push(sc.sql); params.push(...sc.params);
+  // Archived investments are hidden unless a super-admin (applications:delete)
+  // explicitly asks to see them (to restore or purge).
+  const showArchived = filters.showArchived && actor.permissions.includes('applications:delete');
+  if (!showArchived) conds.push('a.archived_at IS NULL');
   if (filters.status) { params.push(filters.status); conds.push(`a.status = $${params.length}`); }
   if (filters.series_id) { params.push(filters.series_id); conds.push(`a.series_id = $${params.length}`); }
   const base = `FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
      WHERE ${conds.join(' AND ')}`;
   const total = Number((await db.query<{ n: number }>(`SELECT count(*)::int AS n ${base}`, params)).rows[0]!.n);
   const { rows } = await db.query(
-    `SELECT a.id, a.application_no, a.status, a.total_amount, a.allotment_date, a.maturity_date,
+    `SELECT a.id, a.application_no, a.status, a.total_amount, a.allotment_date, a.maturity_date, a.archived_at,
             c.full_name AS customer_name, c.customer_code, s.code AS series_code
      ${base} ORDER BY a.created_at DESC LIMIT 2000`,
     params

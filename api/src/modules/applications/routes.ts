@@ -10,7 +10,7 @@ import { serveHeaders } from '../../lib/uploads.js';
 export const applicationsRouter = Router();
 
 applicationsRouter.get('/', requirePermission('customers:read'),
-  asyncHandler(async (req, res) => res.json({ rows: await s.listApplications(getDb(), req.user!, { status: req.query.status as string, series_id: req.query.series_id ? Number(req.query.series_id) : undefined }) })));
+  asyncHandler(async (req, res) => res.json(await s.listApplications(getDb(), req.user!, { status: req.query.status as string, series_id: req.query.series_id ? Number(req.query.series_id) : undefined }))));
 
 // Specific paths BEFORE '/:id' so they aren't captured by the param route.
 applicationsRouter.get('/clubbing-candidates', requirePermission('applications:create'),

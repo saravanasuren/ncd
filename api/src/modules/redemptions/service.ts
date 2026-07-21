@@ -13,6 +13,7 @@ import { writeAudit } from '../../lib/audit.js';
 import { assertTransition } from '../../lib/statusMachine.js';
 import { nextCode } from '../../lib/sequences.js';
 import { computeRedemption } from '../../lib/redemption.js';
+import { computeTds } from '../../lib/tds.js';
 import { round2, toISODate } from '../../lib/dates.js';
 import type { RateSpec } from '../../lib/incentive.js';
 import { getSettingsMap } from '../settings/service.js';
@@ -40,38 +41,59 @@ async function createRequest(
   const penalty = input.type === 'maturity' ? { mode: 'flat' as const, value: 0 } : await penaltySetting(tx);
   const redDate = input.redemptionDate ?? new Date().toISOString().slice(0, 10);
   // Accrued broken-period interest (last paid → redemption date) is now COMPUTED
-  // and RECORDED on the redemption (it was silently 0 before because the
-  // coupon/dates were never passed). Single-Active-line apps compute exactly;
-  // multi-line uses the first line's rate on the total (staff review before pay).
-  // NOTE: net_payment stays principal − penalty per the documented design; the
-  // broken interest's PAYOUT mechanism is a pending product decision.
+  // and SETTLED WITH the premature payout, net of TDS (owner review 2026-07-21).
+  // It was previously silently 0 (coupon/dates never passed) and the documented
+  // "paid separately next cycle" never fired — the line closes, so the interest
+  // run (Active lines only) could never pay it. Single-Active-line apps compute
+  // exactly; multi-line uses the first line's rate on the total.
   let brokenArgs: Partial<Parameters<typeof computeRedemption>[0]> = {};
+  let brokenLine: Record<string, unknown> | undefined;
   if (input.type === 'premature') {
-    const line = (await tx.query<{ coupon_rate_pct: string; day_count_convention: string; paid_through: string | null }>(
-      `SELECT l.coupon_rate_pct, l.day_count_convention,
+    brokenLine = (await tx.query<Record<string, unknown>>(
+      `SELECT l.id AS line_id, l.coupon_rate_pct, l.day_count_convention, l.payout_frequency,
+              l.amount AS line_amount, l.scheme_id,
+              c.is_nri, c.tds_applicable AS cust_tds, c.tax_form, c.tax_form_expires_on,
               COALESCE((SELECT max(ds.due_date) FROM disbursement_schedule ds
                          WHERE ds.line_id = l.id AND ds.due_type IN ('Interest','BrokenInterest') AND ds.status = 'Paid'),
                        a.interest_start_date) AS paid_through
          FROM application_lines l JOIN applications a ON a.id = l.application_id
+         JOIN customers c ON c.id = a.customer_id
         WHERE l.application_id = $1 AND l.status = 'Active' ORDER BY l.id LIMIT 1`, [input.applicationId])).rows[0];
-    const paidThrough = toISODate(line?.paid_through ?? null);
-    if (line && paidThrough) {
+    const paidThrough = toISODate((brokenLine?.paid_through as string | null) ?? null);
+    if (brokenLine && paidThrough) {
       brokenArgs = {
-        couponRatePct: Number(line.coupon_rate_pct),
+        couponRatePct: Number(brokenLine.coupon_rate_pct),
         lastRegularPayoutDate: paidThrough,
         redemptionDate: redDate,
-        convention: line.day_count_convention as never,
+        convention: brokenLine.day_count_convention as never,
       };
     }
   }
   const calc = computeRedemption({ principal, penalty, ...brokenArgs });
+  // TDS on the broken interest (same rule the interest run uses), then fold the
+  // net into the settlement. net_payment = (principal − penalty) + brokenNet.
+  let brokenNet = 0;
+  if (calc.brokenInterest > 0 && brokenLine) {
+    const tdsRule = brokenLine.scheme_id
+      ? (await tx.query<{ rate_pct: number }>('SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [brokenLine.scheme_id])).rows[0] ?? null
+      : null;
+    const brokenTds = round2(computeTds(
+      tdsRule,
+      { is_nri: brokenLine.is_nri as boolean, tds_applicable: brokenLine.cust_tds as boolean,
+        tax_form: brokenLine.tax_form as string | null, tax_form_expires_on: toISODate(brokenLine.tax_form_expires_on as string | null) },
+      { payout_frequency: brokenLine.payout_frequency as string, amount: Number(brokenLine.line_amount) },
+      { due_type: 'BrokenInterest', gross_amount: calc.brokenInterest, due_date: redDate },
+    ));
+    brokenNet = round2(calc.brokenInterest - brokenTds);
+  }
+  const netPayment = round2(calc.netPayment + brokenNet);
   const redNo = await nextCode(tx, 'redemption', 'MCR-{yyyy}-{seq:6}');
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO redemptions (redemption_no, application_id, type, principal, penalty, net_payment, broken_interest, requested_date, redemption_date, reason, status, source, requested_by_customer, created_by_user_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Requested',$11,$12,$13) RETURNING id`,
-    [redNo, input.applicationId, input.type, calc.principal, calc.penalty, calc.netPayment, calc.brokenInterest, redDate, redDate, input.reason, input.source, input.byCustomer, input.createdBy]
+    [redNo, input.applicationId, input.type, calc.principal, calc.penalty, netPayment, calc.brokenInterest, redDate, redDate, input.reason, input.source, input.byCustomer, input.createdBy]
   );
-  return { id: Number(rows[0]!.id), redemption_no: redNo, principal: calc.principal, penalty: calc.penalty, netPayment: calc.netPayment, brokenInterest: calc.brokenInterest };
+  return { id: Number(rows[0]!.id), redemption_no: redNo, principal: calc.principal, penalty: calc.penalty, netPayment, brokenInterest: calc.brokenInterest };
 }
 
 /** Customer / app requests a redemption (no approval yet — lands in the staff queue). */
@@ -151,8 +173,8 @@ export async function adjustPrematurePenalty(db: Db, actor: AuthUser, redemption
   if (!input.reason?.trim() || input.reason.trim().length < 3) throw errors.badRequest('A reason is required');
 
   return db.withTx(async (tx) => {
-    const red = (await tx.query<{ type: string; status: string; principal: string; penalty: string; penalty_original: string | null; approval_request_id: string | null }>(
-      'SELECT type, status, principal, penalty, penalty_original, approval_request_id FROM redemptions WHERE id = $1 FOR UPDATE', [redemptionId])).rows[0];
+    const red = (await tx.query<{ type: string; status: string; principal: string; penalty: string; net_payment: string; penalty_original: string | null; approval_request_id: string | null }>(
+      'SELECT type, status, principal, penalty, net_payment, penalty_original, approval_request_id FROM redemptions WHERE id = $1 FOR UPDATE', [redemptionId])).rows[0];
     if (!red) throw errors.notFound('Redemption not found');
     if (red.type !== 'premature') throw errors.unprocessable('Only premature redemptions carry a penalty');
     if (red.status !== 'Requested') throw errors.unprocessable('This redemption is no longer pending approval');
@@ -160,8 +182,11 @@ export async function adjustPrematurePenalty(db: Db, actor: AuthUser, redemption
     if (input.new_penalty > current + 0.001) throw errors.badRequest('The penalty can only be waived or reduced, not increased');
 
     const principal = Number(red.principal);
+    // Preserve the settled broken-interest portion of the payout across the
+    // penalty change: net = (principal − penalty) + brokenNet.
+    const brokenNet = round2(Number(red.net_payment) - (principal - current));
     const newPenalty = round2(input.new_penalty);
-    const newNet = round2(principal - newPenalty);
+    const newNet = round2(principal - newPenalty + brokenNet);
     const original = red.penalty_original != null ? Number(red.penalty_original) : current;
 
     await tx.query(
@@ -207,13 +232,29 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
   await tx.query("UPDATE applications SET status = 'Redeemed', redemption_date = $1, updated_at = now() WHERE id = $2", [redDate, appId]);
   await tx.query("UPDATE application_lines SET status = 'PrematureWithdrawn', outstanding_amount = 0 WHERE application_id = $1 AND status = 'Active'", [appId]);
   await tx.query("UPDATE disbursement_schedule SET status = 'Skipped' WHERE application_id = $1 AND status = 'Scheduled'", [appId]);
-  const red = (await tx.query<{ net_payment: string }>('SELECT net_payment FROM redemptions WHERE id = $1', [redId])).rows[0]!;
+  const red = (await tx.query<{ principal: string; penalty: string; net_payment: string; broken_interest: string }>(
+    'SELECT principal, penalty, net_payment, broken_interest FROM redemptions WHERE id = $1', [redId])).rows[0]!;
   const lineId = (await tx.query<{ id: string }>('SELECT id FROM application_lines WHERE application_id = $1 ORDER BY id LIMIT 1', [appId])).rows[0]?.id;
   if (lineId) {
+    // The payout (net_payment) = principal redemption + net broken interest.
+    // Record them as two rows: 'Premature' (principal, no TDS) and, when there
+    // is accrued interest, 'BrokenInterest' (with its TDS) — so TDS reporting
+    // captures the interest tax. Together they sum to net_payment (paid in one
+    // NEFT transfer from the redemptions ledger).
+    const principalNet = round2(Number(red.principal) - Number(red.penalty));
+    const brokenGross = Number(red.broken_interest);
+    const brokenNet = round2(Number(red.net_payment) - principalNet);
+    const brokenTds = round2(brokenGross - brokenNet);
     await tx.query(
       `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status)
        VALUES ($1,$2,$3,'Premature',$4,0,$4,'Scheduled') ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,
-      [Number(lineId), appId, redDate, red.net_payment]);
+      [Number(lineId), appId, redDate, principalNet]);
+    if (brokenGross > 0) {
+      await tx.query(
+        `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status)
+         VALUES ($1,$2,$3,'BrokenInterest',$4,$5,$6,'Scheduled') ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,
+        [Number(lineId), appId, redDate, brokenGross, brokenTds, brokenNet]);
+    }
   }
   await tx.query("UPDATE redemptions SET status = 'Approved', redemption_date = $1 WHERE id = $2", [redDate, redId]);
 });

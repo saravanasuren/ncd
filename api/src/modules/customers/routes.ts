@@ -12,7 +12,7 @@ export const customersRouter = Router();
 customersRouter.get('/', requirePermission('customers:read'),
   asyncHandler(async (req, res) => {
     const filters = { status: req.query.status as string, district: req.query.district as string, q: req.query.q as string };
-    res.json({ rows: await s.listCustomers(getDb(), req.user!, filters) });
+    res.json(await s.listCustomers(getDb(), req.user!, filters));
   }));
 
 const createSchema = z.object({

@@ -116,12 +116,17 @@ export async function listCustomers(db: Db, actor: AuthUser, filters: CustomerFi
     OR EXISTS (SELECT 1 FROM applications a WHERE a.customer_id = c.id))`);
   if (filters.district) { params.push(filters.district); conds.push(`c.district = $${params.length}`); }
   if (filters.q) { params.push(`%${filters.q}%`); conds.push(`(c.full_name ILIKE $${params.length} OR c.customer_code ILIKE $${params.length} OR c.phone ILIKE $${params.length})`); }
+  const LIMIT = 2000;
+  const base = `FROM customers c WHERE ${conds.join(' AND ')}`;
+  const total = Number((await db.query<{ n: number }>(`SELECT count(*)::int AS n ${base}`, params)).rows[0]!.n);
   const { rows } = await db.query(
     `SELECT c.id, c.customer_code, c.full_name, c.phone, c.district, c.kyc_status, c.creation_status, c.is_active
-     FROM customers c WHERE ${conds.join(' AND ')} ORDER BY c.created_at DESC LIMIT 2000`,
+     ${base} ORDER BY c.created_at DESC LIMIT ${LIMIT}`,
     params
   );
-  return rows;
+  // total/truncated let the UI warn "showing N of M" instead of silently
+  // dropping rows past the cap. rows stays first for back-compat.
+  return { rows, total, truncated: total > rows.length };
 }
 
 async function assertVisible(db: Db, actor: AuthUser, customerId: number): Promise<void> {

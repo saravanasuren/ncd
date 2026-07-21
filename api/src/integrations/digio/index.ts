@@ -56,21 +56,39 @@ function normalisePhone(phone?: string | null): string | undefined {
  * to sign (the application form) is uploaded as base64 — without it Digio would
  * have nothing to sign, so callers pass it in. Inert in stub mode.
  *
- * NOTE: the exact upload field names and signature-box coordinates must be
- * validated against Digio's sandbox once DIGIO_* creds land — this cannot be
- * exercised end-to-end without them. */
+ * Payload validated against live Digio 2026-07-21, matched to the wealth
+ * adapter's production config. */
 export async function createSignRequest(input: { signerEmail?: string; signerPhone?: string; signerName?: string; document?: SignDocument }): Promise<SignRequestResult> {
   const phone = normalisePhone(input.signerPhone);
+  // Phone-first identifier so the link goes by SMS (Dhanam's customer base);
+  // email + phone as separate fields so Digio delivers on BOTH channels.
+  const identifier = phone || input.signerEmail || input.signerPhone || 'unknown';
   const body: Record<string, unknown> = {
-    signers: [{ identifier: input.signerEmail || phone || 'unknown', name: input.signerName, reason: 'NCD subscription agreement' }],
+    signers: [{
+      identifier,
+      name: input.signerName || 'Customer',
+      reason: 'NCD subscription agreement',
+      sign_type: 'aadhaar', // Aadhaar-OTP eSign — not draw-signature-after-login
+      email: input.signerEmail || undefined,
+      phone: phone || undefined,
+    }],
     expire_in_days: 10,
-    display_on_page: 'all',
     notify_signers: true,
+    send_sign_link: true,
+    generate_access_token: true,
+    include_authentication_url: 'true',
+    // No display_on_page: without sign_coordinates Digio rejects 'custom', and
+    // 'all' stamps every page — let Digio default to last-page placement.
   };
   if (input.document) { body.file_name = input.document.fileName; body.file_data = input.document.contentBase64; }
   const r = await call('POST', '/v2/client/document/uploadpdf', body);
-  const signer = Array.isArray(r.signers) ? r.signers[0] : undefined;
-  return { digioRequestId: String(r.id), signUrl: signer?.sign_url ?? null, status: String(r.status ?? 'requested') };
+  // Digio may return the signer link at signing_parties[0].authentication_url;
+  // usually it's delivered to the signer directly (notify + send_sign_link).
+  const parties = Array.isArray(r.signing_parties) ? r.signing_parties : [];
+  const signUrl = parties[0]?.authentication_url
+    ?? (Array.isArray(r.signers) ? r.signers[0]?.sign_url : undefined)
+    ?? r.sign_url ?? null;
+  return { digioRequestId: String(r.id), signUrl: (signUrl as string | null) ?? null, status: String(r.status ?? 'requested') };
 }
 
 /** Poll Digio for one request's current status (real mode only). */

@@ -97,6 +97,11 @@ export async function emitForApplication(
       phone: r.phone,
       data: {
         lockerhub_application_no: r.lockerhub_intent_no ?? r.application_no,
+        // LockerHub's payment.acknowledged handler reconciles its queue row on
+        // data.lockerhub_intent_no (confirmed by Prem 2026-07-21). Send it
+        // explicitly alongside the contract's lockerhub_application_no so their
+        // reconciliation matches regardless of which key their code reads.
+        lockerhub_intent_no: r.lockerhub_intent_no,
         customer_code: r.customer_code,
         application_no: r.application_no,
       },

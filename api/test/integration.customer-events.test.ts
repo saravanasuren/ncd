@@ -89,5 +89,13 @@ describe('customer-event webhook', () => {
     const types = rows.map((r: any) => r.event_type);
     expect(types).toContain('payment.acknowledged');
     expect(types).toContain('subscription.activated');
+
+    // payment.acknowledged must carry data.lockerhub_intent_no so LockerHub can
+    // reconcile its payment-queue row (confirmed by Prem 2026-07-21).
+    const pay = (await ctx.db.query<{ intent: string }>(
+      `SELECT payload->'data'->>'lockerhub_intent_no' AS intent FROM customer_event_webhooks
+        WHERE event_type = 'payment.acknowledged'
+          AND payload->'data'->>'application_no' IN (SELECT application_no FROM applications WHERE lockerhub_intent_no='EVT-WIRE-1')`)).rows[0];
+    expect(pay?.intent).toBe('EVT-WIRE-1');
   });
 });

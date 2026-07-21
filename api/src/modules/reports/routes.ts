@@ -76,7 +76,7 @@ reportsRouter.get('/acknowledgment/:applicationId.pdf', requirePermission('custo
   asyncHandler(async (req, res) => {
     const { assertApplicationVisible } = await import('../../lib/visibility.js');
     await assertApplicationVisible(getDb(), req.user!, Number(req.params.applicationId));
-    const { acknowledgmentPdf } = await import('./documents.js');
+    const { acknowledgmentPdf } = await import('./forms/acknowledgment.js');
     const buf = await acknowledgmentPdf(getDb(), Number(req.params.applicationId));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="acknowledgment-${req.params.applicationId}.pdf"`);

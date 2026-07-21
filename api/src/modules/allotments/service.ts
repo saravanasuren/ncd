@@ -11,7 +11,7 @@ import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { canTransition } from '../../lib/statusMachine.js';
-import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
+import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 
 /** Apps ready to allot = Active in the series but not yet allotted. */
 const READY_TO_ALLOT = "a.status = 'Active' AND a.allotment_date IS NULL";
@@ -109,6 +109,14 @@ export async function cancelPendingAllotment(db: Db, actor: AuthUser, seriesId: 
     return { cancelled: batches.length };
   });
 }
+
+// On REJECT of an allotment approval, cancel the batch so the series drops out
+// of the "pending" state and the Allot button re-enables (otherwise the batch
+// stayed PendingChecker and the Allotments page still showed Pending/Revert).
+registerOnReject('allotment_batch', async (tx, req) => {
+  const batchId = req.metadata.batch_id ? Number(req.metadata.batch_id) : null;
+  if (batchId) await tx.query("UPDATE allotment_batches SET status = 'Cancelled' WHERE id = $1", [batchId]);
+});
 
 registerOnFinalApprove('allotment_batch', async (tx, req) => {
   const seriesId = Number(req.metadata.series_id);

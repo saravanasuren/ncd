@@ -59,6 +59,19 @@ describe('allotment date override at approval', () => {
     expect((await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' })).status).toBe(201);
   });
 
+  it('rejecting the allotment approval clears the pending state (Allot re-enabled)', async () => {
+    const { seriesId } = await seedSeries('NCD-ALLOTE', '9733300005');
+    const ncd = await as('ncd@demo.local');
+    const batch = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });
+    // Reject from the Approvals page.
+    expect((await (await admin()).post(`/api/approvals/${batch.json.request.id}/reject`, { reason: 'wrong date' })).status).toBe(200);
+    const list = await (await admin()).get('/api/allotments/series');
+    const row = list.json.rows.find((r: any) => r.series_id === seriesId);
+    expect(row.pending_request_id).toBeNull();   // no longer pending → Allot shows again
+    // and a fresh allotment can be raised.
+    expect((await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' })).status).toBe(201);
+  });
+
   it('an invalid override date is rejected and the apps stay un-allotted', async () => {
     const { seriesId, appId } = await seedSeries('NCD-ALLOTB', '9733300002');
     const ncd = await as('ncd@demo.local');

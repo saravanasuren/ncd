@@ -60,25 +60,26 @@ describe('segments — branch / channel tabs, redeemed children, search', () => 
     expect(withDate.allotment_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
-  it('Locker Hub tab shows only lockerhub-sourced investments', async () => {
+  it('Locker Hub tab = locker deposits (any source) + lockerhub-sourced', async () => {
     const a = await admin();
     const r = await a.get('/api/reports/segments/lockerhub');
     const g = r.json.groups.find((x: any) => x.key === 'NCD-SEG');
     expect(g).toBeTruthy();
     const apps = g.children.map((c: any) => c.application_no);
-    expect(apps).toContain('APP-SEG-1');
-    expect(apps).not.toContain('APP-SEG-2');   // dhanamfin
-    expect(apps).not.toContain('APP-SEG-3');   // dhanamfin
+    expect(apps).toContain('APP-SEG-1');       // source = lockerhub
+    expect(apps).toContain('APP-SEG-3');       // a locker deposit (grouped by purpose)
+    expect(apps).not.toContain('APP-SEG-2');   // dhanamfin, not a locker deposit
+    expect(Number(g.outstanding)).toBe(700000); // APP-SEG-1 + APP-SEG-3 active
   });
 
-  it('Dhanamfin tab shows only dhanamfin-sourced investments (incl. redeemed)', async () => {
+  it('Dhanamfin tab = dhanamfin-sourced, non-locker (incl. redeemed)', async () => {
     const a = await admin();
     const r = await a.get('/api/reports/segments/dhanamfin');
     const g = r.json.groups.find((x: any) => x.key === 'NCD-SEG');
     expect(g).toBeTruthy();
-    expect(Number(g.outstanding)).toBe(200000);   // APP-SEG-3 active only
-    const apps = g.children.map((c: any) => c.application_no).sort();
-    expect(apps).toEqual(['APP-SEG-2', 'APP-SEG-3']);
+    expect(Number(g.outstanding)).toBe(0);     // only APP-SEG-2, which is redeemed
+    const apps = g.children.map((c: any) => c.application_no);
+    expect(apps).toEqual(['APP-SEG-2']);       // APP-SEG-3 is a locker deposit → under Locker Hub
   });
 
   it('Locker-deposit drill carries the branch column', async () => {

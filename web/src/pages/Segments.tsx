@@ -13,7 +13,7 @@ const TABS: { key: Seg; label: string }[] = [
   { key: 'agent', label: 'Agent-wise' },
   { key: 'staff', label: 'Staff-wise' },
   { key: 'lockerhub', label: 'Locker Hub' },
-  { key: 'dhanamfin', label: 'Dhanamfin' },
+  { key: 'dhanamfin', label: 'Dhanamfin App' },
 ];
 const TAB_KEYS = TABS.map((t) => t.key);
 
@@ -69,7 +69,7 @@ export function SegmentsPage() {
   return (
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Segments</h1>
-      <p className="text-sm text-text-muted mt-1 mb-4">The book sliced by series, customer, district, agent, staff, and funding channel (Locker Hub / Dhanamfin). Click a row's <span className="font-mono">+</span> to see its individual investments (including redeemed ones).</p>
+      <p className="text-sm text-text-muted mt-1 mb-4">The book sliced by series, customer, district, agent, staff, and funding channel (Locker Hub = locker deposits + LockerHub-originated · Dhanamfin App = app NCDs). Click a row's <span className="font-mono">+</span> to see its individual investments (including redeemed ones).</p>
       <div className="flex gap-1 mb-4 border-b border-border">
         {TABS.map((t) => (
           <button key={t.key} onClick={() => switchTab(t.key)}

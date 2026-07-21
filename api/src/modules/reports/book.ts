@@ -375,8 +375,14 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
   // statuses (children only). Reusing OUTSTANDING_SQL_LIST keeps the outstanding
   // rows byte-identical to every other book query — never hardcode the set.
   const extra: string[] = [`a.status IN (${OUTSTANDING_SQL_LIST}, ${EXITED_STATUS_SQL_LIST})`];
-  if (by === 'lockerhub') extra.push("a.source = 'lockerhub'");
-  if (by === 'dhanamfin') extra.push("a.source = 'dhanamfin'");
+  // Funding-channel split by PURPOSE, not by a legacy/new source tag:
+  //  • Locker Hub    = locker deposits (any source) + anything LockerHub-originated.
+  //  • Dhanamfin App = regular NCD subscriptions from the Dhanamfin mobile app
+  //    (locker deposits excluded here — they belong under Locker Hub).
+  // This is why the currently-open series shows its live locker-deposit activity
+  // under Locker Hub even though its regular NCDs are tagged source='dhanamfin'.
+  if (by === 'lockerhub') extra.push("(a.is_locker_deposit = TRUE OR a.source = 'lockerhub')");
+  if (by === 'dhanamfin') extra.push("(a.source = 'dhanamfin' AND a.is_locker_deposit = FALSE)");
   const w = appWhere(actor, { ...filters, status: undefined }, extra);
   const { rows } = await db.query<any>(
     `SELECT a.application_no, ${AMT} AS amount, a.status, a.allotment_date,

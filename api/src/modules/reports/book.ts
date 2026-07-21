@@ -466,13 +466,17 @@ export async function redemptions(db: Db, actor: AuthUser, filters: BookFilters 
  */
 export async function seriesActiveWindow(db: Db, seriesIds: number[]): Promise<{ from: string; to: string } | null> {
   if (!seriesIds?.length) return null;
-  const { rows } = await db.query<{ from: string | null; to: string | null }>(
-    `SELECT min(COALESCE(opened_at::date, deemed_date, created_at::date)) AS from,
-            max(COALESCE(allotted_at::date, CURRENT_DATE)) AS to
+  // to_char forces a clean 'YYYY-MM-DD' TEXT result so it survives the driver's
+  // date parsing: node-pg (prod) returns a DATE column as a JS Date, PGlite as a
+  // string. The value is re-used as a date PARAMETER below, so a JS Date coerced
+  // via String() ('Wed Jun 01 2026 …') would blow up real Postgres.
+  const { rows } = await db.query<{ win_from: string | null; win_to: string | null }>(
+    `SELECT to_char(min(COALESCE(opened_at::date, deemed_date, created_at::date)), 'YYYY-MM-DD') AS win_from,
+            to_char(max(COALESCE(allotted_at::date, CURRENT_DATE)), 'YYYY-MM-DD') AS win_to
        FROM series WHERE id = ANY($1)`, [seriesIds]);
   const r = rows[0];
-  if (!r?.from) return null;
-  return { from: String(r.from).slice(0, 10), to: String(r.to ?? new Date().toISOString().slice(0, 10)).slice(0, 10) };
+  if (!r?.win_from) return null;
+  return { from: r.win_from, to: r.win_to ?? new Date().toISOString().slice(0, 10) };
 }
 
 /** Redemptions that BELONG to the selected series (by ownership), regardless of

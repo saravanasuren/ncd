@@ -36,6 +36,12 @@ payoutsRouter.post('/:id/mark-paid', requirePermission('payouts:mark-paid-manual
     res.json(await s.markBatchPaid(getDb(), req.user!, Number(req.params.id), utr));
   }));
 
+// Explicit staff action: WhatsApp every customer paid in this settled batch
+// (approved ncd_interest_final). Kept off the settlement path so hundreds of
+// sends never fire as an approval side effect.
+payoutsRouter.post('/:id/whatsapp-interest', requirePermission('notifications:admin', 'payouts:mark-paid-manual'),
+  asyncHandler(async (req, res) => res.json(await s.notifyInterestOnWhatsapp(getDb(), Number(req.params.id)))));
+
 payoutsRouter.get('/:id/download.xlsx', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {
     const { buffer, batchNo } = await s.neftForBatch(getDb(), Number(req.params.id));

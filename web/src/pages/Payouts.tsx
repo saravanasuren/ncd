@@ -17,6 +17,11 @@ export function PayoutsPage() {
 
   const create = useMutation({ mutationFn: () => api.post('/api/payouts', { payout_date: date }), onSuccess: () => { setMsg('Sent to the approvals queue — a checker confirms it, which settles the period and resets interest.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); qc.invalidateQueries({ queryKey: ['payout-preview', date] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
   const markPaid = useMutation({ mutationFn: (batchId: number) => api.post(`/api/payouts/${batchId}/mark-paid`, {}), onSuccess: () => { setMsg('Sent to the approvals queue — a checker confirms the payment, which settles the period.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
+  const notifyWa = useMutation({
+    mutationFn: (batchId: number) => api.post<{ queued: number; skipped: number; sent: number }>(`/api/payouts/${batchId}/whatsapp-interest`, {}),
+    onSuccess: (r) => setMsg(`WhatsApp: ${r.sent} sent${r.queued > r.sent ? `, ${r.queued - r.sent} pending` : ''}${r.skipped ? `, ${r.skipped} skipped (no phone on file)` : ''}.`),
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
 
   const [stmt, setStmt] = useState('');
   const matchStmt = useMutation({
@@ -63,6 +68,11 @@ export function PayoutsPage() {
               <span className="inline-flex gap-2 justify-end">
                 <a href={`/api/payouts/${b.id}/download.xlsx`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ NEFT sheet</a>
                 {b.status === 'PendingChecker' && <span className="text-xs text-text-muted italic">awaiting checker</span>}
+                {b.status === 'Paid' && (
+                  <button disabled={notifyWa.isPending}
+                    onClick={() => { if (window.confirm(`Send an interest-credit WhatsApp to every customer paid in ${b.batch_no}? This can be a lot of messages.`)) { setMsg(''); notifyWa.mutate(b.id); } }}
+                    className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40">📲 Notify customers</button>
+                )}
               </span>
             ) },
         ];

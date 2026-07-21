@@ -243,28 +243,37 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
   }
 
   return (
-    <div className={card}>
-      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Relations & KYC</h2>
+    <>
       {msg && <div className="text-xs text-danger mb-2">{msg}</div>}
-      <div className="grid grid-cols-2 gap-4 text-sm">
-        <div>
-          <div className="flex items-center justify-between"><span className="font-semibold">Nominees</span>{can('customers:update') && <button onClick={addNominee} className="text-xs text-primary hover:underline">+ Add</button>}</div>
-          <ul className="mt-1 text-text-muted">{(data.nominees ?? []).map((n: any) => <li key={n.id}>{n.full_name} — {Number(n.share_pct) || 0}%</li>)}{!(data.nominees ?? []).length && <li>None</li>}</ul>
+
+      {/* Relations — nominees + joint holders */}
+      <div className={card}>
+        <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Relations</h2>
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <div className="flex items-center justify-between"><span className="font-semibold">Nominees</span>{can('customers:update') && <button onClick={addNominee} className="text-xs text-primary hover:underline">+ Add</button>}</div>
+            <ul className="mt-1 text-text-muted">{(data.nominees ?? []).map((n: any) => <li key={n.id}>{n.full_name} — {Number(n.share_pct) || 0}%</li>)}{!(data.nominees ?? []).length && <li>None</li>}</ul>
+          </div>
+          <div>
+            <div className="flex items-center justify-between"><span className="font-semibold">Joint holders</span>{can('customers:update') && <button onClick={addJoint} className="text-xs text-primary hover:underline">+ Add</button>}</div>
+            <ul className="mt-1 text-text-muted">{(data.jointHolders ?? []).map((h: any) => <li key={h.id}>{h.full_name}</li>)}{!(data.jointHolders ?? []).length && <li>None</li>}</ul>
+          </div>
         </div>
+      </div>
+
+      {/* KYC — documents + verification */}
+      <div className={card}>
+        <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">KYC</h2>
         <div>
-          <div className="flex items-center justify-between"><span className="font-semibold">Joint holders</span>{can('customers:update') && <button onClick={addJoint} className="text-xs text-primary hover:underline">+ Add</button>}</div>
-          <ul className="mt-1 text-text-muted">{(data.jointHolders ?? []).map((h: any) => <li key={h.id}>{h.full_name}</li>)}{!(data.jointHolders ?? []).length && <li>None</li>}</ul>
+          <div className="flex items-center justify-between"><span className="font-semibold text-sm">Documents</span>{can('customers:update') && <button onClick={uploadDoc} className="text-xs text-primary hover:underline">+ Upload</button>}</div>
+          <ul className="mt-1 text-text-muted text-sm">{(data.documents ?? []).map((d: any) => <li key={d.id}><a href={`/api/customers/${customerId}/documents/${d.id}`} target="_blank" rel="noreferrer" className="text-primary hover:underline">{d.doc_type} — {d.original_filename ?? d.id}</a> <span className="text-xs">({d.origin})</span></li>)}{!(data.documents ?? []).length && <li>None</li>}</ul>
+        </div>
+        <div className="flex gap-2 mt-4">
+          {can('kyc:verify') && <button onClick={() => wrap(api.post(`/api/customers/${customerId}/kyc/digilocker/start`).then(() => api.post(`/api/customers/${customerId}/kyc/digilocker/complete`)))} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">DigiLocker verify</button>}
+          {can('customers:deactivate') && !data.customer.is_deceased && <button onClick={() => { const d = window.prompt('Deceased date (YYYY-MM-DD)'); if (d) wrap(api.post(`/api/customers/${customerId}/deceased`, { deceased_date: d })); }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg text-danger">Mark deceased</button>}
         </div>
       </div>
-      <div className="mt-3">
-        <div className="flex items-center justify-between"><span className="font-semibold text-sm">Documents</span>{can('customers:update') && <button onClick={uploadDoc} className="text-xs text-primary hover:underline">+ Upload</button>}</div>
-        <ul className="mt-1 text-text-muted text-sm">{(data.documents ?? []).map((d: any) => <li key={d.id}><a href={`/api/customers/${customerId}/documents/${d.id}`} target="_blank" rel="noreferrer" className="text-primary hover:underline">{d.doc_type} — {d.original_filename ?? d.id}</a> <span className="text-xs">({d.origin})</span></li>)}{!(data.documents ?? []).length && <li>None</li>}</ul>
-      </div>
-      <div className="flex gap-2 mt-4">
-        {can('kyc:verify') && <button onClick={() => wrap(api.post(`/api/customers/${customerId}/kyc/digilocker/start`).then(() => api.post(`/api/customers/${customerId}/kyc/digilocker/complete`)))} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">DigiLocker verify</button>}
-        {can('customers:deactivate') && !data.customer.is_deceased && <button onClick={() => { const d = window.prompt('Deceased date (YYYY-MM-DD)'); if (d) wrap(api.post(`/api/customers/${customerId}/deceased`, { deceased_date: d })); }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg text-danger">Mark deceased</button>}
-      </div>
-    </div>
+    </>
   );
 }
 

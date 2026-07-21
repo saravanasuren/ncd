@@ -19,6 +19,7 @@ import type { RateSpec } from '../../lib/incentive.js';
 import { getSettingsMap } from '../settings/service.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
 import { createApprovalRequest, registerOnFinalApprove, registerOnReject, type ApprovalRow } from '../approvals/service.js';
+import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
 
 async function outstandingPrincipal(db: Db, applicationId: number): Promise<number> {
   return Number((await db.query<{ p: string }>(
@@ -220,6 +221,7 @@ registerOnFinalApprove('redemption', async (tx, req) => {
   await tx.query("UPDATE applications SET status = 'Redeemed', redemption_date = now(), updated_at = now() WHERE id = $1", [appId]);
   await tx.query("UPDATE application_lines SET status = 'Matured' WHERE application_id = $1 AND status = 'Active'", [appId]);
   await tx.query("UPDATE redemptions SET status = 'Approved' WHERE id = $1", [redId]);
+  await emitForApplication(tx, 'redemption.completed', appId, `red:${redId}`);
 });
 
 registerOnFinalApprove('premature_redemption', async (tx, req) => {
@@ -230,6 +232,7 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
   if (!app) return;
   assertTransition('application', app.status, 'Redeemed');
   await tx.query("UPDATE applications SET status = 'Redeemed', redemption_date = $1, updated_at = now() WHERE id = $2", [redDate, appId]);
+  await emitForApplication(tx, 'redemption.completed', appId, `red:${redId}`);
   await tx.query("UPDATE application_lines SET status = 'PrematureWithdrawn', outstanding_amount = 0 WHERE application_id = $1 AND status = 'Active'", [appId]);
   await tx.query("UPDATE disbursement_schedule SET status = 'Skipped' WHERE application_id = $1 AND status = 'Scheduled'", [appId]);
   const red = (await tx.query<{ principal: string; penalty: string; net_payment: string; broken_interest: string }>(

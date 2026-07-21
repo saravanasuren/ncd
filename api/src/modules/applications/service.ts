@@ -14,7 +14,8 @@ import { nextCode } from '../../lib/sequences.js';
 import { isTerminal } from '../../lib/statusMachine.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
 import { getSettingsMap } from '../settings/service.js';
-import { createApprovalRequest, registerOnFinalApprove } from '../approvals/service.js';
+import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
+import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
 
 const SCOPE_COLS = {
   userCol: 'a.enrolled_by_user_id',
@@ -85,6 +86,8 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
     );
     const appId = Number(rows[0]!.id);
     await addLine(tx, appId, scheme, input.amount);
+    // Tell LockerHub a subscription intent was created (contract event). No-op unless configured.
+    await emitForApplication(tx, 'subscription.created', appId);
     const subscriptionRequest = await createApprovalRequest(tx, { type: 'subscription', entityType: 'applications', entityId: appId, makerUserId: actor.id, metadata: { application_no: appNo } });
     await writeAudit(tx, { actorId: actor.id, action: 'application.create', entityType: 'applications', entityId: appId, after: { appNo, amount: input.amount, isNew } });
     return { id: appId, application_no: appNo, clubbed: false, subscription_request: subscriptionRequest };
@@ -99,6 +102,13 @@ registerOnFinalApprove('subscription', async (tx, req) => {
   const appId = Number(req.entity_id);
   const { activateApplication } = await import('./activate.js');
   await activateApplication(tx, appId, { confirmedByUserId: req.maker_user_id });
+});
+
+// A rejected subscription approval = the intent was cancelled. Emit-only (the
+// app lifecycle is unchanged here); no-op unless the event webhook is configured.
+registerOnReject('subscription', async (tx, req) => {
+  if (!req.entity_id) return;
+  await emitForApplication(tx, 'subscription.cancelled', Number(req.entity_id));
 });
 
 /**

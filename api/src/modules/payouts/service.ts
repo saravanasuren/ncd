@@ -13,6 +13,7 @@ import { computeTds } from '../../lib/tds.js';
 import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
 import { nextCode } from '../../lib/sequences.js';
 import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
+import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
 import { getSettingsMap } from '../settings/service.js';
 
 const DUE_TYPES = "('Interest','BrokenInterest')";
@@ -159,6 +160,11 @@ registerOnFinalApprove('interest_batch', async (tx, req) => {
     "UPDATE disbursement_schedule SET status = 'Paid', paid_at = $1, utr = COALESCE(utr, $2) WHERE batch_id = $3 AND status = 'Scheduled'",
     [batch?.payout_date ?? null, utr, batchId]);
   await tx.query("UPDATE payout_batches SET status = 'Paid' WHERE id = $1", [batchId]);
+  // Tell LockerHub each customer's interest was paid (contract event, one per
+  // application in the batch). No-op unless the event webhook is configured.
+  const paidApps = (await tx.query<{ application_id: string }>(
+    'SELECT DISTINCT application_id FROM disbursement_schedule WHERE batch_id = $1', [batchId])).rows;
+  for (const a of paidApps) await emitForApplication(tx, 'interest.paid', Number(a.application_id), `batch:${batchId}`);
 });
 
 // On REJECT of an interest batch: reverse the materialisation so the interest

@@ -49,6 +49,11 @@ const schema = z.object({
   // Agent-event webhooks fire ONLY when both URL + secret are set in SSM.
   LOCKERHUB_WEBHOOK_URL: z.string().optional(),
   LOCKERHUB_WEBHOOK_SECRET: z.string().optional(),
+  // Customer/subscription event webhook (NCD_INTEGRATION_CONTRACT.md). Fires
+  // ONLY when this URL is set; auth reuses the shared LOCKERHUB_INTEGRATION_KEY
+  // as an outbound X-Integration-Key. Contract target:
+  //   https://lockers.dhanamfinance.com/api/integration/wealth/webhook
+  LOCKERHUB_EVENT_WEBHOOK_URL: z.string().optional(),
   // Daily reconciliation cron runs ONLY when explicitly enabled.
   LOCKERHUB_RECONCILIATION_ENABLED: z.string().default('false'),
   LOCKERHUB_DB_PATH: z.string().default('/home/ubuntu/LockerHub/data/lockerhub.db'),

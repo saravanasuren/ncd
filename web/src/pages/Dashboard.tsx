@@ -422,7 +422,8 @@ function GroupRows({ g, open, onToggle }: { g: any; open: boolean; onToggle: () 
           <td className="py-1 pl-8 pr-3">{ch.customer} <span className="text-text-muted font-mono">{ch.application_no}</span></td>
           <td className="py-1 px-3 text-right text-text-muted">{ch.series_code}</td>
           <td className="py-1 px-3 text-right text-text-muted">{ch.status}</td>
-          <td className="py-1 pl-3 text-right mono">{formatINR(ch.amount)}</td>
+          {/* Outstanding column: 0 once redeemed (was wrongly showing the original amount). */}
+          <td className="py-1 pl-3 text-right mono">{formatINR(ch.outstanding ?? ch.amount)}</td>
         </tr>
       ))}
     </>

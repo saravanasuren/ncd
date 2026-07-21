@@ -563,12 +563,17 @@ export async function moneyInByChannel(db: Db, actor: AuthUser, filters: BookFil
  * user → staff; everything else (agents, Direct) → agent. staff+agent = total. */
 export async function moneyInBySource(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, { ...filters, status: 'active' });
-  const { rows } = await db.query<{ staff: string; agent: string }>(
+  const { rows } = await db.query<{ staff: string; agent: string; staff_investors: number; agent_investors: number }>(
     `SELECT COALESCE(sum(a.total_amount) FILTER (WHERE sref.full_name IS NOT NULL),0) AS staff,
-            COALESCE(sum(a.total_amount) FILTER (WHERE sref.full_name IS NULL),0) AS agent
+            COALESCE(sum(a.total_amount) FILTER (WHERE sref.full_name IS NULL),0) AS agent,
+            count(DISTINCT a.customer_id) FILTER (WHERE sref.full_name IS NOT NULL)::int AS staff_investors,
+            count(DISTINCT a.customer_id) FILTER (WHERE sref.full_name IS NULL)::int AS agent_investors
      ${FROM_ATTR} WHERE ${w.sql} AND a.date_money_received IS NOT NULL`, w.params);
   const r = rows[0]!;
-  return { staff: round2(Number(r.staff)), agent: round2(Number(r.agent)) };
+  return {
+    staff: round2(Number(r.staff)), agent: round2(Number(r.agent)),
+    staff_investors: Number(r.staff_investors), agent_investors: Number(r.agent_investors),
+  };
 }
 
 /** New-investment list for the window; optional channel = 'locker' | 'app'. */

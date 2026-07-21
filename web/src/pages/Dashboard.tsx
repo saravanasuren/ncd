@@ -119,9 +119,9 @@ export function Dashboard() {
                       sub={`${f.redemptions_of_series_count} redeemed · this series`}
                       onClick={() => pickWidget('redemptions-of-series', `Redemptions of ${selSeriesCode}`)} canDrill={canDrill} />
                   )}
-                  <Tile label="Staff-wise" value={formatINR(f.money_in_staff)} sub="New business by staff"
+                  <Tile label="Staff-wise" value={formatINR(f.money_in_staff)} sub={`${f.money_in_staff_investors} investors`}
                     onClick={() => pickWidget('staff', 'New business by staff (in range)')} canDrill={canDrill} />
-                  <Tile label="Agent-wise" value={formatINR(f.money_in_agent)} sub="New business by agent"
+                  <Tile label="Agent-wise" value={formatINR(f.money_in_agent)} sub={`${f.money_in_agent_investors} investors`}
                     onClick={() => pickWidget('agent', 'New business by agent (in range)')} canDrill={canDrill} />
                   {overview.data.rate_mix && (
                     <Tile label="Cost of funds" value={`${overview.data.rate_mix.weighted_avg_rate}%`}

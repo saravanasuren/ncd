@@ -33,7 +33,7 @@ const EMPTY = {
   // Personal
   full_name: '', father_name: '', occupation: '', dob: '', gender: '', pan: '', aadhaar: '',
   phone: '', phone_secondary: '', email: '', investor_category: '',
-  address: '', city: '', district: '', state: '', is_nri: false, referred_by_text: '',
+  address: '', pincode: '', city: '', district: '', state: '', is_nri: false, referred_by_text: '',
   // Demat
   depository: '', dp_id: '', client_id: '',
   // KYC
@@ -66,6 +66,26 @@ function readBase64(file: File): Promise<string> {
     r.onerror = () => reject(new Error('read failed'));
     r.readAsDataURL(file);
   });
+}
+
+/** Whole-year age from an ISO DOB, or null. Senior citizen = 60+. */
+function ageFromDob(dob: string): number | null {
+  if (!dob) return null;
+  const d = new Date(dob + 'T00:00:00');
+  if (isNaN(d.getTime())) return null;
+  const now = new Date();
+  let a = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) a--;
+  return a >= 0 && a < 130 ? a : null;
+}
+
+/** Depository from a DP ID: NSDL DP IDs start with "IN"; CDSL are 8-digit numeric. */
+function depositoryFromDpId(dp: string): string {
+  const v = dp.trim().toUpperCase();
+  if (v.startsWith('IN')) return 'NSDL';
+  if (/^\d{8}$/.test(v)) return 'CDSL';
+  return '';
 }
 
 function Field({ label, required, hint, children }: { label: string; required?: boolean; hint?: string; children: ReactNode }) {
@@ -103,8 +123,55 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
   const [err, setErr] = useState('');
   const [dup, setDup] = useState<{ id: number; customer_code: string; full_name: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pinState, setPinState] = useState<'idle' | 'looking' | 'ok' | 'miss'>('idle');
+  const [ifscState, setIfscState] = useState<'idle' | 'looking' | 'ok' | 'miss'>('idle');
+  const [penny, setPenny] = useState<{ status: string; name?: string | null; detail?: string } | null>(null);
+  const [pennyBusy, setPennyBusy] = useState(false);
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
   const setFile = (k: DocKey, file: File | null) => setFiles((prev) => ({ ...prev, [k]: file }));
+
+  // PIN → city/state autofill (India Post). Non-blocking: a miss leaves the
+  // fields editable. Fires when the PIN reaches 6 digits.
+  async function onPincode(v: string) {
+    const pin = v.replace(/\D/g, '').slice(0, 6);
+    set({ pincode: pin });
+    if (pin.length !== 6) { setPinState('idle'); return; }
+    setPinState('looking');
+    try {
+      const r = await api.get<{ found: boolean; state?: string; city?: string }>(`/api/lookups/pincode/${pin}`);
+      if (r.found) { set({ state: r.state ?? '', city: r.city ?? '', district: r.city ?? '' }); setPinState('ok'); }
+      else setPinState('miss');
+    } catch { setPinState('miss'); }
+  }
+
+  // IFSC → bank/branch autofill (debounced), mirroring the bank-account form.
+  useEffect(() => {
+    const code = f.ifsc.trim().toUpperCase();
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(code)) { setIfscState('idle'); return; }
+    let cancelled = false;
+    setIfscState('looking');
+    const t = setTimeout(async () => {
+      try {
+        const r = await api.get<{ found: boolean; bank?: string; branch?: string; city?: string }>(`/api/lookups/ifsc/${code}`);
+        if (cancelled) return;
+        if (r.found) { set({ bank_name: r.bank ?? '', branch_name: r.branch ?? '', branch_city: r.city ?? '' }); setIfscState('ok'); }
+        else setIfscState('miss');
+      } catch { if (!cancelled) setIfscState('miss'); }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [f.ifsc]);
+
+  async function runPennyDrop() {
+    setPenny(null); setPennyBusy(true);
+    try {
+      const r = await api.post<{ status: string; name_on_record: string | null; detail: string }>('/api/lookups/penny-drop', {
+        account_number: f.account_number.trim(), ifsc: f.ifsc.trim().toUpperCase(), name: f.bank_holder_name.trim() || undefined,
+      });
+      setPenny({ status: r.status, name: r.name_on_record, detail: r.detail });
+      if (r.status === 'Verified' && r.name_on_record && !f.bank_holder_name.trim()) set({ bank_holder_name: r.name_on_record });
+    } catch (e) { setPenny({ status: 'Failed', detail: e instanceof ApiError ? e.message : 'Verification failed' }); }
+    finally { setPennyBusy(false); }
+  }
 
   // Debounced autosave of the text fields (Google-Sheets-style) so an accidental
   // close never loses typed data; cleared on a successful save or "Start fresh".
@@ -129,7 +196,7 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
     const personal: Record<string, unknown> = { full_name: f.full_name.trim(), is_nri: f.is_nri, tds_applicable: f.tds !== 'no' };
     const put = (k: string, v: string) => { if (v.trim()) personal[k] = v.trim(); };
     put('pan', f.pan); put('dob', f.dob); put('gender', f.gender); put('phone', f.phone);
-    put('email', f.email); put('address', f.address); put('city', f.city); put('district', f.district); put('state', f.state);
+    put('email', f.email); put('address', f.address); put('pincode', f.pincode); put('city', f.city); put('district', f.district); put('state', f.state);
     put('referred_by_text', f.referred_by_text); put('father_name', f.father_name); put('occupation', f.occupation);
     put('phone_secondary', f.phone_secondary); put('investor_category', f.investor_category); put('ckyc_number', f.ckyc_number);
     if (f.aadhaar.replace(/\D/g, '').length >= 4) personal.aadhaar_last4 = f.aadhaar.replace(/\D/g, '').slice(-4);
@@ -215,6 +282,14 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
               <Field label="Father's name"><input className={inp} value={f.father_name} onChange={(e) => set({ father_name: e.target.value })} /></Field>
               <Field label="Occupation" hint="e.g. Salaried, Business, Retired"><input className={inp} value={f.occupation} onChange={(e) => set({ occupation: e.target.value })} /></Field>
               <Field label="Date of birth"><input className={inp} type="date" value={f.dob} onChange={(e) => set({ dob: e.target.value })} /></Field>
+              <Field label="Age / category" hint="Auto from DOB; senior citizen = 60+ (drives TDS filing category)">
+                <div className={`${inp} flex items-center gap-2 bg-bg`}>
+                  {ageFromDob(f.dob) != null ? (<>
+                    <span className="font-semibold">{ageFromDob(f.dob)} yrs</span>
+                    <span className={`text-[11px] rounded px-1.5 py-0.5 ${ageFromDob(f.dob)! >= 60 ? 'bg-[color:var(--warn-bg)] text-warn' : 'bg-border text-text-muted'}`}>{ageFromDob(f.dob)! >= 60 ? 'Senior citizen' : 'General'}</span>
+                  </>) : <span className="text-text-muted">—</span>}
+                </div>
+              </Field>
               <Field label="Gender"><select className={inp} value={f.gender} onChange={(e) => set({ gender: e.target.value })}><option value="">—</option>{GENDERS.map((g) => <option key={g}>{g}</option>)}</select></Field>
               <Field label="PAN"><input className={`${inp} uppercase`} placeholder="ABCDE1234F" value={f.pan} onChange={(e) => set({ pan: e.target.value.toUpperCase() })} /></Field>
               <Field label="Aadhaar (12 digits)" hint="Only the last 4 digits are stored (UIDAI)."><input className={inp} inputMode="numeric" maxLength={12} placeholder="Full 12-digit Aadhaar" value={f.aadhaar} onChange={(e) => set({ aadhaar: e.target.value.replace(/\D/g, '') })} /></Field>
@@ -223,6 +298,9 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
               <Field label="Email"><input className={inp} type="email" value={f.email} onChange={(e) => set({ email: e.target.value })} /></Field>
               <Field label="Investor category"><select className={inp} value={f.investor_category} onChange={(e) => set({ investor_category: e.target.value })}><option value="">—</option>{CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select></Field>
               <div className="sm:col-span-2"><Field label="Address"><input className={inp} value={f.address} onChange={(e) => set({ address: e.target.value })} /></Field></div>
+              <Field label="Pincode" hint={pinState === 'looking' ? 'Looking up…' : pinState === 'ok' ? '✓ City/State filled — edit if needed' : pinState === 'miss' ? 'Not found — enter city/state manually' : 'Auto-fills city & state'}>
+                <input className={inp} inputMode="numeric" maxLength={6} placeholder="6-digit PIN" value={f.pincode} onChange={(e) => onPincode(e.target.value)} />
+              </Field>
               <Field label="City"><input className={inp} value={f.city} onChange={(e) => set({ city: e.target.value })} /></Field>
               <Field label="District"><input className={inp} value={f.district} onChange={(e) => set({ district: e.target.value })} /></Field>
               <Field label="State"><input className={inp} value={f.state} onChange={(e) => set({ state: e.target.value })} /></Field>
@@ -236,7 +314,7 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
               <p className="sm:col-span-2 text-xs text-text-muted -mb-1">DP ID and Client ID are 8 characters each (NSDL/CDSL standard). Optional at this stage.</p>
               <Field label="Depository"><select className={inp} value={f.depository} onChange={(e) => set({ depository: e.target.value })}><option value="">—</option>{DEPOSITORIES.map((d) => <option key={d}>{d}</option>)}</select></Field>
               <div />
-              <Field label="DP ID (8 chars)"><input className={`${inp} uppercase`} placeholder="e.g. IN300456" value={f.dp_id} onChange={(e) => set({ dp_id: e.target.value.toUpperCase() })} /></Field>
+              <Field label="DP ID (8 chars)" hint="NSDL starts with IN; 8-digit numeric = CDSL — depository auto-fills"><input className={`${inp} uppercase`} placeholder="e.g. IN300456" value={f.dp_id} onChange={(e) => { const v = e.target.value.toUpperCase(); const dep = depositoryFromDpId(v); set(dep ? { dp_id: v, depository: dep } : { dp_id: v }); }} /></Field>
               <Field label="Client ID (8 chars)"><input className={inp} placeholder="e.g. 12345678" value={f.client_id} onChange={(e) => set({ client_id: e.target.value })} /></Field>
               <div className="sm:col-span-2"><FilePick label="CML copy" hint="Client Master List from depository — PDF or image scan" file={files.cml} onPick={(x) => setFile('cml', x)} /></div>
             </div>
@@ -270,10 +348,23 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
                   </div>
                 </Field>
               </div>
-              <Field label="IFSC"><input className={`${inp} uppercase`} placeholder="e.g. SBIN0001234" value={f.ifsc} onChange={(e) => set({ ifsc: e.target.value.toUpperCase() })} /></Field>
+              <Field label="IFSC" hint={ifscState === 'looking' ? 'Looking up…' : ifscState === 'ok' ? '✓ Bank/branch filled' : ifscState === 'miss' ? 'Not found — enter bank/branch manually' : 'Auto-fills bank & branch'}><input className={`${inp} uppercase`} placeholder="e.g. SBIN0001234" value={f.ifsc} onChange={(e) => set({ ifsc: e.target.value.toUpperCase() })} /></Field>
               <Field label="Bank name"><input className={inp} value={f.bank_name} onChange={(e) => set({ bank_name: e.target.value })} /></Field>
               <Field label="Branch name"><input className={inp} value={f.branch_name} onChange={(e) => set({ branch_name: e.target.value })} /></Field>
               <Field label="Branch city"><input className={inp} value={f.branch_city} onChange={(e) => set({ branch_city: e.target.value })} /></Field>
+              <div className="sm:col-span-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button type="button" disabled={pennyBusy || f.account_number.trim().length < 4 || !/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/.test(f.ifsc.trim())}
+                    onClick={runPennyDrop} className="text-xs border border-border-strong rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40">
+                    {pennyBusy ? 'Verifying…' : '⛃ Penny-drop verify'}
+                  </button>
+                  {penny && (
+                    <span className={`text-xs rounded px-2 py-0.5 ${penny.status === 'Verified' ? 'bg-[color:var(--success-bg)] text-success' : 'bg-[color:var(--danger-bg)] text-danger'}`}>
+                      {penny.status === 'Verified' ? `✓ Verified${penny.name ? ' — ' + penny.name : ''}` : `✗ ${penny.detail ?? 'Not verified'}`}
+                    </span>
+                  )}
+                </div>
+              </div>
               <div className="sm:col-span-2"><FilePick label="Cheque / passbook image" hint="Shows account number + IFSC + name" file={files.bank_proof} onPick={(x) => setFile('bank_proof', x)} /></div>
             </div>
           )}

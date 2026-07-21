@@ -49,6 +49,7 @@ export interface CreateCustomerInput {
   investor_category?: string;
   ckyc_number?: string;
   tds_applicable?: boolean;
+  pincode?: string;
 }
 
 export async function createCustomer(db: Db, actor: AuthUser, input: CreateCustomerInput): Promise<{ id: number; customer_code: string }> {
@@ -82,14 +83,14 @@ export async function createCustomer(db: Db, actor: AuthUser, input: CreateCusto
       // investment — where the approver reviews the customer profile + the
       // investment together.
       `INSERT INTO customers (customer_code, full_name, pan, dob, gender, phone, email, address, city, district, state, is_nri, referred_by_text,
-        father_name, occupation, aadhaar_last4, aadhaar, phone_secondary, investor_category, ckyc_number, tds_applicable,
+        father_name, occupation, aadhaar_last4, aadhaar, phone_secondary, investor_category, ckyc_number, tds_applicable, pincode,
         creation_status, enrolled_by_user_id, enrolled_by_agent_id, branch_id, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,'Approved',$22,$23,$24,TRUE) RETURNING id`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,'Approved',$23,$24,$25,TRUE) RETURNING id`,
       [code, input.full_name, input.pan ?? null, input.dob ?? null, input.gender ?? null, input.phone ?? null,
        input.email ?? null, input.address ?? null, input.city ?? null, input.district ?? null, input.state ?? null,
        input.is_nri ?? false, input.referred_by_text ?? null,
        input.father_name ?? null, input.occupation ?? null, aadhaar4, aadhaarFull, input.phone_secondary ?? null,
-       input.investor_category ?? null, input.ckyc_number ?? null, input.tds_applicable ?? true,
+       input.investor_category ?? null, input.ckyc_number ?? null, input.tds_applicable ?? true, input.pincode ?? null,
        actor.id, actor.agentId, branchId]
     );
     const id = Number(rows[0]!.id);

@@ -83,7 +83,11 @@ export async function revertSeriesAllotment(db: Db, actor: AuthUser, seriesId: n
 
 registerOnFinalApprove('allotment_batch', async (tx, req) => {
   const seriesId = Number(req.metadata.series_id);
+  // The approver may override the maker's date at approval time (incl. a past
+  // date) — it's merged into metadata by approve(). Allotment is a data-neutral
+  // stamp (no schedule/maturity recompute), so a backdated date is safe.
   const allotmentDate = String(req.metadata.allotment_date);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(allotmentDate)) throw errors.badRequest('Invalid allotment date (expected YYYY-MM-DD)');
   const isin = (req.metadata.isin as string | null) ?? null;
   const batchId = req.metadata.batch_id ? Number(req.metadata.batch_id) : null;
 

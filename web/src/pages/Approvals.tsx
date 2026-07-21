@@ -41,11 +41,17 @@ function Detail({ id, canAct, selfApproval, actionLabel, onDone }: { id: number;
       detail: { subject: string; amount: number | null; facts: Array<{ label: string; value: string }> };
       editable: Editable | null }>(`/api/approvals/${id}`),
   });
+  // Allotment date is editable at approval time (backdatable). null = "use the
+  // maker's date" until the approver changes it.
+  const [allotDateOverride, setAllotDateOverride] = useState<string | null>(null);
   if (isLoading) return <div className="text-xs text-text-muted px-4 pb-3">Loading detail…</div>;
   const r = data?.request ?? {};
   const covered = data?.covered ?? null;
   const facts = data?.detail?.facts ?? [];
   const total = (covered ?? []).reduce((s, c) => s + Number(c.amount), 0);
+  const isAllotment = String(r.request_type ?? '') === 'allotment_batch';
+  const metaAllotDate = String((r.metadata as Record<string, unknown> | undefined)?.allotment_date ?? '').slice(0, 10);
+  const allotDate = allotDateOverride ?? metaAllotDate;
   return (
     <div className="px-4 pb-4">
       {covered && (
@@ -97,9 +103,18 @@ function Detail({ id, canAct, selfApproval, actionLabel, onDone }: { id: number;
           ))}
         </dl>
       )}
+      {isAllotment && canAct && (
+        <div className="mb-2 bg-bg rounded p-3">
+          <label className="block text-xs font-semibold text-text-label mb-1">Allotment date</label>
+          <input type="date" value={allotDate} onChange={(e) => setAllotDateOverride(e.target.value)}
+            className="px-2 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary" />
+          <p className="text-[11px] text-text-muted mt-1">You can set a past date — e.g. the date the series was actually allotted.</p>
+        </div>
+      )}
       {data?.editable
         ? <EditableInvestment ed={data.editable} id={id} canAct={canAct} selfApproval={selfApproval} actionLabel={actionLabel} onDone={onDone} />
-        : canAct && <ConfirmApproval id={id} label={actionLabel} selfApproval={selfApproval} onDone={onDone} />}
+        : canAct && <ConfirmApproval id={id} label={actionLabel} selfApproval={selfApproval}
+            extraFields={isAllotment ? { allotment_date: allotDate } : undefined} onDone={onDone} />}
     </div>
   );
 }
@@ -407,14 +422,20 @@ function SelfApprovalReason({ value, onChange }: { value: string; onChange: (v: 
   );
 }
 
-/** Two-step confirm for requests that have no editable investment form. */
-function ConfirmApproval({ id, label, selfApproval, onDone }: { id: number; label: string; selfApproval?: boolean; onDone: () => void }) {
+/** Two-step confirm for requests that have no editable investment form.
+ * `extraFields` are merged into the approve payload (e.g. an overridden
+ * allotment date). */
+function ConfirmApproval({ id, label, selfApproval, extraFields, onDone }: { id: number; label: string; selfApproval?: boolean; extraFields?: Record<string, unknown>; onDone: () => void }) {
   const qc = useQueryClient();
   const [err, setErr] = useState('');
   const [selfReason, setSelfReason] = useState('');
   const blocked = !!selfApproval && selfReason.trim().length < 3;
   const go = useMutation({
-    mutationFn: () => api.post(`/api/approvals/${id}/approve`, selfApproval ? { extra: { self_approval_reason: selfReason.trim() } } : {}),
+    mutationFn: () => {
+      const extra: Record<string, unknown> = { ...(extraFields ?? {}) };
+      if (selfApproval) extra.self_approval_reason = selfReason.trim();
+      return api.post(`/api/approvals/${id}/approve`, Object.keys(extra).length ? { extra } : {});
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['approval', id] }); onDone(); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to approve'),
   });

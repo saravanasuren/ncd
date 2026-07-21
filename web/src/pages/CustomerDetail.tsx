@@ -295,7 +295,8 @@ function NewInvestment({ customerId }: { customerId: number }) {
       <div className="flex flex-wrap gap-2 items-center">
         <select className={sel} value={seriesId} onChange={(e) => { setSeriesId(e.target.value); setClubWith(''); }}>
           <option value="">Series…</option>
-          {(series.data?.rows ?? []).map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
+          {/* Only an OPEN series can take a new investment (closed/allotted are locked). */}
+          {(series.data?.rows ?? []).filter((s) => s.status === 'Open').map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
         </select>
         <select className={sel} value={schemeId} onChange={(e) => setSchemeId(e.target.value)}>
           <option value="">Scheme…</option>

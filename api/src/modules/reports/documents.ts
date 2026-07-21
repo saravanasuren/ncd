@@ -70,16 +70,23 @@ export async function allotmentLetterPdf(db: Db, applicationId: number): Promise
 }
 
 /** TDS register for a month (YYYY-MM) — one row per TDS-bearing payout. */
+// Citizen category as of the payout date, derived from DOB (auto — no manual
+// entry). Senior citizen = 60+ (§194A: higher exemption limit + Form 15H, vs
+// 15G for general). Kept in SQL so it can never drift from the customer's DOB.
+const CATEGORY_SQL = "CASE WHEN c.dob IS NOT NULL AND EXTRACT(YEAR FROM age(ds.due_date, c.dob)) >= 60 THEN 'Senior' ELSE 'General' END";
+const formFor = (category: unknown) => (category === 'Senior' ? '15H' : '15G');
+
 export async function tdsReport(db: Db, yyyymm: string): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet(`TDS ${yyyymm}`);
-  ws.addRow(['Customer', 'PAN', 'Application', 'Due date', 'Gross', 'TDS', 'Net']).eachCell((c) => { c.font = { bold: true }; });
+  ws.addRow(['Customer', 'PAN', 'Category', 'Form', 'Application', 'Due date', 'Gross', 'TDS', 'Net']).eachCell((c) => { c.font = { bold: true }; });
   const rows = (await db.query<Record<string, unknown>>(
-    `SELECT c.full_name, c.pan, a.application_no, ds.due_date, ds.gross_amount, ds.tds_amount, ds.net_amount
+    `SELECT c.full_name, c.pan, a.application_no, ds.due_date, ds.gross_amount, ds.tds_amount, ds.net_amount,
+            ${CATEGORY_SQL} AS category
      FROM disbursement_schedule ds JOIN applications a ON a.id = ds.application_id JOIN customers c ON c.id = a.customer_id
      WHERE ds.tds_amount > 0 AND to_char(ds.due_date,'YYYY-MM') = $1 ORDER BY c.full_name`, [yyyymm])).rows;
-  for (const r of rows) ws.addRow([r.full_name, r.pan, r.application_no, r.due_date, Number(r.gross_amount), Number(r.tds_amount), Number(r.net_amount)]);
-  [5, 6, 7].forEach((i) => { ws.getColumn(i).numFmt = '#,##,##0.00'; });
+  for (const r of rows) ws.addRow([r.full_name, r.pan, r.category, formFor(r.category), r.application_no, r.due_date, Number(r.gross_amount), Number(r.tds_amount), Number(r.net_amount)]);
+  [7, 8, 9].forEach((i) => { ws.getColumn(i).numFmt = '#,##,##0.00'; });
   ws.columns.forEach((c) => { c.width = 18; });
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
@@ -109,11 +116,12 @@ export async function tds26q(db: Db, quarter: string): Promise<Buffer> {
     'Date of payment/credit', 'Amount paid/credited', 'TDS', 'Surcharge', 'Health & Edu Cess',
     'Total tax deducted', 'Total tax deposited', 'Date of deduction', 'Rate (%)',
     'Reason for non/lower deduction', 'Section code', 'Date of deposit', 'Challan / BSR ref',
+    'Deductee category', 'Form (15G/15H)', // trailing info — auto from DOB, for filing prep
   ];
   ws.addRow(HEADERS).eachCell((c) => { c.font = { bold: true }; });
 
   const rows = (await db.query<Record<string, unknown>>(
-    `SELECT c.full_name, c.pan, ds.due_date, ds.gross_amount, ds.tds_amount
+    `SELECT c.full_name, c.pan, ds.due_date, ds.gross_amount, ds.tds_amount, ${CATEGORY_SQL} AS category
        FROM disbursement_schedule ds JOIN applications a ON a.id = ds.application_id JOIN customers c ON c.id = a.customer_id
       WHERE ds.tds_amount > 0 AND ds.due_date >= $1::date AND ds.due_date <= $2::date
       ORDER BY c.full_name, ds.due_date`, [start, end])).rows;
@@ -142,6 +150,8 @@ export async function tds26q(db: Db, quarter: string): Promise<Buffer> {
       '194A',
       '',                          // date of deposit (challan) — filled at filing
       '',                          // challan/BSR — filled at filing
+      r.category,                  // deductee category (auto from DOB)
+      formFor(r.category),         // 15H (senior) / 15G (general)
     ]);
   }
   [6, 7, 8, 9, 10, 11].forEach((i) => { ws.getColumn(i).numFmt = '#,##,##0.00'; });

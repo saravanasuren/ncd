@@ -42,6 +42,10 @@ export interface SignRequestResult {
 /** A PDF to be signed — the filled application form (base64). */
 export interface SignDocument { fileName: string; contentBase64: string; }
 
+/** Where the sole/1st-applicant signature goes: PDF bottom-left coordinates +
+ *  1-indexed page (from the application-form renderer). */
+export interface SignaturePlacement { box: { llx: number; lly: number; urx: number; ury: number }; page: number; }
+
 /** Normalise an Indian mobile to Digio's required +91XXXXXXXXXX. Bare 10-digit
  * numbers get dropped on the SMS channel, so the sign link never arrives
  * (a real Digio gotcha carried over from the wealth adapter). */
@@ -58,7 +62,7 @@ function normalisePhone(phone?: string | null): string | undefined {
  *
  * Payload validated against live Digio 2026-07-21, matched to the wealth
  * adapter's production config. */
-export async function createSignRequest(input: { signerEmail?: string; signerPhone?: string; signerName?: string; document?: SignDocument }): Promise<SignRequestResult> {
+export async function createSignRequest(input: { signerEmail?: string; signerPhone?: string; signerName?: string; document?: SignDocument; signature?: SignaturePlacement }): Promise<SignRequestResult> {
   const phone = normalisePhone(input.signerPhone);
   // Phone-first identifier so the link goes by SMS (Dhanam's customer base);
   // email + phone as separate fields so Digio delivers on BOTH channels.
@@ -77,10 +81,15 @@ export async function createSignRequest(input: { signerEmail?: string; signerPho
     send_sign_link: true,
     generate_access_token: true,
     include_authentication_url: 'true',
-    // No display_on_page: without sign_coordinates Digio rejects 'custom', and
-    // 'all' stamps every page — let Digio default to last-page placement.
   };
   if (input.document) { body.file_name = input.document.fileName; body.file_data = input.document.contentBase64; }
+  // Place the eSignature in the form's 1st-applicant box. 'custom' is only valid
+  // WITH sign_coordinates (Digio rejects it otherwise); without a box Digio
+  // defaults to last-page placement (no display_on_page).
+  if (input.signature) {
+    body.display_on_page = 'custom';
+    body.sign_coordinates = { [identifier]: { [String(input.signature.page)]: [input.signature.box] } };
+  }
   const r = await call('POST', '/v2/client/document/uploadpdf', body);
   // Digio may return the signer link at signing_parties[0].authentication_url;
   // usually it's delivered to the signer directly (notify + send_sign_link).

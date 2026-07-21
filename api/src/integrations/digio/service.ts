@@ -7,7 +7,7 @@ import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
-import { createSignRequest, fetchStatus, isSignedStatus, digioConfigured } from './index.js';
+import { createSignRequest, fetchStatus, isSignedStatus, digioConfigured, type SignaturePlacement } from './index.js';
 
 /** Start a signing session for an application; returns the sign URL. */
 export async function initiateSigning(db: Db, actor: AuthUser, applicationId: number): Promise<{ sign_url: string | null; digio_request_id: string; stub: boolean }> {
@@ -18,14 +18,16 @@ export async function initiateSigning(db: Db, actor: AuthUser, applicationId: nu
   // can't be produced, still start the session (eSign is off the critical path)
   // and log the degraded path rather than failing the request.
   let document: { fileName: string; contentBase64: string } | undefined;
+  let signature: SignaturePlacement | undefined;
   try {
-    const { applicationFormPdf } = await import('../../modules/reports/documents.js');
-    const pdf = await applicationFormPdf(db, applicationId);
-    document = { fileName: `application-${applicationId}.pdf`, contentBase64: pdf.toString('base64') };
+    const { applicationFormPdf } = await import('../../modules/reports/forms/application-form.js');
+    const form = await applicationFormPdf(db, applicationId);
+    document = { fileName: `application-${applicationId}.pdf`, contentBase64: form.buffer.toString('base64') };
+    if (form.signatureBox) signature = { box: form.signatureBox, page: form.signaturePage };
   } catch (e) {
     console.warn(`[digio] application-form PDF unavailable for app ${applicationId}; initiating without a document: ${(e as Error).message}`);
   }
-  const req = await createSignRequest({ signerEmail: c?.email ?? undefined, signerPhone: c?.phone ?? undefined, signerName: c?.full_name, document });
+  const req = await createSignRequest({ signerEmail: c?.email ?? undefined, signerPhone: c?.phone ?? undefined, signerName: c?.full_name, document, signature });
   await db.query(
     `INSERT INTO digio_signing_sessions (application_id, digio_request_id, sign_url, signer_email, signer_phone, status, created_by_user_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7)

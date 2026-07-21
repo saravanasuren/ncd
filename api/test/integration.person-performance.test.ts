@@ -45,6 +45,19 @@ describe('enroller performance (staff/agent detail)', () => {
     expect(r.json.incentives).toHaveProperty('balance');
   });
 
+  it('counts investments migrated with no enroller of their own (via the customer’s enroller)', async () => {
+    const staff = await as('staff@demo.local');
+    const cust = await staff.post('/api/customers', { full_name: 'Migrated Cust', phone: '9770000002' });
+    const app = await staff.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000, date_money_received: '2026-07-12' });
+    // Simulate a wealth-migrated investment: enroller stripped from the app,
+    // kept only on the customer (real prod state for imported investments).
+    await ctx.db.query('UPDATE applications SET enrolled_by_user_id = NULL, enrolled_by_agent_id = NULL WHERE id = $1', [app.json.id]);
+
+    const r = await (await admin()).get(`/api/dashboard/person/staff/${staffId}`);
+    expect(r.status).toBe(200);
+    expect(r.json.investments.some((x: any) => x.id === app.json.id)).toBe(true); // still attributed
+  });
+
   it('is management-only — a branch staff cannot open it', async () => {
     const staff = await as('staff@demo.local');
     expect((await staff.get(`/api/dashboard/person/staff/${staffId}`)).status).toBe(403);

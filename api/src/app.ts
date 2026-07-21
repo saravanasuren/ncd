@@ -19,6 +19,7 @@ import { usersRouter } from './modules/users/routes.js';
 import { productsRouter } from './modules/products/routes.js';
 import { leadsRouter } from './modules/leads/routes.js';
 import { customersRouter } from './modules/customers/routes.js';
+import { lookupsRouter } from './modules/lookups/routes.js';
 import { approvalsRouter } from './modules/approvals/routes.js';
 import { applicationsRouter } from './modules/applications/routes.js';
 import { agentsRouter } from './modules/agents/routes.js';
@@ -92,6 +93,7 @@ export function createApp(): Express {
   app.use('/api/users', usersRouter);
   app.use('/api/leads', leadsRouter);
   app.use('/api/customers', customersRouter);
+  app.use('/api/lookups', lookupsRouter);
   app.use('/api/approvals', approvalsRouter);
   app.use('/api/applications', applicationsRouter);
   app.use('/api/agents', agentsRouter);

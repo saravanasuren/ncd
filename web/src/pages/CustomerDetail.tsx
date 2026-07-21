@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { formatINR } from '@new-wealth/shared';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -10,7 +10,6 @@ export function CustomerDetailPage() {
   const { id } = useParams();
   const qc = useQueryClient();
   const { can } = useAuth();
-  const [bank, setBank] = useState({ account_number: '', ifsc: '' });
   const [msg, setMsg] = useState('');
   const [panel, setPanel] = useState<'correction' | 'handover' | null>(null);
   const [corr, setCorr] = useState<Record<string, string>>({});
@@ -28,8 +27,6 @@ export function CustomerDetailPage() {
 
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
   const wrap = (p: Promise<unknown>) => p.then(() => { setMsg(''); invalidate(); }).catch((e) => setMsg(e instanceof ApiError ? e.message : 'Failed'));
-
-  const addBank = useMutation({ mutationFn: () => api.post(`/api/customers/${id}/bank-accounts`, bank), onSuccess: () => { setBank({ account_number: '', ifsc: '' }); invalidate(); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
 
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Customer not found or out of scope.</div>;
@@ -125,28 +122,13 @@ export function CustomerDetailPage() {
 
       <div className={card}>
         <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Bank accounts</h2>
-        <div className="divide-y divide-border">
-          {data.bankAccounts.map((b: any) => (
-            <div key={b.id} className="py-2 flex items-center gap-3 text-sm">
-              <span className="font-mono">{b.account_number}</span>
-              <span className="text-text-muted">{b.ifsc}</span>
-              <span className={`text-xs rounded px-1.5 py-0.5 ${b.penny_drop_status === 'Verified' ? 'bg-[color:var(--success-bg)] text-success' : 'bg-[color:var(--danger-bg)] text-danger'}`}>{b.penny_drop_status}</span>
-              {b.is_active && <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--primary-ring)] text-primary">Active</span>}
-              {!b.is_active && b.penny_drop_status === 'Verified' && can('customers:update') && (
-                <button onClick={() => wrap(api.post(`/api/customers/${id}/bank-accounts/${b.id}/set-active`))} className="text-xs text-primary hover:underline ml-auto">Make active</button>
-              )}
-            </div>
-          ))}
-          {data.bankAccounts.length === 0 && <div className="py-2 text-text-muted text-sm">No bank accounts yet.</div>}
-        </div>
-        {can('customers:update') && (
-          <div className="flex gap-2 items-center mt-3">
-            <input className={inp} placeholder="Account number" value={bank.account_number} onChange={(e) => setBank({ ...bank, account_number: e.target.value })} />
-            <input className={inp} placeholder="IFSC" value={bank.ifsc} onChange={(e) => setBank({ ...bank, ifsc: e.target.value })} />
-            <button disabled={bank.account_number.length < 4 || bank.ifsc.length < 4 || addBank.isPending} onClick={() => addBank.mutate()}
-              className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">+ Add & verify</button>
-          </div>
-        )}
+        <BankAccounts
+          customerId={Number(id)}
+          accounts={data.bankAccounts}
+          canEdit={can('customers:update')}
+          onChange={invalidate}
+          onError={setMsg}
+        />
       </div>
 
       <RelationsKyc customerId={Number(id)} data={data} onChange={invalidate} can={can} />
@@ -338,4 +320,102 @@ function NewInvestment({ customerId }: { customerId: number }) {
 
 function Field({ label, value }: { label: string; value: unknown }) {
   return (<><dt className="text-text-muted">{label}</dt><dd className="font-medium">{value ? String(value) : '—'}</dd></>);
+}
+
+/**
+ * Bank accounts: list + add. Name and account number are typed; entering a
+ * valid IFSC auto-fills the bank and branch from the directory lookup
+ * (/api/lookups/ifsc). Penny-drop verification happens on the server via
+ * kycProvider() when the account is added.
+ */
+function BankAccounts({ customerId, accounts, canEdit, onChange, onError }: {
+  customerId: number; accounts: any[]; canEdit: boolean; onChange: () => void; onError: (m: string) => void;
+}) {
+  const empty = { holder_name: '', account_number: '', ifsc: '', bank_name: '', branch_name: '', branch_city: '' };
+  const [f, setF] = useState(empty);
+  const [ifscState, setIfscState] = useState<'idle' | 'looking' | 'found' | 'notfound'>('idle');
+  const set = (k: keyof typeof f, v: string) => setF((s) => ({ ...s, [k]: v }));
+  const ifscValid = /^[A-Z]{4}0[A-Z0-9]{6}$/.test(f.ifsc.trim().toUpperCase());
+
+  // Debounced IFSC → bank/branch lookup. Non-blocking: on miss/error the user
+  // can still add the account (bank/branch just stay whatever was typed/blank).
+  useEffect(() => {
+    const code = f.ifsc.trim().toUpperCase();
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(code)) { setIfscState('idle'); return; }
+    let cancelled = false;
+    setIfscState('looking');
+    const t = setTimeout(async () => {
+      try {
+        const r = await api.get<any>(`/api/lookups/ifsc/${code}`);
+        if (cancelled) return;
+        if (r.found) {
+          setF((s) => ({ ...s, bank_name: r.bank, branch_name: r.branch, branch_city: r.city }));
+          setIfscState('found');
+        } else {
+          setF((s) => ({ ...s, bank_name: '', branch_name: '', branch_city: '' }));
+          setIfscState('notfound');
+        }
+      } catch { if (!cancelled) setIfscState('notfound'); }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [f.ifsc]);
+
+  const add = useMutation({
+    mutationFn: () => api.post(`/api/customers/${customerId}/bank-accounts`, {
+      ...f, ifsc: f.ifsc.trim().toUpperCase(), holder_name: f.holder_name.trim() || undefined,
+    }),
+    onSuccess: () => { setF(empty); setIfscState('idle'); onChange(); },
+    onError: (e) => onError(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const wrapSet = (p: Promise<unknown>) => p.then(onChange).catch((e) => onError(e instanceof ApiError ? e.message : 'Failed'));
+  const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
+
+  return (
+    <>
+      <div className="divide-y divide-border">
+        {accounts.map((b: any) => (
+          <div key={b.id} className="py-2.5 flex items-center gap-3 text-sm flex-wrap">
+            <div className="min-w-0">
+              {b.holder_name && <div className="font-medium truncate">{b.holder_name}</div>}
+              <div className="flex items-center gap-2">
+                <span className="font-mono">{b.account_number}</span>
+                <span className="text-text-muted">{b.ifsc}</span>
+              </div>
+              {(b.bank_name || b.branch_name) && (
+                <div className="text-xs text-text-muted">
+                  {[b.bank_name, b.branch_name, b.branch_city].filter(Boolean).join(' · ')}
+                </div>
+              )}
+            </div>
+            <span className={`text-xs rounded px-1.5 py-0.5 ${b.penny_drop_status === 'Verified' ? 'bg-[color:var(--success-bg)] text-success' : b.penny_drop_status === 'Failed' ? 'bg-[color:var(--danger-bg)] text-danger' : 'bg-bg text-text-muted'}`}>{b.penny_drop_status}</span>
+            {b.is_active && <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--primary-ring)] text-primary">Active</span>}
+            {!b.is_active && b.penny_drop_status === 'Verified' && canEdit && (
+              <button onClick={() => wrapSet(api.post(`/api/customers/${customerId}/bank-accounts/${b.id}/set-active`))} className="text-xs text-primary hover:underline ml-auto">Make active</button>
+            )}
+          </div>
+        ))}
+        {accounts.length === 0 && <div className="py-2 text-text-muted text-sm">No bank accounts yet.</div>}
+      </div>
+
+      {canEdit && (
+        <div className="mt-3">
+          <div className="flex gap-2 items-start flex-wrap">
+            <input className={inp} placeholder="Account holder name" value={f.holder_name} onChange={(e) => set('holder_name', e.target.value)} />
+            <input className={inp} placeholder="Account number" value={f.account_number} onChange={(e) => set('account_number', e.target.value.replace(/\s/g, ''))} />
+            <input className={`${inp} uppercase`} placeholder="IFSC" value={f.ifsc} maxLength={11}
+              onChange={(e) => set('ifsc', e.target.value.toUpperCase().replace(/\s/g, ''))} />
+            <button disabled={f.account_number.length < 4 || !ifscValid || add.isPending} onClick={() => add.mutate()}
+              className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">+ Add &amp; verify</button>
+          </div>
+          <div className="text-xs mt-1.5 min-h-[1rem]">
+            {ifscState === 'looking' && <span className="text-text-muted">Looking up IFSC…</span>}
+            {ifscState === 'found' && (
+              <span className="text-success">🏦 {[f.bank_name, f.branch_name, f.branch_city].filter(Boolean).join(' · ')}</span>
+            )}
+            {ifscState === 'notfound' && ifscValid && <span className="text-text-muted">IFSC not found in the directory — you can still add the account.</span>}
+          </div>
+        </div>
+      )}
+    </>
+  );
 }

@@ -60,26 +60,27 @@ describe('segments — branch / channel tabs, redeemed children, search', () => 
     expect(withDate.allotment_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
-  it('Locker Hub tab = locker deposits (any source) + lockerhub-sourced', async () => {
+  it('Locker Hub tab = locker deposits (matches the Dashboard tile)', async () => {
     const a = await admin();
     const r = await a.get('/api/reports/segments/lockerhub');
     const g = r.json.groups.find((x: any) => x.key === 'NCD-SEG');
     expect(g).toBeTruthy();
     const apps = g.children.map((c: any) => c.application_no);
-    expect(apps).toContain('APP-SEG-1');       // source = lockerhub
-    expect(apps).toContain('APP-SEG-3');       // a locker deposit (grouped by purpose)
-    expect(apps).not.toContain('APP-SEG-2');   // dhanamfin, not a locker deposit
-    expect(Number(g.outstanding)).toBe(700000); // APP-SEG-1 + APP-SEG-3 active
+    expect(apps).toContain('APP-SEG-3');       // the locker deposit
+    expect(apps).not.toContain('APP-SEG-1');   // lockerhub-sourced NCD, not a deposit
+    expect(apps).not.toContain('APP-SEG-2');   // dhanamfin-sourced NCD
+    expect(Number(g.outstanding)).toBe(200000); // APP-SEG-3 active
   });
 
-  it('Dhanamfin tab = dhanamfin-sourced, non-locker (incl. redeemed)', async () => {
+  it('Dhanamfin App tab = app-sourced NCDs, non-locker (matches the Dashboard tile)', async () => {
     const a = await admin();
     const r = await a.get('/api/reports/segments/dhanamfin');
     const g = r.json.groups.find((x: any) => x.key === 'NCD-SEG');
     expect(g).toBeTruthy();
-    expect(Number(g.outstanding)).toBe(0);     // only APP-SEG-2, which is redeemed
-    const apps = g.children.map((c: any) => c.application_no);
-    expect(apps).toEqual(['APP-SEG-2']);       // APP-SEG-3 is a locker deposit → under Locker Hub
+    // APP-SEG-1 (lockerhub) active ₹5L + APP-SEG-2 (dhanamfin) redeemed ₹0.
+    expect(Number(g.outstanding)).toBe(500000);
+    const apps = g.children.map((c: any) => c.application_no).sort();
+    expect(apps).toEqual(['APP-SEG-1', 'APP-SEG-2']); // APP-SEG-3 is a deposit → Locker Hub
   });
 
   it('Locker-deposit drill carries the branch column', async () => {

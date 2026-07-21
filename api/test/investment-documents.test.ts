@@ -51,6 +51,16 @@ describe('investment document generators', () => {
     expect(isPdf(r.buffer)).toBe(true);
   });
 
+  it('the application-form generator returns a signature box for Digio placement', async () => {
+    const { applicationFormPdf } = await import('../src/modules/reports/forms/application-form.js');
+    const r = await applicationFormPdf(ctx.db, appId);
+    expect(r.buffer.subarray(0, 4).toString('latin1')).toBe('%PDF');
+    expect(r.signaturePage).toBeGreaterThanOrEqual(1);
+    expect(r.signatureBox).not.toBeNull();
+    expect(r.signatureBox!.urx).toBeGreaterThan(r.signatureBox!.llx);
+    expect(r.signatureBox!.ury).toBeGreaterThan(r.signatureBox!.lly);
+  });
+
   it('both endpoints require authentication', async () => {
     const anon = new Client(ctx.base);
     expect((await anon.raw(`/api/reports/application-form/${appId}.pdf`)).status).toBe(401);

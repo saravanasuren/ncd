@@ -24,6 +24,10 @@ export const errors = {
   conflict: (msg: string, detail?: unknown) => new AppError('CONFLICT', 409, msg, detail),
   unprocessable: (msg: string, detail?: unknown) =>
     new AppError('UNPROCESSABLE', 422, msg, detail),
+  unavailable: (msg = 'Service unavailable') => new AppError('UNAVAILABLE', 503, msg),
+  // Pass an upstream (e.g. LockerHub) status + body straight through to the caller.
+  upstream: (status: number, msg: string, detail?: unknown) =>
+    new AppError('UPSTREAM', status >= 400 && status < 600 ? status : 502, msg, detail),
 };
 
 export interface ErrorEnvelope {

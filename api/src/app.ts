@@ -32,6 +32,7 @@ import { reportsRouter } from './modules/reports/routes.js';
 import { portalRouter } from './modules/portal/routes.js';
 import { integrationRouter } from './modules/integration/routes.js';
 import { myRouter, agentLeadsRouter } from './modules/integration/my.js';
+import { lockersRouter } from './modules/lockers/routes.js';
 import { webhooksRouter } from './modules/webhooks/routes.js';
 import { eventsRouter } from './modules/events/routes.js';
 import { statementsRouter } from './modules/statements/routes.js';
@@ -106,6 +107,7 @@ export function createApp(): Express {
   app.use('/api/payouts', payoutsRouter);
   app.use('/api/bank-statements', statementsRouter);
   app.use('/api/redemptions', redemptionsRouter);
+  app.use('/api/lockers', lockersRouter);
   app.use('/api/ncd-events', eventsRouter);
   app.use('/api/incentives', incentivesRouter);
   app.use('/api/dashboard', dashboardRouter);

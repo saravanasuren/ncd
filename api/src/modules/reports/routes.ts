@@ -56,7 +56,7 @@ reportsRouter.get('/bond/:applicationId.pdf', requirePermission('customers:read'
   asyncHandler(async (req, res) => {
     const { assertApplicationVisible } = await import('../../lib/visibility.js');
     await assertApplicationVisible(getDb(), req.user!, Number(req.params.applicationId));
-    const { bondCertificatePdf } = await import('./documents.js');
+    const { bondCertificatePdf } = await import('./forms/bond.js');
     const buf = await bondCertificatePdf(getDb(), Number(req.params.applicationId));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="bond-${req.params.applicationId}.pdf"`);
@@ -86,8 +86,8 @@ reportsRouter.get('/application-form/:applicationId.pdf', requirePermission('cus
   asyncHandler(async (req, res) => {
     const { assertApplicationVisible } = await import('../../lib/visibility.js');
     await assertApplicationVisible(getDb(), req.user!, Number(req.params.applicationId));
-    const { applicationFormPdf } = await import('./documents.js');
-    const buf = await applicationFormPdf(getDb(), Number(req.params.applicationId));
+    const { applicationFormBuffer } = await import('./forms/application-form.js');
+    const buf = await applicationFormBuffer(getDb(), Number(req.params.applicationId));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="application-form-${req.params.applicationId}.pdf"`);
     res.end(buf);

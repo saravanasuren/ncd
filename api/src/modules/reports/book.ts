@@ -32,6 +32,9 @@ function appWhere(actor: AuthUser, filters: BookFilters, extra: string[] = []): 
   const params: unknown[] = [];
   const sc = scopeWhere(scopeFor(actor), APP_SCOPE, 0);
   conds.push(sc.sql); params.push(...sc.params);
+  // Archived (super-admin soft-deleted) investments never count in the book,
+  // dashboard or reports — they are hidden until unarchived or purged.
+  conds.push('a.archived_at IS NULL');
   if (filters.status === 'active') conds.push(`a.status IN (${OUTSTANDING_SQL_LIST})`);
   else if (filters.status === 'redeemed') conds.push("a.status = 'Redeemed'");
   if (filters.seriesIds?.length) { params.push(filters.seriesIds); conds.push(`a.series_id = ANY($${params.length})`); }

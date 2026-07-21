@@ -105,14 +105,14 @@ export function Dashboard() {
                     primary onClick={() => pickWidget('series', `${activeSeries?.code ?? 'Active series'} — investments`, activeSeries?.series_id)} canDrill={canDrill && !!activeSeries} />
                   <Tile label="Outstanding book" value={formatINR(k.outstanding_book)} sub={`${k.active_investors} investors`}
                     onClick={() => pickWidget('outstanding', 'Outstanding book — by series')} canDrill={canDrill} />
-                  <Tile label="New investments" value={formatINR(f.money_in)} sub={`${f.new_investments} in range`}
+                  <Tile label="New investments" value={formatINR(f.money_in)} sub={`${f.new_investments} investors`}
                     onClick={() => pickWidget('new-investments', 'New investments in range')} canDrill={canDrill} />
-                  <Tile label="Locker deposits" value={formatINR(f.money_in_locker)} sub="Money in · locker"
+                  <Tile label="Locker deposits" value={formatINR(f.money_in_locker)} sub="Deposits through lockers"
                     onClick={() => pickWidget('locker', 'Locker deposits in range')} canDrill={canDrill} />
-                  <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub="Money in · app"
+                  <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub="Deposits through Mobile App"
                     onClick={() => pickWidget('app', 'DhanamFin app investments in range')} canDrill={canDrill} />
                   <Tile label={selSeriesCode ? 'Redeemed in window' : 'Redemptions'} value={formatINR(f.redemptions_total)}
-                    sub={selSeriesCode ? `${f.redemptions_count} redeemed · ${winLabel ?? selSeriesCode} window` : `${f.redemptions_count} in range`}
+                    sub={selSeriesCode ? `${f.redemptions_count} redeemed · ${winLabel ?? selSeriesCode} window` : `${f.redemptions_count} investors`}
                     onClick={() => pickWidget('redemptions', selSeriesCode ? `Redeemed during ${selSeriesCode} window${winLabel ? ` (${winLabel})` : ''}` : 'Redemptions in range')} canDrill={canDrill} />
                   {selSeriesCode && f.redemptions_of_series_total != null && (
                     <Tile label={`Redemptions of ${selSeriesCode}`} value={formatINR(f.redemptions_of_series_total)}

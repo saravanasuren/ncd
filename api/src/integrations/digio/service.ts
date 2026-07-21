@@ -49,6 +49,17 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
       [sess.id, opts.signedAt ?? null, opts.signedDocumentUrl ?? null, JSON.stringify(opts.payload ?? {})]);
     // eSign is off the critical path — just stamp esigned_at if not already set.
     await tx.query('UPDATE applications SET esigned_at = COALESCE(esigned_at, now()) WHERE id = $1', [sess.application_id]);
+    // Generate + store the Bond certificate right after eSign (owner spec).
+    // Defensive — a PDF hiccup must not fail the signing webhook.
+    try {
+      const { bondCertificatePdf } = await import('../../modules/reports/forms/bond.js');
+      const { saveBuffer } = await import('../../lib/storage.js');
+      const pdf = await bondCertificatePdf(tx, Number(sess.application_id));
+      const { path } = saveBuffer('bonds', `bond-${sess.application_id}.pdf`, pdf);
+      await tx.query('UPDATE applications SET bond_pdf_path = $1, bond_generated_at = now() WHERE id = $2', [path, sess.application_id]);
+    } catch (e) {
+      console.warn(`[documents] bond generation failed for app ${sess.application_id}: ${(e as Error).message}`);
+    }
     await writeAudit(tx, { actorId: null, action: 'esign.complete', entityType: 'applications', entityId: Number(sess.application_id), after: { digioRequestId } });
     return { ok: true, applicationId: Number(sess.application_id) };
   });

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
@@ -6,10 +6,16 @@ import { ReferredByPicker } from './ReferredByPicker.js';
 
 /**
  * Staff customer-enrolment wizard (modal). Mirrors the old app's 6-section
- * flow — Personal · Demat · KYC docs · Bank · Nominee · Review. Everything is
- * collected in memory and persisted on "Save and exit" / "Submit for approval":
- * create the customer → demat → KYC docs → bank account → nominee → (submit).
- * No draft is written until the user saves, so Back/Next never duplicates rows.
+ * flow — Personal · Demat · KYC docs · Bank · Nominee · Review. Fields are
+ * persisted to the customer (create → demat → KYC docs → bank → nominee →
+ * submit) only on "Save and exit" / "Submit for approval", so Back/Next never
+ * duplicates rows.
+ *
+ * Google-Sheets-style safety net: as you type, the text fields autosave to the
+ * browser (localStorage, debounced) and are restored if the modal is closed or
+ * reopened — so a stray outside-click no longer loses your work. Clearing
+ * happens on a successful save/submit or via "Start fresh". (File picks can't
+ * be persisted by the browser, so only those re-attach after a full close.)
  */
 
 const GENDERS = ['Male', 'Female', 'Other'];
@@ -40,6 +46,17 @@ const EMPTY = {
 };
 type Form = typeof EMPTY;
 type DocKey = 'pan_card' | 'aadhaar_card' | 'customer_photo' | 'customer_signature' | 'address_proof' | 'cml' | 'bank_proof';
+
+// Autosave the in-progress enrolment to the browser so an accidental close /
+// navigation never loses typed data. Files aren't serialisable, so only text
+// fields survive a full close.
+const DRAFT_KEY = 'ncd:enroll-draft-v1';
+function loadDraft(): { f?: Partial<Form>; step?: number } | null {
+  try { const s = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); return s && s.f ? s : null; } catch { return null; }
+}
+function isDirty(f: Form): boolean {
+  return (Object.keys(EMPTY) as Array<keyof Form>).some((k) => f[k] !== EMPTY[k]);
+}
 
 function readBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -76,8 +93,9 @@ function FilePick({ label, hint, file, onPick }: { label: string; hint?: string;
 export function CustomerWizard({ onClose }: { onClose: () => void }) {
   const nav = useNavigate();
   const qc = useQueryClient();
-  const [step, setStep] = useState(0);
-  const [f, setF] = useState<Form>(EMPTY);
+  const [step, setStep] = useState<number>(() => loadDraft()?.step ?? 0);
+  const [f, setF] = useState<Form>(() => { const d = loadDraft(); return d?.f ? { ...EMPTY, ...d.f } : EMPTY; });
+  const [restored, setRestored] = useState<boolean>(() => !!loadDraft());
   const [files, setFiles] = useState<Record<DocKey, File | null>>({
     pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null,
   });
@@ -86,6 +104,25 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
   const setFile = (k: DocKey, file: File | null) => setFiles((prev) => ({ ...prev, [k]: file }));
+
+  // Debounced autosave of the text fields (Google-Sheets-style) so an accidental
+  // close never loses typed data; cleared on a successful save or "Start fresh".
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        if (isDirty(f)) localStorage.setItem(DRAFT_KEY, JSON.stringify({ f, step }));
+        else localStorage.removeItem(DRAFT_KEY);
+      } catch { /* storage disabled / quota — best-effort */ }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [f, step]);
+
+  const clearDraft = () => { try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } };
+  const startFresh = () => {
+    clearDraft();
+    setF(EMPTY); setStep(0); setRestored(false); setErr(''); setDup(null);
+    setFiles({ pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null });
+  };
 
   async function persist(submit: boolean): Promise<number> {
     const personal: Record<string, unknown> = { full_name: f.full_name.trim(), is_nri: f.is_nri, tds_applicable: f.tds !== 'no' };
@@ -130,6 +167,7 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
     setErr(''); setDup(null); setBusy(true);
     try {
       const id = await persist(submit);
+      clearDraft(); // saved server-side now — drop the local autosave
       qc.invalidateQueries({ queryKey: ['customers'] });
       onClose();
       nav(`/app/customers/${id}`);
@@ -140,13 +178,22 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
     } finally { setBusy(false); }
   }
 
+  // Backdrop does NOT close on click — a stray outside-click must never discard
+  // an in-progress enrolment. Close via ✕ / Cancel (the draft autosaves anyway).
   return (
-    <div className="fixed inset-0 z-40 bg-black/40 flex items-start justify-center overflow-y-auto py-6 px-4" onClick={onClose}>
-      <div className="bg-surface border border-border rounded-lg shadow-lg w-full max-w-3xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-40 bg-black/40 flex items-start justify-center overflow-y-auto py-6 px-4">
+      <div className="bg-surface border border-border rounded-lg shadow-lg w-full max-w-3xl">
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border sticky top-0 bg-surface z-10">
           <h2 className="text-base font-bold m-0">Enroll customer</h2>
           <button onClick={onClose} className="text-text-muted hover:text-text text-lg leading-none" aria-label="Close">✕</button>
         </div>
+
+        {restored && (
+          <div className="flex items-center justify-between gap-2 px-5 py-2 border-b border-border bg-[color:var(--success-bg,#f0fdf4)] text-xs">
+            <span className="text-text-muted">↩ Resumed your unsaved draft — it autosaves as you type.</span>
+            <button onClick={startFresh} className="text-primary hover:underline font-medium whitespace-nowrap">Start fresh</button>
+          </div>
+        )}
 
         {/* Step strip */}
         <div className="flex flex-wrap gap-1 px-5 py-3 border-b border-border bg-bg/50">

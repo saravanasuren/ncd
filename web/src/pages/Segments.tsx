@@ -19,7 +19,7 @@ const TAB_KEYS = TABS.map((t) => t.key);
 
 interface Child {
   application_no: string; customer_id: number; customer: string; customer_code: string;
-  series_code: string; amount: string; status: string; allotment_date: string | null;
+  series_code: string; amount: string; outstanding: string; redeemed: string; status: string; allotment_date: string | null;
 }
 interface Group {
   key: string; label: string; sublabel: string | null; district: string | null; sourced_by: string | null;
@@ -240,7 +240,8 @@ function groupColumns(tab: Seg, expanded: Set<string>, toggle: (k: string) => vo
 }
 
 function ChildTable({ tab, rows, onPickCustomer }: { tab: Seg; rows: Child[]; onPickCustomer: (c: Child) => void }) {
-  // Per-tab detail columns (besides Amount, always last, right-aligned).
+  // Per-tab detail columns (besides Redeemed + Outstanding, always last two,
+  // right-aligned).
   const cols: [string, keyof Child][] =
     tab === 'customer' ? [['Series', 'series_code'], ['App no.', 'application_no'], ['Status', 'status'], ['Allotted', 'allotment_date']]
     : (tab === 'series' || tab === 'lockerhub' || tab === 'dhanamfin') ? [['Customer', 'customer'], ['App no.', 'application_no'], ['Status', 'status'], ['Allotted', 'allotment_date']]
@@ -251,7 +252,8 @@ function ChildTable({ tab, rows, onPickCustomer }: { tab: Seg; rows: Child[]; on
         <thead>
           <tr className="text-left text-text-muted">
             {cols.map(([h]) => <th key={h} className="py-1 pr-4 font-medium">{h}</th>)}
-            <th className="py-1 text-right font-medium">Amount</th>
+            <th className="py-1 pr-4 text-right font-medium">Redeemed</th>
+            <th className="py-1 text-right font-medium">Outstanding</th>
           </tr>
         </thead>
         <tbody>
@@ -269,10 +271,11 @@ function ChildTable({ tab, rows, onPickCustomer }: { tab: Seg; rows: Child[]; on
                     : (r[k] ?? '—')}
                 </td>
               ))}
-              <td className="py-1 text-right mono">{formatINR(r.amount)}</td>
+              <td className="py-1 pr-4 text-right mono">{Number(r.redeemed) > 0 ? <span className="text-danger">{formatINR(r.redeemed)}</span> : <span className="text-text-muted">—</span>}</td>
+              <td className="py-1 text-right mono">{formatINR(r.outstanding)}</td>
             </tr>
           ))}
-          {rows.length === 0 && <tr><td colSpan={cols.length + 1} className="py-2 text-center text-text-muted">No investments.</td></tr>}
+          {rows.length === 0 && <tr><td colSpan={cols.length + 2} className="py-2 text-center text-text-muted">No investments.</td></tr>}
         </tbody>
       </table>
     </div>

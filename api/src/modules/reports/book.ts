@@ -339,7 +339,9 @@ export interface SegmentChild {
   customer: string;
   customer_code: string;
   series_code: string;
-  amount: number;
+  amount: number;       // legacy: live outstanding (active) or original (exited)
+  outstanding: number;  // current live outstanding — 0 once exited
+  redeemed: number;     // amount redeemed/exited — 0 while live
   status: string;
   allotment_date: string | null;
 }
@@ -433,10 +435,16 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
       g.outstanding = round2(g.outstanding + Number(r.amount));
       custSets.get(key)!.add(r.customer_code);
     }
+    // A child is either outstanding (live money) or exited (redeemed). AMT is the
+    // live outstanding for active apps and the original amount for exited ones,
+    // so split it into the two columns by status.
+    const live = outstandingStatus.has(r.status);
+    const amt = round2(Number(r.amount));
     g.children.push({
       application_no: r.application_no, customer_id: Number(r.customer_id), customer: r.customer, customer_code: r.customer_code,
-      series_code: r.series_code, amount: round2(Number(r.amount)), status: r.status,
-      allotment_date: toISODate(r.allotment_date ?? null),
+      series_code: r.series_code, amount: amt,
+      outstanding: live ? amt : 0, redeemed: live ? 0 : amt,
+      status: r.status, allotment_date: toISODate(r.allotment_date ?? null),
     });
   }
   for (const [key, g] of groups) g.investors = custSets.get(key)!.size;

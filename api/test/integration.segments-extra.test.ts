@@ -54,7 +54,15 @@ describe('segments — branch / channel tabs, redeemed children, search', () => 
     expect(g).toBeTruthy();
     expect(Number(g.outstanding)).toBe(700000);                       // active only
     expect(Number(g.redeemed)).toBe(300000);                          // register redeemed column
-    expect(g.children.some((c: any) => c.status === 'Redeemed')).toBe(true);
+    // A redeemed child shows its amount under redeemed (outstanding 0); an active
+    // child the reverse — so each row's columns reconcile with the group.
+    const redeemedChild = g.children.find((c: any) => c.status === 'Redeemed');
+    expect(redeemedChild).toBeTruthy();
+    expect(Number(redeemedChild.redeemed)).toBe(300000);
+    expect(Number(redeemedChild.outstanding)).toBe(0);
+    const activeChild = g.children.find((c: any) => c.status === 'Active');
+    expect(Number(activeChild.outstanding)).toBeGreaterThan(0);
+    expect(Number(activeChild.redeemed)).toBe(0);
     // allotment date is a clean ISO string, not a timestamp
     const withDate = g.children.find((c: any) => c.allotment_date);
     expect(withDate.allotment_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);

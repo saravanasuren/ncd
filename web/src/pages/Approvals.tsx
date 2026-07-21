@@ -81,8 +81,14 @@ function Detail({ id, canAct, selfApproval, actionLabel, onDone }: { id: number;
           )}
         </div>
       )}
-      {facts.length > 0 && (
+      {(facts.length > 0 || covered) && (
         <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-xs bg-bg rounded p-3 mb-2">
+          {covered && (
+            <span className="contents">
+              <dt className="text-text-muted">Total amount</dt>
+              <dd className="m-0 font-semibold break-words mono">{formatINR(total)}</dd>
+            </span>
+          )}
           {facts.map((f) => (
             <span key={f.label} className="contents">
               <dt className="text-text-muted">{f.label}</dt>

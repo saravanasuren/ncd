@@ -51,6 +51,12 @@ async function startCrons(): Promise<void> {
     void dispatchPending(getDb()).catch((e) => console.warn('[cron] agent-event dispatch:', (e as Error).message));
   }, 30_000).unref();
 
+  // Customer/subscription event webhook — no-op unless LOCKERHUB_EVENT_WEBHOOK_URL is set.
+  const { dispatchPendingCustomerEvents } = await import('./integrations/lockerhub/customerEvents.js');
+  setInterval(() => {
+    void dispatchPendingCustomerEvents(getDb()).catch((e) => console.warn('[cron] customer-event dispatch:', (e as Error).message));
+  }, 30_000).unref();
+
   // Daily book-summary email (docs/00 §12) — once per IST day after 18:00 IST.
   const { runBookSummary } = await import('./integrations/book-summary.js');
   setInterval(() => {

@@ -25,6 +25,7 @@ import { kycProvider } from '../../integrations/kyc/index.js';
 import { getSettingsMap } from '../settings/service.js';
 import { createApprovalRequest } from '../approvals/service.js';
 import { enqueue } from '../notifications/service.js';
+import { emitCustomerEvent, emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
 import {
   customerFacingStatus, iso, maskPhone, normalisePhone, openSeriesDefaults,
   pad, phoneMatchSql,
@@ -311,6 +312,17 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
         console.warn('[LH-KYC-DOC] save failed (non-fatal):', (e as Error).message);
       }
     }
+  }
+
+  // Tell LockerHub the profile synced (contract event) — only on a real create
+  // or field change, keyed so identical re-syncs collapse. No-op unless configured.
+  if (result.created || updatedFields.length) {
+    await emitCustomerEvent(db, {
+      eventType: 'customer.synced',
+      phone,
+      data: { customer_code: result.customerCode, created: result.created },
+      dedupKey: `${result.customerId}:${result.created ? 'created' : [...updatedFields].sort().join('+')}`,
+    });
   }
 
   res.json({
@@ -754,6 +766,10 @@ async function landFundedApplication(db: Db, b: LandInput): Promise<{ appId: num
       after: { application_no: appNo, lockerhub_intent_no: b.intentNo, amount: b.amount, paid_at: b.paidAt, ...b.auditExtra },
       ip: b.ip,
     });
+
+    // Acknowledge the settled payment to LockerHub (contract event). No-op
+    // unless configured. subscription.activated fires separately from activate().
+    await emitForApplication(tx, 'payment.acknowledged', appId, `pay:${b.intentNo}`);
 
     return { appId, appNo, customerId };
   });

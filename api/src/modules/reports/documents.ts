@@ -94,42 +94,6 @@ export async function allotmentLetterPdf(db: Db, applicationId: number): Promise
   });
 }
 
-/** Acknowledgement of funds received against a subscription. Available once the
- * money-received details are captured; does NOT assert allotment (that's the
- * bond certificate / allotment letter). */
-export async function acknowledgmentPdf(db: Db, applicationId: number): Promise<Buffer> {
-  const a = (await db.query<Record<string, unknown>>(
-    `SELECT a.application_no, a.total_amount, a.amount_received, a.date_money_received,
-            a.collection_method, a.collection_reference,
-            c.full_name, c.customer_code, c.pan, s.code AS series_code, s.name AS series_name, s.isin
-       FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
-      WHERE a.id = $1`, [applicationId])).rows[0];
-  if (!a) throw errors.notFound('Application not found');
-  const lines = (await db.query<Record<string, unknown>>(
-    `SELECT al.amount, al.coupon_rate_pct, al.tenure_months, al.payout_frequency, sch.name AS scheme_name
-       FROM application_lines al LEFT JOIN schemes sch ON sch.id = al.scheme_id
-      WHERE al.application_id = $1 ORDER BY al.id`, [applicationId])).rows;
-  const received = Number(a.amount_received ?? a.total_amount);
-  return renderPdf((doc) => {
-    letterhead(doc, 'Acknowledgement of Investment', `${a.full_name} · ${a.customer_code}`);
-    doc.fontSize(10).font('Helvetica');
-    doc.text(`Dear ${a.full_name},`);
-    doc.moveDown(0.4);
-    doc.text(`We gratefully acknowledge receipt of your investment towards the Non-Convertible Debentures issued by Dhanam Investment and Finance Private Limited, against application ${a.application_no}.`, { width: 500 });
-    doc.moveDown(0.6).font('Helvetica-Bold').text('Payment received').font('Helvetica').fontSize(9);
-    doc.text(`Amount received: ${inrPdf(received)}`);
-    if (a.collection_method) doc.text(`Payment mode: ${a.collection_method}${a.collection_reference ? `   ·   Ref: ${a.collection_reference}` : ''}`);
-    doc.text(`Date of receipt: ${toISODate(a.date_money_received as string | Date | null) ?? '—'}`);
-    doc.moveDown(0.6).fontSize(10).font('Helvetica-Bold').text('Investment').font('Helvetica').fontSize(9);
-    doc.text(`Series: ${a.series_name} (${a.series_code})${a.isin ? `   ·   ISIN ${a.isin}` : ''}`);
-    doc.text(`PAN: ${a.pan ?? '—'}`);
-    for (const l of lines) doc.text(`${l.scheme_name ?? '—'}   ${inrPdf(Number(l.amount))}   ${Number(l.coupon_rate_pct)}% p.a.   ${l.tenure_months} months   ${l.payout_frequency}`);
-    if (!lines.length) doc.fillColor('#6b7380').text('—').fillColor('#1a1d23');
-    doc.moveDown(1).fontSize(8.5).fillColor('#6b7380').text('This is a computer-generated acknowledgement of funds received and does not by itself constitute allotment of debentures. Allotment and the debenture certificate follow as per the terms of the issue.', { width: 500 });
-    doc.moveDown(1).fillColor('#1a1d23').fontSize(9).font('Helvetica-Bold').text('For Dhanam Investment and Finance Private Limited');
-  });
-}
-
 /** Filled subscription application form — the applicant, investment, payment,
  * demat, bank and nominee details captured at enrolment, as a printable PDF. */
 export async function applicationFormPdf(db: Db, applicationId: number): Promise<Buffer> {

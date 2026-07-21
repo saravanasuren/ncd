@@ -449,3 +449,82 @@ describe('agent endpoints', () => {
     expect(unknown.status).toBe(404);
   });
 });
+
+// Integration-contract conformance (NCD_INTEGRATION_CONTRACT.md v1.0) — the
+// exact field NAMES LockerHub's spec sends/expects, added additively alongside
+// the existing native fields so neither reader breaks.
+describe('contract conformance — field aliases', () => {
+  it('B5 holdings expose rate / nominee / next_payout', async () => {
+    const r = await integ('GET', `/api/integration/customers/${customerId}/holdings`);
+    expect(r.status).toBe(200);
+    const h = r.json.holdings[0];
+    expect(h).toHaveProperty('rate');
+    expect(h.rate).toBe(h.coupon_rate_pct);
+    expect(h.nominee).toBe('Facade Nominee');
+    expect(h).toHaveProperty('next_payout');
+    expect(h.next_payout).toBe(h.next_payout_date);
+  });
+
+  it('B9 series/active expose flat scheme_id / coupon_rate_pct / min_amount', async () => {
+    const r = await integ('GET', '/api/integration/series/active');
+    expect(r.status).toBe(200);
+    const s = r.json.series[0];
+    expect(s).toHaveProperty('scheme_id');
+    expect(s).toHaveProperty('coupon_rate_pct');
+    expect(s).toHaveProperty('min_amount');
+    // headline flat rate mirrors the first (highest) scheme
+    expect(s.coupon_rate_pct).toBe(s.schemes[0].coupon_rate_pct);
+    expect(s.min_amount).toBe(s.schemes[0].min_amount);
+  });
+
+  it('B16 stats/ncd-aum expose aum (rupees) + investors', async () => {
+    const r = await integ('GET', '/api/integration/stats/ncd-aum');
+    expect(r.status).toBe(200);
+    expect(typeof r.json.aum).toBe('number');
+    expect(typeof r.json.investors).toBe('number');
+    expect(r.json.investors).toBe(r.json.customers_total);
+  });
+
+  it('B17 ncd/match exposes flat ncd_id / holder_name / amount', async () => {
+    const r = await integ('GET', `/api/integration/ncd/match?pan=AAAPF1111F&amount=400000`);
+    expect(r.status).toBe(200);
+    expect(r.json.found).toBe(true);
+    expect(r.json.ncd_id).toBe(r.json.candidates[0].ncd_id);
+    expect(r.json.holder_name).toBe('Facade Customer');
+    expect(r.json.amount).toBe(400000);
+  });
+
+  it('B12 subscription-request accepts `amount` and returns subscription_id', async () => {
+    const r = await integ('POST', '/api/integration/subscription-request', {
+      customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 250000,
+      lockerhub_application_no: 'LH-CONF-B12',
+    });
+    expect(r.status).toBe(200);
+    expect(r.json.success).toBe(true);
+    expect(r.json.subscription_id).toBeTruthy();
+  });
+
+  it('B13 subscription-payments accept the contract key `intent_no`', async () => {
+    const body = {
+      intent_no: 'CONF-B13-001', phone: '9899000111', customer_name: 'B13 Conf',
+      series_id: seriesId, scheme_id: schemeId, amount: 300000, paid_at: '2026-07-21',
+    };
+    const first = await integ('POST', '/api/integration/subscription-payments/from-lockerhub', body);
+    expect(first.status).toBe(200);
+    expect(first.json.success).toBe(true);
+    // Idempotent replay on the same intent_no → already processed, no 400 on the key.
+    const again = await integ('POST', '/api/integration/subscription-payments/from-lockerhub', body);
+    expect(again.status).toBe(200);
+    expect(again.json.already_processed).toBe(true);
+  });
+
+  it('B18 locker-deposits accept the contract key `amount` + application_no', async () => {
+    const r = await integ('POST', '/api/integration/locker-deposits', {
+      deposit_reference: 'CONF-B18-001', phone: '9899000222', name: 'B18 Conf',
+      pan: 'AAAPF2222F', amount: 150000, application_no: 'LH-APP-B18',
+    });
+    expect(r.status).toBe(201);
+    expect(r.json.success).toBe(true);
+    expect(r.json.approval_status).toBe('pending_approval');
+  });
+});

@@ -94,7 +94,8 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
   if (!name) return res.status(400).json({ error: 'name required' });
 
   const db = getDb();
-  const trigger = b.trigger || 'unknown';
+  // Contract (B11) sends `source`; the legacy caller sends `trigger`. Either marks the audit origin.
+  const trigger = b.trigger || b.source || 'unknown';
   const updatedFields: string[] = [];
   const settings = await getSettingsMap(db);
   const codeFmt = String(settings['numbering.customer_format'] ?? 'DHN{seq:6}');
@@ -444,7 +445,8 @@ customerWritesRouter.post('/subscription-request', asyncHandler(async (req, res)
   const customerName = String(body.name ?? body.full_name ?? body.customer_name ?? '').trim();
   const seriesId = parseInt(String(body.series_id), 10);
   const schemeId = body.scheme_id ? parseInt(String(body.scheme_id), 10) : null;
-  const requestedAmount = Number(body.requested_amount);
+  // Contract (B12) sends `amount`; the legacy caller sends `requested_amount`.
+  const requestedAmount = Number(body.requested_amount ?? body.amount);
   const notes = String(body.notes ?? '');
   const lhAppNo = String(body.lockerhub_application_no ?? '').trim() || null;
 
@@ -492,7 +494,8 @@ customerWritesRouter.post('/subscription-request', asyncHandler(async (req, res)
         [interestedSchemeLabel, cust.full_name, normalisePhone(cust.phone)]
       )).rows[0];
   if (dup) {
-    return res.json({ success: true, reference_id: leadRef(String(dup.id), dup.created_at), lead_id: Number(dup.id), already_exists: true });
+    const ref = leadRef(String(dup.id), dup.created_at);
+    return res.json({ success: true, reference_id: ref, subscription_id: ref, lead_id: Number(dup.id), already_exists: true });
   }
 
   // ncd's investor_leads has no email / interested_series_id / lead_no columns —
@@ -512,7 +515,9 @@ customerWritesRouter.post('/subscription-request', asyncHandler(async (req, res)
     ip: req.ip,
   });
 
-  res.json({ success: true, reference_id: leadRef(lead.id, lead.created_at), lead_id: Number(lead.id) });
+  const ref = leadRef(lead.id, lead.created_at);
+  // `subscription_id` is the contract (B12) alias for the intent reference.
+  res.json({ success: true, reference_id: ref, subscription_id: ref, lead_id: Number(lead.id) });
 }));
 
 // ─── L5 · Redemption request → staff queue ───────────────────────────────
@@ -787,7 +792,9 @@ async function notifyOperators(db: Db, appNo: string, amount: number, customerId
 // POST /subscription-payments/from-lockerhub — Easebuzz-verified money landed.
 customerWritesRouter.post('/subscription-payments/from-lockerhub', asyncHandler(async (req, res) => {
   const b = req.body ?? {};
-  const intentNo = b.lockerhub_intent_no;
+  // Contract (B13) sends `intent_no`; the legacy caller sends `lockerhub_intent_no`.
+  // This is the durable-retry idempotency key, so accept both spellings.
+  const intentNo = b.lockerhub_intent_no ?? b.intent_no;
   const phone = normalisePhone(b.customer_phone ?? b.phone ?? '');
   const seriesId = b.series_id != null && b.series_id !== '' ? parseInt(String(b.series_id), 10) : null;
   const schemeId = b.scheme_id != null && b.scheme_id !== '' ? parseInt(String(b.scheme_id), 10) : null;
@@ -876,9 +883,11 @@ customerWritesRouter.post('/locker-deposits', asyncHandler(async (req, res) => {
   const b = req.body ?? {};
   const ref = String(b.deposit_reference ?? '').trim();
   const phone = normalisePhone(b.phone ?? '');
-  const amount = b.deposit_amount != null ? Number(b.deposit_amount) : null;
+  // Contract (B18) sends `amount`; the legacy caller sends `deposit_amount`.
+  const amountRaw = b.deposit_amount ?? b.amount;
+  const amount = amountRaw != null ? Number(amountRaw) : null;
   if (!ref) return res.status(400).json({ error: 'deposit_reference required' });
-  if (!amount || amount <= 0) return res.status(400).json({ error: 'deposit_amount required and must be > 0' });
+  if (!amount || amount <= 0) return res.status(400).json({ error: 'amount (deposit_amount) required and must be > 0' });
   if (phone.length < 10) return res.status(400).json({ error: 'phone required (10 digits)' });
 
   const db = getDb();
@@ -924,6 +933,7 @@ customerWritesRouter.post('/locker-deposits', asyncHandler(async (req, res) => {
         locker_no: b.locker_no ?? null,
         branch: b.branch ?? null,
         source_flag: b.source_flag ?? null,
+        lockerhub_application_no: b.application_no ?? null, // contract (B18) cross-ref
       },
     });
   } catch (e) {

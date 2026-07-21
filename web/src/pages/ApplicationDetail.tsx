@@ -159,6 +159,8 @@ export function ApplicationDetailPage() {
           </label>
         )}
         {a.receipt_file_path && <a href={`/api/applications/${id}/receipt`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">View receipt</a>}
+        <a href={`/api/reports/application-form/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Application form</a>
+        {a.status === 'Active' && <a href={`/api/reports/acknowledgment/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Acknowledgement</a>}
         {a.allotment_date && (
           <>
             <a href={`/api/reports/bond/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Bond certificate</a>

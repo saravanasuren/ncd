@@ -66,6 +66,22 @@ reportsRouter.get('/allotment/:applicationId.pdf', requirePermission('customers:
     res.setHeader('Content-Disposition', `inline; filename="allotment-${req.params.applicationId}.pdf"`);
     res.end(buf);
   }));
+reportsRouter.get('/acknowledgment/:applicationId.pdf', requirePermission('customers:read'),
+  asyncHandler(async (req, res) => {
+    const { acknowledgmentPdf } = await import('./documents.js');
+    const buf = await acknowledgmentPdf(getDb(), Number(req.params.applicationId));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="acknowledgment-${req.params.applicationId}.pdf"`);
+    res.end(buf);
+  }));
+reportsRouter.get('/application-form/:applicationId.pdf', requirePermission('customers:read'),
+  asyncHandler(async (req, res) => {
+    const { applicationFormPdf } = await import('./documents.js');
+    const buf = await applicationFormPdf(getDb(), Number(req.params.applicationId));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="application-form-${req.params.applicationId}.pdf"`);
+    res.end(buf);
+  }));
 
 // 26Q quarterly TDS filing annexure. :quarter = 'YYYY-Qn'.
 reportsRouter.get('/tds-26q/:quarter.xlsx', requirePermission('reports:download'),

@@ -127,9 +127,9 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
 const byCodeDesc = (a: any, b: any) =>
   String(b.code).localeCompare(String(a.code), undefined, { numeric: true, sensitivity: 'base' });
 
-/** Universal search — customers (scoped) + agents + staff (docs/05 §2). */
+/** Universal search — customers + applications (both scoped) + agents + staff (docs/05 §2). */
 export async function search(db: Db, actor: AuthUser, q: string) {
-  if (!q || q.trim().length < 2) return { customers: [], agents: [], staff: [] };
+  if (!q || q.trim().length < 2) return { customers: [], applications: [], agents: [], staff: [] };
   const like = `%${q.trim()}%`;
   const { scopeFor, scopeWhere } = await import('../../lib/scope.js');
   const sc = scopeWhere(scopeFor(actor), { userCol: 'c.enrolled_by_user_id', agentCol: 'c.enrolled_by_agent_id', branchCol: 'c.branch_id', selfIdCol: 'c.id' }, 1);
@@ -137,12 +137,20 @@ export async function search(db: Db, actor: AuthUser, q: string) {
     `SELECT c.id, c.customer_code, c.full_name, c.phone FROM customers c
      WHERE (c.full_name ILIKE $1 OR c.customer_code ILIKE $1 OR c.phone ILIKE $1 OR c.pan ILIKE $1 OR c.email ILIKE $1) AND ${sc.sql}
      ORDER BY c.full_name LIMIT 12`, [like, ...sc.params])).rows;
+  // Applications by number — scoped to what the caller owns (branch staff/agent
+  // find their own; admins find all). This is what "APP-2026-000781" searches hit.
+  const scA = scopeWhere(scopeFor(actor), { userCol: 'a.enrolled_by_user_id', agentCol: 'a.enrolled_by_agent_id', branchCol: 'c.branch_id' }, 1);
+  const applications = (await db.query(
+    `SELECT a.id, a.application_no, a.status, s.code AS series_code, c.full_name AS customer, c.customer_code
+     FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
+     WHERE a.application_no ILIKE $1 AND ${scA.sql}
+     ORDER BY a.application_no DESC LIMIT 10`, [like, ...scA.params])).rows;
   let agents: unknown[] = [], staff: unknown[] = [];
   if (actor.permissions.includes('dashboard:drilldown')) {
     agents = (await db.query('SELECT id, agent_code, full_name FROM agents WHERE full_name ILIKE $1 OR agent_code ILIKE $1 ORDER BY full_name LIMIT 8', [like])).rows;
     staff = (await db.query("SELECT u.id, u.full_name, r.name AS role FROM users u JOIN roles r ON r.id = u.role_id WHERE u.full_name ILIKE $1 AND r.name <> 'customer' ORDER BY u.full_name LIMIT 8", [like])).rows;
   }
-  return { customers, agents, staff };
+  return { customers, applications, agents, staff };
 }
 
 /**

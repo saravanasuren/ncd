@@ -20,7 +20,7 @@ function filtersFromQuery(q: Record<string, unknown>): BookFilters {
   };
 }
 
-const SEGMENT_BYS = new Set<book.SegmentBy>(['series', 'customer', 'district', 'agent', 'staff']);
+const SEGMENT_BYS = new Set<book.SegmentBy>(['series', 'customer', 'district', 'agent', 'staff', 'branch', 'lockerhub', 'dhanamfin']);
 
 // Grouped explorer: one summary row per dimension value, each expandable to its
 // individual investments (see book.segmentGrouped). The flat book.* functions

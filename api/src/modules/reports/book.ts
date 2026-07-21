@@ -12,6 +12,9 @@ import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
 
 /** SQL list literal for the outstanding-book status set, e.g. 'Active','PendingAllotment',… */
 const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((s) => `'${s}'`).join(',');
+/** Exited (money-returned) statuses — shown in segment expansions alongside the
+ * outstanding ones, so a group lists its redeemed customers too. */
+const EXITED_STATUS_SQL_LIST = ['Redeemed', 'Matured', 'PrematureWithdrawn', 'RolledOver', 'Transferred'].map((s) => `'${s}'`).join(',');
 
 export interface BookFilters {
   from?: string;
@@ -325,7 +328,7 @@ export async function interestLedger(db: Db, actor: AuthUser) {
   return rows;
 }
 
-export type SegmentBy = 'series' | 'customer' | 'district' | 'agent' | 'staff';
+export type SegmentBy = 'series' | 'customer' | 'district' | 'agent' | 'staff' | 'branch' | 'lockerhub' | 'dhanamfin';
 
 export interface SegmentChild {
   application_no: string;
@@ -362,20 +365,33 @@ export interface SegmentGroup {
  * flat segment functions. Fetches once, groups in JS.
  */
 export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, filters: BookFilters = {}): Promise<SegmentGroup[]> {
-  const w = appWhere(actor, { ...filters, status: filters.status ?? 'active' });
+  // Series/branch/channel views group series-code / branch / (channel→series).
+  const seriesLike = by === 'series' || by === 'lockerhub' || by === 'dhanamfin';
+  // Show REAL investments so the expansion lists redeemed customers too: the
+  // exact OUTSTANDING set (so summary columns are unchanged) PLUS the exited
+  // statuses (children only). Reusing OUTSTANDING_SQL_LIST keeps the outstanding
+  // rows byte-identical to every other book query — never hardcode the set.
+  const extra: string[] = [`a.status IN (${OUTSTANDING_SQL_LIST}, ${EXITED_STATUS_SQL_LIST})`];
+  if (by === 'lockerhub') extra.push("a.source = 'lockerhub'");
+  if (by === 'dhanamfin') extra.push("a.source = 'dhanamfin'");
+  const w = appWhere(actor, { ...filters, status: undefined }, extra);
   const { rows } = await db.query<any>(
     `SELECT a.application_no, ${AMT} AS amount, a.status, a.allotment_date,
             c.id AS customer_id, c.customer_code, c.full_name AS customer, COALESCE(c.district,'Unassigned') AS district,
+            COALESCE(b.name,'Unassigned') AS branch,
             s.code AS series_code, s.status AS series_status,
             sref.full_name AS staff_ref, ${REFERRER} AS referrer
      ${FROM_ATTR}
+     LEFT JOIN branches b ON b.id = c.branch_id
      WHERE ${w.sql}`, w.params);
 
+  const outstandingStatus = new Set<string>(OUTSTANDING_APPLICATION_STATUSES);
   const groups = new Map<string, SegmentGroup>();
   const custSets = new Map<string, Set<string>>();
   // Attribution: referrer matched to a staff user → Staff-wise; else Agent-wise.
   const keyOf = (r: any): string =>
-    by === 'series' ? r.series_code : by === 'customer' ? r.customer_code : by === 'district' ? r.district
+    seriesLike ? r.series_code : by === 'customer' ? r.customer_code : by === 'district' ? r.district
+    : by === 'branch' ? r.branch
     : by === 'agent' ? (r.referrer ?? 'Direct') : (r.staff_ref ?? '');
 
   for (const r of rows) {
@@ -387,7 +403,7 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
       g = {
         key,
         label: by === 'customer' ? r.customer : key,
-        sublabel: by === 'customer' ? r.customer_code : by === 'series' ? r.series_status : null,
+        sublabel: by === 'customer' ? r.customer_code : seriesLike ? r.series_status : null,
         district: by === 'customer' ? r.district : null,
         sourced_by: by === 'customer' ? (r.staff_ref ?? r.referrer ?? '—') : null,
         investors: 0, investments: 0, outstanding: 0, children: [],
@@ -395,13 +411,15 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
       groups.set(key, g);
       custSets.set(key, new Set());
     }
-    g.investments += 1;
-    g.outstanding = round2(g.outstanding + Number(r.amount));
-    custSets.get(key)!.add(r.customer_code);
+    if (outstandingStatus.has(r.status)) {          // summary counts live money only
+      g.investments += 1;
+      g.outstanding = round2(g.outstanding + Number(r.amount));
+      custSets.get(key)!.add(r.customer_code);
+    }
     g.children.push({
       application_no: r.application_no, customer_id: Number(r.customer_id), customer: r.customer, customer_code: r.customer_code,
       series_code: r.series_code, amount: round2(Number(r.amount)), status: r.status,
-      allotment_date: r.allotment_date ?? null,
+      allotment_date: toISODate(r.allotment_date ?? null),
     });
   }
   for (const [key, g] of groups) g.investors = custSets.get(key)!.size;
@@ -434,9 +452,9 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
     }
   }
 
-  // Series view lists newest series first (NCD_28, 27, 26…); other views by amount.
+  // Series/channel views list newest series first (NCD_28, 27, 26…); others by amount.
   const out = [...groups.values()].sort((a, b) =>
-    by === 'series'
+    seriesLike
       ? String(b.key).localeCompare(String(a.key), undefined, { numeric: true, sensitivity: 'base' })
       : b.outstanding - a.outstanding);
   for (const g of out) g.children.sort((a, b) => b.amount - a.amount);
@@ -533,8 +551,10 @@ export async function newInvestmentsList(db: Db, actor: AuthUser, filters: BookF
   const w = appWhere(actor, { ...filters, status: 'active' }, extra);
   const { rows } = await db.query(
     `SELECT a.application_no, c.full_name AS customer, c.customer_code, s.code AS series_code,
+            COALESCE(b.name,'—') AS branch,
             a.total_amount AS amount, a.date_money_received, a.is_locker_deposit, a.source, a.status
-     ${FROM} WHERE ${w.sql} ORDER BY a.date_money_received DESC, a.application_no`, w.params);
+     ${FROM} LEFT JOIN branches b ON b.id = c.branch_id
+     WHERE ${w.sql} ORDER BY a.date_money_received DESC, a.application_no`, w.params);
   return rows;
 }
 

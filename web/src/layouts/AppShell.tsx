@@ -15,7 +15,7 @@ export function AppShell() {
   const items = NAV.filter((i) => can(...i.anyOf) && !(user && i.hideForRoles?.includes(user.role)));
   const [q, setQ] = useState('');
   const [pwOpen, setPwOpen] = useState(false);
-  const [results, setResults] = useState<{ customers: any[]; agents: any[]; staff: any[] } | null>(null);
+  const [results, setResults] = useState<{ customers: any[]; applications: any[]; agents: any[]; staff: any[] } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Close the mobile drawer whenever the route changes (e.g. a nav item is tapped).
@@ -65,7 +65,7 @@ export function AppShell() {
           <button onClick={() => setDrawerOpen(true)} aria-label="Open menu"
             className="lg:hidden text-text-muted hover:text-text border border-border rounded px-2 py-1 text-lg leading-none">☰</button>
           <div className="relative flex-1 max-w-md">
-            <input placeholder="Search customers, agents, staff…" value={q} onChange={(e) => onSearch(e.target.value)}
+            <input placeholder="Search customers, application no., agents, staff…" value={q} onChange={(e) => onSearch(e.target.value)}
               className="w-full px-3 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary" />
             {results && (q.trim().length >= 2) && (
               <div className="absolute top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-card z-10 max-h-80 overflow-auto">
@@ -74,9 +74,15 @@ export function AppShell() {
                     <span className="font-medium">{c.full_name}</span><span className="text-xs text-text-muted font-mono ml-auto">{c.customer_code}</span>
                   </button>
                 ))}
+                {(results.applications ?? []).map((a) => (
+                  <button key={`app${a.id}`} onClick={() => go(`/app/applications/${a.id}`)} className="w-full text-left px-3 py-2 text-sm hover:bg-bg flex items-center gap-2">
+                    <span className="font-mono">{a.application_no}</span>
+                    <span className="text-xs text-text-muted">{a.customer} · {a.series_code} · {a.status}</span>
+                  </button>
+                ))}
                 {results.agents.map((a) => <div key={`a${a.id}`} className="px-3 py-2 text-sm text-text-muted">Agent: {a.full_name} <span className="font-mono text-xs">{a.agent_code}</span></div>)}
                 {results.staff.map((s) => <div key={`s${s.id}`} className="px-3 py-2 text-sm text-text-muted">Staff: {s.full_name} ({s.role})</div>)}
-                {!results.customers.length && !results.agents.length && !results.staff.length && <div className="px-3 py-3 text-sm text-text-muted">No matches.</div>}
+                {!results.customers.length && !(results.applications ?? []).length && !results.agents.length && !results.staff.length && <div className="px-3 py-3 text-sm text-text-muted">No matches.</div>}
               </div>
             )}
           </div>

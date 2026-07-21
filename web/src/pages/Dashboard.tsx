@@ -236,7 +236,8 @@ function Tile({ label, value, sub, primary, onClick, canDrill = false }: {
 interface FlatCol { key: string; header: string; kind?: 'money' | 'date' | 'num'; foot?: 'sum' }
 const INVESTMENT_COLS: FlatCol[] = [
   { key: 'application_no', header: 'App No' }, { key: 'customer', header: 'Customer' },
-  { key: 'series_code', header: 'Series' }, { key: 'amount', header: 'Amount', kind: 'money' },
+  { key: 'series_code', header: 'Series' }, { key: 'branch', header: 'Branch' },
+  { key: 'amount', header: 'Amount', kind: 'money' },
   { key: 'date_money_received', header: 'Received', kind: 'date' }, { key: 'status', header: 'Status' },
 ];
 const FLAT_COLS: Record<string, FlatCol[]> = {
@@ -309,7 +310,7 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
 
   return (
     <div className="fixed inset-0 z-40 bg-black/40 flex items-start justify-center overflow-y-auto py-8 px-4" onClick={onClose}>
-      <div className="bg-surface border border-border rounded-lg shadow-lg w-full max-w-4xl" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-surface border border-border rounded-lg shadow-lg w-full max-w-5xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border sticky top-0 bg-surface">
           <div>
             <h2 className="text-base font-bold m-0">{title}</h2>

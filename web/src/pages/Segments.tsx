@@ -5,13 +5,16 @@ import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 
-type Seg = 'series' | 'customer' | 'district' | 'agent' | 'staff';
+type Seg = 'series' | 'customer' | 'district' | 'agent' | 'staff' | 'branch' | 'lockerhub' | 'dhanamfin';
 const TABS: { key: Seg; label: string }[] = [
   { key: 'series', label: 'Series-wise' },
   { key: 'customer', label: 'Customer-wise' },
   { key: 'district', label: 'District-wise' },
   { key: 'agent', label: 'Agent-wise' },
   { key: 'staff', label: 'Staff-wise' },
+  { key: 'branch', label: 'Branch-wise' },
+  { key: 'lockerhub', label: 'Locker Hub' },
+  { key: 'dhanamfin', label: 'Dhanamfin' },
 ];
 const TAB_KEYS = TABS.map((t) => t.key);
 
@@ -67,7 +70,7 @@ export function SegmentsPage() {
   return (
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Segments</h1>
-      <p className="text-sm text-text-muted mt-1 mb-4">The book sliced by series, customer, district, agent and staff. Click a row's <span className="font-mono">+</span> to see its individual investments.</p>
+      <p className="text-sm text-text-muted mt-1 mb-4">The book sliced by series, customer, district, agent, staff, branch, and funding channel (Locker Hub / Dhanamfin). Click a row's <span className="font-mono">+</span> to see its individual investments (including redeemed ones).</p>
       <div className="flex gap-1 mb-4 border-b border-border">
         {TABS.map((t) => (
           <button key={t.key} onClick={() => switchTab(t.key)}
@@ -218,7 +221,16 @@ function groupColumns(tab: Seg, expanded: Set<string>, toggle: (k: string) => vo
       ncds, outstanding,
     ];
   }
-  const label = tab === 'district' ? 'District' : tab === 'agent' ? 'Agent' : 'Staff';
+  if (tab === 'lockerhub' || tab === 'dhanamfin') {
+    // Funding-channel views group by series (only that channel's investments).
+    return [
+      { key: 'label', header: 'Series', value: (g) => g.label, render: expander },
+      { key: 'status', header: 'Allotment status', value: (g) => g.sublabel ?? '',
+        render: (g) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{g.sublabel ?? '—'}</span> },
+      investors, ncds, outstanding,
+    ];
+  }
+  const label = tab === 'district' ? 'District' : tab === 'branch' ? 'Branch' : tab === 'agent' ? 'Agent' : 'Staff';
   return [{ key: 'label', header: label, value: (g) => g.label, render: expander }, investors, ncds, outstanding];
 }
 
@@ -226,7 +238,7 @@ function ChildTable({ tab, rows, onPickCustomer }: { tab: Seg; rows: Child[]; on
   // Per-tab detail columns (besides Amount, always last, right-aligned).
   const cols: [string, keyof Child][] =
     tab === 'customer' ? [['Series', 'series_code'], ['App no.', 'application_no'], ['Status', 'status'], ['Allotted', 'allotment_date']]
-    : tab === 'series' ? [['Customer', 'customer'], ['App no.', 'application_no'], ['Status', 'status'], ['Allotted', 'allotment_date']]
+    : (tab === 'series' || tab === 'lockerhub' || tab === 'dhanamfin') ? [['Customer', 'customer'], ['App no.', 'application_no'], ['Status', 'status'], ['Allotted', 'allotment_date']]
     : [['Customer', 'customer'], ['Series', 'series_code'], ['App no.', 'application_no'], ['Status', 'status']];
   return (
     <div className="bg-bg/60 px-4 py-2 border-l-2 border-primary/30">
@@ -248,6 +260,7 @@ function ChildTable({ tab, rows, onPickCustomer }: { tab: Seg; rows: Child[]; on
                         {r.customer}
                       </button>
                     )
+                    : k === 'allotment_date' ? (r[k] ? String(r[k]).slice(0, 10) : '—')
                     : (r[k] ?? '—')}
                 </td>
               ))}

@@ -14,7 +14,18 @@ export async function initiateSigning(db: Db, actor: AuthUser, applicationId: nu
   const app = (await db.query<{ id: string; customer_id: string }>('SELECT id, customer_id FROM applications WHERE id = $1', [applicationId])).rows[0];
   if (!app) throw errors.notFound('Application not found');
   const c = (await db.query<{ email: string | null; phone: string | null; full_name: string }>('SELECT email, phone, full_name FROM customers WHERE id = $1', [app.customer_id])).rows[0];
-  const req = await createSignRequest({ signerEmail: c?.email ?? undefined, signerPhone: c?.phone ?? undefined, signerName: c?.full_name });
+  // The application form is the document Digio signs. Generate it here; if it
+  // can't be produced, still start the session (eSign is off the critical path)
+  // and log the degraded path rather than failing the request.
+  let document: { fileName: string; contentBase64: string } | undefined;
+  try {
+    const { applicationFormPdf } = await import('../../modules/reports/documents.js');
+    const pdf = await applicationFormPdf(db, applicationId);
+    document = { fileName: `application-${applicationId}.pdf`, contentBase64: pdf.toString('base64') };
+  } catch (e) {
+    console.warn(`[digio] application-form PDF unavailable for app ${applicationId}; initiating without a document: ${(e as Error).message}`);
+  }
+  const req = await createSignRequest({ signerEmail: c?.email ?? undefined, signerPhone: c?.phone ?? undefined, signerName: c?.full_name, document });
   await db.query(
     `INSERT INTO digio_signing_sessions (application_id, digio_request_id, sign_url, signer_email, signer_phone, status, created_by_user_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7)

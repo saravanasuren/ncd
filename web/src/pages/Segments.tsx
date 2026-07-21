@@ -222,11 +222,17 @@ function groupColumns(tab: Seg, expanded: Set<string>, toggle: (k: string) => vo
   }
   if (tab === 'lockerhub' || tab === 'dhanamfin') {
     // Funding-channel views group by series (only that channel's investments).
+    // Issued + Redeemed reconcile with the Dashboard tile: Issued (money in) =
+    // Outstanding + Redeemed.
     return [
       { key: 'label', header: 'Series', value: (g) => g.label, render: expander },
       { key: 'status', header: 'Allotment status', value: (g) => g.sublabel ?? '',
         render: (g) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{g.sublabel ?? '—'}</span> },
-      investors, ncds, outstanding,
+      investors, ncds,
+      { key: 'issued', header: 'Issued', align: 'right', value: (g) => Number(g.issued ?? 0), render: (g) => <span className="mono">{formatINR(g.issued ?? 0)}</span> },
+      { key: 'redeemed', header: 'Redeemed', align: 'right', value: (g) => Number(g.redeemed ?? 0),
+        render: (g) => Number(g.redeemed ?? 0) > 0 ? <span className="mono text-danger">{formatINR(g.redeemed ?? 0)}</span> : <span className="text-text-muted">—</span> },
+      outstanding,
     ];
   }
   const label = tab === 'district' ? 'District' : tab === 'agent' ? 'Agent' : 'Staff';

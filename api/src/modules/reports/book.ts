@@ -374,7 +374,6 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
   // exact OUTSTANDING set (so summary columns are unchanged) PLUS the exited
   // statuses (children only). Reusing OUTSTANDING_SQL_LIST keeps the outstanding
   // rows byte-identical to every other book query — never hardcode the set.
-  const extra: string[] = [`a.status IN (${OUTSTANDING_SQL_LIST}, ${EXITED_STATUS_SQL_LIST})`];
   // Funding-channel split — MUST reconcile with the Dashboard channel tiles
   // (the owner's source of truth), so the two screens never disagree:
   //  • Locker Hub    = locker deposits (is_locker_deposit) — the Dashboard
@@ -382,8 +381,16 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
   //  • Dhanamfin App = app-sourced NCDs (dhanamfin/lockerhub), locker deposits
   //    excluded so an investment lands in exactly one channel — the Dashboard
   //    "DhanamFin App" tile.
-  if (by === 'lockerhub') extra.push('a.is_locker_deposit = TRUE');
-  if (by === 'dhanamfin') extra.push("(a.source IN ('dhanamfin','lockerhub') AND a.is_locker_deposit = FALSE)");
+  // The same channel filter is applied to the issued/redeemed register below so
+  // its numbers are channel-specific too (Issued = Outstanding + Redeemed).
+  const channelExtra: string[] = [];
+  if (by === 'lockerhub') channelExtra.push('a.is_locker_deposit = TRUE');
+  if (by === 'dhanamfin') channelExtra.push("(a.source IN ('dhanamfin','lockerhub') AND a.is_locker_deposit = FALSE)");
+  // Show REAL investments so the expansion lists redeemed customers too: the
+  // exact OUTSTANDING set (so summary columns are unchanged) PLUS the exited
+  // statuses (children only). Reusing OUTSTANDING_SQL_LIST keeps the outstanding
+  // rows byte-identical to every other book query — never hardcode the set.
+  const extra: string[] = [`a.status IN (${OUTSTANDING_SQL_LIST}, ${EXITED_STATUS_SQL_LIST})`, ...channelExtra];
   const w = appWhere(actor, { ...filters, status: undefined }, extra);
   const { rows } = await db.query<any>(
     `SELECT a.application_no, ${AMT} AS amount, a.status, a.allotment_date,
@@ -441,8 +448,11 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
   // (same rule as OUTSTANDING_APPLICATION_STATUSES), so it must not inflate
   // "issued" — since the go-live change that is where every new investment
   // waits, and it was making NCD_28 read ₹15L against ₹10L outstanding.
-  if (by === 'series') {
-    const reg = appWhere(actor, { seriesIds: filters.seriesIds });
+  if (seriesLike) {
+    // Channel views (Locker Hub / Dhanamfin App) apply the SAME channel filter
+    // so their Issued/Redeemed are channel-specific and reconcile with the tab's
+    // Outstanding (Issued = Outstanding + Redeemed).
+    const reg = appWhere(actor, { seriesIds: filters.seriesIds }, channelExtra);
     const { rows: regRows } = await db.query<any>(
       `SELECT s.code AS series_code,
               min(a.date_money_received) AS win_from, max(a.date_money_received) AS win_to,

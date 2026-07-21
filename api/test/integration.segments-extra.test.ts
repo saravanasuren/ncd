@@ -79,6 +79,9 @@ describe('segments — branch / channel tabs, redeemed children, search', () => 
     expect(g).toBeTruthy();
     // APP-SEG-1 (lockerhub) active ₹5L + APP-SEG-2 (dhanamfin) redeemed ₹0.
     expect(Number(g.outstanding)).toBe(500000);
+    // Channel-specific register reconciles: Issued = Outstanding + Redeemed.
+    expect(Number(g.issued)).toBe(800000);    // ₹5L + ₹3L came in
+    expect(Number(g.redeemed)).toBe(300000);  // APP-SEG-2 redeemed
     const apps = g.children.map((c: any) => c.application_no).sort();
     expect(apps).toEqual(['APP-SEG-1', 'APP-SEG-2']); // APP-SEG-3 is a deposit → Locker Hub
   });

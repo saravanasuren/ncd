@@ -7,9 +7,10 @@ import { ReferredByPicker } from './ReferredByPicker.js';
 /**
  * Staff customer-enrolment wizard (modal). Mirrors the old app's 6-section
  * flow — Personal · Demat · KYC docs · Bank · Nominee · Review. Fields are
- * persisted to the customer (create → demat → KYC docs → bank → nominee →
- * submit) only on "Save and exit" / "Submit for approval", so Back/Next never
- * duplicates rows.
+ * persisted to the customer (create → demat → KYC docs → bank → nominee) only
+ * on "Save & exit" / "Save & add investment", so Back/Next never duplicates
+ * rows. The customer is created live — no separate approval (owner 2026-07-21);
+ * the investment is the single approval gate.
  *
  * Google-Sheets-style safety net: as you type, the text fields autosave to the
  * browser (localStorage, debounced) and are restored if the modal is closed or
@@ -124,7 +125,7 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
     setFiles({ pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null });
   };
 
-  async function persist(submit: boolean): Promise<number> {
+  async function persist(): Promise<number> {
     const personal: Record<string, unknown> = { full_name: f.full_name.trim(), is_nri: f.is_nri, tds_applicable: f.tds !== 'no' };
     const put = (k: string, v: string) => { if (v.trim()) personal[k] = v.trim(); };
     put('pan', f.pan); put('dob', f.dob); put('gender', f.gender); put('phone', f.phone);
@@ -158,19 +159,20 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
         guardian_name: f.guardian_name.trim() || null, guardian_pan: f.guardian_pan.trim() || null,
       }] });
 
-    if (submit) await api.post(`/api/customers/${id}/submit-for-approval`);
     return id;
   }
 
-  async function finish(submit: boolean) {
+  // Customer is created live (no approval — owner 2026-07-21). goInvest → open
+  // their profile, where the "Add investment" form is ready; else just close.
+  async function finish(goInvest: boolean) {
     if (!f.full_name.trim()) { setErr('Full name is required.'); setStep(0); return; }
     setErr(''); setDup(null); setBusy(true);
     try {
-      const id = await persist(submit);
+      const id = await persist();
       clearDraft(); // saved server-side now — drop the local autosave
       qc.invalidateQueries({ queryKey: ['customers'] });
       onClose();
-      nav(`/app/customers/${id}`);
+      if (goInvest) nav(`/app/customers/${id}`);
     } catch (e) {
       const d = e instanceof ApiError ? (e.detail as { existing_customer?: { id: number; customer_code: string; full_name: string } } | undefined) : undefined;
       if (d?.existing_customer) setDup(d.existing_customer);
@@ -307,7 +309,7 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
             <button disabled={busy} onClick={() => finish(false)} className="text-sm border border-border-strong rounded px-4 py-1.5 hover:border-primary disabled:opacity-40">Save &amp; exit</button>
             {step < 5
               ? <button onClick={() => setStep(step + 1)} className="text-sm bg-primary hover:bg-primary-hover text-white rounded px-5 py-1.5 font-semibold">Next →</button>
-              : <button disabled={busy} onClick={() => finish(true)} className="text-sm bg-primary hover:bg-primary-hover text-white rounded px-5 py-1.5 font-semibold disabled:opacity-40">Submit for approval</button>}
+              : <button disabled={busy} onClick={() => finish(true)} className="text-sm bg-primary hover:bg-primary-hover text-white rounded px-5 py-1.5 font-semibold disabled:opacity-40">Save &amp; add investment →</button>}
           </div>
         </div>
       </div>
@@ -330,7 +332,7 @@ function Review({ f, files }: { f: Form; files: Record<DocKey, File | null> }) {
   );
   return (
     <div>
-      <p className="text-sm text-text-muted mb-3">Verify everything below. <strong>Submit for approval</strong> sends the customer to the Approvals queue for final sign-off. The customer is created in a pending state and goes live only after approval.</p>
+      <p className="text-sm text-text-muted mb-3">Verify everything below. The customer is created <strong>live immediately</strong> — no separate approval. <strong>Save &amp; add investment</strong> opens their profile so you can add the investment straight away; the investment is what goes to the Approvals queue, where the approver reviews the customer profile and the investment together.</p>
       <Section title="Personal">
         <Row k="Name" v={dash(f.full_name)} /><Row k="Father's name" v={dash(f.father_name)} /><Row k="Occupation" v={dash(f.occupation)} />
         <Row k="DOB" v={dash(f.dob)} /><Row k="Gender" v={dash(f.gender)} /><Row k="PAN" v={dash(f.pan)} />

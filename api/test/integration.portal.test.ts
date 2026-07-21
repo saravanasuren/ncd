@@ -39,11 +39,7 @@ async function integ(method: string, path: string, body?: unknown) {
 async function buildActiveCustomer() {
   const a = await admin();
   const cust = await a.post('/api/customers', { full_name: 'Portal Customer', phone: customerPhone, email: 'portal.cust@example.com' });
-  const cid = cust.json.id;
-  // Submit + approve the customer so it becomes active (real flow).
-  const submit = await a.post(`/api/customers/${cid}/submit-for-approval`);
-  const ncd0 = await as('ncd@demo.local');
-  await ncd0.post(`/api/approvals/${submit.json.request.id}/approve`);
+  const cid = cust.json.id; // live on creation — no approval step
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '77770001111', ifsc: 'HDFC0009999' });
   const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);

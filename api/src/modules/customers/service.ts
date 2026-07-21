@@ -77,10 +77,14 @@ export async function createCustomer(db: Db, actor: AuthUser, input: CreateCusto
     const code = await nextCode(tx, 'customer', codeFmt);
     const branchId = actor.branchIds[0] ?? null;
     const { rows } = await tx.query<{ id: string }>(
+      // Customer creation no longer needs its own approval (owner 2026-07-21):
+      // the customer is live immediately, and the single approval gate is the
+      // investment — where the approver reviews the customer profile + the
+      // investment together.
       `INSERT INTO customers (customer_code, full_name, pan, dob, gender, phone, email, address, city, district, state, is_nri, referred_by_text,
         father_name, occupation, aadhaar_last4, aadhaar, phone_secondary, investor_category, ckyc_number, tds_applicable,
         creation_status, enrolled_by_user_id, enrolled_by_agent_id, branch_id, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,'Draft',$22,$23,$24,FALSE) RETURNING id`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,'Approved',$22,$23,$24,TRUE) RETURNING id`,
       [code, input.full_name, input.pan ?? null, input.dob ?? null, input.gender ?? null, input.phone ?? null,
        input.email ?? null, input.address ?? null, input.city ?? null, input.district ?? null, input.state ?? null,
        input.is_nri ?? false, input.referred_by_text ?? null,

@@ -11,10 +11,8 @@ beforeAll(async () => {
   const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
   const a = new Client(ctx.base); await a.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' });
   const cust = await a.post('/api/customers', { full_name: 'Doc Cust', phone: '9990003333' });
-  customerId = cust.json.id;
-  const submit = await a.post(`/api/customers/${customerId}/submit-for-approval`);
+  customerId = cust.json.id; // live on creation — no approval step
   const ncd = new Client(ctx.base); await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
-  await ncd.post(`/api/approvals/${submit.json.request.id}/approve`);
   const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
   appId = app.json.id;
   await approveInvestment(ncd, app);

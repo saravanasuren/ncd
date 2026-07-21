@@ -100,6 +100,7 @@ customersRouter.put('/:id/nominees', requirePermission('customers:update'),
     const { nominees } = z.object({ nominees: z.array(z.object({
       full_name: z.string().min(1), relationship: z.string().nullish(), share_pct: z.number().nullish(), dob: z.string().nullish(),
       pan: z.string().nullish(), phone: z.string().nullish(), address: z.string().nullish(), guardian_name: z.string().nullish(), guardian_pan: z.string().nullish(),
+      kyc_id_type: z.string().nullish(), kyc_id_number: z.string().nullish(),
     })) }).parse(req.body);
     res.json(await s.setNominees(getDb(), req.user!, Number(req.params.id), nominees));
   }));

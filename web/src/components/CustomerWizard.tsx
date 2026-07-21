@@ -41,12 +41,12 @@ const EMPTY = {
   // Bank
   bank_holder_name: '', account_number: '', account_type: '', tds: 'yes', ifsc: '',
   bank_name: '', branch_name: '', branch_city: '',
-  // Nominee
-  nom_full_name: '', nom_dob: '', nom_relationship: '', nom_pan: '', nom_phone: '',
+  // Nominee (KYC replaces the old PAN-only field: Aadhaar or PAN + a photo)
+  nom_full_name: '', nom_dob: '', nom_relationship: '', nom_kyc_type: '', nom_kyc_number: '', nom_phone: '',
   nom_address: '', guardian_name: '', guardian_pan: '',
 };
 type Form = typeof EMPTY;
-type DocKey = 'pan_card' | 'aadhaar_card' | 'customer_photo' | 'customer_signature' | 'address_proof' | 'cml' | 'bank_proof';
+type DocKey = 'pan_card' | 'aadhaar_card' | 'customer_photo' | 'customer_signature' | 'address_proof' | 'cml' | 'bank_proof' | 'nominee_kyc';
 
 // Autosave the in-progress enrolment to the browser so an accidental close /
 // navigation never loses typed data. Files aren't serialisable, so only text
@@ -98,7 +98,7 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
   const [f, setF] = useState<Form>(() => { const d = loadDraft(); return d?.f ? { ...EMPTY, ...d.f } : EMPTY; });
   const [restored, setRestored] = useState<boolean>(() => !!loadDraft());
   const [files, setFiles] = useState<Record<DocKey, File | null>>({
-    pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null,
+    pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null, nominee_kyc: null,
   });
   const [err, setErr] = useState('');
   const [dup, setDup] = useState<{ id: number; customer_code: string; full_name: string } | null>(null);
@@ -122,7 +122,7 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
   const startFresh = () => {
     clearDraft();
     setF(EMPTY); setStep(0); setRestored(false); setErr(''); setDup(null);
-    setFiles({ pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null });
+    setFiles({ pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null, nominee_kyc: null });
   };
 
   async function persist(): Promise<number> {
@@ -155,7 +155,8 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
     if (f.nom_full_name.trim())
       await api.put(`/api/customers/${id}/nominees`, { nominees: [{
         full_name: f.nom_full_name.trim(), dob: f.nom_dob || null, relationship: f.nom_relationship || null,
-        pan: f.nom_pan.trim() || null, phone: f.nom_phone.trim() || null, address: f.nom_address.trim() || null,
+        kyc_id_type: f.nom_kyc_type || null, kyc_id_number: f.nom_kyc_number.trim() || null,
+        phone: f.nom_phone.trim() || null, address: f.nom_address.trim() || null,
         guardian_name: f.guardian_name.trim() || null, guardian_pan: f.guardian_pan.trim() || null,
       }] });
 
@@ -284,8 +285,15 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
               <div className="sm:col-span-2"><Field label="Full name" hint="Required only if a nominee is being added"><input className={inp} value={f.nom_full_name} onChange={(e) => set({ nom_full_name: e.target.value })} /></Field></div>
               <Field label="Date of birth"><input className={inp} type="date" value={f.nom_dob} onChange={(e) => set({ nom_dob: e.target.value })} /></Field>
               <Field label="Relationship"><select className={inp} value={f.nom_relationship} onChange={(e) => set({ nom_relationship: e.target.value })}><option value="">—</option>{RELATIONSHIPS.map((r) => <option key={r}>{r}</option>)}</select></Field>
-              <Field label="Nominee PAN"><input className={`${inp} uppercase`} value={f.nom_pan} onChange={(e) => set({ nom_pan: e.target.value.toUpperCase() })} /></Field>
               <Field label="Nominee phone"><input className={inp} inputMode="numeric" maxLength={10} value={f.nom_phone} onChange={(e) => set({ nom_phone: e.target.value.replace(/\D/g, '') })} /></Field>
+              <Field label="Nominee KYC" hint="Aadhaar or PAN of the nominee">
+                <div className="flex gap-2">
+                  <select className={`${inp} w-28`} value={f.nom_kyc_type} onChange={(e) => set({ nom_kyc_type: e.target.value })}><option value="">Type…</option><option value="Aadhaar">Aadhaar</option><option value="PAN">PAN</option></select>
+                  <input className={inp} placeholder={f.nom_kyc_type === 'PAN' ? 'ABCDE1234F' : f.nom_kyc_type === 'Aadhaar' ? '12-digit Aadhaar' : 'ID number'}
+                    value={f.nom_kyc_number} onChange={(e) => set({ nom_kyc_number: f.nom_kyc_type === 'PAN' ? e.target.value.toUpperCase() : e.target.value })} />
+                </div>
+              </Field>
+              <div className="sm:col-span-2"><FilePick label="Nominee KYC photo" hint="Aadhaar / PAN scan of the nominee (image or PDF)" file={files.nominee_kyc} onPick={(x) => setFile('nominee_kyc', x)} /></div>
               <div className="sm:col-span-2"><Field label="Nominee address"><textarea className={inp} rows={2} value={f.nom_address} onChange={(e) => set({ nom_address: e.target.value })} /></Field></div>
               <Field label="Guardian name (if minor)"><input className={inp} value={f.guardian_name} onChange={(e) => set({ guardian_name: e.target.value })} /></Field>
               <Field label="Guardian PAN (if minor)"><input className={`${inp} uppercase`} value={f.guardian_pan} onChange={(e) => set({ guardian_pan: e.target.value.toUpperCase() })} /></Field>
@@ -355,7 +363,7 @@ function Review({ f, files }: { f: Form; files: Record<DocKey, File | null> }) {
       </Section>
       <Section title="Nominee">
         {f.nom_full_name.trim()
-          ? <><Row k="Name" v={dash(f.nom_full_name)} /><Row k="Relationship" v={dash(f.nom_relationship)} /><Row k="DOB" v={dash(f.nom_dob)} /><Row k="PAN" v={dash(f.nom_pan)} /><Row k="Phone" v={dash(f.nom_phone)} /></>
+          ? <><Row k="Name" v={dash(f.nom_full_name)} /><Row k="Relationship" v={dash(f.nom_relationship)} /><Row k="DOB" v={dash(f.nom_dob)} /><Row k="KYC" v={f.nom_kyc_type ? `${f.nom_kyc_type} ${f.nom_kyc_number}`.trim() : '—'} /><Row k="Phone" v={dash(f.nom_phone)} /></>
           : <div className="text-sm text-text-muted">No nominee added.</div>}
       </Section>
     </div>

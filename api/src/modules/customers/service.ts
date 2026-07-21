@@ -277,6 +277,7 @@ export async function setJointHolders(db: Db, actor: AuthUser, customerId: numbe
 export interface NomineeInput {
   full_name: string; relationship?: string | null; share_pct?: number | null; dob?: string | null;
   pan?: string | null; phone?: string | null; address?: string | null; guardian_name?: string | null; guardian_pan?: string | null;
+  kyc_id_type?: string | null; kyc_id_number?: string | null;
 }
 export async function setNominees(db: Db, actor: AuthUser, customerId: number, nominees: NomineeInput[]) {
   await assertVisible(db, actor, customerId);
@@ -285,9 +286,10 @@ export async function setNominees(db: Db, actor: AuthUser, customerId: number, n
   await db.withTx(async (tx) => {
     await tx.query('DELETE FROM nominees WHERE customer_id = $1', [customerId]);
     for (const n of nominees) {
-      await tx.query('INSERT INTO nominees (customer_id, full_name, relationship, share_pct, dob, pan, phone, address, guardian_name, guardian_pan) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+      await tx.query('INSERT INTO nominees (customer_id, full_name, relationship, share_pct, dob, pan, phone, address, guardian_name, guardian_pan, kyc_id_type, kyc_id_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
         [customerId, n.full_name, n.relationship ?? null, n.share_pct ?? null, n.dob ?? null,
-         n.pan ?? null, n.phone ?? null, n.address ?? null, n.guardian_name ?? null, n.guardian_pan ?? null]);
+         n.pan ?? null, n.phone ?? null, n.address ?? null, n.guardian_name ?? null, n.guardian_pan ?? null,
+         n.kyc_id_type ?? null, n.kyc_id_number ?? null]);
     }
     await writeAudit(tx, { actorId: actor.id, action: 'customer.nominees', entityType: 'customers', entityId: customerId, after: { count: nominees.length } });
   });

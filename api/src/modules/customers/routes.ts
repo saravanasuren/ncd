@@ -37,6 +37,7 @@ const createSchema = z.object({
   investor_category: z.string().optional(),
   ckyc_number: z.string().optional(),
   tds_applicable: z.boolean().optional(),
+  pincode: z.string().optional(),
 });
 
 customersRouter.post('/', requirePermission('customers:create'),

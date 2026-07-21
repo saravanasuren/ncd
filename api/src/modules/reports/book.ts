@@ -126,7 +126,10 @@ export async function seriesSummary(db: Db, actor: AuthUser, filters: BookFilter
             count(DISTINCT a.customer_id)::int AS investors,
             COALESCE(sum(${AMT}) FILTER (WHERE a.status IN (${OUTSTANDING_SQL_LIST})),0) AS outstanding,
             COALESCE(sum(a.total_amount) FILTER (WHERE a.status = 'Redeemed'),0) AS redeemed,
-            COALESCE(sum(a.total_amount),0) AS issued
+            -- "issued" = money that actually came in over the series' life. Must
+            -- match the Segments series-register (segmentGrouped) exactly, so it
+            -- excludes never-funded statuses (Rejected/Cancelled/Draft/PendingApproval).
+            COALESCE(sum(a.total_amount) FILTER (WHERE a.status NOT IN ('Rejected','Cancelled','Draft','PendingApproval')),0) AS issued
      ${FROM} WHERE ${w.sql} GROUP BY s.id, s.code, s.status ORDER BY s.code`, w.params);
   return rows;
 }

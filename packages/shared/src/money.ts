@@ -44,7 +44,11 @@ export function moneyNum(v: string | number): number {
  * Format for display with Indian digit grouping (₹12,34,567.00).
  * Symbol optional so it works in table cells and exports.
  */
-export function formatINR(v: string | number, opts: { symbol?: boolean } = {}): string {
+export function formatINR(v: string | number | null | undefined, opts: { symbol?: boolean } = {}): string {
+  // Display helper — tolerate a missing/garbage value with an em-dash rather
+  // than throwing (a thrown formatINR crash-rendered whole pages when an API
+  // omitted a money field). Money MATH still uses the strict toPaise.
+  if (v == null || v === '' || !Number.isFinite(typeof v === 'number' ? v : Number(v))) return '—';
   const paise = toPaise(v);
   const neg = paise < 0;
   const abs = Math.abs(paise);

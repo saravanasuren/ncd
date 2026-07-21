@@ -164,7 +164,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   // there instead.
   branch_staff: [...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view')],
 
-  agent: [...STAFF_FUNNEL],
+  // Agents source leads and enrol, but must NOT approve KYC on customers they
+  // enrolled — that is a segregation-of-duties break on a regulated control
+  // (an external agent self-approving their own customer's verification). KYC
+  // verification stays with internal staff/managers. (Review 2026-07-21.)
+  agent: STAFF_FUNNEL.filter((p) => p !== 'kyc:verify' && p !== 'kyc:reject'),
 
   customer: ['portal:self-service'],
 };

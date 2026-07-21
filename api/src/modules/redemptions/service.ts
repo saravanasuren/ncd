@@ -13,10 +13,11 @@ import { writeAudit } from '../../lib/audit.js';
 import { assertTransition } from '../../lib/statusMachine.js';
 import { nextCode } from '../../lib/sequences.js';
 import { computeRedemption } from '../../lib/redemption.js';
-import { round2 } from '../../lib/dates.js';
+import { round2, toISODate } from '../../lib/dates.js';
 import type { RateSpec } from '../../lib/incentive.js';
 import { getSettingsMap } from '../settings/service.js';
-import { createApprovalRequest, registerOnFinalApprove, type ApprovalRow } from '../approvals/service.js';
+import { scopeFor, scopeWhere } from '../../lib/scope.js';
+import { createApprovalRequest, registerOnFinalApprove, registerOnReject, type ApprovalRow } from '../approvals/service.js';
 
 async function outstandingPrincipal(db: Db, applicationId: number): Promise<number> {
   return Number((await db.query<{ p: string }>(
@@ -37,8 +38,33 @@ async function createRequest(
 ): Promise<{ id: number; redemption_no: string; principal: number; penalty: number; netPayment: number; brokenInterest: number }> {
   const principal = await outstandingPrincipal(tx, input.applicationId);
   const penalty = input.type === 'maturity' ? { mode: 'flat' as const, value: 0 } : await penaltySetting(tx);
-  const calc = computeRedemption({ principal, penalty });
   const redDate = input.redemptionDate ?? new Date().toISOString().slice(0, 10);
+  // Accrued broken-period interest (last paid → redemption date) is now COMPUTED
+  // and RECORDED on the redemption (it was silently 0 before because the
+  // coupon/dates were never passed). Single-Active-line apps compute exactly;
+  // multi-line uses the first line's rate on the total (staff review before pay).
+  // NOTE: net_payment stays principal − penalty per the documented design; the
+  // broken interest's PAYOUT mechanism is a pending product decision.
+  let brokenArgs: Partial<Parameters<typeof computeRedemption>[0]> = {};
+  if (input.type === 'premature') {
+    const line = (await tx.query<{ coupon_rate_pct: string; day_count_convention: string; paid_through: string | null }>(
+      `SELECT l.coupon_rate_pct, l.day_count_convention,
+              COALESCE((SELECT max(ds.due_date) FROM disbursement_schedule ds
+                         WHERE ds.line_id = l.id AND ds.due_type IN ('Interest','BrokenInterest') AND ds.status = 'Paid'),
+                       a.interest_start_date) AS paid_through
+         FROM application_lines l JOIN applications a ON a.id = l.application_id
+        WHERE l.application_id = $1 AND l.status = 'Active' ORDER BY l.id LIMIT 1`, [input.applicationId])).rows[0];
+    const paidThrough = toISODate(line?.paid_through ?? null);
+    if (line && paidThrough) {
+      brokenArgs = {
+        couponRatePct: Number(line.coupon_rate_pct),
+        lastRegularPayoutDate: paidThrough,
+        redemptionDate: redDate,
+        convention: line.day_count_convention as never,
+      };
+    }
+  }
+  const calc = computeRedemption({ principal, penalty, ...brokenArgs });
   const redNo = await nextCode(tx, 'redemption', 'MCR-{yyyy}-{seq:6}');
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO redemptions (redemption_no, application_id, type, principal, penalty, net_payment, broken_interest, requested_date, redemption_date, reason, status, source, requested_by_customer, created_by_user_id)
@@ -221,26 +247,47 @@ export async function redemptionNeft(db: Db): Promise<Buffer> {
   );
 }
 
-/** Redemption report (all redemptions) as xlsx. */
-export async function redemptionReport(db: Db): Promise<Buffer> {
+/** Scope predicate for redemptions, by the underlying application's owner. */
+function redemptionScope(actor: AuthUser, offset = 0) {
+  return scopeWhere(scopeFor(actor), { userCol: 'a.enrolled_by_user_id', agentCol: 'a.enrolled_by_agent_id', branchCol: 'c.branch_id' }, offset);
+}
+
+/** Redemption report (scoped to the caller) as xlsx. */
+export async function redemptionReport(db: Db, actor: AuthUser): Promise<Buffer> {
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Redemptions');
   ws.addRow(['Ref', 'Customer', 'Application', 'Type', 'Principal', 'Penalty', 'Net', 'Status', 'Date']).eachCell((c) => { c.font = { bold: true }; });
+  const sc = redemptionScope(actor);
   const rows = (await db.query<Record<string, unknown>>(
     `SELECT r.redemption_no, c.full_name, a.application_no, r.type, r.principal, r.penalty, r.net_payment, r.status, r.redemption_date
-     FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id ORDER BY r.created_at DESC`)).rows;
+     FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
+     WHERE ${sc.sql} ORDER BY r.created_at DESC`, sc.params)).rows;
   for (const r of rows) ws.addRow([r.redemption_no, r.full_name, r.application_no, r.type, Number(r.principal), Number(r.penalty), Number(r.net_payment), r.status, r.redemption_date]);
   [5, 6, 7].forEach((i) => { ws.getColumn(i).numFmt = '#,##,##0.00'; });
   ws.columns.forEach((c) => { c.width = 16; });
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-export async function listRedemptions(db: Db, filter?: 'requests' | 'all') {
-  const where = filter === 'requests' ? "WHERE r.status = 'Requested' AND r.approval_request_id IS NULL" : '';
+export async function listRedemptions(db: Db, actor: AuthUser, filter?: 'requests' | 'all') {
+  const sc = redemptionScope(actor);
+  const conds = [sc.sql];
+  if (filter === 'requests') conds.push("r.status = 'Requested' AND r.approval_request_id IS NULL");
   return (await db.query(
     `SELECT r.id, r.redemption_no, r.type, r.status, r.source, r.requested_by_customer, r.principal, r.penalty, r.net_payment, r.redemption_date, r.approval_request_id,
             a.application_no, c.full_name AS customer_name
      FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
-     ${where} ORDER BY r.created_at DESC LIMIT 2000`)).rows;
+     WHERE ${conds.join(' AND ')} ORDER BY r.created_at DESC LIMIT 2000`, sc.params)).rows;
 }
+
+// On REJECT of a redemption approval, mark the redemption Rejected (terminal).
+// Without this the row stayed 'Requested' with an approval_request_id set — it
+// vanished from the queue, couldn't be resubmitted, and blocked any new
+// redemption on the same investment. (Review 2026-07-21.)
+async function rejectRedemption(tx: Db, req: ApprovalRow) {
+  const redId = Number(req.metadata.redemption_id);
+  if (!redId) return;
+  await tx.query("UPDATE redemptions SET status = 'Rejected' WHERE id = $1 AND status = 'Requested'", [redId]);
+}
+registerOnReject('premature_redemption', rejectRedemption);
+registerOnReject('redemption', rejectRedemption);

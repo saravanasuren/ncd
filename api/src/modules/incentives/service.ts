@@ -223,10 +223,12 @@ export async function statementPdf(db: Db, payeeType: string, payeeId: number): 
   const name = payeeType === 'agent'
     ? (await db.query<{ full_name: string }>('SELECT full_name FROM agents WHERE id = $1', [payeeId])).rows[0]?.full_name
     : (await db.query<{ full_name: string }>('SELECT full_name FROM users WHERE id = $1', [payeeId])).rows[0]?.full_name;
+  // Exclude self-investments so the listed rows reconcile with the header
+  // Accrued/Paid/Balance (which come from payeeBalance, itself NOT_SELF-filtered).
   const accruals = (await db.query<Record<string, unknown>>(
     `SELECT ia.accrual_date, ia.amount, ia.rate_mode, ia.rate_value, a.application_no
-     FROM incentive_accruals ia JOIN applications a ON a.id = ia.application_id
-     WHERE ia.payee_type = $1 AND ia.payee_id = $2 ORDER BY ia.accrual_date`, [payeeType, payeeId])).rows;
+     ${ACCRUAL_FROM}
+     WHERE ia.payee_type = $1 AND ia.payee_id = $2 AND ${NOT_SELF} ORDER BY ia.accrual_date`, [payeeType, payeeId])).rows;
   const payouts = (await db.query<Record<string, unknown>>('SELECT paid_at, amount, reference FROM incentive_payouts WHERE payee_type = $1 AND payee_id = $2 ORDER BY paid_at', [payeeType, payeeId])).rows;
 
   const { renderPdf, letterhead } = await import('../../lib/pdf.js');

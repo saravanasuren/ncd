@@ -9,7 +9,7 @@ import * as s from './service.js';
 export const redemptionsRouter = Router();
 
 redemptionsRouter.get('/', requirePermission('redemptions:initiate', 'dashboard:view'),
-  asyncHandler(async (req, res) => res.json({ rows: await s.listRedemptions(getDb(), req.query.filter === 'requests' ? 'requests' : 'all') })));
+  asyncHandler(async (req, res) => res.json({ rows: await s.listRedemptions(getDb(), req.user!, req.query.filter === 'requests' ? 'requests' : 'all') })));
 
 redemptionsRouter.post('/premature', requirePermission('redemptions:initiate'),
   asyncHandler(async (req, res) => {
@@ -43,8 +43,8 @@ redemptionsRouter.get('/neft.xlsx', requirePermission('redemptions:initiate'),
   }));
 
 redemptionsRouter.get('/report.xlsx', requirePermission('redemptions:initiate', 'reports:download'),
-  asyncHandler(async (_req, res) => {
-    const buf = await s.redemptionReport(getDb());
+  asyncHandler(async (req, res) => {
+    const buf = await s.redemptionReport(getDb(), req.user!);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="redemption-report.xlsx"');
     res.end(buf);

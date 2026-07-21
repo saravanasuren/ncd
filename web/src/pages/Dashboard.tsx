@@ -123,17 +123,6 @@ export function Dashboard() {
                     onClick={() => pickWidget('staff', 'New business by staff (in range)')} canDrill={canDrill} />
                   <Tile label="Agent-wise" value={formatINR(f.money_in_agent)} sub="New business by agent"
                     onClick={() => pickWidget('agent', 'New business by agent (in range)')} canDrill={canDrill} />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-                  {isnap && (
-                    <>
-                      <Tile label="Monthly interest" value={formatINR(isnap.monthly_projected)} sub="Gross coupon cost / month at current book"
-                        onClick={() => pickWidget('interest-month', 'This month’s interest (projected)')} canDrill={canDrill} />
-                      <Tile label="Interest accrued" value={formatINR(isnap.accrued_total)} sub="Total accrued as on date"
-                        onClick={() => pickWidget('interest-accrued', 'Interest accrued, as on date')} canDrill={canDrill} />
-                    </>
-                  )}
                   {overview.data.rate_mix && (
                     <Tile label="Cost of funds" value={`${overview.data.rate_mix.weighted_avg_rate}%`}
                       sub={`Weighted-avg coupon on ${formatINR(overview.data.rate_mix.total_outstanding)}`}
@@ -141,19 +130,34 @@ export function Dashboard() {
                   )}
                 </div>
 
-                {overview.data.incentives && (
-                  <>
-                    <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Incentives</h2>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-                      <Tile label="Staff-wise incentive" value={formatINR(overview.data.incentives.staff.earned)}
-                        sub={`${formatINR(overview.data.incentives.staff.paid)} paid · ${formatINR(overview.data.incentives.staff.pending)} pending`}
-                        onClick={() => pickWidget('staff-incentive', 'Staff incentive — by person')} canDrill={canDrill} />
-                      <Tile label="Agent-wise incentive" value={formatINR(overview.data.incentives.agent.earned)}
-                        sub={`${formatINR(overview.data.incentives.agent.paid)} paid · ${formatINR(overview.data.incentives.agent.pending)} pending`}
-                        onClick={() => pickWidget('agent-incentive', 'Agent incentive — by person')} canDrill={canDrill} />
+                {/* Snapshot panels — always the whole book "as it stands now",
+                    independent of the quick-range / series picker above. */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-4 mb-6">
+                  {isnap && (
+                    <div>
+                      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Interest Details</h2>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <Tile label="Monthly interest" value={formatINR(isnap.monthly_projected)} sub="Gross coupon cost / month · whole book"
+                          onClick={() => pickWidget('interest-month', 'This month’s interest (projected) · whole book')} canDrill={canDrill} />
+                        <Tile label="Interest accrued" value={formatINR(isnap.accrued_total)} sub="Total accrued as on date · whole book"
+                          onClick={() => pickWidget('interest-accrued', 'Interest accrued, as on date · whole book')} canDrill={canDrill} />
+                      </div>
                     </div>
-                  </>
-                )}
+                  )}
+                  {overview.data.incentives && (
+                    <div>
+                      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Incentives</h2>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <Tile label="Staff-wise incentive" value={formatINR(overview.data.incentives.staff.earned)}
+                          sub={`${formatINR(overview.data.incentives.staff.paid)} paid · ${formatINR(overview.data.incentives.staff.pending)} pending`}
+                          onClick={() => pickWidget('staff-incentive', 'Staff incentive — by person')} canDrill={canDrill} />
+                        <Tile label="Agent-wise incentive" value={formatINR(overview.data.incentives.agent.earned)}
+                          sub={`${formatINR(overview.data.incentives.agent.paid)} paid · ${formatINR(overview.data.incentives.agent.pending)} pending`}
+                          onClick={() => pickWidget('agent-incentive', 'Agent incentive — by person')} canDrill={canDrill} />
+                      </div>
+                    </div>
+                  )}
+                </div>
               </>
             );
           })()}

@@ -77,4 +77,13 @@ describe('dashboard redemptions — series window vs ownership', () => {
     expect(ov.json.flow.redemptions_window).toBeNull();
     expect(ov.json.flow.redemptions_of_series_total).toBeNull();
   });
+
+  it('Interest Details snapshot is whole-book — unchanged by the series picker', async () => {
+    const a = await admin();
+    const all = await a.get('/api/dashboard/overview');
+    const oneSeries = await a.get(`/api/dashboard/overview?series=${seriesA}`);
+    // Monthly interest + accrued are the same number regardless of the selected series.
+    expect(Number(oneSeries.json.interest_snapshot.monthly_projected)).toBe(Number(all.json.interest_snapshot.monthly_projected));
+    expect(Number(oneSeries.json.interest_snapshot.accrued_total)).toBe(Number(all.json.interest_snapshot.accrued_total));
+  });
 });

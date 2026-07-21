@@ -73,8 +73,8 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     book.alm(db, actor, today),                            // ALM timing tiles (snapshot)
     book.rateMix(db, actor),                               // cost-of-funds rate mix (snapshot)
     book.todayBook(db, actor, today),                      // today's additions/deletions
-    book.interestAccrued(db, actor, seriesFilter, anchor, today),                                    // accrued payable as-on-date (always)
-    book.monthlyInterestRunRate(db, actor, seriesFilter),                                            // run-rate gross monthly coupon of the whole outstanding book
+    book.interestAccrued(db, actor, {}, anchor, today),                                              // "Interest Details" panel — whole book, ignores the range/series picker
+    book.monthlyInterestRunRate(db, actor, {}),                                                      // "Interest Details" panel — whole-book run-rate, ignores the range/series picker
   ]);
   // Incentive totals (Staff vs Agent) — management only.
   const incentiveTotals = showIncentives ? await incentives.incentiveTotals(db) : null;
@@ -175,19 +175,21 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
     case 'interest-paid':
       return { kind: 'rows', rows: await book.interestListInRange(db, actor, filters, true) };
     case 'interest-month': {
-      // "Monthly interest" tile = this calendar month's interest (projected), not the selected window.
+      // "Monthly interest" tile = this calendar month's interest (projected),
+      // whole book — independent of the range/series picker (matches the tile).
       const today = todayISO();
       const monthStart = `${today.slice(0, 7)}-01`;
       const d = new Date(`${today}T00:00:00Z`);
       const monthEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
-      return { kind: 'rows', rows: await book.interestListInRange(db, actor, { seriesIds: filters.seriesIds, from: monthStart, to: monthEnd }) };
+      return { kind: 'rows', rows: await book.interestListInRange(db, actor, { from: monthStart, to: monthEnd }) };
     }
     case 'interest-accrued': {
-      // "Accrued interest" tile = total payable as on today (always), scoped to any selected series.
+      // "Accrued interest" tile = total payable as on today, whole book —
+      // independent of the range/series picker (matches the tile).
       const today = todayISO();
       const settings = await getSettingsMap(db);
       const payoutDay = Number(settings['interest.payout_day_of_month'] ?? 28) || 28;
-      return { kind: 'rows', rows: await book.accruedList(db, actor, seriesFilter, payoutAnchor(today, payoutDay), today) };
+      return { kind: 'rows', rows: await book.accruedList(db, actor, {}, payoutAnchor(today, payoutDay), today) };
     }
     case 'redemptions': {
       // Match the tile: with a series selected, list what was redeemed during

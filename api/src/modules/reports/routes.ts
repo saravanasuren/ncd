@@ -2,7 +2,7 @@
 import { Router } from 'express';
 import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
-import { requirePermission } from '../../middleware/auth.js';
+import { requirePermission, fileTokenOr } from '../../middleware/auth.js';
 import { errors } from '../../lib/errors.js';
 import * as book from './book.js';
 import { buildNcdBook } from './export.js';
@@ -72,10 +72,14 @@ reportsRouter.get('/allotment/:applicationId.pdf', requirePermission('customers:
     res.setHeader('Content-Disposition', `inline; filename="allotment-${req.params.applicationId}.pdf"`);
     res.end(buf);
   }));
-reportsRouter.get('/acknowledgment/:applicationId.pdf', requirePermission('customers:read'),
+// Accepts a `?vt=` file token so WappCloud can fetch the ack PDF for the
+// WhatsApp document header; a valid token skips the session visibility check.
+reportsRouter.get('/acknowledgment/:applicationId.pdf', fileTokenOr('acknowledgment', 'customers:read'),
   asyncHandler(async (req, res) => {
-    const { assertApplicationVisible } = await import('../../lib/visibility.js');
-    await assertApplicationVisible(getDb(), req.user!, Number(req.params.applicationId));
+    if (!req.fileToken) {
+      const { assertApplicationVisible } = await import('../../lib/visibility.js');
+      await assertApplicationVisible(getDb(), req.user!, Number(req.params.applicationId));
+    }
     const { acknowledgmentPdf } = await import('./forms/acknowledgment.js');
     const buf = await acknowledgmentPdf(getDb(), Number(req.params.applicationId));
     res.setHeader('Content-Type', 'application/pdf');

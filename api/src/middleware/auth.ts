@@ -8,7 +8,7 @@ import type { RequestHandler } from 'express';
 import type { Permission } from '@new-wealth/shared';
 import { getDb } from '../db/index.js';
 import { errors } from '../lib/errors.js';
-import { verifyAccess } from '../modules/auth/tokens.js';
+import { verifyAccess, verifyFileToken } from '../modules/auth/tokens.js';
 import { findAuthUserById } from '../modules/users/repo.js';
 import '../lib/authUser.js'; // Express.Request augmentation
 
@@ -42,5 +42,24 @@ export function requirePermission(...perms: Permission[]): RequestHandler {
     const held = new Set(req.user.permissions);
     if (perms.some((p) => held.has(p))) return next();
     next(errors.forbidden(`Requires one of: ${perms.join(', ')}`));
+  };
+}
+
+/**
+ * Document routes an external service must fetch (e.g. WappCloud pulling a
+ * WhatsApp document header). A valid `?vt=` file token scoped to (kind, :applicationId)
+ * authorises in lieu of a session; otherwise fall back to the normal permission
+ * check. On token success sets req.fileToken so the handler can skip its
+ * session-based visibility check (the token already scopes to that one document).
+ */
+export function fileTokenOr(kind: string, ...perms: Permission[]): RequestHandler {
+  return (req, res, next) => {
+    const vt = typeof req.query.vt === 'string' ? req.query.vt : null;
+    const appId = Number(req.params.applicationId);
+    if (vt && Number.isFinite(appId) && verifyFileToken(vt, kind, appId)) {
+      req.fileToken = true;
+      return next();
+    }
+    return requirePermission(...perms)(req, res, next);
   };
 }

@@ -17,6 +17,9 @@ declare global {
   namespace Express {
     interface Request {
       user?: AuthUser;
+      /** Set by fileTokenOr when a valid ?vt= file token authorised the request
+       * (no session), so the handler can skip its session-based visibility check. */
+      fileToken?: boolean;
     }
   }
 }

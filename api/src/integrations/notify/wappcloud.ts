@@ -28,10 +28,18 @@ export function formatPhone(raw: string): string | null {
   return '+' + d;
 }
 
+export interface WappTemplate {
+  name: string;
+  variables: Record<string, string>;
+  /** Document-header media WappCloud fetches (e.g. the ack PDF). */
+  document?: { url: string; filename: string };
+}
+
 // Map a queue template + payload to a registered WappCloud template + its
-// positional {{n}} variables. Exported for unit tests. Returns null when no
-// approved template covers the queue template (the send then fails clearly).
-export function templateFor(meta: SendMeta | undefined): { name: string; variables: Record<string, string> } | null {
+// positional {{n}} variables (and an optional document header). Exported for
+// unit tests. Returns null when no approved template covers the queue template
+// (the send then fails clearly).
+export function templateFor(meta: SendMeta | undefined): WappTemplate | null {
   if (meta?.template === 'portal_otp' && config.WAPPCLOUD_OTP_TEMPLATE) {
     return { name: config.WAPPCLOUD_OTP_TEMPLATE, variables: { '1': String(meta.payload?.otp ?? '') } };
   }
@@ -43,6 +51,17 @@ export function templateFor(meta: SendMeta | undefined): { name: string; variabl
       name: config.WAPPCLOUD_INTEREST_TEMPLATE || 'ncd_interest_final',
       variables: { '1': String(p.name ?? ''), '2': String(p.amount ?? ''), '3': String(p.month ?? ''), '4': String(p.date ?? '') },
     };
+  }
+  // Acknowledgement once funds are received. ncd_akn: {{1}} name, plus a
+  // Document header carrying the ack PDF (WappCloud fetches payload.documentUrl).
+  if (meta?.template === 'acknowledgment') {
+    const p = meta.payload ?? {};
+    const tpl: WappTemplate = {
+      name: config.WAPPCLOUD_ACK_TEMPLATE || 'ncd_akn',
+      variables: { '1': String(p.name ?? '') },
+    };
+    if (p.documentUrl) tpl.document = { url: String(p.documentUrl), filename: String(p.documentName ?? 'Acknowledgment.pdf') };
+    return tpl;
   }
   return null;
 }
@@ -58,6 +77,12 @@ export function wappcloudProvider(): NotifyProvider {
       if (!contact) return { ok: false, error: `wappcloud: no valid phone (got "${to}")` };
       if (override) console.warn(`[wappcloud] TEST MODE — message for ${to} redirected to ${override}`);
 
+      // WappCloud message: template name, optional Document header (fetched from
+      // the URL), optional {{n}} body variables.
+      const message: Record<string, unknown> = { template_name: tpl.name };
+      if (tpl.document) message.header = { type: 'document', url: tpl.document.url, filename: tpl.document.filename };
+      if (Object.keys(tpl.variables).length) message.body = { variables: tpl.variables };
+
       const ctrl = new AbortController();
       const tid = setTimeout(() => ctrl.abort(), 15000);
       try {
@@ -68,10 +93,7 @@ export function wappcloudProvider(): NotifyProvider {
             Authorization: `Bearer ${config.WAPPCLOUD_TOKEN}`,
             'x-api-key': config.WAPPCLOUD_API_KEY!,
           },
-          body: JSON.stringify({
-            contact_number: contact,
-            message: { template_name: tpl.name, body: { variables: tpl.variables } },
-          }),
+          body: JSON.stringify({ contact_number: contact, message }),
           signal: ctrl.signal,
         });
         const text = await r.text().catch(() => '');

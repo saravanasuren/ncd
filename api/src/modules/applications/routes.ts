@@ -75,6 +75,11 @@ applicationsRouter.post('/:id/locker-deposit', requirePermission('applications:u
 applicationsRouter.post('/:id/mark-esigned', requirePermission('applications:mark-esigned'),
   asyncHandler(async (req, res) => { await s.markESigned(getDb(), req.user!, Number(req.params.id)); res.json({ ok: true }); }));
 
+// Send the acknowledgement PDF to the customer over WhatsApp (approved ncd_akn
+// template). Management-tier — same actors who confirm funds / update the app.
+applicationsRouter.post('/:id/whatsapp-ack', requirePermission('notifications:admin', 'applications:update'),
+  asyncHandler(async (req, res) => { res.json(await s.sendWhatsappAck(getDb(), Number(req.params.id))); }));
+
 // ── Super-admin delete / archive (applications:delete → super_admin only) ──
 applicationsRouter.post('/:id/archive', requirePermission('applications:delete'),
   asyncHandler(async (req, res) => {

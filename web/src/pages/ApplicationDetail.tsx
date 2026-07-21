@@ -161,6 +161,12 @@ export function ApplicationDetailPage() {
         {a.receipt_file_path && <a href={`/api/applications/${id}/receipt`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">View receipt</a>}
         <a href={`/api/reports/application-form/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Application form</a>
         {a.status === 'Active' && <a href={`/api/reports/acknowledgment/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Acknowledgement</a>}
+        {a.status === 'Active' && can('applications:update') && (
+          <button
+            onClick={() => run(api.post<{ ok: boolean; status: string; error: string | null; phone: string }>(`/api/applications/${id}/whatsapp-ack`)
+              .then((r) => setNote(r.ok ? `Acknowledgement sent on WhatsApp to ${r.phone}.` : `WhatsApp send ${r.status}${r.error ? ' — ' + r.error : ''}.`)))}
+            className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg" title="Send the acknowledgement PDF to the customer over WhatsApp (ncd_akn)">📲 Ack on WhatsApp</button>
+        )}
         {a.allotment_date && (
           <>
             <a href={`/api/reports/bond/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Bond certificate</a>

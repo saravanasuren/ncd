@@ -75,6 +75,7 @@ export class Client {
   get(p: string) { return this.req('GET', p); }
   post(p: string, b?: unknown) { return this.req('POST', p, b ?? {}); }
   put(p: string, b?: unknown) { return this.req('PUT', p, b ?? {}); }
+  patch(p: string, b?: unknown) { return this.req('PATCH', p, b ?? {}); }
   del(p: string, b?: unknown) { return this.req('DELETE', p, b); }
 
   /** Fetch raw bytes (for binary downloads like xlsx). */

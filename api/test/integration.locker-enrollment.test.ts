@@ -39,8 +39,8 @@ beforeAll(async () => {
       // figure, which is what a link pledges (staff never type it).
       const get = p.match(/^\/locker-applications\/([^/]+)$/);
       if (get && req.method === 'GET') {
-        const size = get[1] === 'la_xl' ? 'XL' : 'Medium';
-        const deposit = get[1] === 'la_xl' ? 300000 : 100000;
+        const size = get[1].startsWith('la_xl') ? 'XL' : 'Medium';
+        const deposit = get[1].startsWith('la_xl') ? 300000 : 100000;
         return send(200, {
           application_id: get[1], application_no: 'APP-L-' + get[1], status: 'payment_pending', locker_size: size,
           legs: { rent: { amount: 3540, settled: false }, deposit: { amount: deposit, settled: false } },
@@ -151,6 +151,35 @@ describe('locker deposit links (NCD backs the deposit)', () => {
     const appId = await liveInvestment(staff, 100000, '9899111002'); // ₹1L only
     const r = await staff.post('/api/lockers/deposit-links', { application_id: appId, lockerhub_application_id: 'la_xl' }); // needs ₹3L
     expect(r.status).toBe(422);
+  });
+
+  it('redeems only the free ₹22L and keeps the ₹3L locker pledge live', async () => {
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const cxo = await login('cxo@demo.local');
+    const appId = await liveInvestment(staff, 2500000, '9899111004');
+    const pledge = await staff.post('/api/lockers/deposit-links', { application_id: appId, lockerhub_application_id: 'la_xl2' });
+    expect(pledge.status).toBe(201);
+    expect(pledge.json.linked_amount).toBe(300000); // ₹3L pledged
+
+    // More than the free portion is refused.
+    const tooMuch = await staff.post('/api/redemptions/premature', { application_id: appId, reason: 'test', amount: 2300000 });
+    expect(tooMuch.status).toBe(422);
+
+    // Exactly the free ₹22L is allowed.
+    const red = await staff.post('/api/redemptions/premature', { application_id: appId, reason: 'partial exit', amount: 2200000 });
+    expect(red.status).toBe(201);
+    expect(Number(red.json.principal)).toBe(2200000);
+
+    // Premature redemption is a single CXO check.
+    const ok = await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
+    expect(ok.status).toBe(200);
+
+    // The investment STAYS live with the pledged ₹3L.
+    const after = await staff.get(`/api/applications/${appId}`);
+    expect(after.json.application.status).toBe('Active');
+    expect(after.json.locker.outstanding).toBe(300000);
+    expect(after.json.locker.linked_to_lockers).toBe(300000);
+    expect(after.json.locker.redeemable).toBe(0);
   });
 
   it('a fully-pledged investment cannot be redeemed until the link is released', async () => {

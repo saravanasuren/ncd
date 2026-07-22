@@ -24,9 +24,10 @@ function PayoutAccount({ appId, customerId, onChange }: { appId: number; custome
 
 /** Lifecycle actions for an Active investment: premature/maturity redemption,
  * rollover, holder transfer, transformation. Each posts and lands in approvals. */
-function LifecycleActions({ appId, onDone, onError }: { appId: number; onDone: (msg: string) => void; onError: (e: unknown) => void }) {
+function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; locker?: { redeemable: number; linked_to_lockers: number } | null; onDone: (msg: string) => void; onError: (e: unknown) => void }) {
   const [open, setOpen] = useState<'premature' | 'transfer' | 'transformation' | null>(null);
   const [reason, setReason] = useState('');
+  const [amount, setAmount] = useState('');
   const [date, setDate] = useState('');
   const [custQ, setCustQ] = useState('');
   const [toCustomer, setToCustomer] = useState<{ id: number; name: string } | null>(null);
@@ -39,7 +40,7 @@ function LifecycleActions({ appId, onDone, onError }: { appId: number; onDone: (
   });
 
   const fire = (p: Promise<unknown>, msg: string) =>
-    p.then(() => { setOpen(null); setReason(''); setDate(''); setToCustomer(null); setCustQ(''); onDone(msg); }).catch(onError);
+    p.then(() => { setOpen(null); setReason(''); setAmount(''); setDate(''); setToCustomer(null); setCustQ(''); onDone(msg); }).catch(onError);
 
   const inp = 'px-2.5 py-1.5 text-xs border border-border-strong rounded outline-none focus:border-primary';
   const act = 'text-xs border border-border rounded px-3 py-1.5 hover:bg-bg';
@@ -57,11 +58,26 @@ function LifecycleActions({ appId, onDone, onError }: { appId: number; onDone: (
       </div>
 
       {open === 'premature' && (
-        <div className="flex gap-2 flex-wrap items-center mt-3">
-          <input className={`${inp} w-64`} placeholder="Reason (required)" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
-          <input className={inp} type="date" value={date} onChange={(e) => setDate(e.target.value)} title="Redemption date (optional, default today)" />
-          <button className={go} disabled={reason.trim().length < 2}
-            onClick={() => fire(api.post('/api/redemptions/premature', { application_id: appId, reason, ...(date ? { redemption_date: date } : {}) }), 'Premature redemption initiated — awaiting approval.')}>Initiate</button>
+        <div className="mt-3">
+          <div className="flex gap-2 flex-wrap items-center">
+            <input className={`${inp} w-64`} placeholder="Reason (required)" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
+            <input className={`${inp} w-44`} type="number" min="1" placeholder="Amount (blank = all)" value={amount} onChange={(e) => setAmount(e.target.value)}
+              title="Partial withdrawal — leave blank to redeem everything redeemable" />
+            <input className={inp} type="date" value={date} onChange={(e) => setDate(e.target.value)} title="Redemption date (optional, default today)" />
+            <button className={go} disabled={reason.trim().length < 2 || (amount !== '' && !(Number(amount) > 0))}
+              onClick={() => fire(api.post('/api/redemptions/premature', {
+                application_id: appId, reason,
+                ...(amount ? { amount: Number(amount) } : {}),
+                ...(date ? { redemption_date: date } : {}),
+              }), 'Premature redemption initiated — awaiting approval.')}>Initiate</button>
+          </div>
+          {/* A pledged investment can only redeem its free portion — the rest secures a locker. */}
+          {locker && locker.linked_to_lockers > 0 && (
+            <div className="text-xs text-text-muted mt-2">
+              {formatINR(locker.linked_to_lockers)} is pledged to a live locker deposit and cannot be redeemed.
+              Redeemable now: <b>{formatINR(locker.redeemable)}</b>. Leave the amount blank to redeem all of it and keep the locker live.
+            </div>
+          )}
         </div>
       )}
 
@@ -248,7 +264,7 @@ export function ApplicationDetailPage() {
       )}
 
       {can('redemptions:initiate') && a.status === 'Active' && (
-        <LifecycleActions appId={Number(id)}
+        <LifecycleActions appId={Number(id)} locker={data.locker}
           onDone={(m) => { setMsg(''); setNote(m); invalidate(); }}
           onError={(e) => { setNote(''); setMsg(e instanceof ApiError ? e.message : 'Failed'); }} />
       )}

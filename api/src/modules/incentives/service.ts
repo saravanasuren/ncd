@@ -62,8 +62,21 @@ export async function payCustomerAccrual(db: Db, actor: AuthUser, payeeType: str
     if (!acc) throw errors.notFound('No incentive found for this customer');
     if (acc.paid_at) return payeeBalance(tx, payeeType, payeeId); // already paid — idempotent
     await tx.query('UPDATE incentive_accruals SET paid_at = now() WHERE id = $1', [acc.id]);
-    await tx.query('INSERT INTO incentive_payouts (payee_type, payee_id, amount, application_id, reference, created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6)',
+    const pay = await tx.query<{ id: string; paid_at: string }>(
+      'INSERT INTO incentive_payouts (payee_type, payee_id, amount, application_id, reference, created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, paid_at',
       [payeeType, payeeId, acc.amount, applicationId, `APP:${applicationId}`, actor.id]);
+    // Agent-event webhook (contract §Events channel 1). Inert unless the
+    // webhook is configured; skipped for agents not sourced from LockerHub.
+    const payout = pay.rows[0];
+    if (payeeType === 'agent' && payout) {
+      const { enqueueEvent } = await import('../../integrations/lockerhub/dispatcher.js');
+      await enqueueEvent(tx, {
+        eventType: 'incentive_paid',
+        targetAgentId: payeeId,
+        dedupKey: `incentive_paid:${payout.id}`,
+        payload: { payout_id: Number(payout.id), paid_at: payout.paid_at, amount: Number(acc.amount), application_id: applicationId },
+      });
+    }
     await writeAudit(tx, { actorId: actor.id, action: 'incentive.pay-customer', entityType: 'incentive_accruals', entityId: Number(acc.id), after: { amount: acc.amount, applicationId } });
     return payeeBalance(tx, payeeType, payeeId);
   });

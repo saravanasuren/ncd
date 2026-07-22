@@ -207,6 +207,46 @@ export function ApplicationDetailPage() {
         {can('applications:update') && a.status === 'Active' && <PayoutAccount appId={Number(id)} customerId={a.customer_id} onChange={invalidate} />}
       </div>
 
+      {/* Locker pledge — ONE investment, part of it backing locker deposits. */}
+      {data.locker && data.locker.linked_to_lockers > 0 && (
+        <div className="bg-surface border border-border rounded-lg shadow-card p-5 mt-4">
+          <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Locker deposit pledge</h2>
+          <div className="flex flex-wrap gap-6 text-sm mb-2">
+            <div><div className="text-text-muted text-xs">Total investment</div><div className="font-semibold">{formatINR(data.locker.outstanding)}</div></div>
+            <div><div className="text-text-muted text-xs">Linked to lockers</div><div className="font-semibold text-warn">{formatINR(data.locker.linked_to_lockers)}</div></div>
+            <div><div className="text-text-muted text-xs">Free NCD</div><div className="font-semibold">{formatINR(data.locker.free_ncd)}</div></div>
+            <div><div className="text-text-muted text-xs">Redeemable</div><div className="font-semibold text-success">{formatINR(data.locker.redeemable)}</div></div>
+          </div>
+          <p className="text-xs text-text-muted mb-3">This is a single investment — the linked amount is the locker's security and can't be redeemed until the link is released.</p>
+          <table className="w-full text-sm border-collapse">
+            <thead><tr className="border-b border-border">
+              {['Locker', 'Size', 'Pledged', 'Status', ''].map((h) => (
+                <th key={h} className="py-2 px-3 text-xs font-semibold text-text-label uppercase tracking-wide text-left">{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {data.locker.links.map((l: any) => (
+                <tr key={l.id} className={`border-b border-border last:border-0 ${l.status !== 'active' ? 'opacity-50' : ''}`}>
+                  <td className="py-2 px-3 font-mono text-xs">{l.locker_no ?? l.lockerhub_application_id}</td>
+                  <td className="py-2 px-3">{l.locker_size ?? '—'}</td>
+                  <td className="py-2 px-3 font-medium">{formatINR(l.linked_amount)}</td>
+                  <td className="py-2 px-3"><span className={`text-[11px] rounded px-1.5 py-0.5 ${l.status === 'active' ? 'bg-[color:var(--warn-bg)] text-warn' : 'bg-bg text-text-muted'}`}>{l.status}</span></td>
+                  <td className="py-2 px-3 text-right">
+                    {l.status === 'active' && can('lockers:enroll') && (
+                      <button className="text-xs text-danger hover:underline"
+                        onClick={() => {
+                          const r = window.prompt('Release this locker link? The pledged amount becomes redeemable.\n\nReason (e.g. locker closed):');
+                          if (r && r.trim().length >= 2) run(api.post(`/api/lockers/deposit-links/${l.id}/release`, { reason: r.trim() }));
+                        }}>Release</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {can('redemptions:initiate') && a.status === 'Active' && (
         <LifecycleActions appId={Number(id)}
           onDone={(m) => { setMsg(''); setNote(m); invalidate(); }}

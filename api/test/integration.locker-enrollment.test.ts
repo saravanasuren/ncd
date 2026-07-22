@@ -35,6 +35,18 @@ beforeAll(async () => {
       if (p === '/customers/9800011122') return send(200, { found: false });
       if (p === '/customers' && req.method === 'POST') return send(200, { success: true, phone: body.phone, created: true });
       if (p === '/locker-applications' && req.method === 'POST') return send(201, { success: true, application_id: 'la_1', application_no: 'APP-L-1', status: 'payment_pending', pricing: { locker_size: 'Medium', annual_fee: 3000, rent_incl_gst: 3540, deposit: 25000, gst_pct: 18 } });
+      // GET a locker application — the deposit leg amount is LockerHub's own
+      // figure, which is what a link pledges (staff never type it).
+      const get = p.match(/^\/locker-applications\/([^/]+)$/);
+      if (get && req.method === 'GET') {
+        const size = get[1] === 'la_xl' ? 'XL' : 'Medium';
+        const deposit = get[1] === 'la_xl' ? 300000 : 100000;
+        return send(200, {
+          application_id: get[1], application_no: 'APP-L-' + get[1], status: 'payment_pending', locker_size: size,
+          legs: { rent: { amount: 3540, settled: false }, deposit: { amount: deposit, settled: false } },
+          allotment: { locker_number: 'L10-4' },
+        });
+      }
       const rec = p.match(/^\/locker-applications\/(.+)\/record-payment$/);
       if (rec && req.method === 'POST') {
         const id = rec[1]!; (paidLegs[id] ??= new Set()).add(body.leg);
@@ -98,5 +110,63 @@ describe('locker enrollment proxy (Part A)', () => {
     expect(rent.json.application_status).toBe('payment_pending');
     const dep = await staff.post(`/api/lockers/applications/${id}/record-payment`, { leg: 'deposit', method: 'cash' });
     expect(dep.json.application_status).toBe('approved'); // auto-allotted on the last leg
+  });
+});
+
+// Owner spec 2026-07-22: an NCD investment backs a locker's deposit. The
+// investment is NEVER split — the link is a claim against it.
+describe('locker deposit links (NCD backs the deposit)', () => {
+  const seriesId = () => ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'").then((r: any) => Number(r.rows[0].id));
+  const schemeId = () => ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'").then((r: any) => Number(r.rows[0].id));
+
+  async function liveInvestment(staff: Client, amount: number, phone: string) {
+    const cust = await staff.post('/api/customers', { full_name: 'Locker Cust ' + phone, phone });
+    const app = await staff.post('/api/applications', {
+      customer_id: cust.json.id, series_id: await seriesId(), scheme_id: await schemeId(), amount, date_money_received: '2026-07-01',
+    });
+    const ncd = await login('ncd@demo.local');
+    await ncd.post(`/api/approvals/${app.json.subscription_request.id}/approve`); // go-live
+    return Number(app.json.id);
+  }
+
+  it('₹25L investment backing a ₹3L XL locker: one investment, ₹3L pledged, ₹22L redeemable', async () => {
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const appId = await liveInvestment(staff, 2500000, '9899111001');
+
+    const link = await staff.post('/api/lockers/deposit-links', { application_id: appId, lockerhub_application_id: 'la_xl' });
+    expect(link.status).toBe(201);
+    expect(link.json.linked_amount).toBe(300000);       // LockerHub's figure, not typed
+    expect(link.json.lockerhub_settled).toBe(true);      // deposit leg auto-settled
+
+    const detail = await staff.get(`/api/applications/${appId}`);
+    expect(detail.json.locker.outstanding).toBe(2500000);
+    expect(detail.json.locker.linked_to_lockers).toBe(300000);
+    expect(detail.json.locker.free_ncd).toBe(2200000);
+    expect(detail.json.locker.redeemable).toBe(2200000);
+    expect(detail.json.locker.links).toHaveLength(1);
+  });
+
+  it('refuses to pledge more than the investment has free', async () => {
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const appId = await liveInvestment(staff, 100000, '9899111002'); // ₹1L only
+    const r = await staff.post('/api/lockers/deposit-links', { application_id: appId, lockerhub_application_id: 'la_xl' }); // needs ₹3L
+    expect(r.status).toBe(422);
+  });
+
+  it('a fully-pledged investment cannot be redeemed until the link is released', async () => {
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const appId = await liveInvestment(staff, 100000, '9899111003'); // ₹1L = Medium deposit exactly
+    const link = await staff.post('/api/lockers/deposit-links', { application_id: appId, lockerhub_application_id: 'la_med' });
+    expect(link.json.linked_amount).toBe(100000);
+
+    const blocked = await staff.post('/api/redemptions/premature', { application_id: appId, reason: 'test' });
+    expect(blocked.status).toBe(422);
+
+    // Locker closed → release frees it.
+    const rel = await staff.post(`/api/lockers/deposit-links/${link.json.link_id}/release`, { reason: 'locker closed' });
+    expect(rel.status).toBe(200);
+    const after = await staff.get(`/api/applications/${appId}`);
+    expect(after.json.locker.linked_to_lockers).toBe(0);
+    expect(after.json.locker.redeemable).toBe(100000);
   });
 });

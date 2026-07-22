@@ -159,13 +159,15 @@ customerReadsRouter.get('/customers/:id/holdings', asyncHandler(async (req, res)
   }
 
   // Totals block — the locker double-count guard (docs/08 §1).
+  // The locker figure is the amount actually PLEDGED to live locker deposits,
+  // not the whole investment: a ₹25L NCD backing a ₹3L locker contributes ₹3L
+  // here, so ncd_principal_excluding_locker_deposits correctly shows ₹22L.
   let ncdPrincipal = 0;
-  let lockerDepositViaNcd = 0;
-  for (const h of holdings) {
-    const p = Number(h.principal || 0);
-    ncdPrincipal += p;
-    if (h.is_locker_deposit) lockerDepositViaNcd += p;
-  }
+  for (const h of holdings) ncdPrincipal += Number(h.principal || 0);
+  const lockerDepositViaNcd = Number((await db.query<{ v: string }>(
+    `SELECT COALESCE(sum(ldl.linked_amount),0) AS v
+       FROM locker_deposit_links ldl JOIN applications a ON a.id = ldl.application_id
+      WHERE a.customer_id = $1 AND ldl.status = 'active'`, [customerId])).rows[0]?.v ?? 0);
 
   res.json({
     customer_id: Number(c.id),

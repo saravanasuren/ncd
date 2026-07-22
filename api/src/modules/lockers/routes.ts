@@ -10,6 +10,7 @@
  */
 import { Router } from 'express';
 import { z } from 'zod';
+import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
 import * as lh from '../../integrations/lockerhub/client.js';
@@ -73,4 +74,20 @@ lockersRouter.post('/applications/:id/record-payment', asyncHandler(async (req, 
 lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) => {
   const b = z.object({ locker_id: z.string().optional(), lease_months: z.number().int().positive().optional() }).parse(req.body ?? {});
   res.json(await lh.allocate(staffOf(req), String(req.params.id), b));
+}));
+
+// ── Deposit links: back a locker's deposit with an NCD investment ──────────
+// The amount is LockerHub's own deposit figure — never typed by staff — and
+// linking settles that deposit leg on their side.
+lockersRouter.post('/deposit-links', asyncHandler(async (req, res) => {
+  const b = z.object({ application_id: z.number().int().positive(), lockerhub_application_id: z.string().min(1) }).parse(req.body ?? {});
+  const { linkDeposit } = await import('./deposits.js');
+  res.status(201).json(await linkDeposit(getDb(), req.user!, { applicationId: b.application_id, lockerApplicationId: b.lockerhub_application_id }));
+}));
+
+// Release a link once the locker is closed — frees the pledged amount to be redeemed.
+lockersRouter.post('/deposit-links/:linkId/release', asyncHandler(async (req, res) => {
+  const { reason } = z.object({ reason: z.string().min(2) }).parse(req.body ?? {});
+  const { releaseLink } = await import('./deposits.js');
+  res.json(await releaseLink(getDb(), req.user!, Number(req.params.linkId), reason));
 }));

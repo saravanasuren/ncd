@@ -62,6 +62,26 @@ const FROM = `FROM applications a JOIN customers c ON c.id = a.customer_id JOIN 
 const AMT = 'COALESCE(bk.live, a.total_amount)';
 
 /**
+ * Amount of an investment PLEDGED to locker deposits — the sum of its live
+ * links. An investment is never split: a ₹25L NCD backing a ₹3L XL locker is
+ * still one ₹25L investment, of which ₹3L is locker security and ₹22L is plain
+ * NCD. Channel reporting uses this so the locker figure matches the locker
+ * agreements, while the outstanding book still counts ₹25L exactly once.
+ */
+const LINKED = `(SELECT COALESCE(sum(ldl.linked_amount),0) FROM locker_deposit_links ldl
+                  WHERE ldl.application_id = a.id AND ldl.status = 'active')`;
+
+/** Is this investment locker-backed? Either it carries a live link (new model)
+ *  or it's a legacy row flagged before links existed. */
+const IS_LOCKER = `(${LINKED} > 0 OR a.is_locker_deposit)`;
+/** Locker-channel amount: the PLEDGED portion when links exist, else the whole
+ *  investment for legacy flagged rows (which were wholly locker deposits). */
+const LOCKER_AMT = `CASE WHEN ${LINKED} > 0 THEN ${LINKED} WHEN a.is_locker_deposit THEN ${AMT} ELSE 0 END`;
+/** What's left for the NCD channels after any pledge. Legacy wholly-locker rows
+ *  contribute nothing (they're excluded from those channels entirely). */
+const FREE_AMT = `GREATEST(${AMT} - ${LINKED}, 0)`;
+
+/**
  * Attribution (docs/06 §1). The referrer is resolved to a stable PAYEE:
  *
  *  1. Effective referrer text = the app's own referred_by_text, falling back to
@@ -265,7 +285,7 @@ export async function todayBook(db: Db, actor: AuthUser, today: string) {
     `SELECT a.application_no, c.id AS customer_id, c.full_name AS customer, c.customer_code,
             s.code AS series_code, a.total_amount AS amount, a.date_money_received, a.status,
             NULLIF(btrim(a.referred_by_text), '') AS referred_by,
-            CASE WHEN a.is_locker_deposit THEN 'Locker'
+            CASE WHEN ${IS_LOCKER} THEN 'Locker'
                  WHEN a.source IN ('dhanamfin','lockerhub') THEN 'DhanamFin app'
                  ELSE COALESCE(NULLIF(btrim(a.collection_method), ''), 'Physical') END AS received_via
      ${FROM} WHERE ${addScope.sql} AND a.date_money_received = $${addScope.params.length + 1}::date
@@ -388,17 +408,29 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
   //    "DhanamFin App" tile.
   // The same channel filter is applied to the issued/redeemed register below so
   // its numbers are channel-specific too (Issued = Outstanding + Redeemed).
+  // Locker Hub = investments carrying a LIVE deposit link. The amount reported
+  // for that channel is the pledged portion only (see LOCKER_AMT below), so a
+  // ₹25L NCD backing a ₹3L locker shows ₹3L here and its ₹22L remainder under
+  // the NCD channels — never ₹25L in both.
   const channelExtra: string[] = [];
-  if (by === 'lockerhub') channelExtra.push('a.is_locker_deposit = TRUE');
-  if (by === 'dhanamfin') channelExtra.push("(a.source IN ('dhanamfin','lockerhub') AND a.is_locker_deposit = FALSE)");
+  if (by === 'lockerhub') channelExtra.push(IS_LOCKER);
+  // App-sourced NCDs. A legacy wholly-locker row stays excluded (as before); a
+  // partially-pledged one appears with its unpledged remainder.
+  if (by === 'dhanamfin') channelExtra.push(`(a.source IN ('dhanamfin','lockerhub') AND NOT (a.is_locker_deposit AND ${LINKED} = 0))`);
   // Show REAL investments so the expansion lists redeemed customers too: the
   // exact OUTSTANDING set (so summary columns are unchanged) PLUS the exited
   // statuses (children only). Reusing OUTSTANDING_SQL_LIST keeps the outstanding
   // rows byte-identical to every other book query — never hardcode the set.
   const extra: string[] = [`a.status IN (${OUTSTANDING_SQL_LIST}, ${EXITED_STATUS_SQL_LIST})`, ...channelExtra];
   const w = appWhere(actor, { ...filters, status: undefined }, extra);
+  // Channel views report their own slice of an investment: Locker Hub shows the
+  // PLEDGED portion, the app channel shows what's left after any pledge. Every
+  // other view reports the whole investment as before.
+  const SEG_AMT = by === 'lockerhub' ? LOCKER_AMT
+    : by === 'dhanamfin' ? FREE_AMT
+    : AMT;
   const { rows } = await db.query<any>(
-    `SELECT a.application_no, ${AMT} AS amount, a.status, a.allotment_date,
+    `SELECT a.application_no, ${SEG_AMT} AS amount, a.status, a.allotment_date,
             c.id AS customer_id, c.customer_code, c.full_name AS customer, COALESCE(c.district,'Unassigned') AS district,
             COALESCE(b.name,'Unassigned') AS branch,
             s.code AS series_code, s.status AS series_status,
@@ -553,12 +585,15 @@ export async function redemptionsOfSeries(db: Db, actor: AuthUser, seriesIds: nu
 export async function moneyInByChannel(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, { ...filters, status: 'active' });
   const { rows } = await db.query<{ total: string; locker: string; app: string; n: string; total_investors: number; locker_investors: number; app_investors: number }>(
+    // `locker` is the amount actually PLEDGED to lockers — the sum of live
+    // deposit links — not the whole investment. A ₹25L NCD backing a ₹3L locker
+    // contributes ₹3L here and ₹22L to plain NCD; `total` still counts ₹25L once.
     `SELECT COALESCE(sum(a.total_amount),0) AS total,
-            COALESCE(sum(a.total_amount) FILTER (WHERE a.is_locker_deposit),0) AS locker,
+            COALESCE(sum(${LOCKER_AMT}),0) AS locker,
             COALESCE(sum(a.total_amount) FILTER (WHERE a.source IN ('dhanamfin','lockerhub')),0) AS app,
             count(a.id)::int AS n,
             count(DISTINCT a.customer_id)::int AS total_investors,
-            count(DISTINCT a.customer_id) FILTER (WHERE a.is_locker_deposit)::int AS locker_investors,
+            count(DISTINCT a.customer_id) FILTER (WHERE ${IS_LOCKER})::int AS locker_investors,
             count(DISTINCT a.customer_id) FILTER (WHERE a.source IN ('dhanamfin','lockerhub'))::int AS app_investors
      ${FROM} WHERE ${w.sql} AND a.date_money_received IS NOT NULL`, w.params);
   const r = rows[0]!;
@@ -588,7 +623,7 @@ export async function moneyInBySource(db: Db, actor: AuthUser, filters: BookFilt
 /** New-investment list for the window; optional channel = 'locker' | 'app'. */
 export async function newInvestmentsList(db: Db, actor: AuthUser, filters: BookFilters = {}, channel?: 'locker' | 'app') {
   const extra = ['a.date_money_received IS NOT NULL'];
-  if (channel === 'locker') extra.push('a.is_locker_deposit');
+  if (channel === 'locker') extra.push(IS_LOCKER);
   if (channel === 'app') extra.push(`a.source IN ('dhanamfin','lockerhub')`);
   const w = appWhere(actor, { ...filters, status: 'active' }, extra);
   const { rows } = await db.query(

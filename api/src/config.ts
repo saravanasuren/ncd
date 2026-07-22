@@ -83,7 +83,12 @@ const schema = z.object({
   DIGIO_CLIENT_SECRET: z.string().optional(),
   DIGIO_BASE: z.string().optional(),
   DIGIO_WEBHOOK_SECRET: z.string().optional(),
-  DIGIO_POLLER_ENABLED: z.string().default('false'),
+  // eSign auto-completion: poll Digio for outstanding sign requests so a signed
+  // document flips to eSigned on its own (no webhook, no manual "Mark eSigned").
+  // ON by default; set to 'false' in SSM to disable. No-ops unless DIGIO_* creds
+  // are present. Interval in seconds (owner asked for ~15s).
+  DIGIO_POLLER_ENABLED: z.string().default('true'),
+  DIGIO_POLL_SECONDS: z.coerce.number().default(15),
   // ── SharePoint (Graph) — offsite backup copy (docs/08 §2) ──
   SHAREPOINT_TENANT_ID: z.string().optional(),
   SHAREPOINT_CLIENT_ID: z.string().optional(),

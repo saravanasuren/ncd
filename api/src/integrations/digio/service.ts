@@ -49,6 +49,19 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
       [sess.id, opts.signedAt ?? null, opts.signedDocumentUrl ?? null, JSON.stringify(opts.payload ?? {})]);
     // eSign is off the critical path — just stamp esigned_at if not already set.
     await tx.query('UPDATE applications SET esigned_at = COALESCE(esigned_at, now()) WHERE id = $1', [sess.application_id]);
+    // Pull the SIGNED copy from Digio and store it so staff can open it from the
+    // application page. Best-effort — a download hiccup must not fail completion.
+    try {
+      const { downloadSignedDocument } = await import('./index.js');
+      const signed = await downloadSignedDocument(digioRequestId);
+      if (signed) {
+        const { saveBuffer } = await import('../../lib/storage.js');
+        const { path } = saveBuffer('esigned', `esigned-${sess.application_id}.pdf`, signed);
+        await tx.query('UPDATE applications SET esigned_pdf_path = $1 WHERE id = $2', [path, sess.application_id]);
+      }
+    } catch (e) {
+      console.warn(`[digio] signed-document download failed for app ${sess.application_id}: ${(e as Error).message}`);
+    }
     // Generate + store the Bond certificate right after eSign (owner spec).
     // Defensive — a PDF hiccup must not fail the signing webhook.
     try {

@@ -115,3 +115,50 @@ lockersRouter.post('/deposit-links/:linkId/release', asyncHandler(async (req, re
   const { releaseLink } = await import('./deposits.js');
   res.json(await releaseLink(getDb(), req.user!, Number(req.params.linkId), reason));
 }));
+
+// ── Cheque register (NCD-side only) ───────────────────────────────────────
+// Lockers are online-only on LockerHub (§A10 retired offline record-payment),
+// so a cheque can never settle a leg there. These routes record the instrument
+// and its clearance in OUR books; every response repeats that the locker is not
+// settled. Recording is enrolment-tier; CLEARING asserts money landed in the
+// bank, so it needs the same permission as confirming a collection.
+lockersRouter.get('/cheques', asyncHandler(async (req, res) => {
+  const { listCheques } = await import('./cheques.js');
+  res.json(await listCheques(getDb(), {
+    status: req.query.status ? String(req.query.status) : undefined,
+    lockerApplicationId: req.query.application_id ? String(req.query.application_id) : undefined,
+  }));
+}));
+
+lockersRouter.post('/cheques', asyncHandler(async (req, res) => {
+  const b = z.object({
+    lockerhub_application_id: z.string().min(1),
+    customer_id: z.number().int().positive().nullish(),
+    leg: LEG,
+    amount: z.number().positive(),
+    cheque_no: z.string().min(1),
+    bank_name: z.string().nullish(),
+    received_on: z.string().min(4),
+    notes: z.string().nullish(),
+  }).parse(req.body ?? {});
+  const { recordCheque } = await import('./cheques.js');
+  res.status(201).json(await recordCheque(getDb(), req.user!, {
+    lockerApplicationId: b.lockerhub_application_id, customerId: b.customer_id ?? null, leg: b.leg,
+    amount: b.amount, chequeNo: b.cheque_no, bankName: b.bank_name ?? null,
+    receivedOn: b.received_on, notes: b.notes ?? null,
+  }));
+}));
+
+lockersRouter.post('/cheques/:id/clear', requirePermission('applications:confirm-collection'),
+  asyncHandler(async (req, res) => {
+    const b = z.object({ cleared_on: z.string().min(4), reference: z.string().nullish() }).parse(req.body ?? {});
+    const { clearCheque } = await import('./cheques.js');
+    res.json(await clearCheque(getDb(), req.user!, Number(req.params.id), { clearedOn: b.cleared_on, reference: b.reference ?? null }));
+  }));
+
+lockersRouter.post('/cheques/:id/bounce', requirePermission('applications:confirm-collection'),
+  asyncHandler(async (req, res) => {
+    const { reason } = z.object({ reason: z.string().min(2) }).parse(req.body ?? {});
+    const { bounceCheque } = await import('./cheques.js');
+    res.json(await bounceCheque(getDb(), req.user!, Number(req.params.id), reason));
+  }));

@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client.js';
+import { useAuth } from '../auth/AuthContext.js';
 
 /**
  * Staff locker enrollment (NCD_INTEGRATION_CONTRACT.md Part A). Drives the
@@ -18,6 +19,7 @@ const money = (n: unknown) => '₹' + Number(n ?? 0).toLocaleString('en-IN');
 interface Size { size: string; annual_fee: number; rent_incl_gst: number; deposit: number; gst_pct: number; vacant_count: number }
 
 export function LockerEnrollmentPage() {
+  const { can } = useAuth();
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const run = async <T,>(p: Promise<T>): Promise<T | undefined> => {
@@ -45,6 +47,11 @@ export function LockerEnrollmentPage() {
   // Backing the deposit with one of the customer's existing NCDs.
   const [candidates, setCandidates] = useState<any[] | null>(null);
   const [chosenNcd, setChosenNcd] = useState('');
+  // Cheque register (NCD-side only — never settles the locker on LockerHub).
+  const [cheques, setCheques] = useState<any[]>([]);
+  const [pendingChq, setPendingChq] = useState<any[]>([]);
+  const [chqLeg, setChqLeg] = useState<'rent' | 'deposit' | null>(null);
+  const [chq, setChq] = useState({ cheque_no: '', bank_name: '', amount: '', received_on: new Date().toISOString().slice(0, 10) });
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
 
@@ -77,7 +84,7 @@ export function LockerEnrollmentPage() {
   };
   const createApp = async () => {
     const r = await run(api.post<any>('/api/lockers/applications', { phone, name: name || undefined, email: email || undefined, branch_id: branchId, locker_size: size }));
-    if (r?.application_id) setApp(r);
+    if (r?.application_id) { setApp(r); setCheques([]); }
   };
   const refreshApp = async () => {
     if (!app?.application_id) return;
@@ -100,6 +107,50 @@ export function LockerEnrollmentPage() {
     }));
     if (r) { setChosenNcd(''); setCandidates(null); await refreshApp(); }
   };
+  // ── Cheque register ────────────────────────────────────────────────────
+  const loadCheques = async () => {
+    if (!app?.application_id) return;
+    const r = await run(api.get<any>(`/api/lockers/cheques?application_id=${encodeURIComponent(app.application_id)}`));
+    if (r) setCheques(r.rows ?? []);
+  };
+  const loadPendingCheques = async () => {
+    const r = await run(api.get<any>('/api/lockers/cheques?status=Pending'));
+    if (r) setPendingChq(r.rows ?? []);
+  };
+  const saveCheque = async () => {
+    if (!chqLeg || !app?.application_id) return;
+    const r = await run(api.post<any>('/api/lockers/cheques', {
+      lockerhub_application_id: String(app.application_id),
+      customer_id: ncdCust?.id ?? undefined,
+      leg: chqLeg,
+      amount: Number(chq.amount),
+      cheque_no: chq.cheque_no.trim(),
+      bank_name: chq.bank_name.trim() || undefined,
+      received_on: chq.received_on,
+    }));
+    if (r) {
+      setChqLeg(null);
+      setChq({ cheque_no: '', bank_name: '', amount: '', received_on: new Date().toISOString().slice(0, 10) });
+      await loadCheques(); await loadPendingCheques();
+    }
+  };
+  const clearCheque = async (id: number) => {
+    const on = window.prompt('Date the funds cleared in the bank (YYYY-MM-DD):', new Date().toISOString().slice(0, 10));
+    if (!on) return;
+    const ref = window.prompt('Bank reference (optional):') ?? '';
+    const r = await run(api.post<any>(`/api/lockers/cheques/${id}/clear`, { cleared_on: on, reference: ref.trim() || undefined }));
+    if (r) { await loadCheques(); await loadPendingCheques(); }
+  };
+  const bounceCheque = async (id: number) => {
+    const reason = window.prompt('Why did it not clear? (bounced / withdrawn)');
+    if (!reason || reason.trim().length < 2) return;
+    const r = await run(api.post<any>(`/api/lockers/cheques/${id}/bounce`, { reason: reason.trim() }));
+    if (r) { await loadCheques(); await loadPendingCheques(); }
+  };
+  // The register loads on mount so staff land on "what's awaiting clearance".
+  useEffect(() => { void loadPendingCheques(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  const chequeFor = (leg: string) => cheques.find((c) => c.leg === leg && c.status === 'Pending')
+    ?? cheques.find((c) => c.leg === leg && c.status === 'Cleared');
   // Lockers and NCD are ONLINE-ONLY (contract v1.2 §A10): cash/cheque/transfer
   // are refused for these products from every caller. Collect via A9
   // payment-link; settlement lands on LockerHub's Easebuzz callback and
@@ -119,6 +170,47 @@ export function LockerEnrollmentPage() {
       <h1 className="text-xl font-bold tracking-tight m-0">Locker enrollment</h1>
       <p className="text-sm text-text-muted mt-1 mb-4">Enroll a customer for a locker end-to-end. Pricing and allotment are handled by LockerHub; a locker is allotted automatically once rent and deposit are both settled.</p>
       {err && <div className="text-xs text-danger bg-[color:var(--danger-bg)] rounded px-3 py-2 mb-3">{err}</div>}
+
+      {/* Cheques taken but not yet cleared. NCD-side bookkeeping only — the
+          locker stays unsettled until the leg is actually paid. */}
+      {pendingChq.length > 0 && (
+        <div className={card}>
+          <h2 className={h2}>Cheques awaiting clearance</h2>
+          <p className="text-xs text-text-muted -mt-2 mb-3">
+            Recorded in NCD for your books. A cleared cheque does <b>not</b> settle the locker — collect the leg online, or back the deposit with an NCD investment.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="text-left text-xs text-text-label uppercase tracking-wide border-b border-border">
+                  <th className="py-2 pr-3">Customer</th><th className="py-2 pr-3">Locker app</th><th className="py-2 pr-3">Leg</th>
+                  <th className="py-2 pr-3 text-right">Amount</th><th className="py-2 pr-3">Cheque</th><th className="py-2 pr-3">Received</th><th />
+                </tr>
+              </thead>
+              <tbody>
+                {pendingChq.map((q) => (
+                  <tr key={q.id} className="border-b border-border last:border-0">
+                    <td className="py-2 pr-3">{q.customer_name ?? '—'} <span className="font-mono text-xs text-text-muted">{q.customer_code ?? ''}</span></td>
+                    <td className="py-2 pr-3 font-mono text-xs">{q.lockerhub_application_id}</td>
+                    <td className="py-2 pr-3">{q.leg}</td>
+                    <td className="py-2 pr-3 text-right mono">{money(q.amount)}</td>
+                    <td className="py-2 pr-3 font-mono text-xs">{q.cheque_no}{q.bank_name ? ` · ${q.bank_name}` : ''}</td>
+                    <td className="py-2 pr-3 text-xs text-text-muted">{q.received_on}</td>
+                    <td className="py-2 text-right whitespace-nowrap">
+                      {can('applications:confirm-collection') ? (
+                        <>
+                          <button className="text-xs text-primary hover:underline mr-3" disabled={busy} onClick={() => clearCheque(q.id)}>Funds cleared</button>
+                          <button className="text-xs text-danger hover:underline" disabled={busy} onClick={() => bounceCheque(q.id)}>Did not clear</button>
+                        </>
+                      ) : <span className="text-xs text-text-muted">awaiting confirmation</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* 1 — Branch + size */}
       <div className={card}>
@@ -243,9 +335,34 @@ export function LockerEnrollmentPage() {
                       <span className="text-xs text-text-muted">Look the customer up by PAN to back this deposit with an NCD.</span>
                     )
                   )}
+                  {/* Cheque register — OUR books only. Never settles the leg on
+                      LockerHub, so the payment link / NCD-backing stays required. */}
+                  {!settled && (() => {
+                    const q = chequeFor(leg);
+                    if (q) return (
+                      <span className="text-xs">
+                        <span className={`rounded px-1.5 py-0.5 ${q.status === 'Cleared' ? 'bg-[color:var(--success-bg)] text-success' : 'bg-[color:var(--warn-bg)] text-warn'}`}>
+                          Cheque {q.cheque_no} · {q.status === 'Cleared' ? `cleared ${q.cleared_on}` : 'awaiting clearance'}
+                        </span>
+                        <span className="text-text-muted ml-1">— still settle the leg above</span>
+                      </span>
+                    );
+                    return <button className={btnGhost} disabled={busy} onClick={() => { setChqLeg(leg); setChq((c) => ({ ...c, amount: String(st?.amount ?? '') })); }}>Record cheque…</button>;
+                  })()}
                 </div>
               );
             })}
+            {chqLeg && (
+              <div className="flex flex-wrap gap-2 items-end border-t border-border pt-3 mt-1">
+                <label className="text-xs text-text-muted">Cheque no<input className={`${inp} block mt-1 w-40`} value={chq.cheque_no} onChange={(e) => setChq({ ...chq, cheque_no: e.target.value })} autoFocus /></label>
+                <label className="text-xs text-text-muted">Bank<input className={`${inp} block mt-1 w-40`} value={chq.bank_name} onChange={(e) => setChq({ ...chq, bank_name: e.target.value })} /></label>
+                <label className="text-xs text-text-muted">Amount<input className={`${inp} block mt-1 w-32`} type="number" value={chq.amount} onChange={(e) => setChq({ ...chq, amount: e.target.value })} /></label>
+                <label className="text-xs text-text-muted">Received on<input className={`${inp} block mt-1`} type="date" value={chq.received_on} onChange={(e) => setChq({ ...chq, received_on: e.target.value })} /></label>
+                <button className={btn} disabled={busy || !chq.cheque_no.trim() || !(Number(chq.amount) > 0)} onClick={saveCheque}>Record {chqLeg} cheque</button>
+                <button className={btnGhost} onClick={() => setChqLeg(null)}>Cancel</button>
+                <p className="text-xs text-text-muted w-full m-0">Recorded in NCD for your books. The locker is <b>not</b> settled by this — collect online or back the deposit with an NCD once the cheque clears.</p>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2 mt-3">
             <button className={btnGhost} disabled={busy} onClick={refreshApp}>Check payment status</button>

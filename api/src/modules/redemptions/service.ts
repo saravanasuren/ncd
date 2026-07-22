@@ -39,6 +39,16 @@ async function createRequest(
   input: { applicationId: number; type: 'premature' | 'maturity'; reason: string; source: string; byCustomer: boolean; redemptionDate?: string; createdBy: number | null }
 ): Promise<{ id: number; redemption_no: string; principal: number; penalty: number; netPayment: number; brokenInterest: number }> {
   const principal = await outstandingPrincipal(tx, input.applicationId);
+  // Money pledged to a live locker deposit is that locker's security — it can't
+  // be redeemed until the link is released (owner spec 2026-07-22). Only the
+  // free portion is redeemable.
+  const { linkedAmount } = await import('../lockers/deposits.js');
+  const pledged = await linkedAmount(tx, input.applicationId);
+  if (pledged > 0 && principal - pledged <= 0) {
+    throw errors.unprocessable(
+      `₹${pledged.toLocaleString('en-IN')} of this investment is pledged to a live locker deposit and cannot be redeemed. Release the locker link first (once the locker is closed).`
+    );
+  }
   const penalty = input.type === 'maturity' ? { mode: 'flat' as const, value: 0 } : await penaltySetting(tx);
   const redDate = input.redemptionDate ?? new Date().toISOString().slice(0, 10);
   // Accrued broken-period interest (last paid → redemption date) is now COMPUTED

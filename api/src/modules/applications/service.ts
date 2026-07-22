@@ -251,7 +251,11 @@ export async function getApplicationDetail(db: Db, actor: AuthUser, appId: numbe
     "SELECT count(*)::int AS n FROM digio_signing_sessions WHERE application_id = $1 AND status = 'requested'", [appId]
   )).rows[0]?.n ?? 0);
   const esignPending = pendingSessions > 0 && !app.esigned_at;
-  return { application: app, lines, schedule, esign_pending: esignPending };
+  // Locker pledge breakdown: total / linked to lockers / free NCD / redeemable.
+  // The investment is never split — links are claims against it.
+  const { depositSummary } = await import('../lockers/deposits.js');
+  const locker = await depositSummary(db, appId);
+  return { application: app, lines, schedule, esign_pending: esignPending, locker };
 }
 
 /**

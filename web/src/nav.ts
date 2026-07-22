@@ -20,6 +20,7 @@ export const NAV: NavItem[] = [
   { to: '/app/segments', label: 'Segments', anyOf: ['reports:download', 'dashboard:drilldown'], group: 'Overview' },
   { to: '/app/leads', label: 'Leads', anyOf: ['leads:read'], group: 'Daily' },
   { to: '/app/customers', label: 'Customers', anyOf: ['customers:read'], group: 'Daily' },
+  { to: '/app/background-verification', label: 'Background Verification', anyOf: ['customers:read'], group: 'Daily' },
   { to: '/app/locker-enrollment', label: 'Locker Enrollment', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/applications', label: 'Applications', anyOf: ['customers:read'], group: 'Daily', hideForRoles: ['cxo'] },
   { to: '/app/approvals', label: 'Approvals', anyOf: ['approvals:check', 'approvals:check-premature', 'approvals:check-handover'], group: 'Daily' },

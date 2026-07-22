@@ -20,6 +20,7 @@ import { ApprovalsPage } from './pages/Approvals.js';
 import { ApplicationsPage } from './pages/Applications.js';
 import { ApplicationDetailPage } from './pages/ApplicationDetail.js';
 import { AgentsPage } from './pages/Agents.js';
+import { BackgroundVerificationPage } from './pages/BackgroundVerification.js';
 import { PersonDetailPage } from './pages/PersonDetail.js';
 import { AllotmentsPage } from './pages/Allotments.js';
 import { PayoutsPage } from './pages/Payouts.js';
@@ -96,6 +97,7 @@ export function App() {
           <Route path="leads" element={<RequirePerm perm="leads:read"><LeadsPage /></RequirePerm>} />
           <Route path="customers" element={<RequirePerm perm="customers:read"><CustomersPage /></RequirePerm>} />
           <Route path="customers/:id" element={<RequirePerm perm="customers:read"><CustomerDetailPage /></RequirePerm>} />
+          <Route path="background-verification" element={<RequirePerm perm="customers:read"><BackgroundVerificationPage /></RequirePerm>} />
           <Route path="people/:type/:id" element={<RequirePerm perm="dashboard:drilldown"><PersonDetailPage /></RequirePerm>} />
           <Route path="locker-enrollment" element={<RequirePerm perm="lockers:enroll"><LockerEnrollmentPage /></RequirePerm>} />
           <Route path="applications" element={<RequirePerm perm="customers:read"><ApplicationsPage /></RequirePerm>} />

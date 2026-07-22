@@ -25,6 +25,7 @@ import { applicationsRouter } from './modules/applications/routes.js';
 import { agentsRouter } from './modules/agents/routes.js';
 import { allotmentsRouter } from './modules/allotments/routes.js';
 import { payoutsRouter } from './modules/payouts/routes.js';
+import { bgvRouter } from './modules/bgv/routes.js';
 import { redemptionsRouter } from './modules/redemptions/routes.js';
 import { incentivesRouter } from './modules/incentives/routes.js';
 import { dashboardRouter } from './modules/dashboard/routes.js';
@@ -99,6 +100,7 @@ export function createApp(): Express {
   app.use('/api/users', usersRouter);
   app.use('/api/leads', leadsRouter);
   app.use('/api/customers', customersRouter);
+  app.use('/api/background-verification', bgvRouter);
   app.use('/api/lookups', lookupsRouter);
   app.use('/api/approvals', approvalsRouter);
   app.use('/api/applications', applicationsRouter);

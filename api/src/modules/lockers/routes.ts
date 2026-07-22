@@ -14,6 +14,7 @@ import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
 import * as lh from '../../integrations/lockerhub/client.js';
+import { errors } from '../../lib/errors.js';
 
 export const lockersRouter = Router();
 lockersRouter.use(requirePermission('lockers:enroll'));
@@ -93,6 +94,15 @@ lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) =
 // ── Deposit links: back a locker's deposit with an NCD investment ──────────
 // The amount is LockerHub's own deposit figure — never typed by staff — and
 // linking settles that deposit leg on their side.
+// Which of this customer's investments could back a deposit, and how much of
+// each is still free. Registered before the ':linkId' routes.
+lockersRouter.get('/deposit-links/candidates', asyncHandler(async (req, res) => {
+  const customerId = Number(req.query.customer_id);
+  if (!Number.isFinite(customerId) || customerId <= 0) throw errors.badRequest('customer_id is required');
+  const { linkCandidates } = await import('./deposits.js');
+  res.json({ candidates: await linkCandidates(getDb(), customerId) });
+}));
+
 lockersRouter.post('/deposit-links', asyncHandler(async (req, res) => {
   const b = z.object({ application_id: z.number().int().positive(), lockerhub_application_id: z.string().min(1) }).parse(req.body ?? {});
   const { linkDeposit } = await import('./deposits.js');

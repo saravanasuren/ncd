@@ -9,9 +9,14 @@
  *
  * Read this before changing anything here: clearing a cheque releases NCD's own
  * hold and NOTHING ELSE. It does not settle the leg on LockerHub and does not
- * allot the locker — that still requires A9 (payment link) or A12 (back the
- * deposit with an NCD investment). Every response says so explicitly so no
- * caller can mistake a cleared cheque for a settled locker.
+ * allot the locker — the LockerHub-side action is a STAFF action in their
+ * Tenants screen (mark the row Paid, method = cheque), not an API call.
+ *
+ * Never route a cheque customer to the A9 payment link to "finish" it: that is
+ * a live payment page, so it would take a SECOND real payment for money we
+ * already hold — double collection, a refund owed, MDR on our own funds, and a
+ * receipt telling the customer they paid online. LockerHub confirmed this
+ * explicitly (2026-07-22). Every response repeats the correct route.
  */
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
@@ -23,7 +28,9 @@ export type ChequeLeg = 'rent' | 'deposit';
 
 /** Stated on every response — a cleared cheque never opens a locker. */
 export const SETTLEMENT_NOTE =
-  'Recorded in NCD only. The locker leg is NOT settled on LockerHub and the locker will not allot — settle it with a payment link, or back the deposit with an NCD investment.';
+  'Recorded in NCD only. The locker leg is NOT settled on LockerHub and the locker will not allot. '
+  + 'Complete it in LockerHub → Tenants (mark the row Paid, method = cheque). '
+  + 'Do NOT open the payment link for a cheque customer — it is a live payment page and would take a SECOND real payment.';
 
 export interface RecordChequeInput {
   lockerApplicationId: string;

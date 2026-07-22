@@ -177,7 +177,8 @@ export function LockerEnrollmentPage() {
         <div className={card}>
           <h2 className={h2}>Cheques awaiting clearance</h2>
           <p className="text-xs text-text-muted -mt-2 mb-3">
-            Recorded in NCD for your books. A cleared cheque does <b>not</b> settle the locker — collect the leg online, or back the deposit with an NCD investment.
+            Recorded in NCD for your books. A cleared cheque does <b>not</b> settle the locker — complete it in <b>LockerHub → Tenants</b> (mark the row Paid, method = cheque).
+            <b> Never open the payment link for a cheque customer</b>: it is a live payment page and would collect the money a second time.
           </p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
@@ -344,7 +345,7 @@ export function LockerEnrollmentPage() {
                         <span className={`rounded px-1.5 py-0.5 ${q.status === 'Cleared' ? 'bg-[color:var(--success-bg)] text-success' : 'bg-[color:var(--warn-bg)] text-warn'}`}>
                           Cheque {q.cheque_no} · {q.status === 'Cleared' ? `cleared ${q.cleared_on}` : 'awaiting clearance'}
                         </span>
-                        <span className="text-text-muted ml-1">— still settle the leg above</span>
+                        <span className="text-text-muted ml-1">— settle in LockerHub → Tenants (method = cheque)</span>
                       </span>
                     );
                     return <button className={btnGhost} disabled={busy} onClick={() => { setChqLeg(leg); setChq((c) => ({ ...c, amount: String(st?.amount ?? '') })); }}>Record cheque…</button>;
@@ -360,7 +361,7 @@ export function LockerEnrollmentPage() {
                 <label className="text-xs text-text-muted">Received on<input className={`${inp} block mt-1`} type="date" value={chq.received_on} onChange={(e) => setChq({ ...chq, received_on: e.target.value })} /></label>
                 <button className={btn} disabled={busy || !chq.cheque_no.trim() || !(Number(chq.amount) > 0)} onClick={saveCheque}>Record {chqLeg} cheque</button>
                 <button className={btnGhost} onClick={() => setChqLeg(null)}>Cancel</button>
-                <p className="text-xs text-text-muted w-full m-0">Recorded in NCD for your books. The locker is <b>not</b> settled by this — collect online or back the deposit with an NCD once the cheque clears.</p>
+                <p className="text-xs text-text-muted w-full m-0">Recorded in NCD for your books. The locker is <b>not</b> settled by this. Once the cheque clears, settle it in <b>LockerHub → Tenants</b> (mark the row Paid, method = cheque). <b>Do not open the payment link</b> for a cheque customer — it is a live payment page and would take a second real payment.</p>
               </div>
             )}
           </div>

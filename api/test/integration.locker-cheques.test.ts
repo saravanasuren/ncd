@@ -40,6 +40,11 @@ describe('locker cheque register', () => {
     expect(Number(r.json.cheque.amount)).toBe(7080);
     expect(r.json.note).toMatch(/NOT settled on LockerHub/i);
     expect(r.json.note).toMatch(/will not allot/i);
+    // Safety: staff must be sent to LockerHub Tenants, never to the payment
+    // link — that is a live payment page and would collect a SECOND time for
+    // money we already hold (LockerHub confirmed 2026-07-22).
+    expect(r.json.note).toMatch(/Tenants/i);
+    expect(r.json.note).toMatch(/second real payment/i);
   });
 
   it('refuses a second pending cheque for the same leg', async () => {

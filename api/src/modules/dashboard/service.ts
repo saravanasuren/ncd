@@ -179,17 +179,25 @@ export async function personPerformance(db: Db, _actor: AuthUser, type: 'staff' 
 
   const col = type === 'agent' ? 'enrolled_by_agent_id' : 'enrolled_by_user_id';
   const custN = Number((await db.query<{ n: string }>(`SELECT count(*)::int AS n FROM customers WHERE ${col} = $1`, [id])).rows[0]!.n);
+  // Attribute an investment to this enroller either directly (a.${col}), or —
+  // when the investment carries NO enroller of its own (migrated from wealth,
+  // where only the customer keeps the enroller) — via the enroller of its
+  // customer. The both-null guard keeps investments the OTHER channel sourced
+  // (agent-entered on a staff-enrolled customer, or vice versa) out of this
+  // person's tally.
+  const attr = `(a.${col} = $1 OR (a.enrolled_by_user_id IS NULL AND a.enrolled_by_agent_id IS NULL AND c.${col} = $1))`;
   const inv = (await db.query<{ n: string; live: string; invested: string; outstanding: string }>(
     `SELECT count(*)::int AS n,
             count(*) FILTER (WHERE a.status IN (${OUTSTANDING_SQL}))::int AS live,
             COALESCE(sum(a.total_amount), 0) AS invested,
             COALESCE(sum(a.total_amount) FILTER (WHERE a.status IN (${OUTSTANDING_SQL})), 0) AS outstanding
-       FROM applications a WHERE a.${col} = $1 AND a.archived_at IS NULL`, [id])).rows[0]!;
+       FROM applications a JOIN customers c ON c.id = a.customer_id
+      WHERE ${attr} AND a.archived_at IS NULL`, [id])).rows[0]!;
   const incentiveLedger = await incentives.payeeBalance(db, type, id);
   const investments = (await db.query(
     `SELECT a.id, a.application_no, c.full_name AS customer, s.code AS series_code, a.total_amount, a.status, a.date_money_received
        FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
-      WHERE a.${col} = $1 AND a.archived_at IS NULL ORDER BY a.created_at DESC LIMIT 200`, [id])).rows;
+      WHERE ${attr} AND a.archived_at IS NULL ORDER BY a.created_at DESC LIMIT 200`, [id])).rows;
 
   return {
     person: { id: Number(person.id), type, full_name: person.full_name, code: person.code, phone: person.phone ?? null, email: person.email ?? null },

@@ -160,3 +160,27 @@ export async function releaseLink(db: Db, actor: AuthUser, linkId: number, reaso
     return { ok: true };
   });
 }
+
+/**
+ * The customer's investments that could back a locker deposit, with how much of
+ * each is still free to pledge. Powers the picker on locker enrolment — without
+ * it staff had no way to reach linkDeposit from the app.
+ */
+export async function linkCandidates(db: Db, customerId: number) {
+  const rows = (await db.query<Record<string, unknown>>(
+    `SELECT a.id, a.application_no, a.status, s.code AS series_code,
+            COALESCE((SELECT sum(al.outstanding_amount) FROM application_lines al
+                       WHERE al.application_id = a.id AND al.status = 'Active'), a.total_amount) AS outstanding,
+            COALESCE((SELECT sum(l.linked_amount) FROM locker_deposit_links l
+                       WHERE l.application_id = a.id AND l.status = 'active'), 0) AS linked
+       FROM applications a JOIN series s ON s.id = a.series_id
+      WHERE a.customer_id = $1 AND a.archived_at IS NULL AND a.status = 'Active'
+      ORDER BY a.id DESC`, [customerId])).rows;
+  return rows.map((r) => {
+    const outstanding = Number(r.outstanding), linked = Number(r.linked);
+    return {
+      id: Number(r.id), application_no: r.application_no, series_code: r.series_code, status: r.status,
+      outstanding, linked, free: Math.max(0, Number((outstanding - linked).toFixed(2))),
+    };
+  });
+}

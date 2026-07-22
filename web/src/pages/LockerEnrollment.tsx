@@ -42,6 +42,9 @@ export function LockerEnrollmentPage() {
   const [cust, setCust] = useState<any | null>(null);      // LockerHub lookup result
   const [ncdCust, setNcdCust] = useState<any | null>(null); // matched NCD customer
   const [notFound, setNotFound] = useState(false);
+  // Backing the deposit with one of the customer's existing NCDs.
+  const [candidates, setCandidates] = useState<any[] | null>(null);
+  const [chosenNcd, setChosenNcd] = useState('');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
 
@@ -80,6 +83,22 @@ export function LockerEnrollmentPage() {
     if (!app?.application_id) return;
     const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}`));
     if (r) setApp((a: any) => ({ ...a, ...r }));
+  };
+  /** This customer's live NCDs and how much of each is still free to pledge. */
+  const loadCandidates = async () => {
+    if (!ncdCust) return;
+    const r = await run(api.get<any>(`/api/lockers/deposit-links/candidates?customer_id=${ncdCust.id}`));
+    if (r) setCandidates(r.candidates ?? []);
+  };
+  /** Pledge the chosen NCD against this locker's deposit leg. The amount is
+   * LockerHub's own deposit figure — never typed here. */
+  const linkNcd = async () => {
+    if (!chosenNcd || !app?.application_id) return;
+    const r = await run(api.post<any>('/api/lockers/deposit-links', {
+      application_id: Number(chosenNcd),
+      lockerhub_application_id: String(app.application_id),
+    }));
+    if (r) { setChosenNcd(''); setCandidates(null); await refreshApp(); }
   };
   // Lockers and NCD are ONLINE-ONLY (contract v1.2 §A10): cash/cheque/transfer
   // are refused for these products from every caller. Collect via A9
@@ -198,8 +217,31 @@ export function LockerEnrollmentPage() {
                       <a className={btnGhost} href={link.url} target="_blank" rel="noopener noreferrer">Open</a>
                     </>
                   )}
+                  {/* Back the deposit with one of this customer's NCDs. The
+                      amount is LockerHub's own deposit figure — staff pick the
+                      investment, never the number. */}
                   {leg === 'deposit' && !settled && (
-                    <span className="text-xs text-text-muted">or back it with an NCD investment from the investment page</span>
+                    ncdCust ? (
+                      candidates === null ? (
+                        <button className={btnGhost} disabled={busy} onClick={loadCandidates}>or back it with an NCD investment…</button>
+                      ) : candidates.length === 0 ? (
+                        <span className="text-xs text-text-muted">No live NCD of {ncdCust.full_name} has free amount to pledge.</span>
+                      ) : (
+                        <>
+                          <select className={inp} value={chosenNcd} onChange={(e) => setChosenNcd(e.target.value)}>
+                            <option value="">Back with an NCD…</option>
+                            {candidates.map((c) => (
+                              <option key={c.id} value={String(c.id)} disabled={c.free <= 0}>
+                                {c.application_no} · {c.series_code} · {money(c.free)} free
+                              </option>
+                            ))}
+                          </select>
+                          <button className={btnGhost} disabled={!chosenNcd || busy} onClick={linkNcd}>Link deposit</button>
+                        </>
+                      )
+                    ) : (
+                      <span className="text-xs text-text-muted">Look the customer up by PAN to back this deposit with an NCD.</span>
+                    )
                   )}
                 </div>
               );

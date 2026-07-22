@@ -44,8 +44,7 @@ export function LockerEnrollmentPage() {
 
   // Application + payments
   const [app, setApp] = useState<any | null>(null);        // created/fetched application
-  const [method, setMethod] = useState<'cash' | 'cheque' | 'bank_transfer'>('cash');
-  const [ref, setRef] = useState('');
+  const [links, setLinks] = useState<Partial<Record<'rent' | 'deposit', { url: string; intent_no?: string; amount?: number }>>>({});
 
   const lookup = async () => {
     const r = await run(api.get<any>(`/api/lockers/customers/${encodeURIComponent(phone)}`));
@@ -64,9 +63,13 @@ export function LockerEnrollmentPage() {
     const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}`));
     if (r) setApp((a: any) => ({ ...a, ...r }));
   };
-  const recordPayment = async (leg: 'rent' | 'deposit') => {
-    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/record-payment`, { leg, method, reference: ref || undefined }));
-    if (r) { setRef(''); await refreshApp(); }
+  // Lockers and NCD are ONLINE-ONLY (contract v1.2 §A10): cash/cheque/transfer
+  // are refused for these products from every caller. Collect via A9
+  // payment-link; settlement lands on LockerHub's Easebuzz callback and
+  // advances the application, so we poll A8 rather than confirming here.
+  const getPaymentLink = async (leg: 'rent' | 'deposit') => {
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/payment-link`, { leg }));
+    if (r?.checkout_url) setLinks((l) => ({ ...l, [leg]: { url: r.checkout_url, intent_no: r.intent_no, amount: r.amount } }));
   };
   const allocate = async () => { await run(api.post(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/allocate`, {})); await refreshApp(); };
 
@@ -138,28 +141,40 @@ export function LockerEnrollmentPage() {
         </div>
       )}
 
-      {/* 4 — Payments */}
+      {/* 4 — Payments (online only) */}
       {app?.application_id && app.status !== 'approved' && !allotment && (
         <div className={card}>
-          <h2 className={h2}>4 · Record payments (cash / cheque / transfer)</h2>
-          <div className="flex flex-wrap gap-2 items-center mb-3">
-            <select className={inp} value={method} onChange={(e) => setMethod(e.target.value as any)}>
-              <option value="cash">Cash</option><option value="cheque">Cheque</option><option value="bank_transfer">Bank transfer</option>
-            </select>
-            <input className={inp} placeholder={method === 'cash' ? 'Reference (optional)' : 'Cheque no. / UTR (required)'} value={ref} onChange={(e) => setRef(e.target.value)} />
-          </div>
-          <div className="flex gap-2">
+          <h2 className={h2}>4 · Collect payment (online)</h2>
+          <div className="flex flex-col gap-2">
             {(['rent', 'deposit'] as const).map((leg) => {
               const st = legState(leg);
               const settled = st?.settled === true;
+              const link = links[leg];
               return (
-                <button key={leg} className={btnGhost} disabled={busy || settled || (method !== 'cash' && !ref.trim())} onClick={() => recordPayment(leg)}>
-                  {settled ? `✓ ${leg} settled` : `Record ${leg}${st?.amount ? ' · ' + money(st.amount) : ''}`}
-                </button>
+                <div key={leg} className="flex flex-wrap gap-2 items-center">
+                  <button className={btnGhost} disabled={busy || settled} onClick={() => getPaymentLink(leg)}>
+                    {settled ? `✓ ${leg} settled` : `${link ? 'New link' : 'Payment link'} · ${leg}${st?.amount ? ' · ' + money(st.amount) : ''}`}
+                  </button>
+                  {!settled && link && (
+                    <>
+                      <input className={`${inp} flex-1 min-w-[16rem] font-mono text-xs`} readOnly value={link.url} onFocus={(e) => e.currentTarget.select()} />
+                      <button className={btnGhost} onClick={() => navigator.clipboard?.writeText(link.url)}>Copy</button>
+                      <a className={btnGhost} href={link.url} target="_blank" rel="noopener noreferrer">Open</a>
+                    </>
+                  )}
+                  {leg === 'deposit' && !settled && (
+                    <span className="text-xs text-text-muted">or back it with an NCD investment from the investment page</span>
+                  )}
+                </div>
               );
             })}
           </div>
-          <p className="text-xs text-text-muted mt-2">The locker auto-allots once both legs are settled.</p>
+          <div className="flex items-center gap-2 mt-3">
+            <button className={btnGhost} disabled={busy} onClick={refreshApp}>Check payment status</button>
+            <p className="text-xs text-text-muted m-0">
+              Send the link to the customer. Settlement lands automatically and the locker auto-allots once both legs are settled — cash, cheque and transfer are not accepted for lockers.
+            </p>
+          </div>
         </div>
       )}
 

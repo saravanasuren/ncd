@@ -1035,9 +1035,14 @@ customerWritesRouter.post('/ncd/:id/release-locker', asyncHandler(async (req, re
     const active = (await tx.query<{ id: string; lockerhub_application_id: string; linked_amount: string }>(
       `SELECT id, lockerhub_application_id, linked_amount FROM locker_deposit_links
         WHERE application_id = $1 AND status = 'active' ORDER BY id`, [appId])).rows;
+    // `deposit_reference` is LockerHub's own reference — the same value B19a
+    // link-locker sent us, which we store on applications.lockerhub_intent_no
+    // (their push is idempotent on (ncd_id, deposit_reference), so an NCD
+    // carries one). Resolve in that order, then fall back to the single live
+    // pledge; never guess when several could match.
     const match = active.find((l) => l.lockerhub_application_id === ref)
-      // Exactly one live pledge on this NCD → unambiguous, release it.
-      ?? (active.length === 1 ? active[0] : undefined);
+      ?? (app.lockerhub_intent_no === ref && active.length === 1 ? active[0] : undefined)
+      ?? (active.length === 1 && !app.lockerhub_intent_no ? active[0] : undefined);
 
     if (!match) {
       // Nothing live to release. Idempotent success when this NCD is already

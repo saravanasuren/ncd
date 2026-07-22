@@ -79,5 +79,30 @@ export async function activateApplication(tx: Db, appId: number, input: GoLiveIn
 
   // Tell LockerHub the NCD is live (contract event). No-op unless configured.
   await emitForApplication(tx, 'subscription.activated', appId);
+
+  // Agent-event webhook `customer_activated` (contract §Events channel 1) — the
+  // agent's referred customer went live. The earning agents are exactly the
+  // agent-side accrual payees (which already resolve enroller vs referrer), plus
+  // the enrolling agent when no incentive accrued (zero-rate cell). Deduped per
+  // (customer, agent), so a second investment by the same customer won't re-fire.
+  const agents = (await tx.query<{ agent_id: string; customer_id: string }>(
+    `SELECT DISTINCT ia.payee_id AS agent_id, a.customer_id
+       FROM incentive_accruals ia JOIN applications a ON a.id = ia.application_id
+      WHERE ia.application_id = $1 AND ia.payee_type = 'agent'
+      UNION
+     SELECT a.enrolled_by_agent_id, a.customer_id FROM applications a
+      WHERE a.id = $1 AND a.enrolled_by_agent_id IS NOT NULL`, [appId])).rows;
+  if (agents.length) {
+    const { enqueueEvent } = await import('../../integrations/lockerhub/dispatcher.js');
+    const activatedAt = new Date().toISOString();
+    for (const r of agents) {
+      await enqueueEvent(tx, {
+        eventType: 'customer_activated',
+        targetAgentId: Number(r.agent_id),
+        dedupKey: `customer_activated:${r.customer_id}:agent:${r.agent_id}`,
+        payload: { customer_id: Number(r.customer_id), activated_at: activatedAt },
+      });
+    }
+  }
   return true;
 }

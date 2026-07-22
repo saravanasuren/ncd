@@ -28,11 +28,15 @@ export async function accrueForApplication(tx: Db, applicationId: number): Promi
     const payeeType = app.enrolled_by_agent_id ? 'agent' : 'staff';
     const payeeId = app.enrolled_by_agent_id ? Number(app.enrolled_by_agent_id) : app.enrolled_by_user_id ? Number(app.enrolled_by_user_id) : null;
     if (payeeId) {
-      await tx.query(
+      const ins = await tx.query(
         `INSERT INTO incentive_accruals (application_id, payee_type, payee_id, matrix_cell, rate_mode, rate_value, amount, accrual_date)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (application_id, payee_type, payee_id) DO NOTHING`,
         [applicationId, payeeType, payeeId, isNew ? 'staff_new' : 'staff_existing', result.staffSpec.mode, result.staffSpec.value, result.staffAmount, today]
       );
+      // Only on a real insert — re-running accrual must not re-fire the event.
+      if (ins.rowCount && payeeType === 'agent') {
+        await emitAccrued(tx, payeeId, applicationId, result.staffAmount, today, isNew ? 'staff_new' : 'staff_existing');
+      }
     }
   }
 
@@ -45,10 +49,31 @@ export async function accrueForApplication(tx: Db, applicationId: number): Promi
     const { resolveReferrer, ensureReferralAgent } = await import('../agents/service.js');
     const payee = await resolveReferrer(tx, referrerName)
       ?? { kind: 'agent' as const, id: await ensureReferralAgent(tx, referrerName) };
-    await tx.query(
+    const ins = await tx.query(
       `INSERT INTO incentive_accruals (application_id, payee_type, payee_id, matrix_cell, rate_mode, rate_value, amount, accrual_date)
        VALUES ($1,$2,$3,'referrer',$4,$5,$6,$7) ON CONFLICT (application_id, payee_type, payee_id) DO NOTHING`,
       [applicationId, payee.kind, payee.id, result.referrerSpec.mode, result.referrerSpec.value, result.referrerAmount, today]
     );
+    if (ins.rowCount && payee.kind === 'agent') {
+      await emitAccrued(tx, payee.id, applicationId, result.referrerAmount, today, 'referrer');
+    }
   }
+}
+
+/**
+ * Agent-event webhook (contract §Events channel 1, `incentive_accrued`). Inert
+ * unless LOCKERHUB_WEBHOOK_URL + _SECRET are set, and skipped for agents that
+ * did not come from LockerHub — both guards live in enqueueEvent.
+ *
+ * NB: LockerHub's payload lists `application_line_id`; our accruals are per
+ * APPLICATION (unique on application+payee), not per line, so it is sent null.
+ */
+async function emitAccrued(tx: Db, agentId: number, applicationId: number, amount: number, accrualDate: string, matrixCell: string) {
+  const { enqueueEvent } = await import('../../integrations/lockerhub/dispatcher.js');
+  await enqueueEvent(tx, {
+    eventType: 'incentive_accrued',
+    targetAgentId: agentId,
+    dedupKey: `incentive_accrued:${applicationId}:agent:${agentId}`,
+    payload: { application_id: applicationId, application_line_id: null, accrual_date: accrualDate, amount, matrix_cell: matrixCell },
+  });
 }

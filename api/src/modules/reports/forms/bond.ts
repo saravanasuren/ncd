@@ -7,14 +7,41 @@
  * Owner decision 2026-07-21: NCD issues the bond right after eSign, before
  * allotment — so the certificate number and allotment/redemption dates stay
  * blank ("—") until the series is allotted. NCD schema: single `address`
- * (no district/pin), series `deemed_date` (no close/allotted_at), no bond serial.
+ * (no district/pin), series `deemed_date` (no close/allotted_at). The certificate
+ * number is NCD's own (migration 031), assigned lazily on first generation.
  */
 import PDFDocument from 'pdfkit';
 import { existsSync } from 'node:fs';
 import type { Db } from '../../../db/types.js';
 import { errors } from '../../../lib/errors.js';
+import { nextCode } from '../../../lib/sequences.js';
 import { getCompanyProfile } from '../../products/service.js';
 import { companyHeader, COMPANY, LOGO_PATH, HAS_LOGO } from './shared.js';
+
+/** Only an issued investment carries a certificate — a pending application must
+ * never burn a certificate number (mirrors wealth's gate). */
+const ISSUABLE = new Set(['Active', 'Matured', 'Redeemed', 'RolledOver']);
+
+/**
+ * Certificate number, assigned LAZILY on first generation (wealth parity:
+ * `BC-{year}-{seq:6}`). Deliberately uses a conditional UPDATE rather than its
+ * own transaction: this runs standalone AND inside the eSign-completion
+ * transaction, so opening one here would nest. If a concurrent generation wins
+ * the race we simply adopt the number it assigned.
+ */
+async function ensureBondSerial(db: Db, applicationId: number, a: Record<string, unknown>): Promise<string | null> {
+  if (a.bond_serial_no) return String(a.bond_serial_no);
+  if (!ISSUABLE.has(String(a.status))) return null; // not issued yet → prints "—"
+  const year = new Date(String(a.allotment_date ?? new Date().toISOString())).getUTCFullYear();
+  const candidate = await nextCode(db, 'bond', undefined, year);
+  const upd = await db.query<{ bond_serial_no: string }>(
+    'UPDATE applications SET bond_serial_no = $1 WHERE id = $2 AND bond_serial_no IS NULL RETURNING bond_serial_no',
+    [candidate, applicationId]);
+  if (upd.rows[0]) return upd.rows[0].bond_serial_no;
+  const cur = (await db.query<{ bond_serial_no: string | null }>(
+    'SELECT bond_serial_no FROM applications WHERE id = $1', [applicationId])).rows[0];
+  return cur?.bond_serial_no ?? null;
+}
 
 const C = { GOLD: '#c9a227', GOLD_DEEP: '#a8851f', NAVY: '#1a2540', TEXT: '#1a1a1a', MUTED: '#666666', TINT: '#fcf6e3' };
 const BOND_REDEMPTION_MONTHS = 36;
@@ -127,11 +154,13 @@ function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHea
 export async function bondCertificatePdf(db: Db, applicationId: number): Promise<Buffer> {
   const a = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.customer_id, a.application_no, a.total_amount, a.allotment_date, a.maturity_date,
+            a.status, a.bond_serial_no,
             c.full_name, c.address, c.city, c.state,
             s.code AS series_code, s.name AS series_name, s.deemed_date, s.isin
        FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
       WHERE a.id = $1`, [applicationId])).rows[0];
   if (!a) throw errors.notFound('Application not found');
+  const certificateNo = await ensureBondSerial(db, applicationId, a);
   const nominee = (await db.query<Record<string, unknown>>('SELECT full_name FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [a.customer_id])).rows[0];
   const line = (await db.query<Record<string, unknown>>(
     `SELECT al.amount, COALESCE(al.coupon_rate_pct, sch.coupon_rate_pct) AS coupon_rate_pct, al.tenure_months,
@@ -164,7 +193,7 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
 
   const rows: Array<[string, string, number?]> = [
     ['Category', `${a.series_code || a.series_name || '—'} Series`],
-    ['Certificate No', '—'], // NCD assigns no bond serial pre-allotment (owner: bond issues after eSign)
+    ['Certificate No', certificateNo || '—'], // assigned on first generation once the investment is live
     ['Name of NCD Holder', (a.full_name as string) || '—'],
     ['Address of NCD Holder', fullAddress, addrRowH],
     ['Nominee', (nominee?.full_name as string) || '—'],

@@ -34,4 +34,5 @@ export const DEFAULT_NUMBER_FORMATS = {
   rollover: 'ROL-{yyyy}-{seq:6}',
   transfer: 'TRF-{yyyy}-{seq:6}',
   redemption: 'MCR-{yyyy}-{seq:6}',
+  bond: 'BC-{yyyy}-{seq:6}',        // bond certificate number (lazy, on first generation)
 } as const;

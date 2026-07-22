@@ -37,8 +37,11 @@ export function LockerEnrollmentPage() {
   const [size, setSize] = useState('');
 
   // Customer
+  const [pan, setPan] = useState('');
   const [phone, setPhone] = useState('');
-  const [cust, setCust] = useState<any | null>(null);      // lookup result
+  const [cust, setCust] = useState<any | null>(null);      // LockerHub lookup result
+  const [ncdCust, setNcdCust] = useState<any | null>(null); // matched NCD customer
+  const [notFound, setNotFound] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
 
@@ -49,6 +52,21 @@ export function LockerEnrollmentPage() {
   const lookup = async () => {
     const r = await run(api.get<any>(`/api/lockers/customers/${encodeURIComponent(phone)}`));
     if (r) { setCust(r); if (r.found && r.profile) { setName(r.profile.name ?? ''); setEmail(r.profile.email ?? ''); } }
+  };
+  /** PAN-first: find them in NCD's book, then carry their phone into the
+   * LockerHub flow (LockerHub is phone-keyed). */
+  const lookupByPan = async () => {
+    const r = await run(api.get<any>(`/api/lockers/customers/by-pan/${encodeURIComponent(pan)}`));
+    if (!r) return;
+    if (!r.found_in_ncd) { setCust(null); setNotFound(true); return; }
+    setNotFound(false);
+    const c = r.customer;
+    setNcdCust(c);
+    setPhone(String(c.phone ?? '').replace(/\D/g, '').slice(-10));
+    setName(c.full_name ?? '');
+    setEmail(c.email ?? '');
+    // r.locker is their LockerHub record (null if unknown there yet).
+    setCust(r.locker ?? { found: false });
   };
   const saveCustomer = async () => {
     const r = await run(api.post<any>('/api/lockers/customers', { phone, name, email: email || undefined }));
@@ -105,10 +123,28 @@ export function LockerEnrollmentPage() {
       {branchId && size && (
         <div className={card}>
           <h2 className={h2}>2 · Customer</h2>
+          {/* PAN-first: staff enrol against the ID document in hand. LockerHub is
+              phone-keyed, so the PAN match fills the phone in for the rest of the flow. */}
           <div className="flex flex-wrap gap-2 items-center">
-            <input className={inp} placeholder="Phone (10 digits)" value={phone} maxLength={10} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, '')); setCust(null); }} />
+            <input className={`${inp} uppercase`} placeholder="PAN (e.g. ABCDE1234F)" value={pan} maxLength={10}
+              onChange={(e) => { setPan(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10)); setCust(null); setNcdCust(null); setNotFound(false); }} />
+            <button className={btnGhost} disabled={pan.length !== 10 || busy} onClick={lookupByPan}>Look up</button>
+            <span className="text-xs text-text-muted">or by phone</span>
+            <input className={inp} placeholder="Phone (10 digits)" value={phone} maxLength={10}
+              onChange={(e) => { setPhone(e.target.value.replace(/\D/g, '')); setCust(null); }} />
             <button className={btnGhost} disabled={phone.length < 10 || busy} onClick={lookup}>Look up</button>
           </div>
+          {ncdCust && (
+            <div className="text-xs text-text-muted mt-2">
+              Matched <b className="text-text">{ncdCust.full_name}</b> <span className="font-mono">{ncdCust.customer_code}</span>
+              {ncdCust.phone
+                ? <> · phone <span className="font-mono">{ncdCust.phone}</span></>
+                : <> · <span className="text-danger">no phone on file — enter one above before continuing</span></>}
+            </div>
+          )}
+          {notFound && (
+            <div className="text-xs text-warn mt-2">No customer with that PAN in NCD — look them up by phone, or enrol the customer first.</div>
+          )}
           {cust && (
             <div className="mt-3 grid grid-cols-2 gap-2 max-w-lg">
               <input className={inp} placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} />

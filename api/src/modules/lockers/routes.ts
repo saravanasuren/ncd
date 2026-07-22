@@ -34,6 +34,24 @@ lockersRouter.get('/lockers', asyncHandler(async (req, res) => {
   if (!branchId) return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'branch_id required' } });
   res.json(await lh.lockers(branchId, req.query.size ? String(req.query.size) : undefined));
 }));
+// PAN-first customer lookup (contract B11). LockerHub is phone-keyed, so we
+// resolve the customer from NCD's own book by PAN and hand THEIR phone to
+// LockerHub — staff enrol against the identity document in front of them
+// rather than having to know the registered mobile.
+// Registered BEFORE '/customers/:phone' so the literal segment can't be
+// captured by the param route.
+lockersRouter.get('/customers/by-pan/:pan', asyncHandler(async (req, res) => {
+  const pan = String(req.params.pan ?? '').toUpperCase().trim();
+  const c = (await getDb().query<{ id: string; customer_code: string; full_name: string; phone: string | null; email: string | null }>(
+    `SELECT id, customer_code, full_name, phone, email FROM customers
+      WHERE upper(pan) = $1 AND archived_at IS NULL ORDER BY id LIMIT 1`, [pan])).rows[0];
+  if (!c) { res.json({ found_in_ncd: false, customer: null, locker: null }); return; }
+  // Their LockerHub state (if any) — never fatal: a LockerHub hiccup must not
+  // block reading our own customer.
+  const locker = c.phone ? await lh.getCustomer(String(c.phone)).catch(() => null) : null;
+  res.json({ found_in_ncd: true, customer: { ...c, id: Number(c.id) }, locker });
+}));
+
 lockersRouter.get('/customers/:phone', asyncHandler(async (req, res) =>
   res.json(await lh.getCustomer(String(req.params.phone)))));
 lockersRouter.get('/applications/:id', asyncHandler(async (req, res) =>

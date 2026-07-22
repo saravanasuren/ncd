@@ -202,7 +202,7 @@ function InvestmentsCard({ rows, canDelete, onChange, onError }: { rows: any[]; 
               <thead>
                 <tr className="border-b border-border">
                   <th className={th}>Series</th><th className={th}>App no</th>
-                  <th className={th}>Status</th><th className={th}>Received</th>
+                  <th className={th}>Status</th><th className={th}>eSign</th><th className={th}>Received</th>
                   <th className={`${th} text-right`}>Invested</th><th className={`${th} text-right`}>Outstanding</th>
                   {canDelete && <th className={`${th} text-right`}></th>}
                 </tr>
@@ -215,6 +215,15 @@ function InvestmentsCard({ rows, canDelete, onChange, onError }: { rows: any[]; 
                     <td className={td}>
                       <span className={`text-[11px] rounded px-1.5 py-0.5 ${appPill[r.status] ?? 'bg-[color:var(--warn-bg)] text-warn'}`}>{r.status}</span>
                       {r.archived_at && <span className="ml-1 text-[11px] rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger">Archived</span>}
+                    </td>
+                    <td className={`${td} whitespace-nowrap`}>
+                      {r.esigned_at
+                        ? <span className="text-[11px] rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success" title={`eSigned on ${String(r.esigned_at).slice(0, 10)}`}>✓ eSigned</span>
+                        : <span className="text-[11px] rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn" title="Not eSigned yet">Not signed</span>}
+                      {r.esigned_at && r.has_signed_copy && (
+                        <a href={`/api/reports/esigned/${r.id}.pdf`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+                           className="ml-1.5 text-[11px] text-primary hover:underline">view</a>
+                      )}
                     </td>
                     <td className={`${td} text-xs whitespace-nowrap`}>{r.date_money_received ? String(r.date_money_received).slice(0, 10) : '—'}</td>
                     <td className={`${td} text-right mono`}>{formatINR(r.amount)}</td>

@@ -174,7 +174,11 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
             -- app wrongly showed its original amount as outstanding.
             CASE WHEN a.status IN (${OUTSTANDING_SQL_LIST}) THEN COALESCE(bk.live, a.total_amount) ELSE 0 END AS outstanding,
             a.status,
-            a.date_money_received, a.allotment_date, a.archived_at
+            a.date_money_received, a.allotment_date, a.archived_at,
+            -- eSign state per investment, so the customer's list shows at a
+            -- glance which applications are signed (and which have a signed
+            -- copy on file to open).
+            a.esigned_at, (a.esigned_pdf_path IS NOT NULL) AS has_signed_copy
      FROM applications a JOIN series s ON s.id = a.series_id
      LEFT JOIN LATERAL (
        SELECT sum(al.outstanding_amount) FILTER (WHERE al.status = 'Active') AS live

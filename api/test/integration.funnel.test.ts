@@ -119,6 +119,15 @@ describe('no-self-approve rule (docs/03 rule zero)', () => {
 });
 
 describe('enrolment wizard — the 6-section fields persist', () => {
+  it('a full 12-digit Aadhaar is stored in full (and last-4 derived from it)', async () => {
+    const staff = await as('staff@demo.local');
+    const created = await staff.post('/api/customers', { full_name: 'Full Aadhaar Wizard', phone: '9000000020', aadhaar: '123456789012' });
+    expect(created.status).toBe(201);
+    const detail = await staff.get(`/api/customers/${created.json.id}`);
+    expect(detail.json.customer.aadhaar).toBe('123456789012'); // printed in full on the application form
+    expect(detail.json.customer.aadhaar_last4).toBe('9012');   // legacy column mirrored
+  });
+
   it('captures personal / demat / bank / nominee detail through the wizard endpoints', async () => {
     const staff = await as('staff@demo.local');
     // Personal step (with the new fields + full Aadhaar → only last 4 kept).

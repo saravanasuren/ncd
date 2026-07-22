@@ -199,7 +199,13 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
     put('email', f.email); put('address', f.address); put('pincode', f.pincode); put('city', f.city); put('district', f.district); put('state', f.state);
     put('referred_by_text', f.referred_by_text); put('father_name', f.father_name); put('occupation', f.occupation);
     put('phone_secondary', f.phone_secondary); put('investor_category', f.investor_category); put('ckyc_number', f.ckyc_number);
-    if (f.aadhaar.replace(/\D/g, '').length >= 4) personal.aadhaar_last4 = f.aadhaar.replace(/\D/g, '').slice(-4);
+    // Send the FULL Aadhaar when all 12 are entered (owner 2026-07-21: stored and
+    // printed on the application form) — the backend derives last-4 from it.
+    // Previously this only ever sent the last 4, so the full number the operator
+    // typed was thrown away and the form printed blanks.
+    const aadhaarDigits = f.aadhaar.replace(/\D/g, '');
+    if (aadhaarDigits.length === 12) personal.aadhaar = aadhaarDigits;
+    else if (aadhaarDigits.length >= 4) personal.aadhaar_last4 = aadhaarDigits.slice(-4);
 
     const { id } = await api.post<{ id: number }>('/api/customers', personal);
 
@@ -293,7 +299,7 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
               </Field>
               <Field label="Gender"><select className={inp} value={f.gender} onChange={(e) => set({ gender: e.target.value })}><option value="">—</option>{GENDERS.map((g) => <option key={g}>{g}</option>)}</select></Field>
               <Field label="PAN"><input className={`${inp} uppercase`} placeholder="ABCDE1234F" maxLength={10} value={f.pan} onChange={(e) => set({ pan: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) })} /></Field>
-              <Field label="Aadhaar (12 digits)" hint="Only the last 4 digits are stored (UIDAI)."><input className={inp} inputMode="numeric" maxLength={12} placeholder="Full 12-digit Aadhaar" value={f.aadhaar} onChange={(e) => set({ aadhaar: e.target.value.replace(/\D/g, '') })} /></Field>
+              <Field label="Aadhaar (12 digits)" hint="Enter all 12 digits — the full Aadhaar is stored and printed on the application form."><input className={inp} inputMode="numeric" maxLength={12} placeholder="Full 12-digit Aadhaar" value={f.aadhaar} onChange={(e) => set({ aadhaar: e.target.value.replace(/\D/g, '') })} /></Field>
               <Field label="Phone (primary)"><input className={inp} inputMode="numeric" maxLength={10} value={f.phone} onChange={(e) => set({ phone: e.target.value.replace(/\D/g, '') })} /></Field>
               <Field label="Phone (secondary)"><input className={inp} inputMode="numeric" maxLength={10} value={f.phone_secondary} onChange={(e) => set({ phone_secondary: e.target.value.replace(/\D/g, '') })} /></Field>
               <Field label="Email"><input className={inp} type="email" value={f.email} onChange={(e) => set({ email: e.target.value })} /></Field>
@@ -435,7 +441,7 @@ function Review({ f, files }: { f: Form; files: Record<DocKey, File | null> }) {
       <Section title="Personal">
         <Row k="Name" v={dash(f.full_name)} /><Row k="Father's name" v={dash(f.father_name)} /><Row k="Occupation" v={dash(f.occupation)} />
         <Row k="DOB" v={dash(f.dob)} /><Row k="Gender" v={dash(f.gender)} /><Row k="PAN" v={dash(f.pan)} />
-        <Row k="Aadhaar" v={f.aadhaar ? `••••••••${f.aadhaar.slice(-4)}` : '—'} /><Row k="Phone" v={dash(f.phone)} /><Row k="Alt phone" v={dash(f.phone_secondary)} />
+        <Row k="Aadhaar" v={dash(f.aadhaar)} /><Row k="Phone" v={dash(f.phone)} /><Row k="Alt phone" v={dash(f.phone_secondary)} />
         <Row k="Email" v={dash(f.email)} /><Row k="Category" v={dash(f.investor_category)} />
         <Row k="Address" v={[f.address, f.city, f.district, f.state].filter(Boolean).join(', ') || '—'} /><Row k="NRI" v={f.is_nri ? 'Yes' : 'No'} />
       </Section>

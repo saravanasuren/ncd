@@ -366,6 +366,29 @@ describe('customer writes', () => {
     expect(miss.json.found).toBe(false);
     expect(miss.json.candidates).toEqual([]);
   });
+
+  it('B19a link-locker pledges an existing NCD, idempotent on deposit_reference', async () => {
+    // The facade's Active NCD (from ncd/match above).
+    const match = await integ('GET', '/api/integration/ncd/match?pan=AAAPF1111F&amount=400000');
+    const ncdId = match.json.candidates[0].ncd_id as string;
+
+    const link = await integ('POST', `/api/integration/ncd/${ncdId}/link-locker`, { deposit_reference: 'LOCK-LINK-1', tenant_id: 'tnt_9', phone: '9876500011' });
+    expect(link.status).toBe(201);
+    expect(link.json).toMatchObject({ success: true, ncd_id: ncdId, linked: true, is_locker_deposit: true });
+
+    // Re-delivery with the same reference → idempotent no-op success.
+    const again = await integ('POST', `/api/integration/ncd/${ncdId}/link-locker`, { deposit_reference: 'LOCK-LINK-1' });
+    expect(again.status).toBe(200);
+    expect(again.json).toMatchObject({ success: true, linked: false, already_linked: true });
+
+    // A different reference on an already-pledged NCD → 409.
+    const conflict = await integ('POST', `/api/integration/ncd/${ncdId}/link-locker`, { deposit_reference: 'LOCK-LINK-2' });
+    expect(conflict.status).toBe(409);
+
+    // Unknown NCD → 404; missing reference → 400.
+    expect((await integ('POST', '/api/integration/ncd/APP-2999-000999/link-locker', { deposit_reference: 'x' })).status).toBe(404);
+    expect((await integ('POST', `/api/integration/ncd/${ncdId}/link-locker`, {})).status).toBe(400);
+  });
 });
 
 describe('agent endpoints', () => {

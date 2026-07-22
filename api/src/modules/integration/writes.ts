@@ -968,3 +968,42 @@ customerWritesRouter.post('/locker-deposits', asyncHandler(async (req, res) => {
     customer_status: customerFacingStatus('PendingApproval', false),
   });
 }));
+
+// POST /ncd/:id/link-locker (B19a, contract v1.1) — an EXISTING NCD is pledged
+// as a locker deposit. `:id` is the NCD's application_no (as returned by B17
+// /ncd/match and B18 /locker-deposits). Flips is_locker_deposit and records the
+// deposit_reference. Idempotent on (ncd_id, deposit_reference): a repeat with
+// the same ref is a no-op success; a different ref on an already-pledged NCD is
+// a 409. Durable-queued by LockerHub, so must be safe to re-deliver.
+customerWritesRouter.post('/ncd/:id/link-locker', asyncHandler(async (req, res) => {
+  const b = req.body ?? {};
+  const appNo = String(req.params.id ?? '').trim();
+  const ref = String(b.deposit_reference ?? '').trim();
+  if (!ref) return res.status(400).json({ error: 'deposit_reference required' });
+
+  const db = getDb();
+  const app = (await db.query<{ id: string; is_locker_deposit: boolean; lockerhub_intent_no: string | null }>(
+    'SELECT id, is_locker_deposit, lockerhub_intent_no FROM applications WHERE application_no = $1', [appNo])).rows[0];
+  if (!app) return res.status(404).json({ error: 'NCD not found' });
+
+  // Idempotency: already pledged under this exact reference → no-op success.
+  if (app.is_locker_deposit && app.lockerhub_intent_no === ref) {
+    return res.json({ success: true, ncd_id: appNo, linked: false, already_linked: true, is_locker_deposit: true });
+  }
+  // Pledged under a DIFFERENT reference → conflict (don't silently repoint).
+  if (app.is_locker_deposit && app.lockerhub_intent_no && app.lockerhub_intent_no !== ref) {
+    return res.status(409).json({ error: 'NCD already linked to a different locker deposit', existing_reference: app.lockerhub_intent_no });
+  }
+  // Another application already owns this reference (unique intent) → conflict.
+  const dup = (await db.query('SELECT application_no FROM applications WHERE lockerhub_intent_no = $1 AND id <> $2 LIMIT 1', [ref, app.id])).rows[0] as { application_no: string } | undefined;
+  if (dup) return res.status(409).json({ error: 'deposit_reference already used by another NCD', ncd_id: dup.application_no });
+
+  await db.query(
+    'UPDATE applications SET is_locker_deposit = TRUE, lockerhub_intent_no = COALESCE(lockerhub_intent_no, $1), updated_at = now() WHERE id = $2',
+    [ref, app.id]);
+  await writeAudit(db, {
+    actorId: null, action: 'LOCKERHUB_NCD_LINKED_AS_LOCKER', entityType: 'applications', entityId: Number(app.id),
+    after: { deposit_reference: ref, tenant_id: b.tenant_id ?? null, phone: b.phone ? maskPhone(String(b.phone)) : null, lockerhub_application_no: b.application_no ?? null },
+  });
+  res.status(201).json({ success: true, ncd_id: appNo, linked: true, is_locker_deposit: true });
+}));

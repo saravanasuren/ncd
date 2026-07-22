@@ -79,7 +79,9 @@ export interface BgvFilters { q?: string; seriesId?: number; kycStatus?: string;
 export async function grid(db: Db, actor: AuthUser, f: BgvFilters = {}) {
   const { scopeFor, scopeWhere } = await import('../../lib/scope.js');
   const params: unknown[] = [];
-  const where: string[] = ['c.archived_at IS NULL'];
+  // Active, non-archived only (spec §5): inactive/draft records are not part of
+  // the book ops is clearing, and would otherwise show as all-red noise.
+  const where: string[] = ['c.archived_at IS NULL', 'c.is_active = TRUE'];
   if (f.q && f.q.trim()) {
     params.push(`%${f.q.trim()}%`);
     where.push(`(c.full_name ILIKE $${params.length} OR c.customer_code ILIKE $${params.length} OR c.pan ILIKE $${params.length})`);

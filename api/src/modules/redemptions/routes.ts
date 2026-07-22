@@ -13,7 +13,12 @@ redemptionsRouter.get('/', requirePermission('redemptions:initiate', 'dashboard:
 
 redemptionsRouter.post('/premature', requirePermission('redemptions:initiate'),
   asyncHandler(async (req, res) => {
-    const input = z.object({ application_id: z.number(), redemption_date: z.string().optional(), reason: z.string().min(2) }).parse(req.body);
+    // `amount` = partial withdrawal (capped at the unpledged portion). Omitted
+    // → redeem everything that isn't pledged to a live locker deposit.
+    const input = z.object({
+      application_id: z.number(), redemption_date: z.string().optional(), reason: z.string().min(2),
+      amount: z.number().positive().optional(),
+    }).parse(req.body);
     res.status(201).json(await s.initiatePremature(getDb(), req.user!, input));
   }));
 

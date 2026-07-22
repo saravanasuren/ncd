@@ -36,17 +36,30 @@ async function penaltySetting(db: Db): Promise<RateSpec> {
 /** Create a 'Requested' redemption record (no approval). Shared by all callers. */
 async function createRequest(
   tx: Db,
-  input: { applicationId: number; type: 'premature' | 'maturity'; reason: string; source: string; byCustomer: boolean; redemptionDate?: string; createdBy: number | null }
+  input: { applicationId: number; type: 'premature' | 'maturity'; reason: string; source: string; byCustomer: boolean; redemptionDate?: string; createdBy: number | null; amount?: number }
 ): Promise<{ id: number; redemption_no: string; principal: number; penalty: number; netPayment: number; brokenInterest: number }> {
-  const principal = await outstandingPrincipal(tx, input.applicationId);
+  const outstanding = await outstandingPrincipal(tx, input.applicationId);
   // Money pledged to a live locker deposit is that locker's security — it can't
   // be redeemed until the link is released (owner spec 2026-07-22). Only the
-  // free portion is redeemable.
+  // FREE portion is redeemable: a ₹25L NCD backing a ₹3L locker can redeem ₹22L
+  // and stay live with ₹3L still securing the locker.
   const { linkedAmount } = await import('../lockers/deposits.js');
   const pledged = await linkedAmount(tx, input.applicationId);
-  if (pledged > 0 && principal - pledged <= 0) {
+  const free = round2(outstanding - pledged);
+  if (free <= 0) {
     throw errors.unprocessable(
       `₹${pledged.toLocaleString('en-IN')} of this investment is pledged to a live locker deposit and cannot be redeemed. Release the locker link first (once the locker is closed).`
+    );
+  }
+  // Partial withdrawal: redeem a stated amount, capped at the free portion.
+  // Omitted → redeem everything that isn't pledged.
+  const principal = input.amount != null ? round2(input.amount) : free;
+  if (principal <= 0) throw errors.badRequest('Redemption amount must be greater than zero');
+  if (principal > free) {
+    throw errors.unprocessable(
+      pledged > 0
+        ? `Only ₹${free.toLocaleString('en-IN')} is redeemable — ₹${pledged.toLocaleString('en-IN')} of the ₹${outstanding.toLocaleString('en-IN')} is pledged to a live locker deposit.`
+        : `Only ₹${free.toLocaleString('en-IN')} is outstanding on this investment.`
     );
   }
   const penalty = input.type === 'maturity' ? { mode: 'flat' as const, value: 0 } : await penaltySetting(tx);
@@ -80,7 +93,16 @@ async function createRequest(
       };
     }
   }
-  const calc = computeRedemption({ principal, penalty, ...brokenArgs });
+  // Penalty applies to the amount actually WITHDRAWN, but the accrued interest
+  // is settled on the FULL outstanding up to the redemption date. That matters
+  // for a partial withdrawal: paying the broken-interest row advances the line's
+  // paid-through watermark to this date, so any interest already earned by the
+  // portion that STAYS invested must be paid out now — otherwise it would be
+  // silently lost. The remainder then accrues fresh from the redemption date.
+  // (For a full redemption the two bases are equal, so nothing changes.)
+  const calc = computeRedemption({ principal, penalty });
+  const accrued = computeRedemption({ principal: outstanding, penalty: { mode: 'flat', value: 0 }, ...brokenArgs });
+  calc.brokenInterest = accrued.brokenInterest;
   // TDS on the broken interest (same rule the interest run uses), then fold the
   // net into the settlement. net_payment = (principal − penalty) + brokenNet.
   let brokenNet = 0;
@@ -139,12 +161,12 @@ export async function submitForApproval(db: Db, staff: AuthUser, redemptionId: n
 }
 
 /** Staff initiates + submits a premature redemption in one step. */
-export async function initiatePremature(db: Db, actor: AuthUser, input: { application_id: number; redemption_date?: string; reason: string }) {
+export async function initiatePremature(db: Db, actor: AuthUser, input: { application_id: number; redemption_date?: string; reason: string; amount?: number }) {
   const app = (await db.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [input.application_id])).rows[0];
   if (!app) throw errors.notFound('Application not found');
   if (app.status !== 'Active') throw errors.unprocessable('Only Active applications can be prematurely redeemed');
   const rec = await db.withTx(async (tx) =>
-    createRequest(tx, { applicationId: input.application_id, type: 'premature', reason: input.reason, source: 'staff', byCustomer: false, redemptionDate: input.redemption_date, createdBy: actor.id }));
+    createRequest(tx, { applicationId: input.application_id, type: 'premature', reason: input.reason, source: 'staff', byCustomer: false, redemptionDate: input.redemption_date, createdBy: actor.id, amount: input.amount }));
   const req = await submitForApproval(db, actor, rec.id);
   return { redemption_id: rec.id, redemption_no: rec.redemption_no, request: req, principal: rec.principal, penalty: rec.penalty, netPayment: rec.netPayment, brokenInterest: rec.brokenInterest };
 }
@@ -240,11 +262,56 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
   const redDate = String(req.metadata.redemption_date ?? new Date().toISOString().slice(0, 10));
   const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [appId])).rows[0];
   if (!app) return;
-  assertTransition('application', app.status, 'Redeemed');
-  await tx.query("UPDATE applications SET status = 'Redeemed', redemption_date = $1, updated_at = now() WHERE id = $2", [redDate, appId]);
-  await emitForApplication(tx, 'redemption.completed', appId, `red:${redId}`);
-  await tx.query("UPDATE application_lines SET status = 'PrematureWithdrawn', outstanding_amount = 0 WHERE application_id = $1 AND status = 'Active'", [appId]);
-  await tx.query("UPDATE disbursement_schedule SET status = 'Skipped' WHERE application_id = $1 AND status = 'Scheduled'", [appId]);
+
+  // How much of the investment is being withdrawn, and what's left after it.
+  const withdrawn = Number((await tx.query<{ principal: string }>(
+    'SELECT principal FROM redemptions WHERE id = $1', [redId])).rows[0]?.principal ?? 0);
+  const outstandingBefore = await outstandingPrincipal(tx, appId);
+  const remaining = round2(outstandingBefore - withdrawn);
+
+  if (remaining > 0) {
+    // ── PARTIAL withdrawal (owner spec 2026-07-22) ────────────────────────
+    // e.g. redeem ₹22L of a ₹25L investment and stay live with the ₹3L that
+    // secures a locker. The investment is NOT closed: each line's outstanding
+    // is reduced (in order) and its remaining projections are scaled down.
+    // Interest is linear in principal, so scaling the unpaid rows by
+    // remaining/before is exact — far safer than re-materialising over paid rows.
+    let left = withdrawn;
+    const lines = (await tx.query<{ id: string; outstanding_amount: string }>(
+      "SELECT id, outstanding_amount FROM application_lines WHERE application_id = $1 AND status = 'Active' ORDER BY id", [appId])).rows;
+    for (const l of lines) {
+      if (left <= 0) break;
+      const before = Number(l.outstanding_amount);
+      const take = Math.min(before, left);
+      const after = round2(before - take);
+      left = round2(left - take);
+      await tx.query('UPDATE application_lines SET outstanding_amount = $1 WHERE id = $2', [after, Number(l.id)]);
+      // Scale this line's UNPAID future projections to the reduced principal.
+      const ratio = before > 0 ? after / before : 0;
+      // net is DERIVED, never rounded on its own — chk_ds_net enforces
+      // net = gross - tds, and rounding all three independently breaks it.
+      await tx.query(
+        `UPDATE disbursement_schedule
+            SET gross_amount = ROUND(gross_amount * $2, 2),
+                tds_amount   = ROUND(tds_amount   * $2, 2),
+                net_amount   = ROUND(gross_amount * $2, 2) - ROUND(tds_amount * $2, 2)
+          WHERE line_id = $1 AND status = 'Scheduled' AND batch_id IS NULL
+            AND due_type IN ('Interest','BrokenInterest') AND due_date > $3::date`,
+        [Number(l.id), ratio, redDate]);
+      if (after <= 0) await tx.query("UPDATE application_lines SET status = 'PrematureWithdrawn' WHERE id = $1", [Number(l.id)]);
+    }
+    await writeAudit(tx, {
+      actorId: null, action: 'redemption.partial', entityType: 'applications', entityId: appId,
+      after: { redemption_id: redId, withdrawn, outstanding_before: outstandingBefore, outstanding_after: remaining },
+    });
+    // The investment stays Active — fall through only to write the payout rows.
+  } else {
+    assertTransition('application', app.status, 'Redeemed');
+    await tx.query("UPDATE applications SET status = 'Redeemed', redemption_date = $1, updated_at = now() WHERE id = $2", [redDate, appId]);
+    await emitForApplication(tx, 'redemption.completed', appId, `red:${redId}`);
+    await tx.query("UPDATE application_lines SET status = 'PrematureWithdrawn', outstanding_amount = 0 WHERE application_id = $1 AND status = 'Active'", [appId]);
+    await tx.query("UPDATE disbursement_schedule SET status = 'Skipped' WHERE application_id = $1 AND status = 'Scheduled'", [appId]);
+  }
   const red = (await tx.query<{ principal: string; penalty: string; net_payment: string; broken_interest: string }>(
     'SELECT principal, penalty, net_payment, broken_interest FROM redemptions WHERE id = $1', [redId])).rows[0]!;
   const lineId = (await tx.query<{ id: string }>('SELECT id FROM application_lines WHERE application_id = $1 ORDER BY id LIMIT 1', [appId])).rows[0]?.id;

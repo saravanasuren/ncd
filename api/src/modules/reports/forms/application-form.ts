@@ -168,7 +168,11 @@ export async function applicationFormPdf(db: Db, applicationId: number): Promise
   const aaX = LX + 260; _fieldLabel(doc, aaX, y, 'Aadhaar (mandatory)');
   const aFull = a.aadhaar && /^\d{12}$/.test(String(a.aadhaar)) ? String(a.aadhaar) : null;
   const aL4 = a.aadhaar_last4 && /^\d{4}$/.test(String(a.aadhaar_last4)) ? String(a.aadhaar_last4) : null;
-  _charBoxes(doc, aaX, y + 9, 12, aFull ? aFull : (aL4 ? '••••••••' + aL4 : ''), 14);
+  // All 12 digits are printed whenever we hold them (owner: print full Aadhaar).
+  // When only the legacy last-4 is on file the first eight boxes are left BLANK
+  // rather than dotted — the number was never captured, and dots read as though
+  // we were deliberately masking a number we actually have.
+  _charBoxes(doc, aaX, y + 9, 12, aFull ? aFull : (aL4 ? '        ' + aL4 : ''), 14);
   y += 26;
   // Address
   _fieldLabel(doc, LX, y, 'Address');

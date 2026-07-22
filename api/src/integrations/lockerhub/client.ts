@@ -79,8 +79,10 @@ export const createLockerApplication = (staff: ActingStaff, input: { phone: stri
 export const paymentLink = (staff: ActingStaff, applicationId: string, leg: 'rent' | 'deposit') =>
   lhFetch<Record<string, unknown>>('POST', `/locker-applications/${encodeURIComponent(applicationId)}/payment-link`, { body: { leg, staff } });
 
-export const recordPayment = (staff: ActingStaff, applicationId: string, input: { leg: 'rent' | 'deposit'; method: 'cash' | 'cheque' | 'bank_transfer'; reference?: string; notes?: string }) =>
-  lhFetch<Record<string, unknown>>('POST', `/locker-applications/${encodeURIComponent(applicationId)}/record-payment`, { body: { ...input, staff } });
+// A10 recordPayment removed — RETIRED by LockerHub (contract v1.2 §A10). It
+// returns 400 `online_only` for every caller, because online-only is a property
+// of the locker/NCD product, not of who is calling. Use paymentLink (A9) to
+// collect, or linkNcd (A12) to satisfy a deposit leg with an NCD investment.
 
 /**
  * A12 — settle a locker's deposit leg as NCD-BACKED (not as money received).

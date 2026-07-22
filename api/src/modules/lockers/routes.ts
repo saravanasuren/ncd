@@ -62,14 +62,10 @@ lockersRouter.post('/applications/:id/payment-link', asyncHandler(async (req, re
   res.json(await lh.paymentLink(staffOf(req), String(req.params.id), leg));
 }));
 
-lockersRouter.post('/applications/:id/record-payment', asyncHandler(async (req, res) => {
-  const b = z.object({
-    leg: LEG, method: z.enum(['cash', 'cheque', 'bank_transfer']),
-    reference: z.string().optional(), notes: z.string().optional(),
-  }).parse(req.body ?? {});
-  // Amount is server-derived on LockerHub — never sent from here.
-  res.json(await lh.recordPayment(staffOf(req), String(req.params.id), b));
-}));
+// A10 record-payment was RETIRED by LockerHub (contract v1.2 §A10): lockers and
+// NCD are online-only products and the route now 400s for every caller. The
+// proxy is gone rather than left to fail — collect via payment-link above, or
+// back the deposit leg with an NCD investment (A12 link-ncd).
 
 lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) => {
   const b = z.object({ locker_id: z.string().optional(), lease_months: z.number().int().positive().optional() }).parse(req.body ?? {});

@@ -54,11 +54,16 @@ beforeAll(async () => {
         return send(200, { success: true, ncd_id: body.ncd_id, leg: 'deposit', settled_as: 'ncd_backed',
           application_status: paidLegs[id]!.has('rent') ? 'approved' : 'payment_pending' });
       }
-      const rec = p.match(/^\/locker-applications\/(.+)\/record-payment$/);
-      if (rec && req.method === 'POST') {
-        const id = rec[1]!; (paidLegs[id] ??= new Set()).add(body.leg);
-        const approved = paidLegs[id]!.has('rent') && paidLegs[id]!.has('deposit');
-        return send(200, { success: true, intent_no: 'LOCK-' + body.leg, leg: body.leg, amount: body.leg === 'rent' ? 3540 : 25000, application_status: approved ? 'approved' : 'payment_pending' });
+      // A10 is RETIRED upstream — 400 online_only for every caller.
+      if (/^\/locker-applications\/(.+)\/record-payment$/.test(p) && req.method === 'POST') {
+        return send(400, { error: 'Lockers and NCD are online-only.', code: 'online_only' });
+      }
+      // A9 payment-link — online collection; settlement lands via Easebuzz.
+      const pl = p.match(/^\/locker-applications\/(.+)\/payment-link$/);
+      if (pl && req.method === 'POST') {
+        const id = pl[1]!; (paidLegs[id] ??= new Set()).add(body.leg); // simulate immediate settlement
+        return send(200, { success: true, leg: body.leg, amount: body.leg === 'rent' ? 3540 : 25000,
+          checkout_url: 'https://pay.easebuzz.in/pay/' + id + '-' + body.leg, intent_no: 'LOCK-' + body.leg });
       }
       return send(404, { error: 'not found: ' + p });
     });
@@ -98,7 +103,7 @@ describe('locker enrollment proxy (Part A)', () => {
     expect(seen.every((s) => s.key === config.LOCKERHUB_INTEGRATION_KEY)).toBe(true);
   });
 
-  it('cash flow: create customer → application → rent + deposit → auto-allotted', async () => {
+  it('online flow: create customer → application → payment link per leg', async () => {
     seen = [];
     const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
 
@@ -113,10 +118,17 @@ describe('locker enrollment proxy (Part A)', () => {
     expect(app.status).toBe(201);
     const id = app.json.application_id;
 
-    const rent = await staff.post(`/api/lockers/applications/${id}/record-payment`, { leg: 'rent', method: 'cash' });
-    expect(rent.json.application_status).toBe('payment_pending');
-    const dep = await staff.post(`/api/lockers/applications/${id}/record-payment`, { leg: 'deposit', method: 'cash' });
-    expect(dep.json.application_status).toBe('approved'); // auto-allotted on the last leg
+    // Online-only: staff generate a payment link per leg (A9). Cash is gone.
+    const rent = await staff.post(`/api/lockers/applications/${id}/payment-link`, { leg: 'rent' });
+    expect(rent.status).toBe(200);
+    expect(rent.json.checkout_url).toMatch(/^https:\/\/pay\.easebuzz\.in\//);
+    expect(rent.json.amount).toBe(3540);
+    const dep = await staff.post(`/api/lockers/applications/${id}/payment-link`, { leg: 'deposit' });
+    expect(dep.json.checkout_url).toBeTruthy();
+
+    // The retired cash route is no longer proxied at all.
+    const cash = await staff.post(`/api/lockers/applications/${id}/record-payment`, { leg: 'rent', method: 'cash' });
+    expect(cash.status).toBe(404);
   });
 });
 

@@ -39,11 +39,11 @@ export async function initiateSigning(db: Db, actor: AuthUser, applicationId: nu
 
 /** Mark a session signed (from the webhook or the poller). Idempotent. */
 export async function completeSigning(db: Db, digioRequestId: string, opts: { signedAt?: string; signedDocumentUrl?: string; payload?: unknown }): Promise<{ ok: boolean; applicationId?: number }> {
-  return db.withTx(async (tx) => {
+  const result = await db.withTx(async (tx) => {
     const sess = (await tx.query<{ id: string; application_id: string; status: string }>(
       'SELECT id, application_id, status FROM digio_signing_sessions WHERE digio_request_id = $1', [digioRequestId])).rows[0];
-    if (!sess) { console.warn(`[digio] webhook for unknown request_id=${digioRequestId} — ignored`); return { ok: false }; }
-    if (sess.status === 'signed') return { ok: true, applicationId: Number(sess.application_id) }; // idempotent
+    if (!sess) { console.warn(`[digio] webhook for unknown request_id=${digioRequestId} — ignored`); return { ok: false, fresh: false }; }
+    if (sess.status === 'signed') return { ok: true, applicationId: Number(sess.application_id), fresh: false }; // idempotent
     await tx.query(
       `UPDATE digio_signing_sessions SET status='signed', signed_at=COALESCE($2::timestamptz, now()), signed_document_url=$3, webhook_payload=$4::jsonb, updated_at=now() WHERE id=$1`,
       [sess.id, opts.signedAt ?? null, opts.signedDocumentUrl ?? null, JSON.stringify(opts.payload ?? {})]);
@@ -61,15 +61,42 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
       console.warn(`[documents] bond generation failed for app ${sess.application_id}: ${(e as Error).message}`);
     }
     await writeAudit(tx, { actorId: null, action: 'esign.complete', entityType: 'applications', entityId: Number(sess.application_id), after: { digioRequestId } });
-    return { ok: true, applicationId: Number(sess.application_id) };
+    return { ok: true, applicationId: Number(sess.application_id), fresh: true };
   });
+
+  // Pull the SIGNED copy from Digio and store it so staff can open it from the
+  // application page. Deliberately AFTER the transaction commits — this is
+  // external network I/O (multi-second timeout) and must never hold a pool
+  // connection or row locks open. Best-effort: a failure leaves esigned_pdf_path
+  // NULL (the link just doesn't appear) and never undoes the completion.
+  if (result.ok && result.fresh && result.applicationId) {
+    try {
+      const { downloadSignedDocument } = await import('./index.js');
+      const signed = await downloadSignedDocument(digioRequestId);
+      if (signed) {
+        const { saveBuffer } = await import('../../lib/storage.js');
+        const { path } = saveBuffer('esigned', `esigned-${result.applicationId}.pdf`, signed);
+        await db.query('UPDATE applications SET esigned_pdf_path = $1 WHERE id = $2', [path, result.applicationId]);
+      }
+    } catch (e) {
+      console.warn(`[digio] signed-document download failed for app ${result.applicationId}: ${(e as Error).message}`);
+    }
+  }
+  return { ok: result.ok, applicationId: result.applicationId };
 }
 
 /** Poll outstanding sessions against Digio (real mode only). Cron-gated. */
 export async function pollOutstanding(db: Db): Promise<{ checked: number; signed: number }> {
   if (!digioConfigured()) return { checked: 0, signed: 0 };
+  // Only chase RECENT signatures. A customer who never signs leaves the session
+  // 'requested' forever — without this cutoff the 15s poller would hit Digio for
+  // that abandoned request indefinitely. Newest first so live signings win the
+  // batch when several are open.
   const { rows } = await db.query<{ digio_request_id: string }>(
-    "SELECT digio_request_id FROM digio_signing_sessions WHERE status = 'requested' AND digio_request_id IS NOT NULL LIMIT 50");
+    `SELECT digio_request_id FROM digio_signing_sessions
+      WHERE status = 'requested' AND digio_request_id IS NOT NULL
+        AND created_at > now() - interval '7 days'
+      ORDER BY created_at DESC LIMIT 50`);
   let signed = 0;
   for (const r of rows) {
     const status = await fetchStatus(r.digio_request_id).catch(() => null);

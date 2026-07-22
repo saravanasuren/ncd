@@ -245,7 +245,13 @@ export async function getApplicationDetail(db: Db, actor: AuthUser, appId: numbe
   if (!app) throw errors.notFound('Application not found');
   const lines = (await db.query('SELECT * FROM application_lines WHERE application_id = $1', [appId])).rows;
   const schedule = (await db.query('SELECT id, due_date, due_type, gross_amount, tds_amount, net_amount, status, paid_at FROM disbursement_schedule WHERE application_id = $1 ORDER BY due_date', [appId])).rows;
-  return { application: app, lines, schedule };
+  // A signature is out with the customer — the UI polls while this is true so the
+  // page flips to eSigned on its own once the Digio poller completes it.
+  const pendingSessions = Number((await db.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM digio_signing_sessions WHERE application_id = $1 AND status = 'requested'", [appId]
+  )).rows[0]?.n ?? 0);
+  const esignPending = pendingSessions > 0 && !app.esigned_at;
+  return { application: app, lines, schedule, esign_pending: esignPending };
 }
 
 /**

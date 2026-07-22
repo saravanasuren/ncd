@@ -51,6 +51,30 @@ reportsRouter.get('/soa/:customerId.pdf', requirePermission('reports:download', 
     res.end(buf);
   }));
 
+// The SIGNED application returned by Digio after eSign (stored at completion).
+// 404 until the customer has actually signed and the copy was fetched.
+reportsRouter.get('/esigned/:applicationId.pdf', requirePermission('customers:read'),
+  asyncHandler(async (req, res) => {
+    const { assertApplicationVisible } = await import('../../lib/visibility.js');
+    const appId = Number(req.params.applicationId);
+    await assertApplicationVisible(getDb(), req.user!, appId);
+    const row = (await getDb().query<{ esigned_pdf_path: string | null }>(
+      'SELECT esigned_pdf_path FROM applications WHERE id = $1', [appId])).rows[0];
+    if (!row?.esigned_pdf_path) {
+      res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No signed document yet for this application' } });
+      return;
+    }
+    const { readStored } = await import('../../lib/storage.js');
+    const buf = readStored(row.esigned_pdf_path);
+    if (!buf) {
+      res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Signed document file is missing on disk' } });
+      return;
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="signed-application-${appId}.pdf"`);
+    res.end(buf);
+  }));
+
 // Staff-facing bond certificate / allotment letter for one application.
 reportsRouter.get('/bond/:applicationId.pdf', requirePermission('customers:read'),
   asyncHandler(async (req, res) => {

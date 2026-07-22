@@ -75,13 +75,16 @@ async function startCrons(): Promise<void> {
     void runBackupCheck(getDb()).catch((e) => console.warn('[cron] backup check:', (e as Error).message));
   }, 15 * 60_000).unref();
 
-  // Digio eSign poller — real mode only, gated (webhook is the primary path;
-  // this catches Digio's unreliable webhook delivery). Every 5 min.
+  // Digio eSign poller — flips an application to eSigned on its own once the
+  // customer signs, with no webhook and no manual "Mark eSigned" (owner spec
+  // 2026-07-22). ON by default; pollOutstanding() itself no-ops unless DIGIO_*
+  // creds are set, so arming it is harmless in stub mode.
   if (config.DIGIO_POLLER_ENABLED === 'true') {
     const { pollOutstanding } = await import('./integrations/digio/service.js');
+    const everyMs = Math.max(5, config.DIGIO_POLL_SECONDS) * 1000;
     setInterval(() => {
       void pollOutstanding(getDb()).catch((e) => console.warn('[cron] digio poll:', (e as Error).message));
-    }, 5 * 60_000).unref();
+    }, everyMs).unref();
   }
 
   if (config.LOCKERHUB_RECONCILIATION_ENABLED === 'true') {

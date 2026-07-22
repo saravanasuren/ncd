@@ -116,7 +116,13 @@ export function ApplicationDetailPage() {
   const [msg, setMsg] = useState('');
   const [note, setNote] = useState('');
   const key = ['application', id];
-  const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<any>(`/api/applications/${id}`) });
+  // While a signature is out with the customer, re-check every 15s so the page
+  // flips to eSigned on its own — no webhook, no manual "Mark eSigned".
+  const { data, isLoading, error } = useQuery({
+    queryKey: key,
+    queryFn: () => api.get<any>(`/api/applications/${id}`),
+    refetchInterval: (q) => (q.state.data?.esign_pending ? 15_000 : false),
+  });
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
   const run = (p: Promise<unknown>) => p.then(() => { setMsg(''); invalidate(); }).catch((e) => setMsg(e instanceof ApiError ? e.message : 'Failed'));
 
@@ -150,7 +156,15 @@ export function ApplicationDetailPage() {
             <button onClick={() => run(api.post(`/api/applications/${id}/mark-esigned`))} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Mark eSigned</button>
           </>
         )}
-        {a.esigned_at && <span className="text-xs text-text-muted">eSigned ✓</span>}
+        {!a.esigned_at && data.esign_pending && (
+          <span className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-2 py-1" title="Digio is polled every 15s; this flips to eSigned automatically once the customer signs">
+            ⏳ Waiting for signature — checking every 15s
+          </span>
+        )}
+        {a.esigned_at && <span className="text-xs text-success">eSigned ✓</span>}
+        {a.esigned_pdf_path && (
+          <a href={`/api/reports/esigned/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Signed application</a>
+        )}
         {can('applications:update') && (
           <label className="text-xs flex items-center gap-1.5 border border-border rounded px-3 py-1.5" title="Money came from a locker (LockerHub-originated deposits flag themselves automatically)">
             <input type="checkbox" checked={!!a.is_locker_deposit}

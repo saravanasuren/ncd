@@ -111,3 +111,25 @@ export async function fetchStatus(digioRequestId: string): Promise<string | null
 export function isSignedStatus(s: string | null | undefined): boolean {
   return !!s && /^(signed|completed|success|agreement_signed)$/i.test(String(s));
 }
+
+/**
+ * Download the SIGNED PDF for a completed request. Binary, so it can't go
+ * through `call()` (which parses JSON). Returns null in stub mode or on any
+ * failure — the caller treats the signed copy as best-effort and never lets a
+ * download hiccup block the eSign completion.
+ */
+export async function downloadSignedDocument(digioRequestId: string): Promise<Buffer | null> {
+  if (!digioConfigured()) return null;
+  try {
+    const auth = Buffer.from(`${config.DIGIO_CLIENT_ID}:${config.DIGIO_CLIENT_SECRET}`).toString('base64');
+    const r = await fetch(`${base()}/v2/client/document/download?document_id=${encodeURIComponent(digioRequestId)}`, {
+      headers: { Authorization: 'Basic ' + auth },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!r.ok) return null;
+    const buf = Buffer.from(await r.arrayBuffer());
+    return buf.length > 0 ? buf : null;
+  } catch {
+    return null;
+  }
+}

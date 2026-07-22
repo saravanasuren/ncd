@@ -56,3 +56,40 @@ describe('digio esign', () => {
     expect(second.esigned_at).toBe(first.esigned_at);
   });
 });
+
+// Auto-completion (owner spec 2026-07-22): no webhook, no manual "Mark eSigned".
+describe('esign auto-poll', () => {
+  it('exposes esign_pending while a signature is out, and clears it on completion', async () => {
+    const a = new Client(ctx.base); await a.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' });
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    const cust = await a.post('/api/customers', { full_name: 'Poll Cust', phone: '9990005555' });
+    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000 });
+    const id = app.json.id;
+
+    // Before any signing session → not pending.
+    expect((await a.get(`/api/applications/${id}`)).json.esign_pending).toBe(false);
+
+    await a.post(`/api/applications/${id}/esign/initiate`);
+    expect((await a.get(`/api/applications/${id}`)).json.esign_pending).toBe(true);
+
+    // No signed copy stored yet (stub mode) → the signed-application route 404s.
+    expect((await a.get(`/api/reports/esigned/${id}.pdf`)).status).toBe(404);
+
+    // Completion (what the 15s poller triggers) flips it without any manual step.
+    const { completeSigning } = await import('../src/integrations/digio/service.js');
+    const reqId = (await ctx.db.query<{ digio_request_id: string }>(
+      'SELECT digio_request_id FROM digio_signing_sessions WHERE application_id = $1', [id])).rows[0]!;
+    await completeSigning(ctx.db, reqId.digio_request_id, {});
+
+    const after = await a.get(`/api/applications/${id}`);
+    expect(after.json.esign_pending).toBe(false);
+    expect(after.json.application.esigned_at).not.toBeNull();
+  });
+
+  it('the poller is a no-op when Digio creds are absent (stub mode)', async () => {
+    const { pollOutstanding } = await import('../src/integrations/digio/service.js');
+    const out = await pollOutstanding(ctx.db);
+    expect(out).toEqual({ checked: 0, signed: 0 });
+  });
+});

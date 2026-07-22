@@ -47,6 +47,13 @@ beforeAll(async () => {
           allotment: { locker_number: 'L10-4' },
         });
       }
+      // A12 link-ncd — deposit settled as NCD-backed, never a payment row.
+      const ln = p.match(/^\/locker-applications\/(.+)\/link-ncd$/);
+      if (ln && req.method === 'POST') {
+        const id = ln[1]!; (paidLegs[id] ??= new Set()).add('deposit');
+        return send(200, { success: true, ncd_id: body.ncd_id, leg: 'deposit', settled_as: 'ncd_backed',
+          application_status: paidLegs[id]!.has('rent') ? 'approved' : 'payment_pending' });
+      }
       const rec = p.match(/^\/locker-applications\/(.+)\/record-payment$/);
       if (rec && req.method === 'POST') {
         const id = rec[1]!; (paidLegs[id] ??= new Set()).add(body.leg);
@@ -133,10 +140,27 @@ describe('locker deposit links (NCD backs the deposit)', () => {
     const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const appId = await liveInvestment(staff, 2500000, '9899111001');
 
+    seen = [];
     const link = await staff.post('/api/lockers/deposit-links', { application_id: appId, lockerhub_application_id: 'la_xl' });
     expect(link.status).toBe(201);
     expect(link.json.linked_amount).toBe(300000);       // LockerHub's figure, not typed
-    expect(link.json.lockerhub_settled).toBe(true);      // deposit leg auto-settled
+    expect(link.json.lockerhub_settled).toBe(true);      // deposit leg settled as NCD-backed
+
+    // A12: the deposit leg settles via link-ncd carrying our application_no as
+    // ncd_id — NEVER via record-payment (LockerHub retired it in their #709; a
+    // synthetic payment row broke their reconciliation and refund flow).
+    const a12 = seen.find((x) => x.path.endsWith('/link-ncd'))!;
+    expect(a12).toBeTruthy();
+    expect(a12.body.ncd_id).toMatch(/^APP-\d{4}-\d{6}$/);
+    expect(a12.body.staff).toBeTruthy();
+    expect(a12.body.method).toBeUndefined();
+    expect(a12.body.reference).toBeUndefined();
+    expect(seen.some((x) => x.path.endsWith('/record-payment'))).toBe(false);
+
+    // LockerHub's queue is the single writer of the pledge flag — we must not
+    // set it ourselves, or the two writers race.
+    const flag = await ctx.db.query('SELECT is_locker_deposit FROM applications WHERE id = $1', [appId]);
+    expect((flag.rows[0] as any).is_locker_deposit).toBe(false);
 
     const detail = await staff.get(`/api/applications/${appId}`);
     expect(detail.json.locker.outstanding).toBe(2500000);
@@ -197,5 +221,44 @@ describe('locker deposit links (NCD backs the deposit)', () => {
     const after = await staff.get(`/api/applications/${appId}`);
     expect(after.json.locker.linked_to_lockers).toBe(0);
     expect(after.json.locker.redeemable).toBe(100000);
+  });
+
+  // A12 inbound: LockerHub calls us (durable-queued, retried) the moment a
+  // deposit refund settles at locker closure. This is what closes the release
+  // gap end-to-end — staff no longer have to remember to unpledge.
+  it('A12 release-locker discharges the pledge and is idempotent on re-delivery', async () => {
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const appId = await liveInvestment(staff, 500000, '9899111005');
+    const link = await staff.post('/api/lockers/deposit-links', { application_id: appId, lockerhub_application_id: 'la_med2' });
+    expect(link.status).toBe(201);
+    const appNo = (await ctx.db.query('SELECT application_no FROM applications WHERE id = $1', [appId])).rows[0] as any;
+    const ncdId = String(appNo.application_no);
+    const integ = (path: string, body: unknown) => fetch(ctx.base + path, {
+      method: 'POST', headers: { 'X-Integration-Key': config.LOCKERHUB_INTEGRATION_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(async (r) => ({ status: r.status, json: await r.json().catch(() => null) as any }));
+
+    // Pledged → not redeemable.
+    expect((await staff.get(`/api/applications/${appId}`)).json.locker.redeemable).toBe(400000);
+
+    const rel = await integ(`/api/integration/ncd/${ncdId}/release-locker`, {
+      deposit_reference: 'la_med2', refund_no: 'RFND-77', released_at: '2026-07-22T10:00:00Z', reason: 'locker closed',
+    });
+    expect(rel.status).toBe(200);
+    expect(rel.json).toMatchObject({ success: true, released: true, released_amount: 100000, is_locker_deposit: false });
+
+    // The whole investment is redeemable again.
+    const after = await staff.get(`/api/applications/${appId}`);
+    expect(after.json.locker.linked_to_lockers).toBe(0);
+    expect(after.json.locker.redeemable).toBe(500000);
+
+    // Re-delivery of the same refund → idempotent no-op success, not a 500.
+    const again = await integ(`/api/integration/ncd/${ncdId}/release-locker`, { deposit_reference: 'la_med2', refund_no: 'RFND-77' });
+    expect(again.status).toBe(200);
+    expect(again.json).toMatchObject({ success: true, released: false, already_released: true });
+
+    // Missing reference → 400; unknown NCD → 404.
+    expect((await integ(`/api/integration/ncd/${ncdId}/release-locker`, {})).status).toBe(400);
+    expect((await integ('/api/integration/ncd/APP-2999-000999/release-locker', { deposit_reference: 'x' })).status).toBe(404);
   });
 });

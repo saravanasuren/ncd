@@ -1007,3 +1007,73 @@ customerWritesRouter.post('/ncd/:id/link-locker', asyncHandler(async (req, res) 
   });
   res.status(201).json({ success: true, ncd_id: appNo, linked: true, is_locker_deposit: true });
 }));
+
+// POST /ncd/:id/release-locker (A12) — the locker closed and its deposit refund
+// has SETTLED on LockerHub's side, so the pledge over this NCD is discharged and
+// the money becomes redeemable again. `:id` is the NCD's application_no.
+// LockerHub calls this durable-queued with retries, so it must be idempotent:
+// a repeat for an already-released deposit_reference is a no-op success.
+customerWritesRouter.post('/ncd/:id/release-locker', asyncHandler(async (req, res) => {
+  const b = req.body ?? {};
+  const appNo = String(req.params.id ?? '').trim();
+  const ref = String(b.deposit_reference ?? '').trim();
+  if (!ref) return res.status(400).json({ error: 'deposit_reference required' });
+  const refundNo = b.refund_no ? String(b.refund_no) : null;
+  const releasedAt = b.released_at ? String(b.released_at) : null;
+  const reason = String(b.reason ?? 'locker closed — deposit refunded');
+
+  const db = getDb();
+  const app = (await db.query<{ id: string; is_locker_deposit: boolean; lockerhub_intent_no: string | null }>(
+    'SELECT id, is_locker_deposit, lockerhub_intent_no FROM applications WHERE application_no = $1', [appNo])).rows[0];
+  if (!app) return res.status(404).json({ error: 'NCD not found' });
+  const appId = Number(app.id);
+
+  return db.withTx(async (tx) => {
+    // Resolve the pledge this refund discharges. The reference LockerHub sends
+    // is their deposit_reference; we hold their locker application id on the
+    // link and the deposit_reference on the application (set by B19a).
+    const active = (await tx.query<{ id: string; lockerhub_application_id: string; linked_amount: string }>(
+      `SELECT id, lockerhub_application_id, linked_amount FROM locker_deposit_links
+        WHERE application_id = $1 AND status = 'active' ORDER BY id`, [appId])).rows;
+    const match = active.find((l) => l.lockerhub_application_id === ref)
+      // Exactly one live pledge on this NCD → unambiguous, release it.
+      ?? (active.length === 1 ? active[0] : undefined);
+
+    if (!match) {
+      // Nothing live to release. Idempotent success when this NCD is already
+      // clear; 409 when it holds pledges we cannot attribute to this reference.
+      if (active.length === 0) {
+        if (app.is_locker_deposit) {
+          await tx.query('UPDATE applications SET is_locker_deposit = FALSE, updated_at = now() WHERE id = $1', [appId]);
+        }
+        return res.json({ success: true, ncd_id: appNo, released: false, already_released: true, is_locker_deposit: false });
+      }
+      return res.status(409).json({
+        error: 'deposit_reference does not match any live pledge on this NCD',
+        live_references: active.map((l) => l.lockerhub_application_id),
+      });
+    }
+
+    await tx.query(
+      `UPDATE locker_deposit_links
+          SET status = 'released', released_at = COALESCE($2::timestamptz, now()), released_reason = $3
+        WHERE id = $1`,
+      [Number(match.id), releasedAt, `${reason}${refundNo ? ` (refund ${refundNo})` : ''}`]);
+
+    // LockerHub owns the pledge flag; clear it once no pledge remains.
+    const stillLinked = (await tx.query(
+      "SELECT 1 FROM locker_deposit_links WHERE application_id = $1 AND status = 'active'", [appId])).rowCount;
+    if (!stillLinked) {
+      await tx.query('UPDATE applications SET is_locker_deposit = FALSE, updated_at = now() WHERE id = $1', [appId]);
+    }
+    await writeAudit(tx, {
+      actorId: null, action: 'LOCKERHUB_NCD_RELEASED_FROM_LOCKER', entityType: 'applications', entityId: appId,
+      after: { deposit_reference: ref, refund_no: refundNo, released_at: releasedAt, reason, released_amount: Number(match.linked_amount) },
+    });
+    return res.json({
+      success: true, ncd_id: appNo, released: true,
+      released_amount: Number(match.linked_amount),
+      is_locker_deposit: !!stillLinked,
+    });
+  });
+}));

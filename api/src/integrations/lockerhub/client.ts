@@ -82,5 +82,21 @@ export const paymentLink = (staff: ActingStaff, applicationId: string, leg: 'ren
 export const recordPayment = (staff: ActingStaff, applicationId: string, input: { leg: 'rent' | 'deposit'; method: 'cash' | 'cheque' | 'bank_transfer'; reference?: string; notes?: string }) =>
   lhFetch<Record<string, unknown>>('POST', `/locker-applications/${encodeURIComponent(applicationId)}/record-payment`, { body: { ...input, staff } });
 
+/**
+ * A12 — settle a locker's deposit leg as NCD-BACKED (not as money received).
+ *
+ * Replaces the old `recordPayment({ leg: 'deposit' })` route, which LockerHub
+ * retired in their #709 (returns 400 `online_only`): a synthetic payment row
+ * broke their reconciliation, double-counted AUM, and made their deposit-refund
+ * flow treat the pledge as NEFT-refundable cash.
+ *
+ * `ncd_id` is our application_no — the same identifier as B17/B18/B19a. No
+ * method or reference field: the leg is settled by pledge, not by payment.
+ * Idempotent on re-submit. The response carries the locker application status,
+ * since LockerHub allocates in the same call once the rent leg is settled.
+ */
+export const linkNcd = (staff: ActingStaff, applicationId: string, input: { ncd_id: string }) =>
+  lhFetch<Record<string, unknown>>('POST', `/locker-applications/${encodeURIComponent(applicationId)}/link-ncd`, { body: { ...input, staff } });
+
 export const allocate = (staff: ActingStaff, applicationId: string, input: { locker_id?: string; lease_months?: number }) =>
   lhFetch<Record<string, unknown>>('POST', `/locker-applications/${encodeURIComponent(applicationId)}/allocate`, { body: { ...input, staff } });

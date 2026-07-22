@@ -107,8 +107,11 @@ export async function linkDeposit(
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
       [input.applicationId, input.lockerApplicationId,
        locker?.allotment?.locker_number ?? null, locker?.locker_size ?? null, depositAmount, actor.id]);
-    // Back-compat: the legacy boolean still drives a few legacy readers.
-    await tx.query('UPDATE applications SET is_locker_deposit = TRUE WHERE id = $1', [input.applicationId]);
+    // NB: we deliberately do NOT touch applications.is_locker_deposit here.
+    // LockerHub's queue is the single writer of that flag — it calls our
+    // inbound B19a /ncd/:id/link-locker after allocation (Prem, 2026-07-22).
+    // Two writers would race, and their call is the one carrying the
+    // deposit_reference. Live pledges are counted from locker_deposit_links.
     await writeAudit(tx, {
       actorId: actor.id, action: 'locker.deposit.link', entityType: 'applications', entityId: input.applicationId,
       after: { lockerhub_application_id: input.lockerApplicationId, linked_amount: depositAmount, application_no: app.application_no },
@@ -116,23 +119,24 @@ export async function linkDeposit(
     return { id: Number(rows[0]!.id) };
   });
 
-  // Settle the deposit leg in LockerHub so the locker advances/allots on their
-  // side. Done AFTER the commit (network I/O outside the transaction). If it
-  // fails the link still stands — staff can retry settlement.
-  let settled = false; let settleError: string | null = null;
+  // Settle the deposit leg in LockerHub as NCD-BACKED (A12 link-ncd — never a
+  // payment row). Done AFTER the commit (network I/O outside the transaction).
+  // If it fails the link still stands — staff can retry; A12 is idempotent.
+  let settled = false; let settleError: string | null = null; let lockerStatus: string | null = null;
   try {
-    await lh.recordPayment(
+    const r = await lh.linkNcd(
       { id: actor.id, name: actor.fullName, email: actor.email },
       input.lockerApplicationId,
-      { leg: 'deposit', method: 'bank_transfer', reference: app.application_no, notes: `NCD-backed deposit (${app.application_no})` }
+      { ncd_id: app.application_no }
     );
     settled = true;
+    lockerStatus = (r?.application_status ?? r?.status ?? null) as string | null;
   } catch (e) {
     settleError = (e as Error).message;
-    console.warn(`[locker] deposit leg settle failed for locker ${input.lockerApplicationId}: ${settleError}`);
+    console.warn(`[locker] deposit leg link-ncd failed for locker ${input.lockerApplicationId}: ${settleError}`);
   }
 
-  return { ok: true, link_id: link.id, linked_amount: depositAmount, lockerhub_settled: settled, settle_error: settleError };
+  return { ok: true, link_id: link.id, linked_amount: depositAmount, lockerhub_settled: settled, settle_error: settleError, locker_status: lockerStatus };
 }
 
 /** Release a link (locker closed) so the pledged amount becomes redeemable. */
@@ -145,9 +149,10 @@ export async function releaseLink(db: Db, actor: AuthUser, linkId: number, reaso
     await tx.query(
       "UPDATE locker_deposit_links SET status='released', released_by_user_id=$2, released_at=now(), released_reason=$3 WHERE id=$1",
       [linkId, actor.id, reason]);
-    const stillLinked = (await tx.query(
-      "SELECT 1 FROM locker_deposit_links WHERE application_id = $1 AND status = 'active'", [l.application_id])).rowCount;
-    if (!stillLinked) await tx.query('UPDATE applications SET is_locker_deposit = FALSE WHERE id = $1', [l.application_id]);
+    // As on the link side, is_locker_deposit is LockerHub's to write — their
+    // A12 /ncd/:id/release-locker call clears it when the deposit refund
+    // actually settles. Releasing the link row here is what frees the pledged
+    // money for redemption; the flag follows from their side.
     await writeAudit(tx, {
       actorId: actor.id, action: 'locker.deposit.release', entityType: 'applications', entityId: Number(l.application_id),
       after: { link_id: linkId, released_amount: Number(l.linked_amount), reason },

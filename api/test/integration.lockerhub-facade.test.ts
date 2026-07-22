@@ -351,6 +351,10 @@ describe('customer writes', () => {
 
     const missing = await integ('GET', '/api/integration/ncd/locker-deposit-status?deposit_reference=NOPE');
     expect(missing.status).toBe(404);
+    // Machine-readable code so a caller can tell "never received" (re-POST the
+    // deposit) apart from pending/rejected, instead of polling a stranger ref.
+    expect(missing.json.code).toBe('unknown_reference');
+    expect(missing.json.deposit_reference).toBe('NOPE');
   });
 
   it('ncd/match finds an Active NCD by PAN + exact amount', async () => {

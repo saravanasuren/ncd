@@ -723,7 +723,12 @@ customerReadsRouter.get('/ncd/locker-deposit-status', asyncHandler(async (req, r
     `SELECT id, application_no, status FROM applications WHERE lockerhub_intent_no = $1 LIMIT 1`,
     [ref]
   )).rows[0];
-  if (!app) return res.status(404).json({ error: 'Deposit not found' });
+  // No NCD carries this deposit_reference → we have no record of a
+  // POST /locker-deposits for it. Machine-readable `code` so the caller's poll
+  // can distinguish "never received (re-send the deposit)" from a pending or
+  // rejected deposit (both of which return 200 with an approval_status), instead
+  // of polling a genuinely-unknown reference forever.
+  if (!app) return res.status(404).json({ error: 'Deposit not found', code: 'unknown_reference', deposit_reference: ref });
 
   const internal = String(app.status);
   let approvalStatus: string;

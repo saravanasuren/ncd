@@ -100,4 +100,26 @@ describe('multi-NCD locker deposits', () => {
     const { pledgedToLocker } = await import('../src/modules/lockers/deposits.js');
     expect((await pledgedToLocker(ctx.db, 'LKR-COVERED')).total).toBe(300000);
   });
+
+  it('releasing one of two pledges reports the shortfall it opens up', async () => {
+    const a1 = await activeNcd(100000), a2 = await activeNcd(100000);
+    const ids: number[] = [];
+    for (const id of [a1, a2]) {
+      const r = await ctx.db.query(
+        `INSERT INTO locker_deposit_links (application_id, lockerhub_application_id, linked_amount, linked_by_user_id)
+         VALUES ($1, 'LKR-REL', 100000, 1) RETURNING id`, [id]);
+      ids.push(Number((r.rows[0] as any).id));
+    }
+    const { releaseLink } = await import('../src/modules/lockers/deposits.js');
+    const actor = { id: 1, fullName: 'Admin', email: 'admin@dhanam.finance' } as any;
+    const out = await releaseLink(ctx.db, actor, ids[0]!, 'locker closed');
+    expect(out.released_amount).toBe(100000);
+    expect(out.locker_still_pledged).toBe(100000); // the other NCD still backs it
+    expect(out.locker_ncds_remaining).toBe(1);
+    expect(out.locker_now_unbacked).toBe(false);
+
+    const out2 = await releaseLink(ctx.db, actor, ids[1]!, 'locker closed');
+    expect(out2.locker_still_pledged).toBe(0);
+    expect(out2.locker_now_unbacked).toBe(true);
+  });
 });

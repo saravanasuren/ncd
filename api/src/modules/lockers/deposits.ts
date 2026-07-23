@@ -214,8 +214,8 @@ export async function linkDeposit(
 /** Release a link (locker closed) so the pledged amount becomes redeemable. */
 export async function releaseLink(db: Db, actor: AuthUser, linkId: number, reason: string) {
   return db.withTx(async (tx) => {
-    const l = (await tx.query<{ id: string; application_id: string; status: string; linked_amount: string }>(
-      'SELECT id, application_id, status, linked_amount FROM locker_deposit_links WHERE id = $1', [linkId])).rows[0];
+    const l = (await tx.query<{ id: string; application_id: string; status: string; linked_amount: string; lockerhub_application_id: string }>(
+      'SELECT id, application_id, status, linked_amount, lockerhub_application_id FROM locker_deposit_links WHERE id = $1', [linkId])).rows[0];
     if (!l) throw errors.notFound('Link not found');
     if (l.status !== 'active') throw errors.unprocessable('That link is already released');
     await tx.query(
@@ -229,7 +229,19 @@ export async function releaseLink(db: Db, actor: AuthUser, linkId: number, reaso
       actorId: actor.id, action: 'locker.deposit.release', entityType: 'applications', entityId: Number(l.application_id),
       after: { link_id: linkId, released_amount: Number(l.linked_amount), reason },
     });
-    return { ok: true };
+    // A deposit can be backed by several NCDs, so releasing ONE may leave the
+    // locker partly secured. Report what's still pledged rather than returning a
+    // bare ok — staff (and the UI) need to see that a shortfall has opened up.
+    const remaining = (await tx.query<{ v: string; n: string }>(
+      "SELECT COALESCE(sum(linked_amount),0) AS v, count(*)::int AS n FROM locker_deposit_links WHERE lockerhub_application_id = $1 AND status = 'active'",
+      [l.lockerhub_application_id])).rows[0]!;
+    return {
+      ok: true,
+      released_amount: Number(l.linked_amount),
+      locker_still_pledged: Number(remaining.v),
+      locker_ncds_remaining: Number(remaining.n),
+      locker_now_unbacked: Number(remaining.n) === 0,
+    };
   });
 }
 

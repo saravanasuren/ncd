@@ -312,6 +312,28 @@ export async function customerLockers(db: Db, customerId: number) {
 }
 
 /**
+ * Do two names refer to the same person, given their phone already matched?
+ *
+ * FULL SET equality, not overlap. A shared phone plus one shared token is the
+ * signature of a family, not of one person: "SEENU RAJAPPA" and "SEENU" on the
+ * same number are as likely to be father and son as one man written twice, and
+ * linking a locker tenant to the wrong customer page is worse than linking
+ * nothing. Only names that agree completely are treated as the same person.
+ *
+ * Single letters are dropped before comparing: an initial is a conventional
+ * prefix here ("K PALLAVI" is how "PALLAVI" is written in full), not a distinct
+ * name part. Order is ignored, so "MOHAN VANI" still matches "Vani Mohan".
+ */
+export function namesMatch(a: unknown, b: unknown): boolean {
+  const toks = (v: unknown) =>
+    new Set(String(v ?? '').toLowerCase().split(/[^a-z]+/).filter((t) => t.length >= 2));
+  const x = toks(a); const y = toks(b);
+  if (!x.size || x.size !== y.size) return false;
+  for (const t of x) if (!y.has(t)) return false;
+  return true;
+}
+
+/**
  * Locker tenants, branch-wise — EVERY tenant, not just the ones NCD backs.
  *
  * The spine is LockerHub's GET /locker-tenants, which returns every occupied
@@ -426,9 +448,9 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
   });
 
   // Link roster tenants to NCD customers so a tenant who IS one of our customers
-  // clicks through. Phone alone is not enough to assert identity — shared family
-  // numbers have produced real mismatches here before — so the surname/first
-  // token must agree too. A disagreement shows the tenant unlinked, never wrong.
+  // clicks through. Phone alone cannot assert identity — shared family numbers
+  // have produced real mismatches on this codebase before — so the name must
+  // agree in full. A disagreement shows the tenant unlinked, never wrong.
   const rosterPhones = [...new Set(roster.map((t) => last10(t.tenant?.phone)).filter((p) => p.length === 10))];
   const byPhone = rosterPhones.length
     ? (await db.query<Record<string, unknown>>(
@@ -436,12 +458,6 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
           WHERE right(regexp_replace(COALESCE(phone,''), '\\D', '', 'g'), 10) = ANY($1)`, [rosterPhones])).rows
     : [];
   const custByPhone = new Map(byPhone.map((c) => [last10(c.phone), c]));
-  const nameAgrees = (a: unknown, b: unknown) => {
-    const toks = (v: unknown) => new Set(String(v ?? '').toLowerCase().split(/[^a-z]+/i).filter((t) => t.length > 2));
-    const x = toks(a); const y = toks(b);
-    for (const t of x) if (y.has(t)) return true;
-    return false;
-  };
 
   // Merge. A roster row wins on identity (it is the allotted truth); NCD's
   // pledge/cheque is layered onto it. Anything of ours the roster doesn't cover
@@ -460,7 +476,7 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
     const viaPhone = custByPhone.get(phone);
     const c = mine?.customer_id
       ? custById.get(mine.customer_id)
-      : (viaPhone && nameAgrees(viaPhone.full_name, t.tenant?.name) ? viaPhone : undefined);
+      : (viaPhone && namesMatch(viaPhone.full_name, t.tenant?.name) ? viaPhone : undefined);
     return {
       tenant_id: String(t.tenant_id ?? ''),
       lockerhub_application_id: appId || null,

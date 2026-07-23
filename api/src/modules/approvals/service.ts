@@ -464,6 +464,26 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
     }
   }
 
+  if (id && req.entity_type === 'payout_adjustments') {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT pa.kind, pa.amount, pa.narration, a.application_no, c.full_name AS customer, c.customer_code
+         FROM payout_adjustments pa
+         JOIN applications a ON a.id = pa.application_id
+         JOIN customers c ON c.id = a.customer_id
+        WHERE pa.id = $1`, [id])).rows[0];
+    if (r) return {
+      subject: `${r.customer} · ${r.application_no}`,
+      amount: money(r.amount),
+      facts: clean([
+        fact('Customer', `${r.customer}${r.customer_code ? ` (${r.customer_code})` : ''}`),
+        fact('Application', r.application_no),
+        fact('Adjustment', `${r.kind} — one-time, applies to the next interest payout`),
+        fact('Amount', r.amount),
+        fact('Narration', r.narration),
+      ]),
+    };
+  }
+
   if (id && req.entity_type === 'payout_batches') {
     const r = (await db.query<Record<string, unknown>>(
       `SELECT b.payout_date, b.total_net, b.status,

@@ -36,9 +36,10 @@ beforeAll(async () => {
 afterAll(async () => { await ctx.close(); });
 
 const HEADERS = [
-  '#', 'Application No', 'Customer Name', 'DOB', 'PAN', 'Series', 'Type',
+  '#', 'Application No', 'Customer Name', 'DOB', 'Age', 'PAN', 'Gender', 'Category', 'Series', 'Type',
   'Invested (Rs)', 'Rate %', 'Beneficiary Name', 'Bank A/C', 'IFSC',
   'Interest From', 'Interest To', 'Days', 'Gross (Rs)', 'TDS (Rs)', 'Net (Rs)',
+  'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)',
 ];
 
 async function sheetOf(buffer: Buffer) {
@@ -105,14 +106,19 @@ describe('payout summary sheet', () => {
 
     const row = ws.getRow(2);
     expect(String(row.getCell(2).value)).toMatch(/^APP-/);                     // Application No
-    expect(String(row.getCell(7).value)).toMatch(/^(Addition|Live|Redemption)$/); // Type
-    expect(Number(row.getCell(15).value)).toBeGreaterThan(0);                  // Days
+    expect(String(row.getCell(10).value)).toMatch(/^(Addition|Balance After Redemption|Redemption)$/); // Type ('Live' renamed, owner 2026-07-23)
+    expect(Number(row.getCell(18).value)).toBeGreaterThan(0);                  // Days
     // Beneficiary Name comes from the BANK ACCOUNT's holder_name (owner #4),
     // not the customer record — joint/differently-named accounts must match.
-    expect(String(row.getCell(10).value)).toMatch(/^Summary Cust/);
-    // Gross = TDS + Net, all whole rupees.
-    expect(Number(row.getCell(16).value)).toBe(Number(row.getCell(17).value) + Number(row.getCell(18).value));
-    for (const c of [16, 17, 18]) expect(Number(row.getCell(c).value) % 1).toBe(0);
+    expect(String(row.getCell(13).value)).toMatch(/^Summary Cust/);
+    // Gross = TDS + Net, all whole rupees — Net stays PURE interest; the paid
+    // figure with adjustments lives in Total.
+    expect(Number(row.getCell(19).value)).toBe(Number(row.getCell(20).value) + Number(row.getCell(21).value));
+    for (const c of [19, 20, 21, 24]) expect(Number(row.getCell(c).value) % 1).toBe(0);
+    // No adjustments in play here: Total == Net, Addition/Deduction zero.
+    expect(Number(row.getCell(24).value)).toBe(Number(row.getCell(21).value));
+    expect(Number(row.getCell(22).value)).toBe(0);
+    expect(Number(row.getCell(23).value)).toBe(0);
   });
 
   it('Interest From precedes Interest To (the off-by-one wealth hit)', async () => {
@@ -120,8 +126,8 @@ describe('payout summary sheet', () => {
     const ws = await sheetOf((await a.raw(`/api/payouts/preview.summary.xlsx?date=${CUTOFF}`)).buffer);
     const ymd = (v: unknown) => { const [d, m, y] = String(v).split('/').map(Number); return Date.UTC(y!, m! - 1, d!); };
     for (let r = 2; r <= Math.min(ws.rowCount, 12); r++) {
-      const from = ws.getRow(r).getCell(13).value;
-      const to = ws.getRow(r).getCell(14).value;
+      const from = ws.getRow(r).getCell(16).value;
+      const to = ws.getRow(r).getCell(17).value;
       if (!from || !to) continue;
       expect(ymd(from)).toBeLessThanOrEqual(ymd(to));
     }

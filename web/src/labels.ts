@@ -68,6 +68,7 @@ export const APPROVAL_TYPE_LABELS: Record<string, string> = {
   app_investment: 'App investment (live)',
   commission_eligibility: 'Agent Commission',
   interest_batch: 'Interest Payout',
+  payout_adjustment: 'Payout Adjustment',
 };
 
 export function approvalTypeLabel(t: string): string {

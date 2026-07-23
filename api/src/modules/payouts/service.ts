@@ -85,20 +85,67 @@ export async function previewDue(db: Db, payoutDate: string) {
       due_date: payoutDate, due_type: 'Interest',
       from_date: paidThrough, days,
       gross_amount: gross, tds_amount: tds, net_amount: net,
+      addition_amount: 0, deduction_amount: 0, total_amount: net,
     });
   }
-  return { rows: out, totals: { gross: round2(totals.gross), tds: round2(totals.tds), net: round2(totals.net) }, count: out.length };
+
+  // One-time APPROVED adjustments (owner 2026-07-23) land on the application's
+  // next settlement. Net-only: gross/TDS stay pure interest math — gross 1000,
+  // TDS 10, net 990, +100 addition → the bank pays 1090. Attached to the
+  // application's lowest line_id so a multi-line application applies it once;
+  // an application with no accrual this cut-off keeps its adjustment Approved
+  // for the next one.
+  const appIds = [...new Set(out.map((r) => Number(r.application_id)))];
+  const adj = appIds.length
+    ? (await db.query<Record<string, unknown>>(
+        `SELECT application_id,
+                COALESCE(sum(amount) FILTER (WHERE kind = 'Addition'), 0)  AS addition,
+                COALESCE(sum(amount) FILTER (WHERE kind = 'Deduction'), 0) AS deduction
+           FROM payout_adjustments
+          WHERE status = 'Approved' AND application_id = ANY($1)
+          GROUP BY application_id`, [appIds])).rows
+    : [];
+  const firstRowOfApp = new Map<number, Record<string, unknown>>();
+  for (const r of out) {
+    const prev = firstRowOfApp.get(Number(r.application_id));
+    if (!prev || Number(r.line_id) < Number(prev.line_id)) firstRowOfApp.set(Number(r.application_id), r);
+  }
+  let addTotal = 0, dedTotal = 0;
+  for (const a of adj) {
+    const row = firstRowOfApp.get(Number(a.application_id));
+    if (!row) continue;
+    row.addition_amount = round2(Number(a.addition));
+    row.deduction_amount = round2(Number(a.deduction));
+    row.total_amount = round2(Number(row.net_amount) + Number(a.addition) - Number(a.deduction));
+    addTotal += Number(a.addition); dedTotal += Number(a.deduction);
+  }
+
+  return {
+    rows: out,
+    totals: {
+      gross: round2(totals.gross), tds: round2(totals.tds), net: round2(totals.net),
+      addition: round2(addTotal), deduction: round2(dedTotal),
+      total: round2(totals.net + addTotal - dedTotal),
+    },
+    count: out.length,
+  };
 }
 
 export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: string, utr?: string) {
   return db.withTx(async (tx) => {
     const due = await previewDue(tx, payoutDate);
     if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
+    // An approved deduction larger than what has accrued cannot settle — refuse
+    // with the application named rather than writing a negative payment.
+    const neg = (due.rows as Record<string, unknown>[]).find((r) => Number(r.total_amount) < 0);
+    if (neg) throw errors.unprocessable(`Deduction (₹${neg.deduction_amount}) exceeds the interest accrued for ${neg.application_no} (net ₹${neg.net_amount}) — edit or cancel the adjustment first.`);
     const batchNo = await nextCode(tx, 'redemption', 'NEFT-{yyyy}-{seq:6}');
+    // total_net is what the bank actually pays — net interest plus additions
+    // minus deductions. gross/tds stay pure interest.
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO payout_batches (batch_no, kind, payout_date, total_gross, total_tds, total_net, status, created_by_user_id)
        VALUES ($1,'interest',$2,$3,$4,$5,'PendingChecker',$6) RETURNING id`,
-      [batchNo, payoutDate, due.totals.gross, due.totals.tds, due.totals.net, actor.id]
+      [batchNo, payoutDate, due.totals.gross, due.totals.tds, due.totals.total, actor.id]
     );
     const batchId = Number(rows[0]!.id);
 
@@ -118,17 +165,21 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
       await tx.query(
         `INSERT INTO disbursement_schedule
            (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount,
-            status, batch_id, payee_account, payee_ifsc)
-         VALUES ($1,$2,$3,'Interest',$4,$5,$6,'Scheduled',$7,$8,$9)
+            adjustment_amount, status, batch_id, payee_account, payee_ifsc)
+         VALUES ($1,$2,$3,'Interest',$4,$5,$6,$7,'Scheduled',$8,$9,$10)
          ON CONFLICT (line_id, due_date, due_type) DO UPDATE
            SET gross_amount = EXCLUDED.gross_amount, tds_amount = EXCLUDED.tds_amount,
-               net_amount = EXCLUDED.net_amount, batch_id = EXCLUDED.batch_id,
+               net_amount = EXCLUDED.net_amount, adjustment_amount = EXCLUDED.adjustment_amount,
+               batch_id = EXCLUDED.batch_id,
                -- The bank resolved just now beats whatever the projected row was
                -- carrying. Without these two the INSERT's fresh details are
                -- discarded on collision, and a row projected before the customer
                -- had an account stays blank all the way to the bank.
                payee_account = EXCLUDED.payee_account, payee_ifsc = EXCLUDED.payee_ifsc`,
-        [r.line_id, r.application_id, payoutDate, r.gross_amount, r.tds_amount, r.net_amount,
+        // net_amount = what the bank pays (net ± adjustments); the applied delta
+        // sits in adjustment_amount so chk_ds_net still proves the three agree.
+        [r.line_id, r.application_id, payoutDate, r.gross_amount, r.tds_amount, r.total_amount,
+         round2(Number(r.addition_amount) - Number(r.deduction_amount)),
          batchId, bank?.account_number ?? null, bank?.ifsc ?? null]
       );
       // Supersede any still-unpaid projected rows already covered by this
@@ -141,12 +192,22 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
             AND batch_id IS NULL AND due_date <= $2`, [r.line_id, payoutDate, batchId]);
     }
 
+    // Consume the one-time adjustments this batch applied: they rode into the
+    // rows above, so from here they must never apply again. A rejected or
+    // cancelled batch releases them back to Approved.
+    const appsInBatch = [...new Set((due.rows as Record<string, unknown>[]).map((r) => Number(r.application_id)))];
+    if (appsInBatch.length) {
+      await tx.query(
+        `UPDATE payout_adjustments SET status = 'Consumed', batch_id = $1, updated_at = now()
+          WHERE status = 'Approved' AND application_id = ANY($2)`, [batchId, appsInBatch]);
+    }
+
     // Creating a batch IS the maker's "this was paid" claim, so it raises the
     // approval right here. Generating/downloading a sheet stays stateless and
     // free (neftSheetForDate) — nothing is reserved until you claim payment.
     const req = await createApprovalRequest(tx, {
       type: 'interest_batch', entityType: 'payout_batches', entityId: batchId, makerUserId: actor.id,
-      metadata: { batch_id: batchId, payout_date: payoutDate, net: due.totals.net, count: due.count, utr: utr ?? null },
+      metadata: { batch_id: batchId, payout_date: payoutDate, net: due.totals.total, count: due.count, utr: utr ?? null },
     });
     await tx.query('UPDATE payout_batches SET approval_request_id = $1 WHERE id = $2', [req.id, batchId]);
     await writeAudit(tx, { actorId: actor.id, action: 'payout.batch.claim-paid', entityType: 'payout_batches', entityId: batchId, after: { batchNo, net: due.totals.net } });
@@ -228,7 +289,10 @@ registerOnReject('interest_batch', async (tx, req) => {
   await tx.query("UPDATE disbursement_schedule SET status = 'Scheduled', batch_id = NULL WHERE batch_id = $1 AND status = 'Skipped'", [batchId]);
   // 2) Drop the batch's own materialised (still-Scheduled) rows.
   await tx.query("DELETE FROM disbursement_schedule WHERE batch_id = $1 AND status = 'Scheduled'", [batchId]);
-  // 3) Mark the batch failed.
+  // 3) Release the one-time adjustments this batch had consumed — they were
+  //    never paid, so they apply to the next settlement instead.
+  await tx.query("UPDATE payout_adjustments SET status = 'Approved', batch_id = NULL, updated_at = now() WHERE batch_id = $1 AND status = 'Consumed'", [batchId]);
+  // 4) Mark the batch failed.
   await tx.query("UPDATE payout_batches SET status = 'Failed' WHERE id = $1", [batchId]);
 });
 
@@ -280,6 +344,8 @@ async function neftHeaderBits(db: Db) {
 export async function neftSheetForDate(db: Db, payoutDate: string): Promise<Buffer> {
   const due = await previewDue(db, payoutDate);
   if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
+  const neg = (due.rows as Record<string, unknown>[]).find((r) => Number(r.total_amount) < 0);
+  if (neg) throw errors.unprocessable(`Deduction (₹${neg.deduction_amount}) exceeds the interest accrued for ${neg.application_no} (net ₹${neg.net_amount}) — edit or cancel the adjustment first.`);
   const { debitAccount, fallbackEmail } = await neftHeaderBits(db);
   const withBank = await db.query<Record<string, unknown>>(
     `SELECT l.id AS line_id, c.email,
@@ -297,10 +363,13 @@ export async function neftSheetForDate(db: Db, payoutDate: string): Promise<Buff
   const { buildNeftSheet } = await import('../../lib/neft.js');
   return buildNeftSheet(
     { debitAccount, sheetName: 'Sheet 1', valueDate: new Date(), beneficiaryEmail: fallbackEmail },
-    (due.rows as Record<string, unknown>[]).map((r) => {
+    (due.rows as Record<string, unknown>[])
+      // A fully-deducted row settles at ₹0 — it can't appear in a bank file.
+      .filter((r) => Number(r.total_amount) > 0)
+      .map((r) => {
       const b = bank.get(Number(r.line_id)) ?? {};
       return {
-        amount: Number(r.net_amount), valueDate: payoutDate,
+        amount: Number(r.total_amount), valueDate: payoutDate,
         beneAccount: String(b.payee_account ?? ''),
         beneName: String(b.beneficiary_name || r.customer_name || ''),
         ifsc: String(b.payee_ifsc ?? ''),
@@ -345,7 +414,9 @@ export async function neftForBatch(db: Db, batchId: number): Promise<{ buffer: B
             = regexp_replace(COALESCE(ds.payee_account,''), '\\s', '', 'g')
         ORDER BY cba.id DESC LIMIT 1
      ) bn ON TRUE
-     WHERE ds.batch_id = $1 AND ds.status = 'Scheduled' ORDER BY c.full_name`, [batchId])).rows;
+     WHERE ds.batch_id = $1 AND ds.status = 'Scheduled'
+       AND ds.net_amount > 0  -- a fully-deducted row settles at ₹0; banks can't move ₹0
+     ORDER BY c.full_name`, [batchId])).rows;
   const { buildNeftSheet } = await import('../../lib/neft.js');
   const buffer = await buildNeftSheet(
     { debitAccount: debitSetting || debit?.account_number || 'DISBURSEMENT-ACCT',
@@ -377,11 +448,18 @@ export async function markRowFailed(db: Db, actor: AuthUser, scheduleId: number,
 // split that the bank sheet (net only) can't show.
 const SUMMARY_SELECT = `
   SELECT a.application_no, c.full_name AS customer_name, c.dob AS date_of_birth, c.pan,
+         c.gender, c.investor_category AS category,
          s.name AS series_name, l.amount AS investment_amount, l.coupon_rate_pct,
          COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
          COALESCE(ds.payee_account, pb.account_number, cb.account_number) AS account_number,
          COALESCE(ds.payee_ifsc, pb.ifsc, cb.ifsc) AS ifsc,
-         ds.due_date AS period_to, ds.gross_amount, ds.tds_amount, ds.net_amount,
+         ds.due_date AS period_to, ds.gross_amount, ds.tds_amount,
+         -- Net = pure interest (gross − TDS). What the bank actually pays is
+         -- ds.net_amount, which carries any one-time adjustment — shown as Total.
+         (ds.gross_amount - ds.tds_amount) AS net_amount,
+         COALESCE(adj.addition, 0)  AS addition_amount,
+         COALESCE(adj.deduction, 0) AS deduction_amount,
+         ds.net_amount AS total_amount,
          -- Days accrued = this due date minus the previous PAID cut-off for the
          -- same line (or the interest start for a brand-new investment).
          (ds.due_date - COALESCE(
@@ -394,7 +472,7 @@ const SUMMARY_SELECT = `
            WHEN NOT EXISTS (SELECT 1 FROM disbursement_schedule q
                              WHERE q.line_id = ds.line_id AND q.due_date < ds.due_date AND q.status = 'Paid')
              THEN 'Addition'
-           ELSE 'Live'
+           ELSE 'Balance After Redemption'
          END AS row_type
     FROM disbursement_schedule ds
     JOIN applications a ON a.id = ds.application_id
@@ -402,14 +480,26 @@ const SUMMARY_SELECT = `
     JOIN customers c ON c.id = a.customer_id
     LEFT JOIN series s ON s.id = a.series_id
     LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
-    LEFT JOIN customer_bank_accounts cb ON cb.customer_id = c.id AND cb.is_active = TRUE`;
+    LEFT JOIN customer_bank_accounts cb ON cb.customer_id = c.id AND cb.is_active = TRUE
+    -- Adjustments consumed by this row's batch, shown ONLY on the application's
+    -- first (lowest line_id) row — the row their amount was applied to.
+    LEFT JOIN LATERAL (
+      SELECT sum(pa.amount) FILTER (WHERE pa.kind = 'Addition')  AS addition,
+             sum(pa.amount) FILTER (WHERE pa.kind = 'Deduction') AS deduction
+        FROM payout_adjustments pa
+       WHERE pa.batch_id = ds.batch_id AND pa.application_id = ds.application_id
+         AND pa.status = 'Consumed'
+         AND ds.line_id = (SELECT min(d2.line_id) FROM disbursement_schedule d2
+                            WHERE d2.batch_id = ds.batch_id AND d2.application_id = ds.application_id
+                              AND d2.status <> 'Skipped')
+    ) adj ON TRUE`;
 
 /** Summary sheet for a stored batch. */
 export async function summaryForBatch(db: Db, batchId: number): Promise<{ buffer: Buffer; batchNo: string }> {
   const batch = (await db.query<{ batch_no: string }>('SELECT batch_no FROM payout_batches WHERE id = $1', [batchId])).rows[0];
   if (!batch) throw errors.notFound('Batch not found');
   const { rows } = await db.query<Record<string, unknown>>(
-    `${SUMMARY_SELECT} WHERE ds.batch_id = $1 ORDER BY c.full_name`, [batchId]);
+    `${SUMMARY_SELECT} WHERE ds.batch_id = $1 AND ds.status <> 'Skipped' ORDER BY c.full_name`, [batchId]);
   const { buildSummarySheet } = await import('../../lib/payout-summary.js');
   return { buffer: await buildSummarySheet(rows as never[]), batchNo: batch.batch_no };
 }
@@ -430,7 +520,7 @@ async function summaryRowsForDate(db: Db, payoutDate: string): Promise<Record<st
   if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
   const lineIds = (due.rows as Record<string, unknown>[]).map((r) => Number(r.line_id));
   const statics = (await db.query<Record<string, unknown>>(
-    `SELECT l.id AS line_id, c.dob AS date_of_birth, c.pan,
+    `SELECT l.id AS line_id, c.dob AS date_of_birth, c.pan, c.gender, c.investor_category AS category,
             s.name AS series_name, l.amount AS investment_amount, l.coupon_rate_pct,
             COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
             COALESCE(pb.account_number, cb.account_number) AS account_number,
@@ -452,13 +542,16 @@ async function summaryRowsForDate(db: Db, payoutDate: string): Promise<Record<st
       ...st,
       application_no: r.application_no,
       customer_name: r.customer_name,
-      row_type: (st as Record<string, unknown>).paid_before ? 'Live' : 'Addition',
+      row_type: (st as Record<string, unknown>).paid_before ? 'Balance After Redemption' : 'Addition',
       period_from: r.from_date,
       period_to: r.due_date,
       period_days: r.days,
       gross_amount: r.gross_amount,
       tds_amount: r.tds_amount,
       net_amount: r.net_amount,
+      addition_amount: r.addition_amount,
+      deduction_amount: r.deduction_amount,
+      total_amount: r.total_amount,
     };
   });
 }
@@ -478,7 +571,8 @@ async function summaryPdf(rows: Record<string, unknown>[], title: string, subtit
   const totals = rows.reduce<{ gross: number; tds: number; net: number }>((t, r) => ({
     gross: t.gross + Number(r.gross_amount ?? 0),
     tds: t.tds + Number(r.tds_amount ?? 0),
-    net: t.net + Number(r.net_amount ?? 0),
+    // Payable = what the bank moves: net ± one-time adjustments when present.
+    net: t.net + Number(r.total_amount ?? r.net_amount ?? 0),
   }), { gross: 0, tds: 0, net: 0 });
 
   return renderPdf((doc) => {
@@ -486,7 +580,7 @@ async function summaryPdf(rows: Record<string, unknown>[], title: string, subtit
     const cols = [
       { h: '#', w: 22 }, { h: 'Application', w: 92 }, { h: 'Customer', w: 116 },
       { h: 'Series', w: 66 }, { h: 'Type', w: 50 }, { h: 'Days', w: 30 },
-      { h: 'Gross', w: 62 }, { h: 'TDS', w: 52 }, { h: 'Net', w: 62 },
+      { h: 'Gross', w: 62 }, { h: 'TDS', w: 52 }, { h: 'Payable', w: 62 },
     ];
     const x0 = doc.page.margins.left;
     const header = (y: number) => {
@@ -504,8 +598,8 @@ async function summaryPdf(rows: Record<string, unknown>[], title: string, subtit
       }
       const cells = [
         String(i + 1), String(r.application_no ?? ''), String(r.customer_name ?? ''),
-        String(r.series_name ?? ''), String(r.row_type ?? 'Live'), String(r.period_days ?? ''),
-        money(r.gross_amount), money(r.tds_amount), money(r.net_amount),
+        String(r.series_name ?? ''), String(r.row_type ?? 'Balance After Redemption'), String(r.period_days ?? ''),
+        money(r.gross_amount), money(r.tds_amount), money(r.total_amount ?? r.net_amount),
       ];
       doc.fontSize(7.5);
       let x = x0;
@@ -519,7 +613,7 @@ async function summaryPdf(rows: Record<string, unknown>[], title: string, subtit
     doc.moveTo(x0, y + 2).lineTo(x0 + cols.reduce((s, c) => s + c.w, 0), y + 2).stroke();
     y += 7;
     doc.fontSize(8).font('Helvetica-Bold')
-      .text(`${rows.length} row(s)   ·   Gross ₹${money(totals.gross)}   ·   TDS ₹${money(totals.tds)}   ·   Net ₹${money(totals.net)}`, x0, y);
+      .text(`${rows.length} row(s)   ·   Gross ₹${money(totals.gross)}   ·   TDS ₹${money(totals.tds)}   ·   Payable ₹${money(totals.net)}`, x0, y);
   });
 }
 
@@ -527,7 +621,7 @@ export async function summaryPdfForBatch(db: Db, batchId: number): Promise<{ buf
   const batch = (await db.query<{ batch_no: string; payout_date: string }>(
     'SELECT batch_no, payout_date FROM payout_batches WHERE id = $1', [batchId])).rows[0];
   if (!batch) throw errors.notFound('Batch not found');
-  const { rows } = await db.query<Record<string, unknown>>(`${SUMMARY_SELECT} WHERE ds.batch_id = $1 ORDER BY c.full_name`, [batchId]);
+  const { rows } = await db.query<Record<string, unknown>>(`${SUMMARY_SELECT} WHERE ds.batch_id = $1 AND ds.status <> 'Skipped' ORDER BY c.full_name`, [batchId]);
   return {
     buffer: await summaryPdf(rows, 'Interest payout summary', `${batch.batch_no} · payout date ${String(batch.payout_date).slice(0, 10)}`),
     batchNo: batch.batch_no,
@@ -556,6 +650,9 @@ export async function cancelBatch(db: Db, actor: AuthUser, batchId: number, reas
     if (paid) throw errors.conflict('Some rows in this batch are already Paid — cancel would orphan them.');
 
     const freed = await tx.query('UPDATE disbursement_schedule SET batch_id = NULL WHERE batch_id = $1', [batchId]);
+    // Un-consume the one-time adjustments — nothing was paid, so they apply to
+    // the next settlement instead.
+    await tx.query("UPDATE payout_adjustments SET status = 'Approved', batch_id = NULL, updated_at = now() WHERE batch_id = $1 AND status = 'Consumed'", [batchId]);
     await tx.query("UPDATE payout_batches SET status = 'Cancelled' WHERE id = $1", [batchId]);
     // Withdraw the pending "mark paid" claim, if one is open.
     await tx.query(
@@ -586,4 +683,96 @@ export async function cutoffHistory(db: Db, page = 0, pageSize = 20) {
   const hasMore = rows.length > pageSize;
   if (hasMore) rows.pop();
   return { rows, page, page_size: pageSize, has_more: hasMore };
+}
+
+// ── One-time payout adjustments (owner 2026-07-23) ────────────────────────
+// NCD Manager+ records an Addition or Deduction against ONE investment's NEXT
+// interest settlement, with a mandatory narration. Admin/CXO approves it in
+// the approvals queue; the next batch that pays the application consumes it
+// (stamped with the batch) and it never applies again. Net-only — gross/TDS
+// stay pure interest: gross 1000, TDS 10, net 990, +100 → the bank pays 1090.
+
+export interface CreateAdjustmentInput {
+  application_id: number;
+  kind: 'Addition' | 'Deduction';
+  amount: number;
+  narration: string;
+}
+
+export async function createAdjustment(db: Db, actor: AuthUser, input: CreateAdjustmentInput) {
+  return db.withTx(async (tx) => {
+    const app = (await tx.query<Record<string, unknown>>(
+      `SELECT a.id, a.application_no, a.status, c.full_name AS customer
+         FROM applications a JOIN customers c ON c.id = a.customer_id WHERE a.id = $1`,
+      [input.application_id])).rows[0];
+    if (!app) throw errors.notFound('Application not found');
+    if (!OUTSTANDING_APPLICATION_STATUSES.includes(app.status as never)) {
+      throw errors.unprocessable(`${app.application_no} is ${app.status} — adjustments apply to live investments only`);
+    }
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO payout_adjustments (application_id, kind, amount, narration, created_by_user_id)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [input.application_id, input.kind, input.amount, input.narration.trim(), actor.id]);
+    const adjId = Number(rows[0]!.id);
+    const req = await createApprovalRequest(tx, {
+      type: 'payout_adjustment', entityType: 'payout_adjustments', entityId: adjId, makerUserId: actor.id,
+      metadata: {
+        adjustment_id: adjId, application_id: input.application_id, application_no: app.application_no,
+        customer: app.customer, kind: input.kind, amount: input.amount, narration: input.narration.trim(),
+      },
+    });
+    await tx.query('UPDATE payout_adjustments SET approval_request_id = $1 WHERE id = $2', [req.id, adjId]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'payout.adjustment.create', entityType: 'payout_adjustments', entityId: adjId,
+      after: { application_no: app.application_no, kind: input.kind, amount: input.amount, narration: input.narration.trim() },
+    });
+    return { id: adjId, request_id: req.id, request_no: req.request_no, status: 'PendingApproval' };
+  });
+}
+
+registerOnFinalApprove('payout_adjustment', async (tx, req) => {
+  const id = req.metadata.adjustment_id ? Number(req.metadata.adjustment_id) : (req.entity_id ? Number(req.entity_id) : null);
+  if (!id) return;
+  await tx.query("UPDATE payout_adjustments SET status = 'Approved', updated_at = now() WHERE id = $1 AND status = 'PendingApproval'", [id]);
+});
+
+registerOnReject('payout_adjustment', async (tx, req) => {
+  const id = req.metadata.adjustment_id ? Number(req.metadata.adjustment_id) : (req.entity_id ? Number(req.entity_id) : null);
+  if (!id) return;
+  await tx.query("UPDATE payout_adjustments SET status = 'Rejected', updated_at = now() WHERE id = $1 AND status = 'PendingApproval'", [id]);
+});
+
+/** Open (pending + approved) adjustments by default; `all` includes history. */
+export async function listAdjustments(db: Db, opts: { all?: boolean } = {}) {
+  const where = opts.all ? '' : "WHERE pa.status IN ('PendingApproval','Approved')";
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT pa.id, pa.application_id, pa.kind, pa.amount, pa.narration, pa.status, pa.created_at,
+            a.application_no, c.full_name AS customer_name, c.customer_code,
+            u.full_name AS created_by, b.batch_no
+       FROM payout_adjustments pa
+       JOIN applications a ON a.id = pa.application_id
+       JOIN customers c ON c.id = a.customer_id
+       LEFT JOIN users u ON u.id = pa.created_by_user_id
+       LEFT JOIN payout_batches b ON b.id = pa.batch_id
+       ${where}
+      ORDER BY pa.id DESC LIMIT 200`);
+  return rows.map((r) => ({ ...r, id: Number(r.id), application_id: Number(r.application_id), amount: Number(r.amount) }));
+}
+
+/** Withdraw an adjustment that hasn't settled. Consumed ones are history. */
+export async function cancelAdjustment(db: Db, actor: AuthUser, id: number) {
+  return db.withTx(async (tx) => {
+    const r = (await tx.query<Record<string, unknown>>(
+      'SELECT id, status, approval_request_id FROM payout_adjustments WHERE id = $1 FOR UPDATE', [id])).rows[0];
+    if (!r) throw errors.notFound('Adjustment not found');
+    if (r.status !== 'PendingApproval' && r.status !== 'Approved') {
+      throw errors.conflict(`This adjustment is ${r.status} — it can no longer be cancelled.`);
+    }
+    await tx.query("UPDATE payout_adjustments SET status = 'Cancelled', updated_at = now() WHERE id = $1", [id]);
+    if (r.approval_request_id) {
+      await tx.query("UPDATE approval_requests SET status = 'Cancelled' WHERE id = $1 AND status = 'Pending'", [Number(r.approval_request_id)]);
+    }
+    await writeAudit(tx, { actorId: actor.id, action: 'payout.adjustment.cancel', entityType: 'payout_adjustments', entityId: id, after: { from_status: r.status } });
+    return { ok: true };
+  });
 }

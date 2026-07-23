@@ -17,6 +17,11 @@ export function PayoutsPage() {
 
   const create = useMutation({ mutationFn: () => api.post('/api/payouts', { payout_date: date }), onSuccess: () => { setMsg('Sent to the approvals queue — a checker confirms it, which settles the period and resets interest.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); qc.invalidateQueries({ queryKey: ['payout-preview', date] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
   const markPaid = useMutation({ mutationFn: (batchId: number) => api.post(`/api/payouts/${batchId}/mark-paid`, {}), onSuccess: () => { setMsg('Sent to the approvals queue — a checker confirms the payment, which settles the period.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
+  const cancel = useMutation({
+    mutationFn: ({ id, reason }: { id: number; reason: string }) => api.post(`/api/payouts/${id}/cancel`, { reason }),
+    onSuccess: (r: any) => { setMsg(`Batch cancelled — ${r.rows_released} row(s) released back to the un-batched pool.`); qc.invalidateQueries({ queryKey: ['payout-batches'] }); qc.invalidateQueries({ queryKey: ['payout-preview', date] }); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
   const notifyWa = useMutation({
     mutationFn: (batchId: number) => api.post<{ queued: number; skipped: number; sent: number }>(`/api/payouts/${batchId}/whatsapp-interest`, {}),
     onSuccess: (r) => setMsg(`WhatsApp: ${r.sent} sent${r.queued > r.sent ? `, ${r.queued - r.sent} pending` : ''}${r.skipped ? `, ${r.skipped} skipped (no phone on file)` : ''}.`),
@@ -49,6 +54,8 @@ export function PayoutsPage() {
         {/* The human companion to the bank file — same pair wealth produced. */}
         <a href={`/api/payouts/preview.summary.xlsx?date=${date}`}
            className={`text-xs border border-border-strong rounded px-3 py-1.5 no-underline ${!preview.data || preview.data.count === 0 ? 'pointer-events-none opacity-40' : 'hover:bg-bg'}`}>↓ Summary sheet</a>
+        <a href={`/api/payouts/preview.pdf?date=${date}`}
+           className={`text-xs border border-border-strong rounded px-3 py-1.5 no-underline ${!preview.data || preview.data.count === 0 ? 'pointer-events-none opacity-40' : 'hover:bg-bg'}`}>↓ PDF</a>
         <button disabled={!preview.data || preview.data.count === 0 || create.isPending}
           onClick={() => { if (window.confirm(`Confirm the interest up to ${date} has actually been paid out?\n\nThis sends it to a checker; on approval the period is settled and interest resets.`)) { setMsg(''); create.mutate(); } }}
           className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Mark as paid…</button>
@@ -71,6 +78,13 @@ export function PayoutsPage() {
               <span className="inline-flex gap-2 justify-end">
                 <a href={`/api/payouts/${b.id}/download.xlsx`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ NEFT sheet</a>
                 <a href={`/api/payouts/${b.id}/summary.xlsx`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ Summary sheet</a>
+                <a href={`/api/payouts/${b.id}/summary.pdf`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ PDF</a>
+                {b.status !== 'Paid' && b.status !== 'Cancelled' && (
+                  <button onClick={() => {
+                    const reason = window.prompt('Cancel this batch? Its rows go back to the un-batched pool and can be re-batched.\n\nReason:');
+                    if (reason && reason.trim().length >= 2) cancel.mutate({ id: b.id, reason: reason.trim() });
+                  }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">Cancel batch</button>
+                )}
                 {b.status === 'PendingChecker' && <span className="text-xs text-text-muted italic">awaiting checker</span>}
                 {b.status === 'Paid' && (
                   <button disabled={notifyWa.isPending}

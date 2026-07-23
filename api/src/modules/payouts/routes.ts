@@ -68,6 +68,35 @@ payoutsRouter.get('/preview.summary.xlsx', requirePermission('payouts:generate')
     res.end(buffer);
   }));
 
+// Printable variants — ops sign/file these rather than the spreadsheet.
+payoutsRouter.get('/preview.pdf', requirePermission('payouts:generate'),
+  asyncHandler(async (req, res) => {
+    const date = String(req.query.date ?? new Date().toISOString().slice(0, 10));
+    const buffer = await s.previewPdf(getDb(), date);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="NEFT-preview-${date}.pdf"`);
+    res.end(buffer);
+  }));
+
+payoutsRouter.get('/:id/summary.pdf', requirePermission('payouts:generate'),
+  asyncHandler(async (req, res) => {
+    const { buffer, batchNo } = await s.summaryPdfForBatch(getDb(), Number(req.params.id));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${batchNo}-summary.pdf"`);
+    res.end(buffer);
+  }));
+
+// Which cut-offs have been settled, by whom, for how much.
+payoutsRouter.get('/cutoff-history', requirePermission('payouts:generate', 'dashboard:view'),
+  asyncHandler(async (req, res) => res.json(await s.cutoffHistory(getDb(), Math.max(0, Number(req.query.page) || 0)))));
+
+// Cancel an un-settled batch — releases its rows back to the un-batched pool.
+payoutsRouter.post('/:id/cancel', requirePermission('payouts:generate'),
+  asyncHandler(async (req, res) => {
+    const { reason } = z.object({ reason: z.string().min(2) }).parse(req.body ?? {});
+    res.json(await s.cancelBatch(getDb(), req.user!, Number(req.params.id), reason));
+  }));
+
 payoutsRouter.post('/rows/:scheduleId/mark-failed', requirePermission('payouts:mark-paid-manual'),
   asyncHandler(async (req, res) => {
     const { reason } = z.object({ reason: z.string().min(2) }).parse(req.body);

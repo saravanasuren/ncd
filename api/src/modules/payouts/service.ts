@@ -407,3 +407,125 @@ export async function summaryForDate(db: Db, payoutDate: string): Promise<Buffer
   const { buildSummarySheet } = await import('../../lib/payout-summary.js');
   return buildSummarySheet(rows as never[]);
 }
+
+// ── PDF variants of the two sheets ────────────────────────────────────────
+// Same data, printable — ops sign/file these rather than the spreadsheet.
+async function summaryPdf(rows: Record<string, unknown>[], title: string, subtitle: string): Promise<Buffer> {
+  const { renderPdf, letterhead } = await import('../../lib/pdf.js');
+  const money = (v: unknown) => Math.round(Number(v ?? 0)).toLocaleString('en-IN');
+  const totals = rows.reduce<{ gross: number; tds: number; net: number }>((t, r) => ({
+    gross: t.gross + Number(r.gross_amount ?? 0),
+    tds: t.tds + Number(r.tds_amount ?? 0),
+    net: t.net + Number(r.net_amount ?? 0),
+  }), { gross: 0, tds: 0, net: 0 });
+
+  return renderPdf((doc) => {
+    letterhead(doc, title, subtitle);
+    const cols = [
+      { h: '#', w: 22 }, { h: 'Application', w: 92 }, { h: 'Customer', w: 116 },
+      { h: 'Series', w: 66 }, { h: 'Type', w: 50 }, { h: 'Days', w: 30 },
+      { h: 'Gross', w: 62 }, { h: 'TDS', w: 52 }, { h: 'Net', w: 62 },
+    ];
+    const x0 = doc.page.margins.left;
+    const header = (y: number) => {
+      doc.fontSize(7.5).font('Helvetica-Bold');
+      let x = x0;
+      for (const c of cols) { doc.text(c.h, x, y, { width: c.w }); x += c.w; }
+      doc.moveTo(x0, y + 11).lineTo(x, y + 11).stroke();
+      doc.font('Helvetica');
+    };
+    let y = doc.y + 6;
+    header(y); y += 15;
+    rows.forEach((r, i) => {
+      if (y > doc.page.height - doc.page.margins.bottom - 46) {
+        doc.addPage(); y = doc.page.margins.top; header(y); y += 15;
+      }
+      const cells = [
+        String(i + 1), String(r.application_no ?? ''), String(r.customer_name ?? ''),
+        String(r.series_name ?? ''), String(r.row_type ?? 'Live'), String(r.period_days ?? ''),
+        money(r.gross_amount), money(r.tds_amount), money(r.net_amount),
+      ];
+      doc.fontSize(7.5);
+      let x = x0;
+      cells.forEach((v, ci) => {
+        const align = ci >= 5 ? 'right' as const : 'left' as const;
+        doc.text(v, x, y, { width: cols[ci]!.w - 4, align, ellipsis: true, lineBreak: false });
+        x += cols[ci]!.w;
+      });
+      y += 12;
+    });
+    doc.moveTo(x0, y + 2).lineTo(x0 + cols.reduce((s, c) => s + c.w, 0), y + 2).stroke();
+    y += 7;
+    doc.fontSize(8).font('Helvetica-Bold')
+      .text(`${rows.length} row(s)   ·   Gross ₹${money(totals.gross)}   ·   TDS ₹${money(totals.tds)}   ·   Net ₹${money(totals.net)}`, x0, y);
+  });
+}
+
+export async function summaryPdfForBatch(db: Db, batchId: number): Promise<{ buffer: Buffer; batchNo: string }> {
+  const batch = (await db.query<{ batch_no: string; payout_date: string }>(
+    'SELECT batch_no, payout_date FROM payout_batches WHERE id = $1', [batchId])).rows[0];
+  if (!batch) throw errors.notFound('Batch not found');
+  const { rows } = await db.query<Record<string, unknown>>(`${SUMMARY_SELECT} WHERE ds.batch_id = $1 ORDER BY c.full_name`, [batchId]);
+  return {
+    buffer: await summaryPdf(rows, 'Interest payout summary', `${batch.batch_no} · payout date ${String(batch.payout_date).slice(0, 10)}`),
+    batchNo: batch.batch_no,
+  };
+}
+
+export async function previewPdf(db: Db, payoutDate: string): Promise<Buffer> {
+  const { rows } = await db.query<Record<string, unknown>>(
+    `${SUMMARY_SELECT}
+      WHERE ds.status = 'Scheduled' AND ds.batch_id IS NULL AND ds.due_date <= $1::date
+        AND ds.due_type IN ('Interest','BrokenInterest')
+      ORDER BY c.full_name`, [payoutDate]);
+  if (!rows.length) throw errors.unprocessable('No interest has accrued up to that date');
+  return summaryPdf(rows, 'Interest payout preview', `Everything accrued up to ${payoutDate} · not yet batched`);
+}
+
+/**
+ * Cancel a batch that hasn't settled: unlink its rows so the interest returns
+ * to the un-batched pool and can be re-batched. A settled (Paid) batch is past
+ * the point of no return — that needs the reversal path, not this.
+ */
+export async function cancelBatch(db: Db, actor: AuthUser, batchId: number, reason: string) {
+  return db.withTx(async (tx) => {
+    const batch = (await tx.query<{ batch_no: string; status: string }>(
+      'SELECT batch_no, status FROM payout_batches WHERE id = $1 FOR UPDATE', [batchId])).rows[0];
+    if (!batch) throw errors.notFound('Batch not found');
+    if (batch.status === 'Paid') throw errors.conflict('This batch is already settled — it cannot be cancelled.');
+    if (batch.status === 'Cancelled') throw errors.conflict('This batch is already cancelled.');
+    const paid = (await tx.query('SELECT 1 FROM disbursement_schedule WHERE batch_id = $1 AND status = $2 LIMIT 1', [batchId, 'Paid'])).rowCount;
+    if (paid) throw errors.conflict('Some rows in this batch are already Paid — cancel would orphan them.');
+
+    const freed = await tx.query('UPDATE disbursement_schedule SET batch_id = NULL WHERE batch_id = $1', [batchId]);
+    await tx.query("UPDATE payout_batches SET status = 'Cancelled' WHERE id = $1", [batchId]);
+    // Withdraw the pending "mark paid" claim, if one is open.
+    await tx.query(
+      "UPDATE approval_requests SET status = 'Cancelled' WHERE entity_type = 'payout_batches' AND entity_id = $1 AND status = 'Pending'",
+      [String(batchId)]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'payout.batch.cancel', entityType: 'payout_batches', entityId: batchId,
+      after: { batch_no: batch.batch_no, from_status: batch.status, reason, rows_released: freed.rowCount ?? 0 },
+    });
+    return { ok: true, batch_no: batch.batch_no, rows_released: freed.rowCount ?? 0 };
+  });
+}
+
+/** Settled-cut-off history: which periods have been paid, by whom, for how much. */
+export async function cutoffHistory(db: Db, page = 0, pageSize = 20) {
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT b.id AS batch_id, b.batch_no, b.payout_date AS cutoff_date, b.status,
+            b.total_gross AS gross_paid, b.total_tds AS tds_paid, b.total_net AS net_paid,
+            b.created_at, u.full_name AS created_by,
+            (SELECT count(*) FROM disbursement_schedule d WHERE d.batch_id = b.id) AS rows_paid,
+            (SELECT count(DISTINCT d.application_id) FROM disbursement_schedule d WHERE d.batch_id = b.id) AS customers,
+            (SELECT max(d.paid_at) FROM disbursement_schedule d WHERE d.batch_id = b.id AND d.status = 'Paid') AS settled_on
+       FROM payout_batches b
+       LEFT JOIN users u ON u.id = b.created_by_user_id
+      WHERE b.kind = 'interest'
+      ORDER BY b.payout_date DESC, b.id DESC
+      LIMIT $1 OFFSET $2`, [pageSize + 1, page * pageSize]);
+  const hasMore = rows.length > pageSize;
+  if (hasMore) rows.pop();
+  return { rows, page, page_size: pageSize, has_more: hasMore };
+}

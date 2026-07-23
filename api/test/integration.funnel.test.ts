@@ -24,10 +24,19 @@ describe('lead → customer → hand-off to NCD Manager queue', () => {
     const staff = await as('staff@demo.local');
     const lead = await staff.post('/api/leads', { full_name: 'Synthetic Investor', phone: '9000000001', district: 'Erode', source: 'Walk-IN' });
     expect(lead.status).toBe(201);
-    const conv = await staff.post(`/api/leads/${lead.json.id}/convert`, { confirmed_amount: 500000, confirmed_series_id: 1 });
+    // Conversion is now: create the customer through the full form, then link
+    // the lead to it — no amount/series asked at conversion.
+    const cust = await staff.post('/api/customers', { full_name: 'Synthetic Investor', phone: '9000000001', district: 'Erode' });
+    expect(cust.status).toBe(201);
+    const conv = await staff.post(`/api/leads/${lead.json.id}/link-customer`, { customer_id: cust.json.id });
     expect(conv.status).toBe(201);
     customerId = conv.json.customerId;
-    expect(customerId).toBeGreaterThan(0);
+    expect(customerId).toBe(cust.json.id);
+    // The lead is now Converted and points at that customer.
+    const leads = await staff.get('/api/leads');
+    const row = leads.json.rows.find((l: any) => l.id === lead.json.id);
+    expect(row.status).toBe('Converted');
+    expect(Number(row.converted_customer_id)).toBe(customerId);
   });
 
   it('staff adds a bank account — penny-drop stub verifies and it becomes active', async () => {
@@ -63,7 +72,8 @@ describe('scope rules', () => {
   it('an agent cannot see a branch-staff-enrolled customer', async () => {
     const staff = await as('staff@demo.local');
     const lead = await staff.post('/api/leads', { full_name: 'Staff Only Cust', phone: '9000000002' });
-    const conv = await staff.post(`/api/leads/${lead.json.id}/convert`, { confirmed_amount: 100000, confirmed_series_id: 1 });
+    const cust = await staff.post('/api/customers', { full_name: 'Staff Only Cust', phone: '9000000002' });
+    const conv = await staff.post(`/api/leads/${lead.json.id}/link-customer`, { customer_id: cust.json.id });
     const cid = conv.json.customerId;
 
     const agent = await as('agent@demo.local');
@@ -164,5 +174,47 @@ describe('enrolment wizard — the 6-section fields persist', () => {
     const nom = detail.json.nominees[0];
     expect(nom.pan).toBe('NOMEE1234Z');
     expect(nom.guardian_name).toBe('Guardian');
+  });
+});
+
+describe('lead type (NCD vs locker) + conversion linking', () => {
+  it('a locker lead stores the size and nulls the scheme, and vice versa', async () => {
+    const staff = await as('staff@demo.local');
+    const locker = await staff.post('/api/leads', {
+      full_name: 'Locker Prospect', phone: '9000000051', lead_type: 'locker',
+      locker_size: 'XL', interested_scheme: 'should-be-ignored',
+    });
+    expect(locker.status).toBe(201);
+    const ncd = await staff.post('/api/leads', {
+      full_name: 'NCD Prospect', phone: '9000000052', lead_type: 'ncd', interested_scheme: 'NCD 36M',
+    });
+    expect(ncd.status).toBe(201);
+
+    const rows = (await staff.get('/api/leads')).json.rows as any[];
+    const l = rows.find((r) => r.id === locker.json.id);
+    expect(l.lead_type).toBe('locker');
+    expect(l.locker_size).toBe('XL');
+    expect(l.interested_scheme).toBeNull();       // scheme ignored for a locker lead
+    const n = rows.find((r) => r.id === ncd.json.id);
+    expect(n.lead_type).toBe('ncd');
+    expect(n.interested_scheme).toBe('NCD 36M');
+    expect(n.locker_size).toBeNull();             // size ignored for an NCD lead
+  });
+
+  it('a lead defaults to ncd, and an invalid locker size is rejected', async () => {
+    const staff = await as('staff@demo.local');
+    const def = await staff.post('/api/leads', { full_name: 'Default Type', phone: '9000000053' });
+    const row = (await staff.get('/api/leads')).json.rows.find((r: any) => r.id === def.json.id);
+    expect(row.lead_type).toBe('ncd');
+    expect((await staff.post('/api/leads', { full_name: 'Bad Size', lead_type: 'locker', locker_size: 'Jumbo' })).status).toBe(400);
+  });
+
+  it('link-customer refuses to convert a lead twice', async () => {
+    const staff = await as('staff@demo.local');
+    const lead = await staff.post('/api/leads', { full_name: 'Twice Cust', phone: '9000000054' });
+    const c1 = await staff.post('/api/customers', { full_name: 'Twice Cust', phone: '9000000054' });
+    expect((await staff.post(`/api/leads/${lead.json.id}/link-customer`, { customer_id: c1.json.id })).status).toBe(201);
+    const c2 = await staff.post('/api/customers', { full_name: 'Twice Cust B', phone: '9000000055' });
+    expect((await staff.post(`/api/leads/${lead.json.id}/link-customer`, { customer_id: c2.json.id })).status).toBe(409);
   });
 });

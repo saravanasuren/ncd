@@ -64,6 +64,7 @@ export async function login(
 export interface SignupInput {
   type: 'staff' | 'agent';
   mobile: string;
+  email: string;        // the address they sign up with — stored verbatim
   password: string;
   full_name?: string;   // staff
   employee_id?: string; // staff
@@ -80,6 +81,8 @@ function assertStrongPassword(pw: string): void {
 export async function signup(db: Db, input: SignupInput): Promise<{ id: number; mobile: string; agent_code?: string }> {
   const digits = input.mobile.replace(/\D/g, '');
   if (digits.length !== 10) throw errors.badRequest('Mobile number must be 10 digits');
+  const email = input.email.trim().toLowerCase();
+  if (!email) throw errors.badRequest('Email is required');
   assertStrongPassword(input.password);
   if (input.type === 'staff') {
     if (!input.full_name?.trim()) throw errors.badRequest('Name is required');
@@ -88,14 +91,16 @@ export async function signup(db: Db, input: SignupInput): Promise<{ id: number; 
   }
 
   return db.withTx(async (tx) => {
-    // One login per mobile.
+    // One login per mobile, and per email — either identifies a login, so a
+    // duplicate must be a clean 409 rather than a unique-violation 500.
     const dup = await tx.query("SELECT 1 FROM users WHERE regexp_replace(COALESCE(phone,''),'\\D','','g') = $1", [digits]);
     if (dup.rowCount) throw errors.conflict('An account with this mobile number already exists');
+    const dupEmail = await tx.query('SELECT 1 FROM users WHERE lower(email) = $1', [email]);
+    if (dupEmail.rowCount) throw errors.conflict('An account with this email address already exists');
 
     const roleName = input.type === 'staff' ? 'branch_staff' : 'agent';
     const roleId = Number((await tx.query<{ id: string }>('SELECT id FROM roles WHERE name = $1', [roleName])).rows[0]!.id);
     const passwordHash = await bcrypt.hash(input.password, 10);
-    const email = `${digits}@signup.local`; // synthetic — login is by mobile
 
     let agentCode: string | undefined;
     let branchId = input.branch_id ?? null;
@@ -126,7 +131,7 @@ export async function signup(db: Db, input: SignupInput): Promise<{ id: number; 
       entityType: 'users',
       entityId: userId,
       makerUserId: userId,
-      metadata: { user_id: userId, kind: input.type, name: fullName, mobile: digits, employee_id: input.employee_id ?? null, agent_code: agentCode ?? null, branch_id: branchId },
+      metadata: { user_id: userId, kind: input.type, name: fullName, mobile: digits, email, employee_id: input.employee_id ?? null, agent_code: agentCode ?? null, branch_id: branchId },
     });
     await writeAudit(tx, { actorId: userId, action: 'user.signup', entityType: 'users', entityId: userId, after: { kind: input.type, mobile: digits } });
     return { id: userId, mobile: digits, agent_code: agentCode };

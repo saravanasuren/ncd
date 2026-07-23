@@ -175,6 +175,13 @@ export function LockerEnrollmentPage() {
   const legState = (leg: string) => app?.legs?.[leg];
   const allotment = app?.allotment ?? (app?.pricing ? null : undefined);
   const chosen = (avail.data?.sizes ?? []).find((s) => s.size === size);
+  /** Why "Create application" can't be pressed yet, or '' when it can.
+   * LockerHub keys everything on the phone, so that's the hard requirement —
+   * a PAN match fills it in, a phone lookup supplies it directly. */
+  const createBlocker =
+    phone.length < 10 ? 'Look the customer up by PAN or phone first — LockerHub needs their 10-digit phone.'
+    : !name.trim() ? "Enter the customer's full name."
+    : '';
 
   return (
     <div className="w-full max-w-3xl">
@@ -281,12 +288,19 @@ export function LockerEnrollmentPage() {
         </div>
       )}
 
-      {/* 3 — Application */}
-      {cust && (
+      {/* 3 — Application. Rendered as soon as a branch + size are picked, NOT
+          only once a customer resolves: hiding the whole step made the submit
+          invisible, and a PAN that isn't in NCD (cust stays null) left staff on
+          a dead end with no button anywhere. It stays disabled with the reason
+          spelled out until the prerequisites are met. */}
+      {branchId && size && (
         <div className={card}>
           <h2 className={h2}>3 · Locker application</h2>
           {!app ? (
-            <button className={btn} disabled={!name.trim() || busy} onClick={createApp}>Create application</button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button className={btn} disabled={!!createBlocker || busy} onClick={createApp}>Create application</button>
+              {createBlocker && <span className="text-xs text-text-muted">{createBlocker}</span>}
+            </div>
           ) : (
             <div className="text-sm">
               <div className="flex items-center gap-2 mb-2">

@@ -314,51 +314,42 @@ export async function customerLockers(db: Db, customerId: number) {
 /**
  * Locker tenants, branch-wise — EVERY tenant, not just the ones NCD backs.
  *
- * The spine is LockerHub's GET /locker-tenants?branch_id=, which returns every
- * OCCUPIED locker in a branch with the tenant's name/phone/email, locker number,
- * size and lease dates. (Their /lockers is the opposite view — vacant lockers
- * only — which is why this screen used to be NCD-backed lockers alone.)
- * branch_id is required and there is no all-branches form, so "All branches"
- * sweeps them.
+ * The spine is LockerHub's GET /locker-tenants, which returns every occupied
+ * locker with the tenant's identity, locker number, size and lease dates.
+ * (Their /lockers is the opposite view — vacant lockers only — which is why
+ * this screen used to be NCD-backed lockers alone.) Omitting branch_id returns
+ * all branches in ONE call; pass it to scope to a branch.
+ *
+ * Identity is `tenant_id`: their tenancy primary key, immutable, 1:1 with the
+ * allotment, present on every row. Do NOT key on application_id — most
+ * tenancies never had an application (staff create tenants directly), so it is
+ * empty by design rather than by failure.
+ *
+ * Their query already filters to occupied + open tenancies, so `status` is
+ * always "occupied" and Closed/Cancelled never appear — a tenancy vanishing
+ * from the roster IS the closure signal. `account_status` (Active | Closure
+ * Requested) is the one that varies; lease state comes from lease_expires_on.
  *
  * Two things are layered on top:
- *   1. NCD involvement — a deposit pledge or a recorded cheque — matched to the
- *      roster on LockerHub's application_id when they send one, else on phone.
+ *   1. NCD involvement — a deposit pledge or a recorded cheque. NCD can only be
+ *      involved through a locker APPLICATION, and a tenancy created from an
+ *      application does carry application_id, so that is the join. There is no
+ *      phone fallback: a roster row with no application_id cannot be ours.
  *   2. The lockers NCD is involved in that are NOT occupied yet (payment_pending,
  *      awaiting allotment). Those can never appear in a roster of occupied
  *      lockers, but staff still need them on this screen, so they're appended.
- *
- * Roster rows are matched to NCD customers by phone purely to link the name
- * through to the customer page; an unmatched tenant is still shown.
  */
 export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
   const last10 = (v: unknown) => String(v ?? '').replace(/\D/g, '').slice(-10);
   let lockerhub_error: string | null = null;
 
-  // Which branches to sweep — one caller-chosen branch, or all of them.
-  let branchIds: string[] = [];
-  if (opts.branchId) branchIds = [opts.branchId];
-  else {
-    try {
-      branchIds = ((await lh.branches()).branches ?? []).map((b) => String(b.id));
-    } catch (e) { lockerhub_error = (e as Error).message; }
-  }
-
-  // The roster, branch by branch. A branch that fails is recorded, not fatal —
-  // a partial roster still beats a blank screen, and roster_complete says so.
-  const roster: Array<Record<string, any>> = [];
-  let branchesRead = 0;
-  for (let i = 0; i < branchIds.length; i += 4) {
-    await Promise.all(branchIds.slice(i, i + 4).map(async (bid) => {
-      try {
-        const t = await lh.lockerTenants(bid);
-        for (const row of (t.tenants ?? []) as Array<Record<string, any>>) {
-          roster.push({ ...row, branch_id: row.branch_id ?? bid });
-        }
-        branchesRead++;
-      } catch (e) { if (!lockerhub_error) lockerhub_error = (e as Error).message; }
-    }));
-  }
+  // One call, whether that's a single branch or all of them.
+  let roster: Array<Record<string, any>> = [];
+  let rosterRead = false;
+  try {
+    roster = ((await lh.lockerTenants(opts.branchId)).tenants ?? []) as Array<Record<string, any>>;
+    rosterRead = true;
+  } catch (e) { lockerhub_error = (e as Error).message; }
 
   const ours = (await db.query<Record<string, unknown>>(
     `SELECT x.lockerhub_application_id,
@@ -411,11 +402,14 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
     const a = x.app as Record<string, any> | null;
     const c = custById.get(Number(r.customer_id));
     return {
+      tenant_id: null as string | null, // not yet allotted — no tenancy exists
       lockerhub_application_id: String(r.lockerhub_application_id),
       application_no: a?.application_no ?? null,
       branch_id: a?.branch_id ?? null,
+      branch_name: null as string | null,
       locker_size: a?.locker_size ?? null,
       status: a?.status ?? a?.application_status ?? null,
+      account_status: null as string | null,
       locker_no: a?.allotment?.locker_number ?? a?.allotment?.locker_no ?? null,
       tenant_name: a?.name ?? (c?.full_name ?? null),
       tenant_phone: a?.phone ?? (c?.phone ?? null),
@@ -431,8 +425,10 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
     };
   });
 
-  // Link roster tenants to NCD customers by phone, so a name that IS one of our
-  // customers clicks through even when NCD backs no part of the locker.
+  // Link roster tenants to NCD customers so a tenant who IS one of our customers
+  // clicks through. Phone alone is not enough to assert identity — shared family
+  // numbers have produced real mismatches here before — so the surname/first
+  // token must agree too. A disagreement shows the tenant unlinked, never wrong.
   const rosterPhones = [...new Set(roster.map((t) => last10(t.tenant?.phone)).filter((p) => p.length === 10))];
   const byPhone = rosterPhones.length
     ? (await db.query<Record<string, unknown>>(
@@ -440,26 +436,40 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
           WHERE right(regexp_replace(COALESCE(phone,''), '\\D', '', 'g'), 10) = ANY($1)`, [rosterPhones])).rows
     : [];
   const custByPhone = new Map(byPhone.map((c) => [last10(c.phone), c]));
+  const nameAgrees = (a: unknown, b: unknown) => {
+    const toks = (v: unknown) => new Set(String(v ?? '').toLowerCase().split(/[^a-z]+/i).filter((t) => t.length > 2));
+    const x = toks(a); const y = toks(b);
+    for (const t of x) if (y.has(t)) return true;
+    return false;
+  };
 
   // Merge. A roster row wins on identity (it is the allotted truth); NCD's
   // pledge/cheque is layered onto it. Anything of ours the roster doesn't cover
   // — not allotted yet — is appended so it can't silently disappear.
   const oursByAppId = new Map(oursRows.map((r) => [r.lockerhub_application_id, r]));
-  const oursByPhone = new Map(oursRows.filter((r) => last10(r.tenant_phone).length === 10).map((r) => [last10(r.tenant_phone), r]));
   const consumed = new Set<string>();
 
   const rosterRows = roster.map((t) => {
+    // application_id is empty for tenancies staff created directly, and that is
+    // a fact about the tenancy, not a failed lookup. NCD can only be involved
+    // via an application, so no application_id means it cannot be ours.
     const appId = String(t.application_id ?? '').trim();
-    const phone = last10(t.tenant?.phone);
-    const mine = (appId && oursByAppId.get(appId)) || (phone.length === 10 ? oursByPhone.get(phone) : undefined);
+    const mine = appId ? oursByAppId.get(appId) : undefined;
     if (mine) consumed.add(mine.lockerhub_application_id);
-    const c = mine?.customer_id ? custById.get(mine.customer_id) : custByPhone.get(phone);
+    const phone = last10(t.tenant?.phone);
+    const viaPhone = custByPhone.get(phone);
+    const c = mine?.customer_id
+      ? custById.get(mine.customer_id)
+      : (viaPhone && nameAgrees(viaPhone.full_name, t.tenant?.name) ? viaPhone : undefined);
     return {
-      lockerhub_application_id: appId || `locker:${String(t.locker_id ?? t.locker_number ?? '')}`,
+      tenant_id: String(t.tenant_id ?? ''),
+      lockerhub_application_id: appId || null,
       application_no: mine?.application_no ?? null,
       branch_id: t.branch_id ?? null,
+      branch_name: t.branch_name ?? null,
       locker_size: t.size ?? null,
       status: t.status ?? 'occupied',
+      account_status: t.account_status ?? null,
       locker_no: t.locker_number ?? null,
       tenant_name: t.tenant?.name ?? null,
       tenant_phone: t.tenant?.phone ?? null,
@@ -483,10 +493,9 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
 
   return {
     rows,
-    // True only when we actually read every branch we set out to read.
-    roster_complete: branchIds.length > 0 && branchesRead === branchIds.length,
-    branches_read: branchesRead,
-    branches_total: branchIds.length,
+    // The roster is all-or-nothing now — one call, so either we have it or we
+    // don't. False means the page is showing NCD's own rows only.
+    roster_complete: rosterRead,
     lockerhub_error,
   };
 }

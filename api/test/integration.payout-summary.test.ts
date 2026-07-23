@@ -153,6 +153,18 @@ describe('payout PDFs, cancel and cut-off history', () => {
     expect(r.json.error.message).toMatch(/already settled/i);
   });
 
+  it('cut-off history is closed to own-scope staff and agents', async () => {
+    // It reports BOOK-WIDE totals with no scoping, so dashboard:view (which
+    // branch_staff hold) must not be enough.
+    for (const who of ['staff@demo.local', 'agent@demo.local']) {
+      expect((await (await as(who)).get('/api/payouts/cutoff-history')).status).toBe(403);
+    }
+    // The report downloaders and the payout maker do get it.
+    for (const who of ['cxo@demo.local', 'ncd@demo.local']) {
+      expect((await (await as(who)).get('/api/payouts/cutoff-history')).status).toBe(200);
+    }
+  });
+
   it('cut-off history lists the periods with their totals', async () => {
     const a = await admin();
     const h = await a.get('/api/payouts/cutoff-history');

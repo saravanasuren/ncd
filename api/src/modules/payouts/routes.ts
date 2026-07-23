@@ -87,7 +87,10 @@ payoutsRouter.get('/:id/summary.pdf', requirePermission('payouts:generate'),
   }));
 
 // Which cut-offs have been settled, by whom, for how much.
-payoutsRouter.get('/cutoff-history', requirePermission('payouts:generate', 'dashboard:view'),
+// Book-wide payout totals, unscoped — so NOT dashboard:view, which branch_staff
+// hold (they are own-scope everywhere else). Same reach as the other payout
+// routes, plus the report downloaders.
+payoutsRouter.get('/cutoff-history', requirePermission('payouts:generate', 'reports:download'),
   asyncHandler(async (req, res) => res.json(await s.cutoffHistory(getDb(), Math.max(0, Number(req.query.page) || 0)))));
 
 // Cancel an un-settled batch — releases its rows back to the un-batched pool.

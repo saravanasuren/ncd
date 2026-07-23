@@ -99,7 +99,7 @@ describe('agent/staff attribution by referred-by', () => {
     const a = await admin();
     // Give the seeded staff user a stable code, refer a customer by that code.
     await ctx.db.query("UPDATE users SET code = 'STAFF1' WHERE email = 'ncd@demo.local'");
-    const app = await fund(a, 'Coded Ref Cust', 120000, 'STAFF1');
+    const app = await fund(a, 'Coded Ref Cust', 100000, 'STAFF1');
     const ncd = await as('ncd@demo.local');
     await approveInvestment(ncd, app);
 
@@ -115,7 +115,7 @@ describe('agent/staff attribution by referred-by', () => {
 
   it('falls back to the customer referrer when the app-level copy is wiped', async () => {
     const a = await admin();
-    const app = await fund(a, 'Wipe Test Cust', 90000, 'Gokul');
+    const app = await fund(a, 'Wipe Test Cust', 100000, 'Gokul');
     const ncd = await as('ncd@demo.local');
     await approveInvestment(ncd, app);
     // Simulate a re-import wiping the app-level referrer (customer keeps it).

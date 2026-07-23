@@ -5,6 +5,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 
+/** NCDs are issued in whole ₹1,00,000 units (owner spec 2026-07-23). */
+const LAKH = 100000;
+
 /** Customer 360 (docs/05 §5) — profile + bank accounts + KYC + hand-off. */
 /**
  * Two-step confirm for an irreversible purge: type DELETE, then give an audit
@@ -388,6 +391,9 @@ function NewInvestment({ customerId }: { customerId: number }) {
   const [seriesId, setSeriesId] = useState('');
   const [schemeId, setSchemeId] = useState('');
   const [amount, setAmount] = useState('');
+  // NCDs are issued in whole ₹1,00,000 units (the API enforces the scheme's own
+  // min_ticket/multiple_of; this mirrors it so staff see it before submitting).
+  const ticketOk = amount !== '' && Number(amount) >= LAKH && Math.round(Number(amount) * 100) % (LAKH * 100) === 0;
   const [dateReceived, setDateReceived] = useState('');
   const [clubWith, setClubWith] = useState('');
   const [lockerDeposit, setLockerDeposit] = useState(false);
@@ -443,7 +449,10 @@ function NewInvestment({ customerId }: { customerId: number }) {
           <option value="">Scheme…</option>
           {(schemes.data?.rows ?? []).map((s) => <option key={s.id} value={s.id}>{s.code} ({s.coupon_rate_pct}%)</option>)}
         </select>
-        <input className={sel} placeholder="Amount" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        {/* NCDs are issued in whole ₹1,00,000 units — step/min make the browser
+            enforce it, and the hint below states it before they submit. */}
+        <input className={sel} placeholder="Amount (₹1,00,000 units)" type="number" min={LAKH} step={LAKH}
+          value={amount} onChange={(e) => setAmount(e.target.value)} />
         <label className="text-xs flex items-center gap-1.5" title="Date the money was credited to Dhanam's account — interest starts from here once approved">
           Credited <input className={sel} type="date" value={dateReceived} onChange={(e) => setDateReceived(e.target.value)} />
         </label>
@@ -460,11 +469,16 @@ function NewInvestment({ customerId }: { customerId: number }) {
         <label className="text-xs flex items-center gap-1.5" title="Money came from a locker (LockerHub-originated deposits flag themselves automatically)">
           <input type="checkbox" checked={lockerDeposit} onChange={(e) => setLockerDeposit(e.target.checked)} /> Locker deposit
         </label>
-        <button disabled={!seriesId || !schemeId || !amount || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
+        <button disabled={!seriesId || !schemeId || !amount || !ticketOk || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
           className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
           {clubWith ? 'Add to application' : 'Create investment'}
         </button>
       </div>
+      {amount !== '' && !ticketOk && (
+        <div className="text-xs text-danger mt-2">
+          Investments are issued in units of ₹1,00,000. Nearest valid amounts: ₹{(Math.max(1, Math.floor(Number(amount) / LAKH)) * LAKH).toLocaleString('en-IN')} or ₹{((Math.floor(Number(amount) / LAKH) + 1) * LAKH).toLocaleString('en-IN')}.
+        </div>
+      )}
       {clubOptions.length > 0 && (
         <label className="flex items-center gap-2 text-xs text-text-muted mt-3">
           Club into an in-flight application:

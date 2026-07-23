@@ -135,7 +135,7 @@ describe('handover approval — any one of Admin / CXO / Branch Manager', () => 
     const cust = await a.post('/api/customers', { full_name: 'Pay Details Cust', phone: '9700099234' });
     await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '4242424242', ifsc: 'ICIC0001111' });
     const app = await a.post('/api/applications', {
-      customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 150000,
+      customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000,
       date_money_received: '2026-07-05', collection_method: 'Cheque', collection_reference: 'CHQ-99881',
     });
     // attach a receipt (tiny base64 png)

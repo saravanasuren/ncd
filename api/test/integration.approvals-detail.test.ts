@@ -27,7 +27,7 @@ describe('approvals queue — readable subject + detail', () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Queue Subject Cust', phone: '9844000001' });
     const app = await a.post('/api/applications', {
-      customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 250000, date_money_received: '2026-07-11',
+      customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000, date_money_received: '2026-07-11',
     });
     const reqId = Number(app.json.subscription_request.id);
 
@@ -38,7 +38,7 @@ describe('approvals queue — readable subject + detail', () => {
     expect(row).toBeTruthy();
     expect(row.subject).toContain('Queue Subject Cust');
     expect(row.subject).toContain(String(app.json.application_no));
-    expect(Number(row.amount)).toBe(250000);
+    expect(Number(row.amount)).toBe(200000);
 
     // Detail returns readable facts, not the raw record.
     const det = await ncd.get(`/api/approvals/${reqId}`);

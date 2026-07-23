@@ -23,7 +23,7 @@ describe("today's flow cards", () => {
     const cust = await a.post('/api/customers', { full_name: 'Today Investor', phone: '9880001111' });
     await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '2222333344', ifsc: 'ICIC0001111' });
     const today = new Date().toISOString().slice(0, 10);
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 250000, date_money_received: today, collection_method: 'NEFT' });
+    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000, date_money_received: today, collection_method: 'NEFT' });
     // Approve (distinct checker) → the NCD goes live with today's credit date.
     const ncd = new Client(ctx.base);
     await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
@@ -34,10 +34,10 @@ describe("today's flow cards", () => {
     const row = tb.additions.rows.find((r: any) => r.application_no === app.json.application_no);
     expect(row).toBeTruthy();
     expect(row.received_via).toBe('NEFT'); // staff-keyed → shows the actual payment method
-    expect(Number(row.amount)).toBe(250000);
+    expect(Number(row.amount)).toBe(200000);
     expect(row.customer_id).toBe(cust.json.id);         // row is clickable → customer
     expect(tb.additions.count).toBe(1);
-    expect(tb.additions.amount).toBe(250000);
+    expect(tb.additions.amount).toBe(200000);
     // split always reconciles to the total
     expect(tb.additions.app + tb.additions.locker + tb.additions.physical).toBe(tb.additions.amount);
     // deletions side present + shaped even when empty
@@ -63,7 +63,7 @@ describe("today's flow cards", () => {
     const before = Number((await a.get('/api/dashboard/overview')).json.kpis.outstanding_book);
     // A PendingApproval app (subscription gate, no money received) must not count.
     const cust = await a.post('/api/customers', { full_name: 'Pending Approval Cust', phone: '9744400009' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 999999 });
+    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000 });
     await ctx.db.query("UPDATE applications SET status='PendingApproval' WHERE id=$1", [app.json.id]);
     const after = Number((await a.get('/api/dashboard/overview')).json.kpis.outstanding_book);
     expect(after).toBe(before); // unchanged — pending-approval money excluded
@@ -90,8 +90,8 @@ describe("today's flow cards", () => {
     expect(Array.isArray(detail.json.applications)).toBe(true);
     const app = detail.json.applications[0];
     expect(app.series_code).toBe('NCD DEMO');
-    expect(Number(app.amount)).toBe(250000);
-    expect(Number(app.outstanding)).toBe(250000);
+    expect(Number(app.amount)).toBe(200000);
+    expect(Number(app.outstanding)).toBe(200000);
     expect(app.application_no).toMatch(/^APP-/);
   });
 

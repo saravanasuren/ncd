@@ -330,6 +330,9 @@ interface Editable {
   };
 }
 
+/** NCDs are issued in whole ₹1,00,000 units (owner spec 2026-07-23). */
+const LAKH = 100000;
+
 const RO_LABELS: Array<[string, string]> = [
   ['customer', 'Customer'], ['pan', 'PAN'], ['phone', 'Phone'], ['dob', 'Date of birth'],
   ['application_no', 'Reference no.'],
@@ -353,6 +356,11 @@ function EditableInvestment({ ed, id, canAct, selfApproval, actionLabel, onDone 
   const [selfReason, setSelfReason] = useState('');
   const blocked = !!selfApproval && selfReason.trim().length < 3;
   const dirty = (Object.keys(ed.fields) as Array<keyof Editable['fields']>).some((k) => String(f[k] ?? '') !== String(ed.fields[k] ?? ''));
+  // Approval is the go-live gate: nothing becomes Active off-denomination,
+  // whatever created it (staff, app, or an inbound LockerHub write). Mirrors
+  // the server rule so the checker sees it before clicking, not after.
+  const amt = Number(f.total_amount ?? 0);
+  const ticketOk = amt >= LAKH && Math.round(amt * 100) % (LAKH * 100) === 0;
   const approveWithEdits = useMutation({
     mutationFn: () => api.post(`/api/approvals/${id}/approve`, { extra: { edits: f, ...(selfApproval ? { self_approval_reason: selfReason.trim() } : {}) } }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['approval', id] }); onDone(); },
@@ -389,6 +397,7 @@ function EditableInvestment({ ed, id, canAct, selfApproval, actionLabel, onDone 
                 onChange={(v) => setF({ ...f, referred_by_text: v })} />
             ) : (
               <input className={inp} type={type} value={String(f[key] ?? '')}
+                {...(key === 'total_amount' ? { min: LAKH, step: LAKH } : {})}
                 onChange={(e) => setF({ ...f, [key]: type === 'number' ? Number(e.target.value) : e.target.value })} />
             )}
           </label>
@@ -398,12 +407,15 @@ function EditableInvestment({ ed, id, canAct, selfApproval, actionLabel, onDone 
       {canAct && selfApproval && <SelfApprovalReason value={selfReason} onChange={setSelfReason} />}
       {canAct && (
         <div className="flex gap-2 items-center mt-3 border-t border-border pt-3">
-          <button onClick={() => approveWithEdits.mutate()} disabled={approveWithEdits.isPending || blocked}
+          <button onClick={() => approveWithEdits.mutate()} disabled={approveWithEdits.isPending || blocked || !ticketOk}
             className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
             {dirty ? `${actionLabel} (with corrections)` : actionLabel}
           </button>
           {dirty && <button onClick={() => { setErr(''); setF(ed.fields); }} className="text-xs text-text-muted hover:underline">Undo changes</button>}
-          <span className="text-xs text-text-muted">Check the details above before confirming.</span>
+          <span className="text-xs text-text-muted">
+            {ticketOk ? 'Check the details above before confirming.'
+              : `Investments are issued in units of ₹1,00,000 — correct the amount to ₹${(Math.max(1, Math.floor(Number(f.total_amount ?? 0) / LAKH)) * LAKH).toLocaleString('en-IN')} or ₹${((Math.floor(Number(f.total_amount ?? 0) / LAKH) + 1) * LAKH).toLocaleString('en-IN')} before approving.`}
+          </span>
         </div>
       )}
     </div>

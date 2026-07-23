@@ -20,6 +20,7 @@ import { toISODate } from '../../lib/dates.js';
 import { writeAudit } from '../../lib/audit.js';
 import { nextCode } from '../../lib/sequences.js';
 import { typeDef, type ChainLevel } from './config.js';
+import { assertValidTicket } from '../../lib/ticket.js';
 
 type Callback = (tx: Db, request: ApprovalRow) => Promise<void>;
 const onFinalApproveReg = new Map<string, Callback>();
@@ -169,6 +170,16 @@ export async function approve(
           entityType: 'applications', entityId: Number(req.entity_id), after: edits,
         });
       }
+    }
+    // Nothing goes LIVE off-denomination, whatever created it — the checker
+    // corrects the amount here (the approval form already lets them edit it).
+    // This is the gate that covers the inbound LockerHub writes too: they land
+    // as PendingApproval rather than being refused at the door.
+    if (req.request_type === 'subscription' && req.entity_type === 'applications' && req.entity_id) {
+      const app = (await tx.query<{ total_amount: string; scheme_id: string | null }>(
+        `SELECT a.total_amount, (SELECT al.scheme_id FROM application_lines al WHERE al.application_id = a.id ORDER BY al.id LIMIT 1) AS scheme_id
+           FROM applications a WHERE a.id = $1`, [Number(req.entity_id)])).rows[0];
+      if (app) await assertValidTicket(tx, app.scheme_id ? Number(app.scheme_id) : null, Number(app.total_amount));
     }
     const prior = await priorApprovers(tx, id);
     const selfReason = typeof extra?.self_approval_reason === 'string' ? extra.self_approval_reason.trim() : undefined;

@@ -23,7 +23,9 @@ const createSchema = z.object({
   category: z.string().optional(),
   source: z.string().optional(),
   referred_by_text: z.string().optional(),
+  lead_type: z.enum(['ncd', 'locker']).optional(),
   interested_scheme: z.string().optional(),
+  locker_size: z.enum(['Medium', 'L', 'XL']).optional(),
   expected_amount: z.number().optional(),
   follow_up_date: z.string().optional(),
   status: z.string().optional(),
@@ -45,8 +47,10 @@ leadsRouter.get('/:id/notes', requirePermission('leads:read'),
 leadsRouter.get('/duplicate-check', requirePermission('leads:read'),
   asyncHandler(async (req, res) => res.json(await s.duplicateCheck(getDb(), String(req.query.phone ?? '')))));
 
-leadsRouter.post('/:id/convert', requirePermission('leads:convert'),
+// Conversion = link the lead to a customer created through the full customer
+// form (the wizard, name pre-filled). No amount/series here anymore.
+leadsRouter.post('/:id/link-customer', requirePermission('leads:convert'),
   asyncHandler(async (req, res) => {
-    const { confirmed_amount, confirmed_series_id } = z.object({ confirmed_amount: z.number(), confirmed_series_id: z.number() }).parse(req.body);
-    res.status(201).json(await s.convertLead(getDb(), req.user!, Number(req.params.id), confirmed_amount, confirmed_series_id));
+    const { customer_id } = z.object({ customer_id: z.number().int().positive() }).parse(req.body);
+    res.status(201).json(await s.linkLeadToCustomer(getDb(), req.user!, Number(req.params.id), customer_id));
   }));

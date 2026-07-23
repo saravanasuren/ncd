@@ -4,7 +4,6 @@ import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
-import { createCustomer } from '../customers/service.js';
 
 const SCOPE_COLS = {
   userCol: 'l.created_by_user_id',
@@ -49,7 +48,9 @@ export interface CreateLeadInput {
   category?: string;
   source?: string;
   referred_by_text?: string;
-  interested_scheme?: string;
+  lead_type?: 'ncd' | 'locker';
+  interested_scheme?: string;  // NCD leads
+  locker_size?: string;        // locker leads (Medium | L | XL)
   expected_amount?: number;
   follow_up_date?: string;
   status?: string;
@@ -58,21 +59,26 @@ export interface CreateLeadInput {
 
 export async function createLead(db: Db, actor: AuthUser, input: CreateLeadInput) {
   return db.withTx(async (tx) => {
+    // A locker lead carries a size, not a scheme, and vice-versa — keep the
+    // irrelevant one null so the two never contradict each other.
+    const type = input.lead_type === 'locker' ? 'locker' : 'ncd';
+    const scheme = type === 'ncd' ? (input.interested_scheme ?? null) : null;
+    const size = type === 'locker' ? (input.locker_size ?? null) : null;
     const { rows } = await tx.query<{ id: string }>(
-      `INSERT INTO investor_leads (full_name, phone, place, district, category, source, referred_by_text, interested_scheme, expected_amount, follow_up_date, status, notes, created_by_user_id, created_by_agent_id, branch_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+      `INSERT INTO investor_leads (full_name, phone, place, district, category, source, referred_by_text, lead_type, interested_scheme, locker_size, expected_amount, follow_up_date, status, notes, created_by_user_id, created_by_agent_id, branch_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
       [input.full_name, input.phone ?? null, input.place ?? null, input.district ?? null, input.category ?? null,
-       input.source ?? null, input.referred_by_text ?? null, input.interested_scheme ?? null, input.expected_amount ?? null,
+       input.source ?? null, input.referred_by_text ?? null, type, scheme, size, input.expected_amount ?? null,
        input.follow_up_date ?? null, input.status ?? 'New', input.notes ?? null, actor.id, actor.agentId, actor.branchIds[0] ?? null]
     );
     const id = Number(rows[0]!.id);
-    await writeAudit(tx, { actorId: actor.id, action: 'lead.create', entityType: 'investor_leads', entityId: id, after: { name: input.full_name } });
+    await writeAudit(tx, { actorId: actor.id, action: 'lead.create', entityType: 'investor_leads', entityId: id, after: { name: input.full_name, lead_type: type } });
     return { id };
   });
 }
 
 export async function updateLead(db: Db, actor: AuthUser, id: number, input: Partial<CreateLeadInput>) {
-  const fields = ['full_name', 'phone', 'place', 'district', 'category', 'source', 'referred_by_text', 'interested_scheme', 'expected_amount', 'follow_up_date', 'status', 'notes'];
+  const fields = ['full_name', 'phone', 'place', 'district', 'category', 'source', 'referred_by_text', 'lead_type', 'interested_scheme', 'locker_size', 'expected_amount', 'follow_up_date', 'status', 'notes'];
   await db.withTx(async (tx) => {
     const cur = (await tx.query('SELECT * FROM investor_leads WHERE id = $1', [id])).rows[0];
     if (!cur) throw errors.notFound('Lead not found');
@@ -106,22 +112,25 @@ export async function duplicateCheck(db: Db, phone: string) {
   return { duplicate: true as const, customer: { id: Number(rows[0].id), customer_code: rows[0].customer_code, full_name: rows[0].full_name, enrolled_by_user_id: rows[0].enrolled_by_user_id ? Number(rows[0].enrolled_by_user_id) : null } };
 }
 
-/** Convert a lead → a Draft customer (requires confirmed amount + series). */
-export async function convertLead(db: Db, actor: AuthUser, leadId: number, confirmedAmount: number, confirmedSeriesId: number) {
-  if (!confirmedAmount || !confirmedSeriesId) throw errors.badRequest('Confirmed amount and series are required to convert');
-  const lead = (await db.query<{ full_name: string; phone: string | null; district: string | null; referred_by_text: string | null; converted_customer_id: string | null }>(
-    'SELECT full_name, phone, district, referred_by_text, converted_customer_id FROM investor_leads WHERE id = $1', [leadId]
-  )).rows[0];
-  if (!lead) throw errors.notFound('Lead not found');
-  if (lead.converted_customer_id) throw errors.conflict('Lead is already converted');
+/**
+ * Link a lead to the customer that was just created for it through the full
+ * customer form (owner 2026-07-23). Conversion no longer creates a bare
+ * customer from the lead's few fields and no longer asks for an amount/series —
+ * staff open the normal customer wizard (name pre-filled) and enter KYC, demat,
+ * bank, everything, then this marks the lead Converted and records which
+ * customer it became.
+ */
+export async function linkLeadToCustomer(db: Db, actor: AuthUser, leadId: number, customerId: number) {
+  return db.withTx(async (tx) => {
+    const lead = (await tx.query<{ converted_customer_id: string | null }>(
+      'SELECT converted_customer_id FROM investor_leads WHERE id = $1 FOR UPDATE', [leadId])).rows[0];
+    if (!lead) throw errors.notFound('Lead not found');
+    if (lead.converted_customer_id) throw errors.conflict('Lead is already converted');
+    const cust = (await tx.query<{ customer_code: string }>('SELECT customer_code FROM customers WHERE id = $1', [customerId])).rows[0];
+    if (!cust) throw errors.notFound('Customer not found');
 
-  const created = await createCustomer(db, actor, {
-    full_name: lead.full_name,
-    phone: lead.phone ?? undefined,
-    district: lead.district ?? undefined,
-    referred_by_text: lead.referred_by_text ?? undefined,
+    await tx.query("UPDATE investor_leads SET status = 'Converted', converted_customer_id = $1, updated_at = now() WHERE id = $2", [customerId, leadId]);
+    await writeAudit(tx, { actorId: actor.id, action: 'lead.convert', entityType: 'investor_leads', entityId: leadId, after: { customerId } });
+    return { customerId, customer_code: cust.customer_code };
   });
-  await db.query("UPDATE investor_leads SET status = 'Converted', converted_customer_id = $1, updated_at = now() WHERE id = $2", [created.id, leadId]);
-  await writeAudit(db, { actorId: actor.id, action: 'lead.convert', entityType: 'investor_leads', entityId: leadId, after: { customerId: created.id, confirmedAmount, confirmedSeriesId } });
-  return { customerId: created.id, customer_code: created.customer_code };
 }

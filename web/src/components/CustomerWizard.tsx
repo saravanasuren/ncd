@@ -111,12 +111,26 @@ function FilePick({ label, hint, file, onPick }: { label: string; hint?: string;
 }
 
 
-export function CustomerWizard({ onClose }: { onClose: () => void }) {
+export function CustomerWizard(
+  { onClose, prefill, onCreated }: {
+    onClose: () => void;
+    // Seed the form (e.g. converting a lead — name/phone already known).
+    prefill?: Partial<Form>;
+    // Called with the new customer id after a successful save (e.g. to mark the
+    // originating lead Converted). Awaited so its failure surfaces in the wizard.
+    onCreated?: (customerId: number) => Promise<void> | void;
+  }
+) {
   const nav = useNavigate();
   const qc = useQueryClient();
-  const [step, setStep] = useState<number>(() => loadDraft()?.step ?? 0);
-  const [f, setF] = useState<Form>(() => { const d = loadDraft(); return d?.f ? { ...EMPTY, ...d.f } : EMPTY; });
-  const [restored, setRestored] = useState<boolean>(() => !!loadDraft());
+  // A prefill (lead conversion) starts a FRESH form — it must not resurrect an
+  // unrelated autosaved enrolment draft, and it isn't the resumable draft.
+  const [step, setStep] = useState<number>(() => (prefill ? 0 : loadDraft()?.step ?? 0));
+  const [f, setF] = useState<Form>(() => {
+    if (prefill) return { ...EMPTY, ...prefill };
+    const d = loadDraft(); return d?.f ? { ...EMPTY, ...d.f } : EMPTY;
+  });
+  const [restored, setRestored] = useState<boolean>(() => !prefill && !!loadDraft());
   const [files, setFiles] = useState<Record<DocKey, File | null>>({
     pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null, nominee_kyc: null,
   });
@@ -244,6 +258,9 @@ export function CustomerWizard({ onClose }: { onClose: () => void }) {
     try {
       const id = await persist();
       clearDraft(); // saved server-side now — drop the local autosave
+      // Link the originating lead (if any) BEFORE we navigate away, so a link
+      // failure is shown here rather than lost.
+      if (onCreated) await onCreated(id);
       qc.invalidateQueries({ queryKey: ['customers'] });
       onClose();
       if (goInvest) nav(`/app/customers/${id}`);

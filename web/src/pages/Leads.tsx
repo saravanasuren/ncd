@@ -5,6 +5,15 @@ import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { Tabs, type TabDef } from '../components/Tabs.js';
+import { CustomerWizard } from '../components/CustomerWizard.js';
+
+// Locker sizes a lead can be interested in — value = the locker system's own
+// size code, label = the plain M/L/XL the operator asked for.
+const LOCKER_SIZES = [
+  { value: 'Medium', label: 'Medium (M)' },
+  { value: 'L', label: 'Large (L)' },
+  { value: 'XL', label: 'Extra Large (XL)' },
+];
 
 interface Lead {
   id: number;
@@ -15,7 +24,9 @@ interface Lead {
   category: string | null;
   source: string | null;
   referred_by_text: string | null;
+  lead_type: string | null;
   interested_scheme: string | null;
+  locker_size: string | null;
   status: string;
   expected_amount: string | null;
   follow_up_date: string | null;
@@ -43,7 +54,8 @@ const PROSPECTS_TAB = '__prospects__';
 
 const EMPTY_FORM = {
   full_name: '', phone: '', place: '', district: '', category: '', source: '',
-  referred_by_text: '', interested_scheme: '', expected_amount: '', follow_up_date: '', status: '', notes: '',
+  referred_by_text: '', lead_type: 'ncd', interested_scheme: '', locker_size: '',
+  expected_amount: '', follow_up_date: '', status: '', notes: '',
 };
 
 const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
@@ -101,7 +113,6 @@ export function LeadsPage() {
   const { can } = useAuth();
   const [form, setForm] = useState(EMPTY_FORM);
   const [err, setErr] = useState('');
-  const [converting, setConverting] = useState<{ id: number; amount: string; seriesId: string } | null>(null);
   const [notesFor, setNotesFor] = useState<number | null>(null);
   const [edit, setEdit] = useState<{ id: number; status: string; follow_up_date: string; expected_amount: string } | null>(null);
   const [tab, setTab] = useState<string>('all');
@@ -110,12 +121,6 @@ export function LeadsPage() {
 
   const { data, isLoading, error } = useQuery({ queryKey: ['leads'], queryFn: () => api.get<{ rows: Lead[] }>('/api/leads') });
   const prospects = useQuery({ queryKey: ['app-prospects'], queryFn: () => api.get<{ rows: Prospect[] }>('/api/leads/app-prospects') });
-  const series = useQuery({
-    queryKey: ['series'],
-    queryFn: () => api.get<{ rows: { id: number; code: string; status: string }[] }>('/api/series'),
-    enabled: can('leads:convert'),
-  });
-  const openSeries = (series.data?.rows ?? []).filter((s) => s.status === 'Open');
 
   // Configurable vocabularies (docs/07 — no hardcoded business values).
   const uiConfig = useQuery({
@@ -145,7 +150,10 @@ export function LeadsPage() {
       ...(form.category ? { category: form.category } : {}),
       ...(form.source ? { source: form.source } : {}),
       ...(form.referred_by_text ? { referred_by_text: form.referred_by_text } : {}),
-      ...(form.interested_scheme ? { interested_scheme: form.interested_scheme } : {}),
+      lead_type: form.lead_type,
+      // Only the field that matches the type — the server nulls the other anyway.
+      ...(form.lead_type === 'ncd' && form.interested_scheme ? { interested_scheme: form.interested_scheme } : {}),
+      ...(form.lead_type === 'locker' && form.locker_size ? { locker_size: form.locker_size } : {}),
       ...(form.expected_amount ? { expected_amount: Number(form.expected_amount) } : {}),
       ...(form.follow_up_date ? { follow_up_date: form.follow_up_date } : {}),
       ...(form.status ? { status: form.status } : {}),
@@ -166,18 +174,26 @@ export function LeadsPage() {
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
 
-  const convert = useMutation({
-    mutationFn: (c: { id: number; amount: string; seriesId: string }) =>
-      api.post<{ customerId: number }>(`/api/leads/${c.id}/convert`, {
-        confirmed_amount: Number(c.amount),
-        confirmed_series_id: Number(c.seriesId),
-      }),
-    onSuccess: (r) => { setConverting(null); qc.invalidateQueries({ queryKey: ['leads'] }); nav(`/app/customers/${r.customerId}`); },
-    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
-  });
+  // Converting a lead now opens the FULL customer form (name pre-filled) rather
+  // than creating a bare customer. On save we link the lead to the new customer.
+  const [convertLead, setConvertLead] = useState<Lead | null>(null);
 
   return (
     <div className="w-full">
+      {/* Convert = the full customer form, name (and what else we know) pre-filled.
+          On save we link the lead to the new customer and land on their profile. */}
+      {convertLead && (
+        <CustomerWizard
+          prefill={{
+            full_name: convertLead.full_name,
+            phone: convertLead.phone ?? '',
+            district: convertLead.district ?? '',
+            referred_by_text: convertLead.referred_by_text ?? '',
+          }}
+          onCreated={async (customerId) => { await api.post(`/api/leads/${convertLead.id}/link-customer`, { customer_id: customerId }); qc.invalidateQueries({ queryKey: ['leads'] }); }}
+          onClose={() => setConvertLead(null)}
+        />
+      )}
       <div className="flex items-center justify-between mb-5">
         <div>
           <h1 className="text-xl font-bold tracking-tight m-0">Leads</h1>
@@ -226,12 +242,32 @@ export function LeadsPage() {
                   {REFERRED_BY.map((r) => <option key={r}>{r}</option>)}
                 </select>
               </Field>
-              <Field label="Interested scheme">
-                <select className={`${inp} w-full`} value={form.interested_scheme} onChange={(e) => setForm({ ...form, interested_scheme: e.target.value })}>
-                  <option value="">Select…</option>
-                  {SCHEMES.map((s) => <option key={s}>{s}</option>)}
-                </select>
+              <Field label="Interested in" required>
+                <div className="flex gap-4 items-center h-[34px]">
+                  {(['ncd', 'locker'] as const).map((t) => (
+                    <label key={t} className="inline-flex items-center gap-1.5 text-sm">
+                      <input type="radio" name="lead_type" checked={form.lead_type === t}
+                        onChange={() => setForm({ ...form, lead_type: t, interested_scheme: '', locker_size: '' })} />
+                      {t === 'ncd' ? 'NCD investment' : 'Locker'}
+                    </label>
+                  ))}
+                </div>
               </Field>
+              {form.lead_type === 'ncd' ? (
+                <Field label="Interested scheme">
+                  <select className={`${inp} w-full`} value={form.interested_scheme} onChange={(e) => setForm({ ...form, interested_scheme: e.target.value })}>
+                    <option value="">Select…</option>
+                    {SCHEMES.map((s) => <option key={s}>{s}</option>)}
+                  </select>
+                </Field>
+              ) : (
+                <Field label="Locker size">
+                  <select className={`${inp} w-full`} value={form.locker_size} onChange={(e) => setForm({ ...form, locker_size: e.target.value })}>
+                    <option value="">Select…</option>
+                    {LOCKER_SIZES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                </Field>
+              )}
               <Field label="Expected amount (₹)">
                 <input className={`${inp} w-full`} type="number" value={form.expected_amount} onChange={(e) => setForm({ ...form, expected_amount: e.target.value })} />
               </Field>
@@ -280,6 +316,11 @@ export function LeadsPage() {
           { key: 'phone', header: 'Phone', tdClassName: 'text-text-muted', value: (l) => l.phone ?? '', render: (l) => l.phone ?? '—' },
           { key: 'district', header: 'District', value: (l) => l.district ?? '', render: (l) => l.district ?? '—' },
           { key: 'source', header: 'Source', value: (l) => l.source ?? '', render: (l) => l.source ?? '—' },
+          { key: 'interest', header: 'Interested in',
+            value: (l) => l.lead_type === 'locker' ? `Locker ${l.locker_size ?? ''}` : (l.interested_scheme ?? 'NCD'),
+            render: (l) => l.lead_type === 'locker'
+              ? <span>Locker{l.locker_size ? <span className="text-text-muted"> · {LOCKER_SIZES.find((s) => s.value === l.locker_size)?.label ?? l.locker_size}</span> : ''}</span>
+              : <span>NCD{l.interested_scheme ? <span className="text-text-muted"> · {l.interested_scheme}</span> : ''}</span> },
           { key: 'expected_amount', header: 'Expected', align: 'right', value: (l) => Number(l.expected_amount ?? 0),
             render: (l) => l.expected_amount ? <span className="mono">₹{Number(l.expected_amount).toLocaleString('en-IN')}</span> : '—' },
           { key: 'follow_up_date', header: 'Follow-up', value: (l) => l.follow_up_date ?? '',
@@ -303,32 +344,15 @@ export function LeadsPage() {
                   </span>
                 );
               }
-              if (converting?.id === l.id) {
-                return (
-                  <span className="inline-flex items-center gap-1.5">
-                    <input className={`${inp} w-28`} type="number" placeholder="Amount ₹" autoFocus
-                      value={converting.amount} onChange={(e) => setConverting({ ...converting, amount: e.target.value })} />
-                    <select className={inp} value={converting.seriesId}
-                      onChange={(e) => setConverting({ ...converting, seriesId: e.target.value })}>
-                      <option value="">Series…</option>
-                      {openSeries.map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
-                    </select>
-                    <button disabled={!converting.amount || Number(converting.amount) <= 0 || !converting.seriesId || convert.isPending}
-                      onClick={() => { setErr(''); convert.mutate(converting); }}
-                      className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Confirm</button>
-                    <button onClick={() => setConverting(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
-                  </span>
-                );
-              }
               return (
                 <span className="inline-flex items-center gap-2.5">
                   <button onClick={() => setNotesFor(notesFor === l.id ? null : l.id)} className="text-xs text-primary hover:underline">Notes</button>
                   {can('leads:update') && l.status !== 'Converted' && (
-                    <button onClick={() => { setErr(''); setConverting(null); setEdit({ id: l.id, status: l.status, follow_up_date: l.follow_up_date ? String(l.follow_up_date).slice(0, 10) : '', expected_amount: l.expected_amount ?? '' }); }}
+                    <button onClick={() => { setErr(''); setEdit({ id: l.id, status: l.status, follow_up_date: l.follow_up_date ? String(l.follow_up_date).slice(0, 10) : '', expected_amount: l.expected_amount ?? '' }); }}
                       className="text-xs text-primary hover:underline">Edit</button>
                   )}
-                  {can('leads:convert') && l.status !== 'Converted' && (
-                    <button onClick={() => { setErr(''); setEdit(null); setConverting({ id: l.id, amount: l.expected_amount ?? '', seriesId: '' }); }}
+                  {can('leads:convert') && can('customers:create') && l.status !== 'Converted' && (
+                    <button onClick={() => { setErr(''); setEdit(null); setConvertLead(l); }}
                       className="text-xs text-primary hover:underline">Convert →</button>
                   )}
                 </span>

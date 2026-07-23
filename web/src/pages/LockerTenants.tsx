@@ -7,11 +7,11 @@ import { api } from '../api/client.js';
 /**
  * Locker tenants, branch-wise.
  *
- * Honest about its source: LockerHub's per-branch locker roster (/lockers) is
- * erroring on their side, so this lists the lockers NCD is involved in (a
- * deposit pledge or a cheque), resolved against LockerHub for branch, tenant,
- * status and locker number. Occupancy per size comes from their availability
- * endpoint, which does work.
+ * Honest about its source: LockerHub has no tenant-roster endpoint — their
+ * /lockers is a vacancy picker (vacant lockers only, no tenant fields). So this
+ * lists the lockers NCD is involved in (a deposit pledge or a cheque), resolved
+ * against LockerHub for branch, tenant, status and locker number. Availability
+ * per size comes from their availability endpoint.
  */
 const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
 const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
@@ -89,13 +89,15 @@ export function LockerTenantsPage() {
           </h2>
         </div>
 
-        {/* Never imply this is the full branch roster while their endpoint is down. */}
+        {/* Never imply this is the full branch roster. LockerHub has no endpoint
+            that returns occupied lockers + tenant identity — /lockers is vacancy only. */}
         {tenants.data && !tenants.data.roster_complete && (
           <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-3">
-            Showing lockers NCD is involved in (an NCD-backed deposit or a recorded cheque). LockerHub's full per-branch
-            locker list is unavailable — their <span className="font-mono">/lockers</span> endpoint is returning an error,
-            so lockers paid entirely online with no NCD involvement won't appear here yet.
-            {tenants.data.lockerhub_error && <span className="block mt-1 opacity-80">Last error: {tenants.data.lockerhub_error.slice(0, 120)}</span>}
+            Showing lockers <b>NCD is involved in</b> — an NCD-backed deposit or a recorded cheque. A locker paid entirely
+            online, with no NCD involvement, does not appear here: LockerHub has no tenant-roster endpoint for us to read
+            (their locker list returns vacant lockers only). Getting the full branch roster needs a new endpoint on their
+            side, which is pending scope approval.
+            {tenants.data.lockerhub_error && <span className="block mt-1 opacity-80">Last LockerHub error: {tenants.data.lockerhub_error.slice(0, 120)}</span>}
           </div>
         )}
 

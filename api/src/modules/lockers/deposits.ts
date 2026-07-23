@@ -314,14 +314,20 @@ export async function customerLockers(db: Db, customerId: number) {
 /**
  * Locker tenants, branch-wise.
  *
- * LockerHub's GET /lockers?branch_id= — the natural source for a full per-branch
- * roster — is erroring for every branch ("no such column: locker_number",
- * 2026-07-23), so we can't enumerate their lockers. What we CAN do reliably is
- * resolve every locker application NCD is involved in (a deposit pledge or a
- * cheque) via getLockerApplication, which does return branch_id, tenant name,
- * status and allotment. That's an accurate NCD-side tenant list; it is NOT the
- * complete branch roster, and the response says so via `roster_complete: false`
- * so the UI can't imply otherwise.
+ * LockerHub has NO tenant-roster endpoint. Their GET /lockers?branch_id= is a
+ * pick-a-locker helper for enrolment (contract A4) and returns VACANT lockers
+ * only — id, locker_number, size, status, no tenant fields (confirmed against
+ * live data 2026-07-23: 81 rows at RS Puram, 433 at Hosur, every one `vacant`).
+ * So it can never answer "who holds a locker here", and waiting on it would be
+ * waiting for the wrong thing.
+ *
+ * What we CAN resolve is every locker application NCD is involved in (a deposit
+ * pledge or a recorded cheque) via getLockerApplication, which does return
+ * branch_id, tenant name, phone, status and allotment. That's an accurate
+ * NCD-side tenant list; it is NOT the complete branch roster, and the response
+ * says so via `roster_complete: false` so the UI can't imply otherwise.
+ * Completing it needs a new endpoint from LockerHub carrying occupied lockers +
+ * tenant identity — scope pending, since it exposes customer PII to NCD.
  */
 export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
   const ours = (await db.query<Record<string, unknown>>(

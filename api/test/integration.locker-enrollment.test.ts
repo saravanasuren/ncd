@@ -182,11 +182,32 @@ describe('locker deposit links (NCD backs the deposit)', () => {
     expect(detail.json.locker.links).toHaveLength(1);
   });
 
-  it('refuses to pledge more than the investment has free', async () => {
+  // Owner change 2026-07-22: an investment that can't cover the whole deposit no
+  // longer bounces — it pledges what it has and the deposit waits for another
+  // NCD (up to lockers.max_ncds_per_deposit). Crucially, LockerHub is NOT told
+  // the leg is settled until the pledged total actually covers the deposit.
+  it('part-pledges when one investment cannot cover the deposit, and does not settle LockerHub yet', async () => {
     const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const appId = await liveInvestment(staff, 100000, '9899111002'); // ₹1L only
-    const r = await staff.post('/api/lockers/deposit-links', { application_id: appId, lockerhub_application_id: 'la_xl' }); // needs ₹3L
+    const r = await staff.post('/api/lockers/deposit-links', { application_id: appId, lockerhub_application_id: 'la_xl_partial' }); // needs ₹3L
+    expect(r.status).toBe(201);
+    expect(r.json.linked_amount).toBe(100000);      // only what it had free
+    expect(r.json.deposit_amount).toBe(300000);
+    expect(r.json.shortfall_remaining).toBe(200000);
+    expect(r.json.fully_backed).toBe(false);
+    expect(r.json.lockerhub_settled).toBe(false);   // must NOT claim settlement
+  });
+
+  it('an investment with nothing free to pledge is still refused', async () => {
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const appId = await liveInvestment(staff, 100000, '9899111003');
+    // Already fully pledged to a DIFFERENT locker → nothing left to give.
+    await ctx.db.query(
+      `INSERT INTO locker_deposit_links (application_id, lockerhub_application_id, linked_amount, linked_by_user_id)
+       VALUES ($1, 'la_other_locker', 100000, 1)`, [appId]);
+    const r = await staff.post('/api/lockers/deposit-links', { application_id: appId, lockerhub_application_id: 'la_xl_nofree' });
     expect(r.status).toBe(422);
+    expect(r.json.error.message).toMatch(/nothing free to pledge/i);
   });
 
   it('redeems only the free ₹22L and keeps the ₹3L locker pledge live', async () => {

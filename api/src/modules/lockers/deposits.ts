@@ -18,6 +18,7 @@ import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
+import { toISODate } from '../../lib/dates.js';
 import * as lh from '../../integrations/lockerhub/client.js';
 
 export interface LockerLink {
@@ -65,6 +66,23 @@ export async function depositSummary(db: Db, applicationId: number) {
   };
 }
 
+
+/** Total already pledged to one locker, across every NCD backing it. */
+export async function pledgedToLocker(db: Db, lockerApplicationId: string): Promise<{ total: number; count: number }> {
+  const r = (await db.query<{ v: string; n: string }>(
+    "SELECT COALESCE(sum(linked_amount),0) AS v, count(*)::int AS n FROM locker_deposit_links WHERE lockerhub_application_id = $1 AND status = 'active'",
+    [lockerApplicationId])).rows[0]!;
+  return { total: Number(r.v), count: Number(r.n) };
+}
+
+/** Configurable cap — how many NCDs may jointly back one deposit (Settings). */
+export async function maxNcdsPerDeposit(db: Db): Promise<number> {
+  const { getSettingsMap } = await import('../settings/service.js');
+  const raw = (await getSettingsMap(db))['lockers.max_ncds_per_deposit'];
+  const n = Number(raw ?? 2);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 2;
+}
+
 /**
  * Link an investment to a locker's deposit and settle that leg in LockerHub.
  * The amount is LockerHub's own deposit figure for that locker — never typed by
@@ -78,35 +96,65 @@ export async function linkDeposit(
   if (!app) throw errors.notFound('Investment not found');
   if (['Rejected', 'Cancelled'].includes(app.status)) throw errors.unprocessable('This investment is not live');
 
+  // Our OWN guards first — they're local and cheap, and a caller shouldn't get a
+  // LockerHub connectivity error when the real problem is on our side (this
+  // investment is fully pledged, or the locker already has its maximum NCDs).
+  const [outstanding, alreadyLinked, onLocker, maxNcds] = await Promise.all([
+    outstandingOf(db, input.applicationId),
+    linkedAmount(db, input.applicationId),
+    pledgedToLocker(db, input.lockerApplicationId),
+    maxNcdsPerDeposit(db),
+  ]);
+  const dupNow = (await db.query(
+    "SELECT 1 FROM locker_deposit_links WHERE lockerhub_application_id = $1 AND application_id = $2 AND status = 'active'",
+    [input.lockerApplicationId, input.applicationId])).rowCount;
+  if (dupNow) throw errors.conflict('That investment is already backing this locker deposit');
+  if (onLocker.count >= maxNcds) {
+    throw errors.unprocessable(
+      `This locker deposit is already backed by ${onLocker.count} investment(s) — the limit is ${maxNcds}. Raise it in Settings → Lockers, or release a link first.`
+    );
+  }
+  const free = outstanding - alreadyLinked;
+  if (free <= 0) {
+    throw errors.unprocessable(
+      `${app.application_no} has nothing free to pledge (₹${outstanding.toLocaleString('en-IN')} outstanding, all of it already linked).`
+    );
+  }
+
   // LockerHub is the source of truth for the deposit amount + locker identity.
   const locker = await lh.getLockerApplication(input.lockerApplicationId) as Record<string, any>;
   const depositLeg = locker?.legs?.deposit;
   const depositAmount = Number(depositLeg?.amount ?? 0);
   if (!(depositAmount > 0)) throw errors.unprocessable('LockerHub reports no deposit amount for that locker application');
 
-  const [outstanding, alreadyLinked] = await Promise.all([
-    outstandingOf(db, input.applicationId),
-    linkedAmount(db, input.applicationId),
-  ]);
-  const free = outstanding - alreadyLinked;
-  if (depositAmount > free) {
+  // More than one NCD may jointly back a deposit (cap is configurable), so we
+  // pledge what THIS investment can cover toward the shortfall rather than
+  // demanding one NCD cover the whole thing.
+  const shortfall = Number((depositAmount - onLocker.total).toFixed(2));
+  if (shortfall <= 0) throw errors.conflict('That locker deposit is already fully backed by NCD investments');
+  // Pledge the smaller of what's free here and what's still owed.
+  const pledgeAmount = Math.min(free, shortfall);
+  const remainingAfter = Number((shortfall - pledgeAmount).toFixed(2));
+  // If this NCD can't finish it, the remainder must still fit within the cap.
+  if (remainingAfter > 0 && onLocker.count + 1 >= maxNcds) {
     throw errors.unprocessable(
-      `This investment has only ₹${free.toLocaleString('en-IN')} free to pledge (₹${outstanding.toLocaleString('en-IN')} outstanding, ₹${alreadyLinked.toLocaleString('en-IN')} already linked) — the locker deposit is ₹${depositAmount.toLocaleString('en-IN')}.`
+      `${app.application_no} covers ₹${pledgeAmount.toLocaleString('en-IN')} of the ₹${shortfall.toLocaleString('en-IN')} still needed, but the ${maxNcds}-investment limit would be reached with ₹${remainingAfter.toLocaleString('en-IN')} unbacked. Use a larger investment, or raise the limit in Settings → Lockers.`
     );
   }
 
   const link = await db.withTx(async (tx) => {
+    // Additional NCDs are allowed (up to the cap); the SAME investment twice is not.
     const dup = (await tx.query(
-      "SELECT 1 FROM locker_deposit_links WHERE lockerhub_application_id = $1 AND status = 'active'",
-      [input.lockerApplicationId])).rowCount;
-    if (dup) throw errors.conflict('That locker is already backed by an investment');
+      "SELECT 1 FROM locker_deposit_links WHERE lockerhub_application_id = $1 AND application_id = $2 AND status = 'active'",
+      [input.lockerApplicationId, input.applicationId])).rowCount;
+    if (dup) throw errors.conflict('That investment is already backing this locker deposit');
 
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO locker_deposit_links
          (application_id, lockerhub_application_id, locker_no, locker_size, linked_amount, linked_by_user_id)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
       [input.applicationId, input.lockerApplicationId,
-       locker?.allotment?.locker_number ?? null, locker?.locker_size ?? null, depositAmount, actor.id]);
+       locker?.allotment?.locker_number ?? null, locker?.locker_size ?? null, pledgeAmount, actor.id]);
     // NB: we deliberately do NOT touch applications.is_locker_deposit here.
     // LockerHub's queue is the single writer of that flag — it calls our
     // inbound B19a /ncd/:id/link-locker after allocation (Prem, 2026-07-22).
@@ -114,7 +162,7 @@ export async function linkDeposit(
     // deposit_reference. Live pledges are counted from locker_deposit_links.
     await writeAudit(tx, {
       actorId: actor.id, action: 'locker.deposit.link', entityType: 'applications', entityId: input.applicationId,
-      after: { lockerhub_application_id: input.lockerApplicationId, linked_amount: depositAmount, application_no: app.application_no },
+      after: { lockerhub_application_id: input.lockerApplicationId, linked_amount: pledgeAmount, application_no: app.application_no, deposit_amount: depositAmount, pledged_total: onLocker.total + pledgeAmount },
     });
     return { id: Number(rows[0]!.id) };
   });
@@ -122,21 +170,45 @@ export async function linkDeposit(
   // Settle the deposit leg in LockerHub as NCD-BACKED (A12 link-ncd — never a
   // payment row). Done AFTER the commit (network I/O outside the transaction).
   // If it fails the link still stands — staff can retry; A12 is idempotent.
+  //
+  // A12 settles the WHOLE leg and takes a single ncd_id, so we only call it once
+  // the pledged total actually covers the deposit. Calling it on a partial
+  // pledge would tell LockerHub the deposit is secured when it isn't — and
+  // could trip auto-allotment for an under-secured locker.
+  const pledgedTotal = Number((onLocker.total + pledgeAmount).toFixed(2));
+  const fullyBacked = pledgedTotal >= depositAmount;
   let settled = false; let settleError: string | null = null; let lockerStatus: string | null = null;
-  try {
-    const r = await lh.linkNcd(
-      { id: actor.id, name: actor.fullName, email: actor.email },
-      input.lockerApplicationId,
-      { ncd_id: app.application_no }
-    );
-    settled = true;
-    lockerStatus = (r?.application_status ?? r?.status ?? null) as string | null;
-  } catch (e) {
-    settleError = (e as Error).message;
-    console.warn(`[locker] deposit leg link-ncd failed for locker ${input.lockerApplicationId}: ${settleError}`);
+  if (fullyBacked) {
+    try {
+      const r = await lh.linkNcd(
+        { id: actor.id, name: actor.fullName, email: actor.email },
+        input.lockerApplicationId,
+        // The NCD that completes the deposit is the one we name to LockerHub;
+        // NCD holds the full multi-investment breakdown in locker_deposit_links.
+        { ncd_id: app.application_no }
+      );
+      settled = true;
+      lockerStatus = (r?.application_status ?? r?.status ?? null) as string | null;
+    } catch (e) {
+      settleError = (e as Error).message;
+      console.warn(`[locker] deposit leg link-ncd failed for locker ${input.lockerApplicationId}: ${settleError}`);
+    }
   }
 
-  return { ok: true, link_id: link.id, linked_amount: depositAmount, lockerhub_settled: settled, settle_error: settleError, locker_status: lockerStatus };
+  return {
+    ok: true,
+    link_id: link.id,
+    linked_amount: pledgeAmount,
+    deposit_amount: depositAmount,
+    pledged_total: pledgedTotal,
+    shortfall_remaining: Math.max(0, Number((depositAmount - pledgedTotal).toFixed(2))),
+    ncds_linked: onLocker.count + 1,
+    max_ncds: maxNcds,
+    fully_backed: fullyBacked,
+    lockerhub_settled: settled,
+    settle_error: settleError,
+    locker_status: lockerStatus,
+  };
 }
 
 /** Release a link (locker closed) so the pledged amount becomes redeemable. */
@@ -183,4 +255,46 @@ export async function linkCandidates(db: Db, customerId: number) {
       outstanding, linked, free: Math.max(0, Number((outstanding - linked).toFixed(2))),
     };
   });
+}
+
+/**
+ * Everything NCD knows about one customer's lockers, for the customer 360:
+ * LockerHub's own record (best-effort — a hiccup there must not blank the page)
+ * plus OUR pledges and cheques, which are ours alone and always shown.
+ */
+export async function customerLockers(db: Db, customerId: number) {
+  const c = (await db.query<{ phone: string | null }>(
+    'SELECT phone FROM customers WHERE id = $1', [customerId])).rows[0];
+  if (!c) throw errors.notFound('Customer not found');
+
+  const pledges = (await db.query<Record<string, unknown>>(
+    `SELECT l.id, l.lockerhub_application_id, l.locker_no, l.locker_size, l.linked_amount, l.status,
+            l.linked_at, a.application_no, a.id AS application_id
+       FROM locker_deposit_links l JOIN applications a ON a.id = l.application_id
+      WHERE a.customer_id = $1 ORDER BY (l.status = 'active') DESC, l.id DESC`, [customerId])).rows;
+  const cheques = (await db.query<Record<string, unknown>>(
+    `SELECT id, lockerhub_application_id, leg, amount, cheque_no, bank_name, status, received_on, cleared_on
+       FROM locker_cheques WHERE customer_id = $1 ORDER BY (status = 'Pending') DESC, id DESC`, [customerId])).rows;
+
+  let lockerhub: Record<string, unknown> | null = null;
+  let lockerhub_error: string | null = null;
+  if (c.phone) {
+    try { lockerhub = await lh.getCustomer(String(c.phone)) as Record<string, unknown>; }
+    catch (e) { lockerhub_error = (e as Error).message; }
+  }
+
+  return {
+    lockerhub,        // their tenant/locker record (null if unknown or unreachable)
+    lockerhub_error,  // surfaced so staff know it's a fetch failure, not "no lockers"
+    pledges: pledges.map((p) => ({
+      id: Number(p.id), application_id: Number(p.application_id), application_no: p.application_no,
+      lockerhub_application_id: p.lockerhub_application_id, locker_no: p.locker_no, locker_size: p.locker_size,
+      linked_amount: Number(p.linked_amount), status: p.status, linked_at: p.linked_at,
+    })),
+    cheques: cheques.map((q) => ({
+      id: Number(q.id), lockerhub_application_id: q.lockerhub_application_id, leg: q.leg,
+      amount: Number(q.amount), cheque_no: q.cheque_no, bank_name: q.bank_name, status: q.status,
+      received_on: toISODate(q.received_on as string | null), cleared_on: toISODate(q.cleared_on as string | null),
+    })),
+  };
 }

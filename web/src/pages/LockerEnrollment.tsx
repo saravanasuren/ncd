@@ -47,6 +47,7 @@ export function LockerEnrollmentPage() {
   // Backing the deposit with one of the customer's existing NCDs.
   const [candidates, setCandidates] = useState<any[] | null>(null);
   const [chosenNcd, setChosenNcd] = useState('');
+  const [pledge, setPledge] = useState<{ deposit: number; total: number; shortfall: number; used: number; max: number; fully: boolean; settled: boolean } | null>(null);
   // Cheque register (NCD-side only — never settles the locker on LockerHub).
   const [cheques, setCheques] = useState<any[]>([]);
   const [pendingChq, setPendingChq] = useState<any[]>([]);
@@ -105,7 +106,17 @@ export function LockerEnrollmentPage() {
       application_id: Number(chosenNcd),
       lockerhub_application_id: String(app.application_id),
     }));
-    if (r) { setChosenNcd(''); setCandidates(null); await refreshApp(); }
+    if (r) {
+      setChosenNcd('');
+      setPledge({
+        deposit: Number(r.deposit_amount ?? 0), total: Number(r.pledged_total ?? 0),
+        shortfall: Number(r.shortfall_remaining ?? 0), used: Number(r.ncds_linked ?? 0),
+        max: Number(r.max_ncds ?? 0), fully: !!r.fully_backed, settled: !!r.lockerhub_settled,
+      });
+      // Refresh the list so the next pick shows updated free amounts.
+      await loadCandidates();
+      await refreshApp();
+    }
   };
   // ── Cheque register ────────────────────────────────────────────────────
   const loadCheques = async () => {
@@ -353,6 +364,13 @@ export function LockerEnrollmentPage() {
                 </div>
               );
             })}
+            {pledge && (
+              <div className={`text-xs rounded px-3 py-2 ${pledge.fully ? 'bg-[color:var(--success-bg)] text-success' : 'bg-[color:var(--warn-bg)] text-warn'}`}>
+                {pledge.fully
+                  ? <>Deposit fully backed — {money(pledge.total)} of {money(pledge.deposit)} pledged across {pledge.used} investment(s).{pledge.settled ? ' Settled on LockerHub.' : ' LockerHub settlement did not confirm — retry the link.'}</>
+                  : <>{money(pledge.total)} of {money(pledge.deposit)} pledged across {pledge.used} of {pledge.max} investment(s) — <b>{money(pledge.shortfall)} still needed</b>. Link another NCD to complete it; the locker is not settled until it's fully backed.</>}
+              </div>
+            )}
             {chqLeg && (
               <div className="flex flex-wrap gap-2 items-end border-t border-border pt-3 mt-1">
                 <label className="text-xs text-text-muted">Cheque no<input className={`${inp} block mt-1 w-40`} value={chq.cheque_no} onChange={(e) => setChq({ ...chq, cheque_no: e.target.value })} autoFocus /></label>

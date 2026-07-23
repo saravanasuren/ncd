@@ -106,6 +106,14 @@ lockersRouter.get('/customers/:customerId/lockers', asyncHandler(async (req, res
   res.json(await customerLockers(getDb(), id));
 }));
 
+// Locker tenants, branch-wise (sidebar page). NOTE: LockerHub's /lockers is
+// erroring, so this is the NCD-side tenant list, not their full branch roster —
+// the payload says so explicitly.
+lockersRouter.get('/tenants', asyncHandler(async (req, res) => {
+  const { lockerTenants } = await import('./deposits.js');
+  res.json(await lockerTenants(getDb(), { branchId: req.query.branch_id ? String(req.query.branch_id) : undefined }));
+}));
+
 lockersRouter.get('/deposit-links/candidates', asyncHandler(async (req, res) => {
   const customerId = Number(req.query.customer_id);
   if (!Number.isFinite(customerId) || customerId <= 0) throw errors.badRequest('customer_id is required');

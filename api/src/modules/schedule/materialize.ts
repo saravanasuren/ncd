@@ -9,6 +9,44 @@ import { computeTds } from '../../lib/tds.js';
 import { round2, toISODate } from '../../lib/dates.js';
 import { getSettingsMap } from '../settings/service.js';
 
+/**
+ * Re-point a customer's FUTURE unpaid payouts at their current default bank
+ * account. Money already sent keeps the account it was sent to — only rows
+ * that haven't been paid and aren't locked into a batch move.
+ *
+ * Applications pinned to their own account (`payout_bank_account_id`) are left
+ * alone: a customer with several NCDs routes each one to a different bank via
+ * that pin, and the customer-level default must not overwrite those choices.
+ * Only unpinned applications follow the default.
+ *
+ * Call this from every path that changes which account is the default —
+ * without it, a bank account added after the schedule was built never reaches
+ * the payout rows, which is how 293 customers ended up with no bank details on
+ * 18k scheduled rows.
+ */
+export async function resnapshotPayeeBank(tx: Db, customerId: number): Promise<number> {
+  const r = await tx.query(
+    `UPDATE disbursement_schedule ds
+        SET payee_account = b.account_number, payee_ifsc = b.ifsc
+       FROM applications a
+       JOIN LATERAL (
+         SELECT cba.account_number, cba.ifsc
+           FROM customer_bank_accounts cba
+          WHERE cba.customer_id = a.customer_id AND cba.is_active = TRUE
+          ORDER BY cba.id DESC LIMIT 1
+       ) b ON TRUE
+      WHERE ds.application_id = a.id
+        AND a.customer_id = $1
+        AND a.payout_bank_account_id IS NULL
+        AND ds.status = 'Scheduled'
+        AND ds.batch_id IS NULL
+        AND (ds.payee_account IS DISTINCT FROM b.account_number
+             OR ds.payee_ifsc IS DISTINCT FROM b.ifsc)`,
+    [customerId]
+  );
+  return r.rowCount ?? 0;
+}
+
 export async function materializeForApplication(tx: Db, applicationId: number): Promise<number> {
   const app = (await tx.query<Record<string, unknown>>('SELECT * FROM applications WHERE id = $1', [applicationId])).rows[0];
   if (!app) return 0;

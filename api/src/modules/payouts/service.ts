@@ -122,7 +122,12 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
          VALUES ($1,$2,$3,'Interest',$4,$5,$6,'Scheduled',$7,$8,$9)
          ON CONFLICT (line_id, due_date, due_type) DO UPDATE
            SET gross_amount = EXCLUDED.gross_amount, tds_amount = EXCLUDED.tds_amount,
-               net_amount = EXCLUDED.net_amount, batch_id = EXCLUDED.batch_id`,
+               net_amount = EXCLUDED.net_amount, batch_id = EXCLUDED.batch_id,
+               -- The bank resolved just now beats whatever the projected row was
+               -- carrying. Without these two the INSERT's fresh details are
+               -- discarded on collision, and a row projected before the customer
+               -- had an account stays blank all the way to the bank.
+               payee_account = EXCLUDED.payee_account, payee_ifsc = EXCLUDED.payee_ifsc`,
         [r.line_id, r.application_id, payoutDate, r.gross_amount, r.tds_amount, r.net_amount,
          batchId, bank?.account_number ?? null, bank?.ifsc ?? null]
       );
@@ -322,11 +327,24 @@ export async function neftForBatch(db: Db, batchId: number): Promise<{ buffer: B
   const fallbackEmail = asText(settings['payouts.neft_beneficiary_email']);
   const debit = (await db.query<{ account_number: string }>("SELECT account_number FROM banks WHERE is_disbursement_account = TRUE AND is_active = TRUE ORDER BY id LIMIT 1")).rows[0];
   const rows = (await db.query<Record<string, unknown>>(
+    // Beneficiary name MUST come from the account the money is actually going
+    // to (ds.payee_account), not from whichever account happens to be the
+    // customer's default: a customer routing one NCD to another bank would
+    // otherwise get that account's number paired with the default's holder
+    // name. LATERAL … LIMIT 1 also guarantees one row per payout — a plain
+    // join on customer_id could duplicate a row, and a duplicated row in a
+    // bank file is a duplicated payment.
     `SELECT ds.net_amount, ds.due_date, ds.payee_account, ds.payee_ifsc, c.full_name AS name, c.email, a.application_no,
-            cba.holder_name AS beneficiary_name, s.name AS series_name
+            bn.holder_name AS beneficiary_name, s.name AS series_name
      FROM disbursement_schedule ds JOIN applications a ON a.id = ds.application_id JOIN customers c ON c.id = a.customer_id
      LEFT JOIN series s ON s.id = a.series_id
-     LEFT JOIN customer_bank_accounts cba ON cba.customer_id = c.id AND cba.is_active = TRUE
+     LEFT JOIN LATERAL (
+       SELECT cba.holder_name FROM customer_bank_accounts cba
+        WHERE cba.customer_id = c.id
+          AND regexp_replace(COALESCE(cba.account_number,''), '\\s', '', 'g')
+            = regexp_replace(COALESCE(ds.payee_account,''), '\\s', '', 'g')
+        ORDER BY cba.id DESC LIMIT 1
+     ) bn ON TRUE
      WHERE ds.batch_id = $1 AND ds.status = 'Scheduled' ORDER BY c.full_name`, [batchId])).rows;
   const { buildNeftSheet } = await import('../../lib/neft.js');
   const buffer = await buildNeftSheet(

@@ -236,6 +236,9 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
            DO UPDATE SET is_active = TRUE, penny_drop_status = 'Verified', bank_name = EXCLUDED.bank_name, holder_name = EXCLUDED.holder_name`,
           [customerId, String(ba.account_number), ba.ifsc ?? null, ba.bank_name ?? null, ba.holder_name ?? null]
         );
+        // The new default has to reach future unpaid payout rows too.
+        const { resnapshotPayeeBank } = await import('../schedule/materialize.js');
+        await resnapshotPayeeBank(tx, customerId);
         updatedFields.push('bank_account');
       }
     }

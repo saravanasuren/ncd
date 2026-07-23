@@ -191,10 +191,17 @@ agentsRouter.post('/agents/email-check', asyncHandler(async (req, res) => {
   res.json({ exists: r.exists, is_agent: r.is_agent });
 }));
 
-// ─── Agent SSO authenticate (broker model, Option B) ─────────────────────
-// LockerHub forwards the agent's Wealth credentials once over TLS; consumer
-// branches on 401/'invalid_credentials', 403/'not_an_agent'/'disabled' and
-// reads wealth_user_id||id, name, email, phone on success.
+// ─── Agent + staff SSO authenticate (broker model, Option B) ─────────────
+// LockerHub forwards the credentials once over TLS; consumer branches on
+// 401/'invalid_credentials', 403/'not_an_agent'/'disabled' and reads
+// wealth_user_id||id, name, email, phone on success.
+//
+// Agents live in `agents`, our own employees live in `users` — this endpoint
+// resolves BOTH. An agent match wins (an agent with a linked user account is
+// still an agent). A staff match answers `role:'staff'` with `staff_id`, and
+// deliberately nulls wealth_user_id/id/agent_id: LockerHub stores
+// wealth_user_id as agents.id, so handing back a users.id there would alias a
+// completely different agent. Staff carry staff_id and nothing else.
 agentsRouter.post('/agents/authenticate', asyncHandler(async (req, res) => {
   const b = req.body ?? {};
   const identifier = String(b.identifier ?? b.email ?? '').trim();
@@ -216,7 +223,51 @@ agentsRouter.post('/agents/authenticate', asyncHandler(async (req, res) => {
   )).rows[0];
 
   if (!agent) {
-    // A matching non-agent user is 'not_an_agent'; anything else stays 401.
+    // No agent — try a staff identity. Same predicate the signup mirror uses
+    // for its staff-collision check, so the two agree on who counts as staff.
+    const staff = (await db.query<Record<string, unknown>>(
+      `SELECT u.id, u.full_name, u.email, u.phone, u.password_hash, u.is_active, r.name AS role
+         FROM users u JOIN roles r ON r.id = u.role_id
+        WHERE r.name <> 'agent' AND r.name <> 'customer'
+          AND (lower(u.email) = lower($1)
+               ${identPhone.length === 10 ? `OR ${phoneMatchSql('u.phone')} = $2` : ''})
+        ORDER BY u.id ASC LIMIT 1`,
+      identPhone.length === 10 ? [identifier, identPhone] : [identifier]
+    )).rows[0];
+
+    if (staff) {
+      if (staff.is_active === false) return res.status(403).json({ error: 'disabled' });
+      if (!staff.password_hash) return res.status(401).json({ error: 'invalid_credentials' });
+      if (!(await bcrypt.compare(password, String(staff.password_hash)))) {
+        return res.status(401).json({ error: 'invalid_credentials' });
+      }
+      const staffId = Number(staff.id);
+      await writeAudit(db, {
+        actorId: staffId,
+        action: 'LOCKERHUB_STAFF_AUTH',
+        entityType: 'users',
+        entityId: staffId,
+        after: { role: staff.role, via: 'lockerhub_sso' },
+        ip: req.ip,
+      });
+      return res.json({
+        ok: true,
+        success: true,
+        // Null on purpose — see the note above the handler.
+        wealth_user_id: null,
+        id: null,
+        agent_id: null,
+        agent_code: null,
+        staff_id: staffId,
+        name: staff.full_name,
+        email: staff.email ?? null,
+        phone: staff.phone ?? null,
+        role: 'staff',
+        staff_role: staff.role,
+      });
+    }
+
+    // A matching non-agent, non-staff user (a customer) is 'not_an_agent'.
     const user = (await db.query('SELECT 1 FROM users WHERE lower(email) = lower($1) LIMIT 1', [identifier])).rows[0];
     if (user) return res.status(403).json({ error: 'not_an_agent' });
     return res.status(401).json({ error: 'invalid_credentials' });
@@ -224,13 +275,38 @@ agentsRouter.post('/agents/authenticate', asyncHandler(async (req, res) => {
   if (agent.agent_active !== true || agent.user_active === false) {
     return res.status(403).json({ error: 'disabled' });
   }
-  if (!agent.password_hash) return res.status(401).json({ error: 'invalid_credentials' });
-  const ok = await bcrypt.compare(password, String(agent.password_hash));
+  // An agents row carrying no linked user account must not shadow a real user
+  // with the same contact details. Self-signup mirrors and staff-created
+  // agents arrive with user_id NULL, so the person's actual login lives in
+  // `users` — match it on the AGENT's own email/phone (not on the raw
+  // identifier) so we can only ever adopt the same contact point.
+  let passwordHash = agent.password_hash as string | null;
+  let actorUserId = agent.user_id != null ? Number(agent.user_id) : null;
+  if (!passwordHash) {
+    const agentEmail = String(agent.email ?? '');
+    const agentPhone = normalisePhone(String(agent.phone ?? ''));
+    const linked = (await db.query<Record<string, unknown>>(
+      `SELECT u.id, u.password_hash, u.is_active
+         FROM users u JOIN roles r ON r.id = u.role_id
+        WHERE r.name <> 'customer' AND u.password_hash IS NOT NULL
+          AND (($1 <> '' AND lower(u.email) = lower($1))
+               OR ($2 <> '' AND ${phoneMatchSql('u.phone')} = $2))
+        ORDER BY u.id ASC LIMIT 1`,
+      [agentEmail, agentPhone]
+    )).rows[0];
+    if (linked) {
+      if (linked.is_active === false) return res.status(403).json({ error: 'disabled' });
+      passwordHash = String(linked.password_hash);
+      actorUserId = Number(linked.id);
+    }
+  }
+  if (!passwordHash) return res.status(401).json({ error: 'invalid_credentials' });
+  const ok = await bcrypt.compare(password, passwordHash);
   if (!ok) return res.status(401).json({ error: 'invalid_credentials' });
 
   const agentId = Number(agent.id);
   await writeAudit(db, {
-    actorId: agent.user_id != null ? Number(agent.user_id) : null,
+    actorId: actorUserId,
     action: 'LOCKERHUB_AGENT_AUTH',
     entityType: 'agents',
     entityId: agentId,

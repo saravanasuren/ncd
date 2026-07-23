@@ -63,6 +63,13 @@ describe('Federal NEFT sheet', () => {
     // first data row carries the disbursement debit account
     expect(String(ws.getRow(2).getCell(2).value)).toBe('19820200007409');
     expect(String(ws.getRow(2).getCell(1).value)).toBe('NEFT');
+    // Wealth parity on the row itself: one ops mailbox, no whitespace in the
+    // remarks, IFSC exactly 11 chars, whole rupees.
+    expect(String(ws.getRow(2).getCell(8).value)).toMatch(/@/);
+    expect(String(ws.getRow(2).getCell(10).value)).not.toMatch(/\s/);
+    expect(String(ws.getRow(2).getCell(11).value)).toBe('ncdinterest');
+    expect(String(ws.getRow(2).getCell(7).value)).toHaveLength(11);
+    expect(Number(ws.getRow(2).getCell(3).value) % 1).toBe(0);
   });
 });
 

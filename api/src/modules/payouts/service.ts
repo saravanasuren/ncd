@@ -358,7 +358,7 @@ export async function markRowFailed(db: Db, actor: AuthUser, scheduleId: number,
 // other, so it names the customer, the interest period and the gross/TDS/net
 // split that the bank sheet (net only) can't show.
 const SUMMARY_SELECT = `
-  SELECT a.application_no, c.full_name AS customer_name, c.date_of_birth, c.pan,
+  SELECT a.application_no, c.full_name AS customer_name, c.dob AS date_of_birth, c.pan,
          s.name AS series_name, l.amount AS investment_amount, l.coupon_rate_pct,
          COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
          COALESCE(ds.payee_account, pb.account_number, cb.account_number) AS account_number,

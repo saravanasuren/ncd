@@ -129,6 +129,64 @@ describe('payout bank routing', () => {
     expect(collided.rows[0]!.payee_ifsc).toBe('ICIC0001234');
   });
 
+  it('an account that was never penny-dropped can still be chosen, and the pin can be cleared', async () => {
+    // 403 of 433 live accounts are 'Pending' — never penny-dropped, mostly
+    // migrated from wealth. Interest already pays out to whichever account is
+    // active regardless of that status, so refusing to PIN an unverified
+    // account blocked the feature for nearly every customer while making no
+    // payment safer. Ownership is the check that matters.
+    const a = await admin();
+    const { cid, appId } = await customerWithSchedule(a, 'Unverified Bank Cust', '9520000005');
+    await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '88880008888', ifsc: 'ICIC0001234' });
+    const second = await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '99990009999', ifsc: 'HDFC0005678' });
+    const secondId = Number(second.json.id);
+    await ctx.db.query("UPDATE customer_bank_accounts SET penny_drop_status = 'Pending' WHERE id = $1", [secondId]);
+
+    const set = await a.post(`/api/applications/${appId}/payout-account`, { bank_account_id: secondId });
+    expect(set.status).toBe(200);
+    expect((await scheduleRows(cid)).rows.every((r) => r.payee_account === '99990009999')).toBe(true);
+
+    // Clearing the pin hands the NCD back to the customer default.
+    const clear = await a.post(`/api/applications/${appId}/payout-account`, { bank_account_id: null });
+    expect(clear.status).toBe(200);
+    const pin = await ctx.db.query("SELECT payout_bank_account_id FROM applications WHERE id = $1", [appId]);
+    expect(pin.rows[0]!.payout_bank_account_id).toBeNull();
+
+    // Another customer's account is still refused — ownership is the real check.
+    const other = await customerWithSchedule(a, 'Someone Else', '9520000006');
+    const theirs = await a.post(`/api/customers/${other.cid}/bank-accounts`, { account_number: '12120001212', ifsc: 'SBIN0000827' });
+    const bad = await a.post(`/api/applications/${appId}/payout-account`, { bank_account_id: Number(theirs.json.id) });
+    expect(bad.status).toBe(400);
+  });
+
+  it('deleting a bank account is super-admin only, and blocked while anything points at it', async () => {
+    const a = await admin();
+    const { cid, appId } = await customerWithSchedule(a, 'Delete Bank Cust', '9520000007');
+    await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '31310003131', ifsc: 'ICIC0001234' });
+    const spare = await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '32320003232', ifsc: 'HDFC0005678' });
+    const spareId = Number(spare.json.id);
+
+    // Not super-admin → 403. staff@demo.local holds customers:update but not customers:delete.
+    const staff = await as('staff@demo.local');
+    expect((await staff.del(`/api/customers/${cid}/bank-accounts/${spareId}`)).status).toBe(403);
+
+    // Pinned to an NCD → refused with the application number in the message.
+    await a.post(`/api/applications/${appId}/payout-account`, { bank_account_id: spareId });
+    const pinned = await a.del(`/api/customers/${cid}/bank-accounts/${spareId}`);
+    expect(pinned.status).toBe(409);
+    expect(String(pinned.json.error?.message ?? '')).toContain('payout account for');
+
+    // Unpin → delete succeeds and the row is gone.
+    await a.post(`/api/applications/${appId}/payout-account`, { bank_account_id: null });
+    expect((await a.del(`/api/customers/${cid}/bank-accounts/${spareId}`)).status).toBe(200);
+    expect((await ctx.db.query('SELECT 1 FROM customer_bank_accounts WHERE id = $1', [spareId])).rowCount).toBe(0);
+
+    // The ACTIVE account with unpaid payouts pointing at it → refused.
+    const activeId = Number((await ctx.db.query(
+      'SELECT id FROM customer_bank_accounts WHERE customer_id = $1 AND is_active = TRUE', [cid])).rows[0]!.id);
+    expect((await a.del(`/api/customers/${cid}/bank-accounts/${activeId}`)).status).toBe(409);
+  });
+
   it('an NCD pinned to its own account ignores the customer default', async () => {
     const a = await admin();
     const { cid, appId } = await customerWithSchedule(a, 'Pinned Bank Cust', '9520000003');

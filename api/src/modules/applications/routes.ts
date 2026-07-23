@@ -28,7 +28,8 @@ applicationsRouter.post('/', requirePermission('applications:create'),
 
 applicationsRouter.post('/:id/payout-account', requirePermission('applications:update'),
   asyncHandler(async (req, res) => {
-    const { bank_account_id } = z.object({ bank_account_id: z.number() }).parse(req.body);
+    // null clears the pin, putting the NCD back on the customer's default.
+    const { bank_account_id } = z.object({ bank_account_id: z.number().nullable() }).parse(req.body);
     res.json(await s.setPayoutAccount(getDb(), req.user!, Number(req.params.id), bank_account_id));
   }));
 

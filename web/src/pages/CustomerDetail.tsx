@@ -224,6 +224,7 @@ export function CustomerDetailPage() {
           customerId={Number(id)}
           accounts={data.bankAccounts}
           canEdit={can('customers:update')}
+          canDelete={can('customers:delete')}
           onChange={invalidate}
           onError={setMsg}
         />
@@ -562,8 +563,8 @@ function Demat({ customerId, customer, canEdit, onChange, onError }: {
  * (/api/lookups/ifsc). Penny-drop verification happens on the server via
  * kycProvider() when the account is added.
  */
-function BankAccounts({ customerId, accounts, canEdit, onChange, onError }: {
-  customerId: number; accounts: any[]; canEdit: boolean; onChange: () => void; onError: (m: string) => void;
+function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onError }: {
+  customerId: number; accounts: any[]; canEdit: boolean; canDelete: boolean; onChange: () => void; onError: (m: string) => void;
 }) {
   const empty = { holder_name: '', account_number: '', ifsc: '', bank_name: '', branch_name: '', branch_city: '' };
   const [f, setF] = useState(empty);
@@ -623,9 +624,21 @@ function BankAccounts({ customerId, accounts, canEdit, onChange, onError }: {
             </div>
             <span className={`text-xs rounded px-1.5 py-0.5 ${b.penny_drop_status === 'Verified' ? 'bg-[color:var(--success-bg)] text-success' : b.penny_drop_status === 'Failed' ? 'bg-[color:var(--danger-bg)] text-danger' : 'bg-bg text-text-muted'}`}>{b.penny_drop_status}</span>
             {b.is_active && <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--primary-ring)] text-primary">Active</span>}
-            {!b.is_active && b.penny_drop_status === 'Verified' && canEdit && (
-              <button onClick={() => wrapSet(api.post(`/api/customers/${customerId}/bank-accounts/${b.id}/set-active`))} className="text-xs text-primary hover:underline ml-auto">Make active</button>
-            )}
+            <span className="ml-auto flex items-center gap-3">
+              {!b.is_active && b.penny_drop_status === 'Verified' && canEdit && (
+                <button onClick={() => wrapSet(api.post(`/api/customers/${customerId}/bank-accounts/${b.id}/set-active`))} className="text-xs text-primary hover:underline">Make active</button>
+              )}
+              {/* Super-admin only. The server refuses while an NCD is pinned to
+                  it or unpaid payouts point at it, and says which. */}
+              {canDelete && (
+                <button
+                  onClick={() => {
+                    if (!window.confirm(`Delete account ${b.account_number} (${b.ifsc})? Past payments keep their record; this only removes the account from the customer's file.`)) return;
+                    wrapSet(api.del(`/api/customers/${customerId}/bank-accounts/${b.id}`));
+                  }}
+                  className="text-xs text-danger hover:underline">Delete</button>
+              )}
+            </span>
           </div>
         ))}
         {accounts.length === 0 && <div className="py-2 text-text-muted text-sm">No bank accounts yet.</div>}

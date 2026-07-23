@@ -231,8 +231,9 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     group: 'Customers',
     label: 'Lead interested schemes',
     description: 'Selectable scheme-interest values in the lead form.',
+    // Payout-style schemes, not product names (owner 2026-07-23).
     type: 'list',
-    default: ['NCD', 'Fixed Deposit', 'Bond', 'Others'],
+    default: ['Monthly', 'Cumulative', 'Double', 'Annual'],
     editableBy: 'admin',
   },
 

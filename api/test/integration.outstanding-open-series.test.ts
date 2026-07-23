@@ -82,7 +82,7 @@ describe('outstanding book — open series (pre-allotment)', () => {
   it('cancelled money drops out of the outstanding book', async () => {
     const a = await admin();
     const ncd = await ncdManager();
-    const appId = await makeActiveApp(a, ncd, 'Cancelled Investor', 250000);
+    const appId = await makeActiveApp(a, ncd, 'Cancelled Investor', 200000);
     await ctx.db.query("UPDATE applications SET status = 'Cancelled' WHERE id = $1", [appId]);
 
     const ov = await a.get('/api/dashboard/overview');

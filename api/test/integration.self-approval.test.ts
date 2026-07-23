@@ -71,7 +71,7 @@ describe('super admin self-approval', () => {
 
   it('a NON super-admin still cannot approve their own submission, reason or not', async () => {
     const ncd = await as('ncd@demo.local');          // ncd_manager holds approvals:check
-    const { reqId } = await ownInvestment(ncd, '9822000003', 150000);
+    const { reqId } = await ownInvestment(ncd, '9822000003', 100000);
 
     const withReason = await ncd.post(`/api/approvals/${reqId}/approve`, { extra: { self_approval_reason: 'I would like to approve my own request please.' } });
     expect(withReason.status).toBe(403);
@@ -83,7 +83,7 @@ describe('super admin self-approval', () => {
 
   it('the queue flags a super admin own-submission so the UI can demand a reason', async () => {
     const sa = await superAdmin();
-    const { reqId } = await ownInvestment(sa, '9822000004', 120000);
+    const { reqId } = await ownInvestment(sa, '9822000004', 100000);
     const row = ((await sa.get('/api/approvals/queue')).json.rows as any[]).find((r) => r.id === reqId);
     expect(row.canAct).toBe(true);          // super admin may act…
     expect(row.selfApproval).toBe(true);    // …but the UI must collect a reason

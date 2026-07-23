@@ -54,6 +54,9 @@ export const PERMISSIONS = [
   'redemptions:initiate',
   'payouts:generate',
   'payouts:mark-paid-manual',
+  // One-time addition/deduction on an investment's next interest payout —
+  // NCD Manager and up MAKE them; Admin/CXO approve (approvals:check-premature).
+  'payouts:adjust',
   // approvals
   'approvals:check', // generic checker (never own submission)
   'approvals:check-premature', // CXO's single action power (docs/03 §4)
@@ -151,6 +154,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'products:manage',
     'redemptions:initiate',
     'payouts:generate',
+    'payouts:adjust',
     'approvals:check',
     'agents:manage',
     'incentives:manage-eligibility',

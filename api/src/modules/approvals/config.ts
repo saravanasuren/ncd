@@ -106,6 +106,13 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Agent Commission Eligibility',
     levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
+  // One-time addition/deduction on an investment's next interest payout.
+  // Maker: NCD Manager+ (payouts:adjust). Checker: Admin/CXO (owner 2026-07-23).
+  payout_adjustment: {
+    type: 'payout_adjustment',
+    label: 'Payout Adjustment',
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
+  },
 };
 
 export function typeDef(type: string): ApprovalTypeDef {

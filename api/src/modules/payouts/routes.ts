@@ -33,6 +33,25 @@ payoutsRouter.get('/sheet.xlsx', requirePermission('payouts:generate'),
     res.send(buffer);
   }));
 
+// ── One-time adjustments: Addition/Deduction on an investment's next payout.
+// NCD Manager+ makes them (payouts:adjust); Admin/CXO approves in the queue.
+payoutsRouter.get('/adjustments', requirePermission('payouts:generate', 'payouts:adjust'),
+  asyncHandler(async (req, res) => res.json({ rows: await s.listAdjustments(getDb(), { all: req.query.all === '1' }) })));
+
+payoutsRouter.post('/adjustments', requirePermission('payouts:adjust'),
+  asyncHandler(async (req, res) => {
+    const b = z.object({
+      application_id: z.number().int().positive(),
+      kind: z.enum(['Addition', 'Deduction']),
+      amount: z.number().positive(),
+      narration: z.string().trim().min(3, 'Narration is required'),
+    }).parse(req.body);
+    res.status(201).json(await s.createAdjustment(getDb(), req.user!, b));
+  }));
+
+payoutsRouter.post('/adjustments/:id/cancel', requirePermission('payouts:adjust'),
+  asyncHandler(async (req, res) => res.json(await s.cancelAdjustment(getDb(), req.user!, Number(req.params.id)))));
+
 payoutsRouter.get('/', requirePermission('payouts:generate'),
   asyncHandler(async (_req, res) => res.json({ rows: await s.listBatches(getDb()) })));
 

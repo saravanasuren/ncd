@@ -14,6 +14,10 @@ export interface SummaryRow {
   customer_name?: string | null;
   date_of_birth?: string | Date | null;
   pan?: string | null;
+  /** Raw stored value — normalised to Male/Female/Other for display. */
+  gender?: string | null;
+  /** investor_category: Individual / HUF / Trust / Company / … */
+  category?: string | null;
   series_name?: string | null;
   /** Addition = new money paying out first time · Redemption = exiting slice · Live. */
   row_type?: string | null;
@@ -28,13 +32,45 @@ export interface SummaryRow {
   gross_amount?: number | string | null;
   tds_amount?: number | string | null;
   net_amount?: number | string | null;
+  /** One-time adjustments applied to this row's settlement (owner 2026-07-23). */
+  addition_amount?: number | string | null;
+  deduction_amount?: number | string | null;
+  /** What the bank actually pays: net + addition − deduction. */
+  total_amount?: number | string | null;
 }
 
 const COLUMNS = [
-  '#', 'Application No', 'Customer Name', 'DOB', 'PAN', 'Series', 'Type',
+  '#', 'Application No', 'Customer Name', 'DOB', 'Age', 'PAN', 'Gender', 'Category', 'Series', 'Type',
   'Invested (Rs)', 'Rate %', 'Beneficiary Name', 'Bank A/C', 'IFSC',
   'Interest From', 'Interest To', 'Days', 'Gross (Rs)', 'TDS (Rs)', 'Net (Rs)',
+  'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)',
 ];
+
+/** Completed years at the payout date. Blank when either date is unusable. */
+function ageAt(dob: string | Date | null | undefined, at: string | Date | null | undefined): number | '' {
+  const iso = (v: string | Date | null | undefined): string | null => {
+    if (!v) return null;
+    if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : new Date(v.getTime() - v.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? m[0] : null;
+  };
+  const d = iso(dob); const a = iso(at) ?? new Date().toISOString().slice(0, 10);
+  if (!d) return '';
+  const [dy, dm, dd] = d.split('-').map(Number);
+  const [ay, am, ad] = a.split('-').map(Number);
+  let age = ay! - dy!;
+  if (am! < dm! || (am === dm && ad! < dd!)) age--;
+  return age >= 0 && age < 130 ? age : '';
+}
+
+/** Stored values are messy (M / Male / f / Prefer not to say) — normalise. */
+function genderLabel(g: unknown): string {
+  const v = String(g ?? '').trim().toLowerCase();
+  if (!v) return '';
+  if (v === 'm' || v === 'male') return 'Male';
+  if (v === 'f' || v === 'female') return 'Female';
+  return 'Other';
+}
 
 /** Whole rupees, standard rounding (10,616.44 → 10,616; 10,616.78 → 10,617). */
 const amt = (v: unknown): number | string => (v != null && v !== '' ? Math.round(Number(v)) : '');
@@ -83,9 +119,12 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
       r.application_no ?? '',
       r.customer_name ?? '',
       ddmmyyyy(r.date_of_birth),
+      ageAt(r.date_of_birth, r.period_to),
       r.pan ?? '',
+      genderLabel(r.gender),
+      r.category ?? '',
       r.series_name ?? '',
-      r.row_type ?? 'Live',
+      r.row_type ?? 'Balance After Redemption',
       r.investment_amount != null ? Number(r.investment_amount) : '',
       r.coupon_rate_pct != null ? Number(Number(r.coupon_rate_pct).toFixed(2)) : '',
       r.beneficiary_name ?? '',
@@ -97,17 +136,22 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
       amt(r.gross_amount),
       amt(r.tds_amount),
       amt(r.net_amount),
+      amt(r.addition_amount ?? 0),
+      amt(r.deduction_amount ?? 0),
+      amt(r.total_amount ?? r.net_amount),
     ]);
     // Application No, PAN, Bank A/C and IFSC must stay TEXT — otherwise Excel
     // drops leading zeros and renders long account numbers in scientific
     // notation. ⚠ These indexes track the column order above; re-check if it moves.
-    for (const c of [2, 5, 11, 12]) row.getCell(c).numFmt = '@';
+    for (const c of [2, 6, 14, 15]) row.getCell(c).numFmt = '@';
   });
 
   ws.columns = [
-    { width: 5 }, { width: 18 }, { width: 26 }, { width: 12 }, { width: 13 }, { width: 16 },
-    { width: 11 }, { width: 14 }, { width: 8 }, { width: 26 }, { width: 20 }, { width: 13 },
+    { width: 5 }, { width: 18 }, { width: 26 }, { width: 12 }, { width: 6 }, { width: 13 },
+    { width: 9 }, { width: 12 }, { width: 16 },
+    { width: 22 }, { width: 14 }, { width: 8 }, { width: 26 }, { width: 20 }, { width: 13 },
     { width: 14 }, { width: 14 }, { width: 7 }, { width: 13 }, { width: 11 }, { width: 13 },
+    { width: 13 }, { width: 14 }, { width: 13 },
   ];
   return Buffer.from(await wb.xlsx.writeBuffer());
 }

@@ -64,6 +64,9 @@ export function PayoutsPage() {
       {preview.data && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5 text-sm">
           <span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'} with interest accrued to this date · net <span className="mono font-semibold">{formatINR(preview.data.totals.net)}</span>
+          {(preview.data.totals.addition > 0 || preview.data.totals.deduction > 0) && (
+            <span className="text-text-muted"> · additions <span className="mono">+{formatINR(preview.data.totals.addition)}</span> · deductions <span className="mono">−{formatINR(preview.data.totals.deduction)}</span> · payable <span className="mono font-semibold">{formatINR(preview.data.totals.total)}</span></span>
+          )}
           {/* Say WHY the downloads are greyed out, instead of leaving dead buttons. */}
           {preview.data.count === 0 && (
             <div className="text-xs text-warn mt-1.5">
@@ -73,6 +76,8 @@ export function PayoutsPage() {
           )}
         </div>
       )}
+      {can('payouts:adjust') && <AdjustmentsCard onMsg={setMsg} />}
+
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Recent batches</h2>
       {(() => {
         const columns: Column<any>[] = [
@@ -125,6 +130,147 @@ export function PayoutsPage() {
         ];
         return <DataTable columns={cols} rows={statements.data?.rows ?? []} rowKey={(s) => s.id} defaultSort={{ key: 'id', dir: 'desc' }} empty="No statements uploaded yet." />;
       })()}
+    </div>
+  );
+}
+
+/**
+ * One-time payout adjustments (owner 2026-07-23): pick a customer, pick one of
+ * their investments, add or deduct a rupee amount from its NEXT interest payout,
+ * with a mandatory narration. Goes to Admin/CXO for approval; once the next
+ * batch settles it, it's consumed and never applies again.
+ */
+function AdjustmentsCard({ onMsg }: { onMsg: (m: string) => void }) {
+  const qc = useQueryClient();
+  const inp = 'px-2.5 py-1.5 text-xs border border-border-strong rounded outline-none focus:border-primary';
+  const [custQ, setCustQ] = useState('');
+  const [customer, setCustomer] = useState<{ id: number; name: string } | null>(null);
+  const [appId, setAppId] = useState('');
+  const [kind, setKind] = useState<'Addition' | 'Deduction'>('Addition');
+  const [amount, setAmount] = useState('');
+  const [narration, setNarration] = useState('');
+
+  const search = useQuery({
+    queryKey: ['adj-cust-search', custQ],
+    queryFn: () => api.get<{ customers: { id: number; full_name: string; customer_code: string }[] }>(`/api/dashboard/search?q=${encodeURIComponent(custQ)}`),
+    enabled: custQ.trim().length >= 2 && !customer,
+  });
+  const detail = useQuery({
+    queryKey: ['adj-cust-apps', customer?.id],
+    queryFn: () => api.get<any>(`/api/customers/${customer!.id}`),
+    enabled: !!customer,
+  });
+  const list = useQuery({ queryKey: ['payout-adjustments'], queryFn: () => api.get<{ rows: any[] }>('/api/payouts/adjustments') });
+
+  const reset = () => { setAppId(''); setKind('Addition'); setAmount(''); setNarration(''); };
+  const submit = useMutation({
+    mutationFn: () => api.post('/api/payouts/adjustments', {
+      application_id: Number(appId), kind, amount: Number(amount), narration: narration.trim(),
+    }),
+    onSuccess: (r: any) => {
+      onMsg(`${kind} of ${formatINR(Number(amount))} sent for approval (${r.request_no}) — an Admin/CXO confirms it, then it rides on the next interest payout.`);
+      reset(); qc.invalidateQueries({ queryKey: ['payout-adjustments'] });
+    },
+    onError: (e) => onMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const cancelAdj = useMutation({
+    mutationFn: (id: number) => api.post(`/api/payouts/adjustments/${id}/cancel`, {}),
+    onSuccess: () => { onMsg('Adjustment cancelled.'); qc.invalidateQueries({ queryKey: ['payout-adjustments'] }); qc.invalidateQueries({ queryKey: ['payout-preview'] }); },
+    onError: (e) => onMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
+
+  // Adjustments ride on interest, so only live investments qualify.
+  const liveApps = ((detail.data?.applications ?? []) as any[]).filter((a) => Number(a.outstanding ?? 0) > 0);
+  const statusChip: Record<string, string> = {
+    PendingApproval: 'text-warn', Approved: 'text-success', Consumed: 'text-text-muted',
+  };
+
+  return (
+    <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5">
+      <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2.5">
+        One-time adjustments <span className="normal-case font-normal text-text-muted">— add to or deduct from an investment's next interest payout · Admin/CXO approves</span>
+      </div>
+
+      <div className="flex gap-2 flex-wrap items-center">
+        {customer ? (
+          <span className="text-xs bg-bg rounded px-2 py-1.5">
+            {customer.name}
+            <button className="text-text-muted hover:text-danger ml-1.5" onClick={() => { setCustomer(null); setCustQ(''); reset(); }}>×</button>
+          </span>
+        ) : (
+          <span className="relative">
+            <input className={`${inp} w-64`} placeholder="Search customer (name / phone / PAN)…" value={custQ} onChange={(e) => setCustQ(e.target.value)} />
+            {(search.data?.customers ?? []).length > 0 && (
+              <span className="absolute top-full left-0 right-0 mt-1 bg-surface border border-border rounded shadow-card z-10 block max-h-48 overflow-auto">
+                {search.data!.customers.map((c) => (
+                  <button key={c.id} className="block w-full text-left px-2.5 py-1.5 text-xs hover:bg-bg"
+                    onClick={() => { setCustomer({ id: c.id, name: c.full_name }); setCustQ(''); }}>
+                    {c.full_name} <span className="text-text-muted">({c.customer_code})</span>
+                  </button>
+                ))}
+              </span>
+            )}
+          </span>
+        )}
+
+        {customer && (
+          <>
+            <select className={inp} value={appId} onChange={(e) => setAppId(e.target.value)}>
+              <option value="">Investment…</option>
+              {liveApps.map((a: any) => (
+                <option key={a.id} value={a.id}>{a.application_no} · {a.series_code ?? ''} · {formatINR(Number(a.amount ?? 0))}</option>
+              ))}
+            </select>
+            <select className={inp} value={kind} onChange={(e) => setKind(e.target.value as 'Addition' | 'Deduction')}>
+              <option value="Addition">Addition (+)</option>
+              <option value="Deduction">Deduction (−)</option>
+            </select>
+            <input className={`${inp} w-32`} type="number" min="0.01" step="0.01" placeholder="Amount ₹" value={amount} onChange={(e) => setAmount(e.target.value)} />
+            <input className={`${inp} w-72`} placeholder="Narration — reason for this adjustment (required)" value={narration} onChange={(e) => setNarration(e.target.value)} />
+            <button
+              className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover"
+              disabled={!appId || !(Number(amount) > 0) || narration.trim().length < 3 || submit.isPending}
+              onClick={() => submit.mutate()}>
+              Send for approval
+            </button>
+          </>
+        )}
+      </div>
+
+      {(list.data?.rows ?? []).length > 0 && (
+        <div className="overflow-x-auto mt-3">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="text-left text-text-label uppercase tracking-wide border-b border-border">
+                <th className="py-1.5 pr-3">Customer</th>
+                <th className="py-1.5 pr-3">Investment</th>
+                <th className="py-1.5 pr-3">Kind</th>
+                <th className="py-1.5 pr-3 text-right">Amount</th>
+                <th className="py-1.5 pr-3">Narration</th>
+                <th className="py-1.5 pr-3">Status</th>
+                <th className="py-1.5 pr-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.data!.rows.map((r: any) => (
+                <tr key={r.id} className="border-b border-border last:border-0">
+                  <td className="py-1.5 pr-3">{r.customer_name} <span className="text-text-muted">({r.customer_code})</span></td>
+                  <td className="py-1.5 pr-3 font-mono">{r.application_no}</td>
+                  <td className="py-1.5 pr-3">{r.kind === 'Addition' ? '+' : '−'} {r.kind}</td>
+                  <td className="py-1.5 pr-3 text-right mono">{formatINR(Number(r.amount))}</td>
+                  <td className="py-1.5 pr-3 max-w-[280px] truncate" title={r.narration}>{r.narration}</td>
+                  <td className={`py-1.5 pr-3 ${statusChip[r.status] ?? ''}`}>{r.status === 'PendingApproval' ? 'Awaiting Admin/CXO' : r.status}</td>
+                  <td className="py-1.5 pr-3 text-right">
+                    {(r.status === 'PendingApproval' || r.status === 'Approved') && (
+                      <button className="text-danger hover:underline" onClick={() => { if (window.confirm(`Cancel this ${r.kind.toLowerCase()} of ${formatINR(Number(r.amount))} on ${r.application_no}?`)) cancelAdj.mutate(r.id); }}>Cancel</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

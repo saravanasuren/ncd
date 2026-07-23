@@ -208,7 +208,14 @@ export async function addBankAccount(db: Db, actor: AuthUser, customerId: number
     if (typeof input.tds_applicable === 'boolean') {
       await tx.query('UPDATE customers SET tds_applicable = $1, updated_at = now() WHERE id = $2', [input.tds_applicable, customerId]);
     }
-    await writeAudit(tx, { actorId: actor.id, action: 'customer.bank.add', entityType: 'customer_bank_accounts', entityId: Number(rows[0]!.id), after: { customerId, pennyDrop: pd.status } });
+    // A first (or newly default) account must reach the payout rows that were
+    // materialised before it existed — otherwise the bank file pays nobody.
+    let moved = 0;
+    if (makeActive) {
+      const { resnapshotPayeeBank } = await import('../schedule/materialize.js');
+      moved = await resnapshotPayeeBank(tx, customerId);
+    }
+    await writeAudit(tx, { actorId: actor.id, action: 'customer.bank.add', entityType: 'customer_bank_accounts', entityId: Number(rows[0]!.id), after: { customerId, pennyDrop: pd.status, futureRowsRepointed: moved } });
     return { id: Number(rows[0]!.id), pennyDrop: pd };
   });
 }
@@ -221,7 +228,10 @@ export async function setActiveBank(db: Db, actor: AuthUser, customerId: number,
     if (chk.rows[0].penny_drop_status !== 'Verified') throw errors.unprocessable('Cannot activate an unverified account');
     await tx.query('UPDATE customer_bank_accounts SET is_active = FALSE WHERE customer_id = $1', [customerId]);
     await tx.query('UPDATE customer_bank_accounts SET is_active = TRUE WHERE id = $1', [bankId]);
-    await writeAudit(tx, { actorId: actor.id, action: 'customer.bank.set-active', entityType: 'customer_bank_accounts', entityId: bankId, after: { customerId } });
+    // Future unpaid payouts follow the new default; paid ones keep their bank.
+    const { resnapshotPayeeBank } = await import('../schedule/materialize.js');
+    const moved = await resnapshotPayeeBank(tx, customerId);
+    await writeAudit(tx, { actorId: actor.id, action: 'customer.bank.set-active', entityType: 'customer_bank_accounts', entityId: bankId, after: { customerId, futureRowsRepointed: moved } });
   });
 }
 

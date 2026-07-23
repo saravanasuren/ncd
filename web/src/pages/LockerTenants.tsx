@@ -5,11 +5,15 @@ import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 
 /**
- * Locker tenants, branch-wise — every tenant in the branch, not only the ones
- * NCD backs. The roster comes from LockerHub's /locker-tenants (occupied
- * lockers + who holds them); NCD's own pledges and cheques are layered on top,
- * and lockers of ours not allotted yet are appended. Availability per size
- * comes from their availability endpoint.
+ * Locker tenants, branch-wise — every tenant, not only the ones NCD backs. The
+ * roster is one call to LockerHub's /locker-tenants (all branches, or scoped to
+ * one); NCD's own pledges and cheques are layered on top, and lockers of ours
+ * not allotted yet are appended. Availability per size comes from their
+ * availability endpoint.
+ *
+ * Status shown is `account_status` (Active | Closure Requested) — the locker's
+ * own status is always "occupied" here, since their query filters on it, and a
+ * closed tenancy leaves the roster entirely rather than changing status.
  */
 const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
 const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
@@ -17,8 +21,9 @@ const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-n
 interface Branch { id: string; name: string; address?: string }
 interface Size { size: string; rent_incl_gst: number; deposit: number; vacant_count: number }
 interface Tenant {
-  lockerhub_application_id: string; application_no: string | null; branch_id: string | null;
-  locker_size: string | null; status: string | null; locker_no: string | null;
+  tenant_id: string | null; lockerhub_application_id: string | null;
+  application_no: string | null; branch_id: string | null; branch_name: string | null;
+  locker_size: string | null; status: string | null; account_status: string | null; locker_no: string | null;
   tenant_name: string | null; tenant_phone: string | null; tenant_email: string | null;
   allotted_on: string | null; lease_expires_on: string | null;
   customer_id: number | null; customer_code: string | null;
@@ -42,8 +47,7 @@ export function LockerTenantsPage() {
   const tenants = useQuery({
     queryKey: ['locker-tenants', branchId],
     queryFn: () => api.get<{
-      rows: Tenant[]; roster_complete: boolean; branches_read: number; branches_total: number;
-      lockerhub_error: string | null;
+      rows: Tenant[]; roster_complete: boolean; lockerhub_error: string | null;
     }>(`/api/lockers/tenants${branchId ? `?branch_id=${encodeURIComponent(branchId)}` : ''}`),
   });
 
@@ -98,12 +102,12 @@ export function LockerTenantsPage() {
           </h2>
         </div>
 
-        {/* Only warn when the roster really is partial — a branch we could not
-            read. A complete sweep says nothing, because nothing is missing. */}
+        {/* Only warn when we genuinely couldn't read the roster. A successful
+            read says nothing, because nothing is missing. */}
         {tenants.data && !tenants.data.roster_complete && (
           <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-3">
-            <b>Partial roster.</b> Read {tenants.data.branches_read} of {tenants.data.branches_total} branches from LockerHub —
-            tenants in the branches we could not reach are missing from this list.
+            <b>LockerHub roster unavailable.</b> Showing only the lockers NCD is involved in — every other tenant is missing
+            from this list until their API responds again.
             {tenants.data.lockerhub_error && <span className="block mt-1 opacity-80">Last LockerHub error: {tenants.data.lockerhub_error.slice(0, 160)}</span>}
           </div>
         )}
@@ -124,7 +128,7 @@ export function LockerTenantsPage() {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.lockerhub_application_id} className="border-b border-border last:border-0">
+                <tr key={r.tenant_id || r.lockerhub_application_id || r.application_no} className="border-b border-border last:border-0">
                   <td className="py-2 pr-3">
                     {r.customer_id
                       ? <Link to={`/app/customers/${r.customer_id}`} className="text-primary hover:underline">{r.tenant_name ?? '—'}</Link>
@@ -132,18 +136,18 @@ export function LockerTenantsPage() {
                     {r.ncd_backed && <span className="ml-1.5 text-[10px] rounded px-1 py-0.5 bg-primary/10 text-primary align-middle">NCD</span>}
                     <div className="text-xs text-text-muted">{r.tenant_phone ?? ''} {r.customer_code ? `· ${r.customer_code}` : ''}</div>
                   </td>
-                  <td className="py-2 pr-3">{branchName(r.branch_id)}</td>
+                  <td className="py-2 pr-3">{r.branch_name ?? branchName(r.branch_id)}</td>
                   <td className="py-2 pr-3 font-mono text-xs">{r.locker_no ?? '—'}</td>
                   <td className="py-2 pr-3">{r.locker_size ?? '—'}</td>
                   <td className="py-2 pr-3">
-                    <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{r.status ?? (r.unresolved ? 'unresolved' : '—')}</span>
+                    <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{r.account_status ?? r.status ?? '—'}</span>
                     {r.cheque_pending && <span className="ml-1 text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">cheque pending</span>}
                   </td>
                   <td className="py-2 pr-3 text-xs text-text-muted whitespace-nowrap">
                     {r.allotted_on ? <>{r.allotted_on}{r.lease_expires_on ? <> → {r.lease_expires_on}</> : null}</> : '—'}
                   </td>
                   <td className="py-2 pr-3 text-right mono">{r.pledged_amount > 0 ? formatINR(r.pledged_amount) : '—'}</td>
-                  <td className="py-2 pr-3 font-mono text-xs text-text-muted">{r.application_no ?? r.lockerhub_application_id}</td>
+                  <td className="py-2 pr-3 font-mono text-xs text-text-muted">{r.application_no ?? r.lockerhub_application_id ?? '—'}</td>
                 </tr>
               ))}
               {!rows.length && (

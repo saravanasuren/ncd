@@ -41,8 +41,6 @@ describe('locker tenants (branch-wise)', () => {
     // LockerHub is unreachable under test, so the roster was never read —
     // the payload must say so rather than presenting itself as complete.
     expect(r.json.roster_complete).toBe(false);
-    expect(r.json).toHaveProperty('branches_read');
-    expect(r.json).toHaveProperty('branches_total');
   });
 
   it('marks NCD-backed rows, so the page can separate them from plain tenants', async () => {

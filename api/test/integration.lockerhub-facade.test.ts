@@ -436,9 +436,12 @@ describe('agent endpoints', () => {
     const bad = await integ('POST', '/api/integration/agents/authenticate', { identifier: 'agent@demo.local', password: 'wrong-password' });
     expect(bad.status).toBe(401);
     expect(bad.json.error).toBe('invalid_credentials');
-    const staff = await integ('POST', '/api/integration/agents/authenticate', { identifier: 'admin@dhanam.finance', password: 'whatever' });
-    expect(staff.status).toBe(403);
-    expect(staff.json.error).toBe('not_an_agent');
+    // A staff account with the WRONG password is 401, not 'not_an_agent' —
+    // staff now authenticate here too, so a bad password must not leak that
+    // the account exists and is staff.
+    const staffBad = await integ('POST', '/api/integration/agents/authenticate', { identifier: 'admin@dhanam.finance', password: 'whatever' });
+    expect(staffBad.status).toBe(401);
+    expect(staffBad.json.error).toBe('invalid_credentials');
 
     const ok = await integ('POST', '/api/integration/agents/authenticate', { identifier: 'agent@demo.local', password: 'Demo_1234' });
     expect(ok.status).toBe(200);
@@ -472,6 +475,49 @@ describe('agent endpoints', () => {
       body: JSON.stringify({}),
     });
     expect(unknown.status).toBe(404);
+  });
+
+  // Our own employees live in `users`, not `agents`. Before this they hit a
+  // flat 'not_an_agent' and could not sign into LockerHub's app at all.
+  it('authenticate resolves branch staff, and never hands back an agent id for them', async () => {
+    const ok = await integ('POST', '/api/integration/agents/authenticate', { identifier: 'staff@demo.local', password: 'Demo_1234' });
+    expect(ok.status).toBe(200);
+    expect(ok.json.success).toBe(true);
+    expect(ok.json.role).toBe('staff');
+    expect(ok.json.staff_role).toBe('branch_staff');
+    expect(ok.json.staff_id).toBeGreaterThan(0);
+    expect(ok.json.name).toBe('Demo Branch Staff');
+    // The agent-identity fields MUST stay null: LockerHub stores
+    // wealth_user_id as agents.id, so a users.id here would alias an agent.
+    expect(ok.json.wealth_user_id).toBeNull();
+    expect(ok.json.id).toBeNull();
+    expect(ok.json.agent_id).toBeNull();
+
+    // Wrong password → 401, same as an agent.
+    const bad = await integ('POST', '/api/integration/agents/authenticate', { identifier: 'staff@demo.local', password: 'nope' });
+    expect(bad.status).toBe(401);
+    expect(bad.json.error).toBe('invalid_credentials');
+
+    // A deactivated staff account is 'disabled', not a silent 401.
+    await ctx.db.query("UPDATE users SET is_active = FALSE WHERE email = 'staff@demo.local'");
+    const off = await integ('POST', '/api/integration/agents/authenticate', { identifier: 'staff@demo.local', password: 'Demo_1234' });
+    expect(off.status).toBe(403);
+    expect(off.json.error).toBe('disabled');
+    await ctx.db.query("UPDATE users SET is_active = TRUE WHERE email = 'staff@demo.local'");
+  });
+
+  it('staff can authenticate by phone, and an agent still wins over a staff match', async () => {
+    await ctx.db.query("UPDATE users SET phone = '9770000012' WHERE email = 'bm@demo.local'");
+    const byPhone = await integ('POST', '/api/integration/agents/authenticate', { identifier: '9770000012', password: 'Demo_1234' });
+    expect(byPhone.status).toBe(200);
+    expect(byPhone.json.role).toBe('staff');
+    expect(byPhone.json.staff_role).toBe('branch_manager');
+
+    // agent@demo.local is BOTH a users row and an agents row — it must still
+    // resolve as an agent, with a real wealth_user_id.
+    const asAgent = await integ('POST', '/api/integration/agents/authenticate', { identifier: 'agent@demo.local', password: 'Demo_1234' });
+    expect(asAgent.json.role).toBe('agent');
+    expect(asAgent.json.wealth_user_id).toBeGreaterThan(0);
   });
 });
 

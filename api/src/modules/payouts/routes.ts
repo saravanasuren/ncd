@@ -8,13 +8,25 @@ import * as s from './service.js';
 
 export const payoutsRouter = Router();
 
+/**
+ * The date the preview/sheet routes run for. `?? today` is not enough: a
+ * cleared date field arrives as `?date=` (empty string, not absent), and an
+ * empty payoutDate compares before every watermark — previewDue silently
+ * returns zero rows and the download 422s. Anything that isn't a full
+ * YYYY-MM-DD falls back to today.
+ */
+const sheetDate = (q: unknown): string => {
+  const v = String(q ?? '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : new Date().toISOString().slice(0, 10);
+};
+
 payoutsRouter.get('/preview', requirePermission('payouts:generate'),
-  asyncHandler(async (req, res) => res.json(await s.previewDue(getDb(), String(req.query.date ?? new Date().toISOString().slice(0, 10))))));
+  asyncHandler(async (req, res) => res.json(await s.previewDue(getDb(), sheetDate(req.query.date)))));
 
 // Stateless: pull the sheet for ANY date, as often as you like. Writes nothing.
 payoutsRouter.get('/sheet.xlsx', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {
-    const date = String(req.query.date ?? new Date().toISOString().slice(0, 10));
+    const date = sheetDate(req.query.date);
     const buffer = await s.neftSheetForDate(getDb(), date);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="NEFT-interest-upto-${date}.xlsx"`);
@@ -61,7 +73,7 @@ payoutsRouter.get('/:id/summary.xlsx', requirePermission('payouts:generate'),
 
 payoutsRouter.get('/preview.summary.xlsx', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {
-    const date = String(req.query.date ?? new Date().toISOString().slice(0, 10));
+    const date = sheetDate(req.query.date);
     const buffer = await s.summaryForDate(getDb(), date);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="NEFT-preview-summary-${date}.xlsx"`);
@@ -71,7 +83,7 @@ payoutsRouter.get('/preview.summary.xlsx', requirePermission('payouts:generate')
 // Printable variants — ops sign/file these rather than the spreadsheet.
 payoutsRouter.get('/preview.pdf', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {
-    const date = String(req.query.date ?? new Date().toISOString().slice(0, 10));
+    const date = sheetDate(req.query.date);
     const buffer = await s.previewPdf(getDb(), date);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="NEFT-preview-${date}.pdf"`);

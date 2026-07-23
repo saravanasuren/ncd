@@ -64,6 +64,13 @@ export function PayoutsPage() {
       {preview.data && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5 text-sm">
           <span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'} with interest accrued to this date · net <span className="mono font-semibold">{formatINR(preview.data.totals.net)}</span>
+          {/* Say WHY the downloads are greyed out, instead of leaving dead buttons. */}
+          {preview.data.count === 0 && (
+            <div className="text-xs text-warn mt-1.5">
+              Nothing to download for this date: every investment is already settled to it or beyond.
+              Interest accrues from the last paid date — pick a later date to see it.
+            </div>
+          )}
         </div>
       )}
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Recent batches</h2>

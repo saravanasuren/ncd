@@ -1,11 +1,11 @@
 /**
  * Locker tenants, branch-wise (sidebar page).
  *
- * LockerHub's /lockers (their per-branch roster) is erroring, so this endpoint
- * lists the lockers NCD is involved in and resolves each against LockerHub for
- * branch / tenant / status. The tests pin that it never claims to be the full
- * roster, and that a LockerHub failure degrades to unresolved rows rather than
- * failing the whole page.
+ * The roster comes from LockerHub's /locker-tenants; NCD's own pledges and
+ * cheques are layered on, and lockers of ours that aren't allotted yet are
+ * appended. LockerHub isn't configured under test, so these pin the degraded
+ * path: the page still renders NCD's rows, and it must NOT claim a complete
+ * roster when it couldn't read one.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
@@ -38,8 +38,17 @@ describe('locker tenants (branch-wise)', () => {
     const r = await (await admin()).get('/api/lockers/tenants');
     expect(r.status).toBe(200);
     expect(Array.isArray(r.json.rows)).toBe(true);
-    // Must never imply completeness while their /lockers is down.
+    // LockerHub is unreachable under test, so the roster was never read —
+    // the payload must say so rather than presenting itself as complete.
     expect(r.json.roster_complete).toBe(false);
+    expect(r.json).toHaveProperty('branches_read');
+    expect(r.json).toHaveProperty('branches_total');
+  });
+
+  it('marks NCD-backed rows, so the page can separate them from plain tenants', async () => {
+    const r = await (await admin()).get('/api/lockers/tenants');
+    // Every row we produce without a roster is one of ours, by definition.
+    expect((r.json.rows as any[]).every((x) => x.ncd_backed === true)).toBe(true);
   });
 
   it('surfaces a locker NCD backs, carrying our customer through', async () => {

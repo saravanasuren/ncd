@@ -5,13 +5,11 @@ import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 
 /**
- * Locker tenants, branch-wise.
- *
- * Honest about its source: LockerHub has no tenant-roster endpoint — their
- * /lockers is a vacancy picker (vacant lockers only, no tenant fields). So this
- * lists the lockers NCD is involved in (a deposit pledge or a cheque), resolved
- * against LockerHub for branch, tenant, status and locker number. Availability
- * per size comes from their availability endpoint.
+ * Locker tenants, branch-wise — every tenant in the branch, not only the ones
+ * NCD backs. The roster comes from LockerHub's /locker-tenants (occupied
+ * lockers + who holds them); NCD's own pledges and cheques are layered on top,
+ * and lockers of ours not allotted yet are appended. Availability per size
+ * comes from their availability endpoint.
  */
 const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
 const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
@@ -21,14 +19,16 @@ interface Size { size: string; rent_incl_gst: number; deposit: number; vacant_co
 interface Tenant {
   lockerhub_application_id: string; application_no: string | null; branch_id: string | null;
   locker_size: string | null; status: string | null; locker_no: string | null;
-  tenant_name: string | null; tenant_phone: string | null;
+  tenant_name: string | null; tenant_phone: string | null; tenant_email: string | null;
+  allotted_on: string | null; lease_expires_on: string | null;
   customer_id: number | null; customer_code: string | null;
-  pledged_amount: number; cheque_pending: boolean; unresolved: boolean;
+  pledged_amount: number; cheque_pending: boolean; ncd_backed: boolean; unresolved: boolean;
 }
 
 export function LockerTenantsPage() {
   const [branchId, setBranchId] = useState('');
   const [q, setQ] = useState('');
+  const [ncdOnly, setNcdOnly] = useState(false);
 
   const branches = useQuery({
     queryKey: ['locker-branches'],
@@ -41,30 +41,39 @@ export function LockerTenantsPage() {
   });
   const tenants = useQuery({
     queryKey: ['locker-tenants', branchId],
-    queryFn: () => api.get<{ rows: Tenant[]; roster_complete: boolean; lockerhub_error: string | null }>(
-      `/api/lockers/tenants${branchId ? `?branch_id=${encodeURIComponent(branchId)}` : ''}`),
+    queryFn: () => api.get<{
+      rows: Tenant[]; roster_complete: boolean; branches_read: number; branches_total: number;
+      lockerhub_error: string | null;
+    }>(`/api/lockers/tenants${branchId ? `?branch_id=${encodeURIComponent(branchId)}` : ''}`),
   });
 
   const branchName = (id: string | null) =>
     (branches.data?.branches ?? []).find((b) => b.id === id)?.name ?? id ?? '—';
 
-  const rows = (tenants.data?.rows ?? []).filter((r) => {
+  const all = tenants.data?.rows ?? [];
+  const rows = all.filter((r) => {
+    if (ncdOnly && !r.ncd_backed) return false;
     if (!q.trim()) return true;
-    const hay = `${r.tenant_name ?? ''} ${r.tenant_phone ?? ''} ${r.customer_code ?? ''} ${r.locker_no ?? ''} ${r.application_no ?? ''}`.toLowerCase();
+    const hay = `${r.tenant_name ?? ''} ${r.tenant_phone ?? ''} ${r.tenant_email ?? ''} ${r.customer_code ?? ''} ${r.locker_no ?? ''} ${r.application_no ?? ''}`.toLowerCase();
     return hay.includes(q.trim().toLowerCase());
   });
+  const ncdCount = all.filter((r) => r.ncd_backed).length;
 
   return (
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Locker tenants</h1>
-      <p className="text-sm text-text-muted mt-1 mb-4">Who holds a locker, branch by branch. Pick a branch to see its occupancy and the tenants NCD is involved with.</p>
+      <p className="text-sm text-text-muted mt-1 mb-4">Every locker holder, branch by branch. Pick a branch to see its occupancy and its full tenant list.</p>
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <select className={inp} value={branchId} onChange={(e) => setBranchId(e.target.value)}>
           <option value="">All branches</option>
           {(branches.data?.branches ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
-        <input className={`${inp} min-w-[220px]`} placeholder="Search tenant, phone, locker no…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className={`${inp} min-w-[220px]`} placeholder="Search tenant, phone, email, locker no…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <label className="flex items-center gap-1.5 text-sm text-text-muted select-none">
+          <input type="checkbox" checked={ncdOnly} onChange={(e) => setNcdOnly(e.target.checked)} />
+          NCD-backed only ({ncdCount})
+        </label>
         {tenants.isFetching && <span className="text-xs text-text-muted">Loading…</span>}
       </div>
 
@@ -89,15 +98,13 @@ export function LockerTenantsPage() {
           </h2>
         </div>
 
-        {/* Never imply this is the full branch roster. LockerHub has no endpoint
-            that returns occupied lockers + tenant identity — /lockers is vacancy only. */}
+        {/* Only warn when the roster really is partial — a branch we could not
+            read. A complete sweep says nothing, because nothing is missing. */}
         {tenants.data && !tenants.data.roster_complete && (
           <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-3">
-            Showing lockers <b>NCD is involved in</b> — an NCD-backed deposit or a recorded cheque. A locker paid entirely
-            online, with no NCD involvement, does not appear here: LockerHub has no tenant-roster endpoint for us to read
-            (their locker list returns vacant lockers only). Getting the full branch roster needs a new endpoint on their
-            side, which is pending scope approval.
-            {tenants.data.lockerhub_error && <span className="block mt-1 opacity-80">Last LockerHub error: {tenants.data.lockerhub_error.slice(0, 120)}</span>}
+            <b>Partial roster.</b> Read {tenants.data.branches_read} of {tenants.data.branches_total} branches from LockerHub —
+            tenants in the branches we could not reach are missing from this list.
+            {tenants.data.lockerhub_error && <span className="block mt-1 opacity-80">Last LockerHub error: {tenants.data.lockerhub_error.slice(0, 160)}</span>}
           </div>
         )}
 
@@ -110,6 +117,7 @@ export function LockerTenantsPage() {
                 <th className="py-2 pr-3">Locker</th>
                 <th className="py-2 pr-3">Size</th>
                 <th className="py-2 pr-3">Status</th>
+                <th className="py-2 pr-3">Lease</th>
                 <th className="py-2 pr-3 text-right">NCD pledged</th>
                 <th className="py-2 pr-3">Locker app</th>
               </tr>
@@ -121,6 +129,7 @@ export function LockerTenantsPage() {
                     {r.customer_id
                       ? <Link to={`/app/customers/${r.customer_id}`} className="text-primary hover:underline">{r.tenant_name ?? '—'}</Link>
                       : (r.tenant_name ?? '—')}
+                    {r.ncd_backed && <span className="ml-1.5 text-[10px] rounded px-1 py-0.5 bg-primary/10 text-primary align-middle">NCD</span>}
                     <div className="text-xs text-text-muted">{r.tenant_phone ?? ''} {r.customer_code ? `· ${r.customer_code}` : ''}</div>
                   </td>
                   <td className="py-2 pr-3">{branchName(r.branch_id)}</td>
@@ -130,13 +139,16 @@ export function LockerTenantsPage() {
                     <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{r.status ?? (r.unresolved ? 'unresolved' : '—')}</span>
                     {r.cheque_pending && <span className="ml-1 text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">cheque pending</span>}
                   </td>
+                  <td className="py-2 pr-3 text-xs text-text-muted whitespace-nowrap">
+                    {r.allotted_on ? <>{r.allotted_on}{r.lease_expires_on ? <> → {r.lease_expires_on}</> : null}</> : '—'}
+                  </td>
                   <td className="py-2 pr-3 text-right mono">{r.pledged_amount > 0 ? formatINR(r.pledged_amount) : '—'}</td>
                   <td className="py-2 pr-3 font-mono text-xs text-text-muted">{r.application_no ?? r.lockerhub_application_id}</td>
                 </tr>
               ))}
               {!rows.length && (
-                <tr><td colSpan={7} className="py-6 text-center text-text-muted">
-                  {tenants.isLoading ? 'Loading…' : branchId ? 'No tenants NCD is involved with at this branch.' : 'No locker tenants recorded yet.'}
+                <tr><td colSpan={8} className="py-6 text-center text-text-muted">
+                  {tenants.isLoading ? 'Loading…' : ncdOnly ? 'No NCD-backed lockers match.' : branchId ? 'No tenants at this branch yet.' : 'No locker tenants found.'}
                 </td></tr>
               )}
             </tbody>

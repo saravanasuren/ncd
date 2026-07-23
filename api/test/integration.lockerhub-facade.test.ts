@@ -506,6 +506,38 @@ describe('agent endpoints', () => {
     await ctx.db.query("UPDATE users SET is_active = TRUE WHERE email = 'staff@demo.local'");
   });
 
+  // Agents created by staff (and self-signup mirrors) land with user_id NULL.
+  // That row must not shadow the person's real login in `users`.
+  it('an unlinked agents row falls back to the matching user account', async () => {
+    const hash = (await ctx.db.query<{ password_hash: string }>(
+      "SELECT password_hash FROM users WHERE email = 'agent@demo.local'")).rows[0]!.password_hash;
+    const roleId = (await ctx.db.query<{ id: string }>("SELECT id FROM roles WHERE name = 'agent'")).rows[0]!.id;
+    await ctx.db.query(
+      `INSERT INTO users (email, password_hash, full_name, phone, role_id)
+       VALUES ('unlinked@demo.local', $1, 'Unlinked Agent', '9770000077', $2)`, [hash, roleId]);
+    await ctx.db.query(
+      `INSERT INTO agents (agent_code, full_name, phone, email, source, commission_status, is_active)
+       VALUES ('AG-UNLINK', 'Unlinked Agent', '9770000077', 'unlinked@demo.local', 'manual', 'Approved', TRUE)`);
+
+    const r = await integ('POST', '/api/integration/agents/authenticate', { identifier: 'unlinked@demo.local', password: 'Demo_1234' });
+    expect(r.status).toBe(200);
+    expect(r.json.role).toBe('agent');
+    expect(r.json.agent_code).toBe('AG-UNLINK');
+    expect(r.json.wealth_user_id).toBeGreaterThan(0);
+
+    // Still a real password check — the fallback doesn't wave anyone through.
+    const bad = await integ('POST', '/api/integration/agents/authenticate', { identifier: 'unlinked@demo.local', password: 'nope' });
+    expect(bad.status).toBe(401);
+
+    // A deactivated user account behind an active agent row is 'disabled'.
+    await ctx.db.query("UPDATE users SET is_active = FALSE WHERE email = 'unlinked@demo.local'");
+    const off = await integ('POST', '/api/integration/agents/authenticate', { identifier: 'unlinked@demo.local', password: 'Demo_1234' });
+    expect(off.status).toBe(403);
+    expect(off.json.error).toBe('disabled');
+    await ctx.db.query("DELETE FROM agents WHERE agent_code = 'AG-UNLINK'");
+    await ctx.db.query("DELETE FROM users WHERE email = 'unlinked@demo.local'");
+  });
+
   it('staff can authenticate by phone, and an agent still wins over a staff match', async () => {
     await ctx.db.query("UPDATE users SET phone = '9770000012' WHERE email = 'bm@demo.local'");
     const byPhone = await integ('POST', '/api/integration/agents/authenticate', { identifier: '9770000012', password: 'Demo_1234' });

@@ -275,13 +275,38 @@ agentsRouter.post('/agents/authenticate', asyncHandler(async (req, res) => {
   if (agent.agent_active !== true || agent.user_active === false) {
     return res.status(403).json({ error: 'disabled' });
   }
-  if (!agent.password_hash) return res.status(401).json({ error: 'invalid_credentials' });
-  const ok = await bcrypt.compare(password, String(agent.password_hash));
+  // An agents row carrying no linked user account must not shadow a real user
+  // with the same contact details. Self-signup mirrors and staff-created
+  // agents arrive with user_id NULL, so the person's actual login lives in
+  // `users` — match it on the AGENT's own email/phone (not on the raw
+  // identifier) so we can only ever adopt the same contact point.
+  let passwordHash = agent.password_hash as string | null;
+  let actorUserId = agent.user_id != null ? Number(agent.user_id) : null;
+  if (!passwordHash) {
+    const agentEmail = String(agent.email ?? '');
+    const agentPhone = normalisePhone(String(agent.phone ?? ''));
+    const linked = (await db.query<Record<string, unknown>>(
+      `SELECT u.id, u.password_hash, u.is_active
+         FROM users u JOIN roles r ON r.id = u.role_id
+        WHERE r.name <> 'customer' AND u.password_hash IS NOT NULL
+          AND (($1 <> '' AND lower(u.email) = lower($1))
+               OR ($2 <> '' AND ${phoneMatchSql('u.phone')} = $2))
+        ORDER BY u.id ASC LIMIT 1`,
+      [agentEmail, agentPhone]
+    )).rows[0];
+    if (linked) {
+      if (linked.is_active === false) return res.status(403).json({ error: 'disabled' });
+      passwordHash = String(linked.password_hash);
+      actorUserId = Number(linked.id);
+    }
+  }
+  if (!passwordHash) return res.status(401).json({ error: 'invalid_credentials' });
+  const ok = await bcrypt.compare(password, passwordHash);
   if (!ok) return res.status(401).json({ error: 'invalid_credentials' });
 
   const agentId = Number(agent.id);
   await writeAudit(db, {
-    actorId: agent.user_id != null ? Number(agent.user_id) : null,
+    actorId: actorUserId,
     action: 'LOCKERHUB_AGENT_AUTH',
     entityType: 'agents',
     entityId: agentId,

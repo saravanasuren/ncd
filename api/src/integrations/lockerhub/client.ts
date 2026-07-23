@@ -64,6 +64,13 @@ export const lockerAvailability = (branchId?: string) =>
   lhFetch<Record<string, unknown>>('GET', '/locker-availability', { query: { branch_id: branchId } });
 export const lockers = (branchId: string, size?: string) =>
   lhFetch<{ lockers: Array<Record<string, unknown>> }>('GET', '/lockers', { query: { branch_id: branchId, size } });
+/**
+ * The branch tenant roster — every OCCUPIED locker with who holds it. This is
+ * the counterpart to /lockers, which returns vacant lockers only. branch_id is
+ * required; there is no all-branches form, so callers sweep branch by branch.
+ */
+export const lockerTenants = (branchId: string) =>
+  lhFetch<{ tenants: Array<Record<string, unknown>> }>('GET', '/locker-tenants', { query: { branch_id: branchId } });
 export const getCustomer = (phone: string) =>
   lhFetch<Record<string, unknown>>('GET', `/customers/${encodeURIComponent(phone)}`);
 export const getLockerApplication = (id: string) =>

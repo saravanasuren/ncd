@@ -312,24 +312,54 @@ export async function customerLockers(db: Db, customerId: number) {
 }
 
 /**
- * Locker tenants, branch-wise.
+ * Locker tenants, branch-wise — EVERY tenant, not just the ones NCD backs.
  *
- * LockerHub has NO tenant-roster endpoint. Their GET /lockers?branch_id= is a
- * pick-a-locker helper for enrolment (contract A4) and returns VACANT lockers
- * only — id, locker_number, size, status, no tenant fields (confirmed against
- * live data 2026-07-23: 81 rows at RS Puram, 433 at Hosur, every one `vacant`).
- * So it can never answer "who holds a locker here", and waiting on it would be
- * waiting for the wrong thing.
+ * The spine is LockerHub's GET /locker-tenants?branch_id=, which returns every
+ * OCCUPIED locker in a branch with the tenant's name/phone/email, locker number,
+ * size and lease dates. (Their /lockers is the opposite view — vacant lockers
+ * only — which is why this screen used to be NCD-backed lockers alone.)
+ * branch_id is required and there is no all-branches form, so "All branches"
+ * sweeps them.
  *
- * What we CAN resolve is every locker application NCD is involved in (a deposit
- * pledge or a recorded cheque) via getLockerApplication, which does return
- * branch_id, tenant name, phone, status and allotment. That's an accurate
- * NCD-side tenant list; it is NOT the complete branch roster, and the response
- * says so via `roster_complete: false` so the UI can't imply otherwise.
- * Completing it needs a new endpoint from LockerHub carrying occupied lockers +
- * tenant identity — scope pending, since it exposes customer PII to NCD.
+ * Two things are layered on top:
+ *   1. NCD involvement — a deposit pledge or a recorded cheque — matched to the
+ *      roster on LockerHub's application_id when they send one, else on phone.
+ *   2. The lockers NCD is involved in that are NOT occupied yet (payment_pending,
+ *      awaiting allotment). Those can never appear in a roster of occupied
+ *      lockers, but staff still need them on this screen, so they're appended.
+ *
+ * Roster rows are matched to NCD customers by phone purely to link the name
+ * through to the customer page; an unmatched tenant is still shown.
  */
 export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
+  const last10 = (v: unknown) => String(v ?? '').replace(/\D/g, '').slice(-10);
+  let lockerhub_error: string | null = null;
+
+  // Which branches to sweep — one caller-chosen branch, or all of them.
+  let branchIds: string[] = [];
+  if (opts.branchId) branchIds = [opts.branchId];
+  else {
+    try {
+      branchIds = ((await lh.branches()).branches ?? []).map((b) => String(b.id));
+    } catch (e) { lockerhub_error = (e as Error).message; }
+  }
+
+  // The roster, branch by branch. A branch that fails is recorded, not fatal —
+  // a partial roster still beats a blank screen, and roster_complete says so.
+  const roster: Array<Record<string, any>> = [];
+  let branchesRead = 0;
+  for (let i = 0; i < branchIds.length; i += 4) {
+    await Promise.all(branchIds.slice(i, i + 4).map(async (bid) => {
+      try {
+        const t = await lh.lockerTenants(bid);
+        for (const row of (t.tenants ?? []) as Array<Record<string, any>>) {
+          roster.push({ ...row, branch_id: row.branch_id ?? bid });
+        }
+        branchesRead++;
+      } catch (e) { if (!lockerhub_error) lockerhub_error = (e as Error).message; }
+    }));
+  }
+
   const ours = (await db.query<Record<string, unknown>>(
     `SELECT x.lockerhub_application_id,
             max(x.customer_id) AS customer_id,
@@ -353,7 +383,6 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
   // Bounded concurrency: this is a staff screen, not a hot path.
   const CHUNK = 6;
   const resolved: Array<Record<string, unknown>> = [];
-  let lockerhub_error: string | null = null;
   for (let i = 0; i < ours.length; i += CHUNK) {
     const slice = ours.slice(i, i + CHUNK);
     const out = await Promise.all(slice.map(async (r) => {
@@ -376,7 +405,8 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
     : [];
   const custById = new Map(custs.map((c) => [Number(c.id), c]));
 
-  const rows = resolved.map((x: any) => {
+  // NCD's own involvement, keyed for matching against the roster.
+  const oursRows = resolved.map((x: any) => {
     const r = x.row as Record<string, unknown>;
     const a = x.app as Record<string, any> | null;
     const c = custById.get(Number(r.customer_id));
@@ -389,17 +419,74 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
       locker_no: a?.allotment?.locker_number ?? a?.allotment?.locker_no ?? null,
       tenant_name: a?.name ?? (c?.full_name ?? null),
       tenant_phone: a?.phone ?? (c?.phone ?? null),
+      tenant_email: a?.email ?? null,
+      allotted_on: a?.allotment?.allotted_on ?? null,
+      lease_expires_on: a?.allotment?.lease_expires_on ?? null,
       customer_id: c ? Number(c.id) : null,
       customer_code: c?.customer_code ?? null,
       pledged_amount: Number(r.pledged ?? 0),
       cheque_pending: Number(r.cheque_pending ?? 0) > 0,
+      ncd_backed: true,
       unresolved: !a,
     };
-  }).filter((r) => (opts.branchId ? r.branch_id === opts.branchId : true));
+  });
+
+  // Link roster tenants to NCD customers by phone, so a name that IS one of our
+  // customers clicks through even when NCD backs no part of the locker.
+  const rosterPhones = [...new Set(roster.map((t) => last10(t.tenant?.phone)).filter((p) => p.length === 10))];
+  const byPhone = rosterPhones.length
+    ? (await db.query<Record<string, unknown>>(
+        `SELECT id, full_name, customer_code, phone FROM customers
+          WHERE right(regexp_replace(COALESCE(phone,''), '\\D', '', 'g'), 10) = ANY($1)`, [rosterPhones])).rows
+    : [];
+  const custByPhone = new Map(byPhone.map((c) => [last10(c.phone), c]));
+
+  // Merge. A roster row wins on identity (it is the allotted truth); NCD's
+  // pledge/cheque is layered onto it. Anything of ours the roster doesn't cover
+  // — not allotted yet — is appended so it can't silently disappear.
+  const oursByAppId = new Map(oursRows.map((r) => [r.lockerhub_application_id, r]));
+  const oursByPhone = new Map(oursRows.filter((r) => last10(r.tenant_phone).length === 10).map((r) => [last10(r.tenant_phone), r]));
+  const consumed = new Set<string>();
+
+  const rosterRows = roster.map((t) => {
+    const appId = String(t.application_id ?? '').trim();
+    const phone = last10(t.tenant?.phone);
+    const mine = (appId && oursByAppId.get(appId)) || (phone.length === 10 ? oursByPhone.get(phone) : undefined);
+    if (mine) consumed.add(mine.lockerhub_application_id);
+    const c = mine?.customer_id ? custById.get(mine.customer_id) : custByPhone.get(phone);
+    return {
+      lockerhub_application_id: appId || `locker:${String(t.locker_id ?? t.locker_number ?? '')}`,
+      application_no: mine?.application_no ?? null,
+      branch_id: t.branch_id ?? null,
+      locker_size: t.size ?? null,
+      status: t.status ?? 'occupied',
+      locker_no: t.locker_number ?? null,
+      tenant_name: t.tenant?.name ?? null,
+      tenant_phone: t.tenant?.phone ?? null,
+      tenant_email: t.tenant?.email || null,
+      allotted_on: t.allotted_on ?? null,
+      lease_expires_on: t.lease_expires_on ?? null,
+      customer_id: c ? Number(c.id) : null,
+      customer_code: c?.customer_code ?? null,
+      pledged_amount: mine?.pledged_amount ?? 0,
+      cheque_pending: mine?.cheque_pending ?? false,
+      ncd_backed: !!mine,
+      unresolved: false,
+    };
+  });
+
+  const leftover = oursRows
+    .filter((r) => !consumed.has(r.lockerhub_application_id))
+    .filter((r) => (opts.branchId ? r.branch_id === opts.branchId : true));
+
+  const rows = [...rosterRows, ...leftover];
 
   return {
     rows,
-    roster_complete: false, // see the note above — their /lockers is down
+    // True only when we actually read every branch we set out to read.
+    roster_complete: branchIds.length > 0 && branchesRead === branchIds.length,
+    branches_read: branchesRead,
+    branches_total: branchIds.length,
     lockerhub_error,
   };
 }

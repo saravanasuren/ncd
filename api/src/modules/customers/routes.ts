@@ -64,6 +64,11 @@ customersRouter.post('/:id/bank-accounts', requirePermission('customers:update')
 customersRouter.post('/:id/bank-accounts/:bankId/set-active', requirePermission('customers:update'),
   asyncHandler(async (req, res) => { await s.setActiveBank(getDb(), req.user!, Number(req.params.id), Number(req.params.bankId)); res.json({ ok: true }); }));
 
+// Super-admin only — customers:delete is the same gate as customer delete.
+customersRouter.delete('/:id/bank-accounts/:bankId', requirePermission('customers:delete'),
+  asyncHandler(async (req, res) =>
+    res.json(await s.deleteBankAccount(getDb(), req.user!, Number(req.params.id), Number(req.params.bankId)))));
+
 customersRouter.post('/:id/kyc/verify', requirePermission('kyc:verify'),
   asyncHandler(async (req, res) => { await s.setKyc(getDb(), req.user!, Number(req.params.id), 'Verified'); res.json({ ok: true }); }));
 

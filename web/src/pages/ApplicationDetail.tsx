@@ -9,15 +9,38 @@ const rowPill: Record<string, string> = {
   Paid: 'text-success', Scheduled: 'text-text-muted', Skipped: 'text-warn', Failed: 'text-danger',
 };
 
-function PayoutAccount({ appId, customerId, onChange }: { appId: number; customerId: number; onChange: () => void }) {
+/**
+ * Which bank account THIS NCD's interest goes to.
+ *
+ * Only worth showing when the customer has more than one account on file —
+ * with a single account there is nothing to choose. Unpinned, the NCD follows
+ * whichever account is the customer's active one, so the empty option says so
+ * rather than reading like a blank.
+ */
+function PayoutAccount({ appId, customerId, current, onChange }: { appId: number; customerId: number; current: number | null; onChange: () => void }) {
   const { data } = useQuery({ queryKey: ['cust-banks', customerId], queryFn: () => api.get<any>(`/api/customers/${customerId}`) });
-  const set = useMutation({ mutationFn: (bankId: number) => api.post(`/api/applications/${appId}/payout-account`, { bank_account_id: bankId }), onSuccess: onChange });
-  const verified = (data?.bankAccounts ?? []).filter((b: any) => b.penny_drop_status === 'Verified');
-  if (verified.length < 2) return null;
+  const set = useMutation({ mutationFn: (bankId: number | null) => api.post(`/api/applications/${appId}/payout-account`, { bank_account_id: bankId }), onSuccess: onChange });
+  const accounts = data?.bankAccounts ?? [];
+  if (accounts.length < 2) return null;
+
+  const label = (b: any) =>
+    `${b.account_number}${b.bank_name ? ` · ${b.bank_name}` : ''}${b.penny_drop_status === 'Verified' ? '' : ` (${b.penny_drop_status})`}`;
+  const active = accounts.find((b: any) => b.is_active);
+
   return (
-    <select className="text-xs border border-border-strong rounded px-2 py-1" defaultValue="" onChange={(e) => e.target.value && set.mutate(Number(e.target.value))}>
-      <option value="">Interest account…</option>
-      {verified.map((b: any) => <option key={b.id} value={b.id}>{b.account_number}</option>)}
+    <select
+      className="text-xs border border-border-strong rounded px-2 py-1 max-w-[320px]"
+      value={current ?? ''}
+      onChange={(e) => {
+        const id = e.target.value ? Number(e.target.value) : null;
+        const chosen = accounts.find((b: any) => Number(b.id) === id);
+        if (chosen && chosen.penny_drop_status !== 'Verified'
+            && !window.confirm(`${chosen.account_number} has not been penny-drop verified (${chosen.penny_drop_status}). Send this NCD's interest there anyway?`)) return;
+        set.mutate(id);
+      }}
+    >
+      <option value="">Customer default{active ? ` (${active.account_number})` : ''}</option>
+      {accounts.map((b: any) => <option key={b.id} value={b.id}>{label(b)}</option>)}
     </select>
   );
 }
@@ -220,7 +243,7 @@ export function ApplicationDetailPage() {
             }} />
           </label>
         )}
-        {can('applications:update') && a.status === 'Active' && <PayoutAccount appId={Number(id)} customerId={a.customer_id} onChange={invalidate} />}
+        {can('applications:update') && a.status === 'Active' && <PayoutAccount appId={Number(id)} customerId={a.customer_id} current={a.payout_bank_account_id ? Number(a.payout_bank_account_id) : null} onChange={invalidate} />}
       </div>
 
       {/* Locker pledge — ONE investment, part of it backing locker deposits. */}

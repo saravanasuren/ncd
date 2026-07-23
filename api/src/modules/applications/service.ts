@@ -162,12 +162,32 @@ export async function clubbingCandidates(db: Db, customerId: number, seriesId: n
 
 /** Set/change the interest payout bank account for an application (re-snapshots
  * only future unpaid schedule rows). */
-export async function setPayoutAccount(db: Db, actor: AuthUser, appId: number, bankAccountId: number) {
+export async function setPayoutAccount(db: Db, actor: AuthUser, appId: number, bankAccountId: number | null) {
   return db.withTx(async (tx) => {
     const app = (await tx.query<{ customer_id: string }>('SELECT customer_id FROM applications WHERE id = $1', [appId])).rows[0];
     if (!app) throw errors.notFound('Application not found');
-    const bank = (await tx.query<{ account_number: string; ifsc: string }>('SELECT account_number, ifsc FROM customer_bank_accounts WHERE id = $1 AND customer_id = $2 AND penny_drop_status = $3', [bankAccountId, app.customer_id, 'Verified'])).rows[0];
-    if (!bank) throw errors.badRequest('Bank account not found or not verified for this customer');
+
+    // null clears the pin: this NCD goes back to following the customer's
+    // default account, and its future unpaid rows move there with it.
+    if (bankAccountId === null) {
+      await tx.query('UPDATE applications SET payout_bank_account_id = NULL, updated_at = now() WHERE id = $1', [appId]);
+      const { resnapshotPayeeBank } = await import('../schedule/materialize.js');
+      await resnapshotPayeeBank(tx, Number(app.customer_id));
+      await writeAudit(tx, { actorId: actor.id, action: 'application.payout-account', entityType: 'applications', entityId: appId, after: { bankAccountId: null } });
+      return { ok: true };
+    }
+
+    // Any account ON FILE for this customer may be chosen — the check that
+    // matters is that it belongs to them. Requiring penny-drop 'Verified' here
+    // was inconsistent as well as unusable: interest already pays out to
+    // whichever account is active, verified or not (403 of 433 live accounts
+    // are 'Pending' — never penny-dropped, mostly migrated from wealth), so
+    // gating only the per-NCD pin blocked the feature for everyone without
+    // making a single payment safer.
+    const bank = (await tx.query<{ account_number: string; ifsc: string }>(
+      'SELECT account_number, ifsc FROM customer_bank_accounts WHERE id = $1 AND customer_id = $2',
+      [bankAccountId, app.customer_id])).rows[0];
+    if (!bank) throw errors.badRequest('Bank account not found for this customer');
     await tx.query('UPDATE applications SET payout_bank_account_id = $1, updated_at = now() WHERE id = $2', [bankAccountId, appId]);
     // Re-snapshot future unpaid (Scheduled, no batch) rows to the new account.
     await tx.query(

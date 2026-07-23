@@ -235,6 +235,50 @@ export async function setActiveBank(db: Db, actor: AuthUser, customerId: number,
   });
 }
 
+/**
+ * Delete a bank account from a customer's file. Super-admin only (routed
+ * behind customers:delete, the same gate as customer delete/archive).
+ *
+ * Refused while anything still points at it:
+ *   - an NCD pinned to it (payout_bank_account_id) — unpin or repin first;
+ *   - it is the customer's ACTIVE account and unpaid payout rows would be
+ *     left with nowhere to go (make another account active first).
+ * Paid history is untouched: schedule rows carry their own snapshot of the
+ * account they were paid to, so deleting the row loses nothing about the past.
+ */
+export async function deleteBankAccount(db: Db, actor: AuthUser, customerId: number, bankId: number) {
+  await assertVisible(db, actor, customerId);
+  return db.withTx(async (tx) => {
+    const bank = (await tx.query<Record<string, unknown>>(
+      'SELECT id, account_number, ifsc, is_active FROM customer_bank_accounts WHERE id = $1 AND customer_id = $2',
+      [bankId, customerId])).rows[0];
+    if (!bank) throw errors.notFound('Bank account not found for this customer');
+
+    const pinned = (await tx.query<{ application_no: string }>(
+      'SELECT application_no FROM applications WHERE payout_bank_account_id = $1', [bankId])).rows;
+    if (pinned.length) {
+      throw errors.conflict(
+        `This account is the payout account for ${pinned.map((p) => p.application_no).join(', ')} — move those NCDs to another account first`);
+    }
+
+    if (bank.is_active === true) {
+      const unpaid = await tx.query(
+        `SELECT 1 FROM disbursement_schedule ds JOIN applications a ON a.id = ds.application_id
+          WHERE a.customer_id = $1 AND ds.status = 'Scheduled' LIMIT 1`, [customerId]);
+      if (unpaid.rowCount) {
+        throw errors.conflict('This is the active payout account and unpaid payouts point at it — make another account active first');
+      }
+    }
+
+    await tx.query('DELETE FROM customer_bank_accounts WHERE id = $1', [bankId]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'customer.bank.delete', entityType: 'customer_bank_accounts', entityId: bankId,
+      before: { customerId, account_number: bank.account_number, ifsc: bank.ifsc, was_active: bank.is_active },
+    });
+    return { ok: true };
+  });
+}
+
 export async function setKyc(db: Db, actor: AuthUser, customerId: number, to: 'Verified' | 'Rejected', reason?: string) {
   await assertVisible(db, actor, customerId);
   await db.withTx(async (tx) => {

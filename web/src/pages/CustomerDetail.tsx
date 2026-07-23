@@ -17,6 +17,74 @@ function purgeConfirm(what: string): string | null {
   return reason.trim().length >= 2 ? reason.trim() : null;
 }
 
+
+/** Lockers this customer holds — LockerHub's record plus OUR pledges/cheques.
+ * Fetched separately so a LockerHub outage degrades this card alone. */
+function LockersCard({ customerId }: { customerId: number }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['customer-lockers', customerId],
+    queryFn: () => api.get<any>(`/api/lockers/customers/${customerId}/lockers`),
+    retry: false,
+  });
+  if (isLoading || !data) return null;
+  const pledges = data.pledges ?? [];
+  const cheques = data.cheques ?? [];
+  const lh = data.lockerhub;
+  const lockers = lh?.lockers ?? lh?.applications ?? [];
+  if (!pledges.length && !cheques.length && !lockers.length && !data.lockerhub_error) return null;
+  const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
+  return (
+    <div className={card}>
+      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Lockers</h2>
+      {data.lockerhub_error && (
+        <div className="text-xs text-warn mb-2">Couldn’t reach LockerHub — showing what NCD holds. ({String(data.lockerhub_error).slice(0, 80)})</div>
+      )}
+      {lockers.length > 0 && (
+        <div className="text-sm mb-3">
+          {lockers.map((l: any, i: number) => (
+            <div key={i} className="flex flex-wrap gap-x-3 gap-y-1 items-center border-b border-border last:border-0 py-1.5">
+              <span className="font-medium">{l.locker_no ?? l.locker_number ?? l.application_id ?? 'Locker'}</span>
+              {l.branch_name && <span className="text-text-muted text-xs">{l.branch_name}</span>}
+              {l.locker_size && <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.locker_size}</span>}
+              {(l.status ?? l.application_status) && <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.status ?? l.application_status}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {pledges.length > 0 && (
+        <>
+          <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1">NCDs pledged as deposit</div>
+          <div className="text-sm mb-3">
+            {pledges.map((p: any) => (
+              <div key={p.id} className="flex flex-wrap gap-x-3 items-center border-b border-border last:border-0 py-1.5">
+                <Link to={`/app/applications/${p.application_id}`} className="text-primary hover:underline font-mono text-xs">{p.application_no}</Link>
+                <span className="mono">{formatINR(p.linked_amount)}</span>
+                <span className="text-xs text-text-muted">locker {p.lockerhub_application_id}{p.locker_no ? ` · ${p.locker_no}` : ''}</span>
+                <span className={`text-xs rounded px-1.5 py-0.5 ${p.status === 'active' ? 'bg-[color:var(--warn-bg)] text-warn' : 'bg-bg text-text-muted'}`}>{p.status}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {cheques.length > 0 && (
+        <>
+          <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1">Locker cheques</div>
+          <div className="text-sm">
+            {cheques.map((q: any) => (
+              <div key={q.id} className="flex flex-wrap gap-x-3 items-center border-b border-border last:border-0 py-1.5">
+                <span className="font-mono text-xs">{q.cheque_no}</span>
+                <span className="mono">{formatINR(q.amount)}</span>
+                <span className="text-xs text-text-muted">{q.leg} · {q.bank_name ?? '—'}</span>
+                <span className={`text-xs rounded px-1.5 py-0.5 ${q.status === 'Cleared' ? 'bg-[color:var(--success-bg)] text-success' : q.status === 'Pending' ? 'bg-[color:var(--warn-bg)] text-warn' : 'bg-bg text-text-muted'}`}>{q.status}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function CustomerDetailPage() {
   const { id } = useParams();
   const qc = useQueryClient();
@@ -163,6 +231,8 @@ export function CustomerDetailPage() {
       <RelationsKyc customerId={Number(id)} data={data} onChange={invalidate} can={can} />
 
       {can('applications:create') && c.creation_status === 'Approved' && <NewInvestment customerId={Number(id)} />}
+
+      <LockersCard customerId={Number(id)} />
     </div>
   );
 }

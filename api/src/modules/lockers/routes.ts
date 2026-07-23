@@ -96,6 +96,16 @@ lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) =
 // linking settles that deposit leg on their side.
 // Which of this customer's investments could back a deposit, and how much of
 // each is still free. Registered before the ':linkId' routes.
+// Everything NCD knows about one customer's lockers — their LockerHub record
+// plus our own pledges and cheques. Powers the Lockers card on customer 360.
+lockersRouter.get('/customers/:customerId/lockers', asyncHandler(async (req, res) => {
+  const { assertCustomerVisible } = await import('../../lib/visibility.js');
+  const id = Number(req.params.customerId);
+  await assertCustomerVisible(getDb(), req.user!, id);
+  const { customerLockers } = await import('./deposits.js');
+  res.json(await customerLockers(getDb(), id));
+}));
+
 lockersRouter.get('/deposit-links/candidates', asyncHandler(async (req, res) => {
   const customerId = Number(req.query.customer_id);
   if (!Number.isFinite(customerId) || customerId <= 0) throw errors.badRequest('customer_id is required');

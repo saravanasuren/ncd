@@ -197,11 +197,13 @@ export function LeadsPage() {
               <button onClick={() => { setErr(''); setCreating(false); }} className="text-text-muted hover:text-text text-lg leading-none" aria-label="Close">✕</button>
             </div>
             <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
-              <Field label="Phone number">
-                <input className={`${inp} w-full`} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-              </Field>
+              {/* Name leads (owner 2026-07-23) — it's the required field, and
+                  staff fill the form top-left first. */}
               <Field label="Full name" required>
                 <input className={`${inp} w-full`} value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} autoFocus />
+              </Field>
+              <Field label="Phone number">
+                <input className={`${inp} w-full`} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
               </Field>
               <Field label="District">
                 <input className={`${inp} w-full`} value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} />

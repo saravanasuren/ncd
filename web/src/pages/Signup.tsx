@@ -8,7 +8,7 @@ import { api, ApiError } from '../api/client.js';
  * verification until an Admin/CXO reviews it. */
 export function SignupPage() {
   const [type, setType] = useState<'staff' | 'agent' | null>(null);
-  const [f, setF] = useState({ full_name: '', employee_id: '', mobile: '', branch_id: '', password: '', confirm: '' });
+  const [f, setF] = useState({ full_name: '', employee_id: '', mobile: '', email: '', branch_id: '', password: '', confirm: '' });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<{ mobile: string; agent_code?: string } | null>(null);
@@ -25,10 +25,12 @@ export function SignupPage() {
 
   const pwOk = f.password.length >= 8 && /[A-Za-z]/.test(f.password) && /[0-9]/.test(f.password);
   const mobileOk = f.mobile.replace(/\D/g, '').length === 10;
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim());
 
   async function submit() {
     setErr('');
     if (!mobileOk) { setErr('Enter a valid 10-digit mobile number.'); return; }
+    if (!emailOk) { setErr('Enter a valid email address.'); return; }
     if (!pwOk) { setErr('Password must be at least 8 characters and include a letter and a number.'); return; }
     if (f.password !== f.confirm) { setErr('Passwords do not match.'); return; }
     if (type === 'staff') {
@@ -38,7 +40,7 @@ export function SignupPage() {
     }
     setBusy(true);
     try {
-      const body: Record<string, unknown> = { type, mobile: f.mobile.replace(/\D/g, ''), password: f.password };
+      const body: Record<string, unknown> = { type, mobile: f.mobile.replace(/\D/g, ''), email: f.email.trim(), password: f.password };
       if (type === 'staff') {
         body.full_name = f.full_name.trim();
         if (f.employee_id.trim()) body.employee_id = f.employee_id.trim();
@@ -97,6 +99,11 @@ export function SignupPage() {
             <label className={label}>Official mobile number *</label>
             <input className={input} inputMode="numeric" maxLength={10} placeholder="10-digit mobile"
               value={f.mobile} onChange={(e) => set({ mobile: e.target.value.replace(/\D/g, '') })} autoFocus={type === 'agent'} />
+
+            <label className={label}>Email address *</label>
+            <input type="email" className={input} placeholder="name@example.com" autoComplete="email"
+              value={f.email} onChange={(e) => set({ email: e.target.value })} />
+            <div className="text-[11px] text-text-muted mt-1">You can sign in with either your mobile number or this email.</div>
 
             <label className={label}>Password *</label>
             <input type="password" className={input} value={f.password} onChange={(e) => set({ password: e.target.value })} autoComplete="new-password" />

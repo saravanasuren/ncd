@@ -38,6 +38,11 @@ const loginSchema = z.object({
 const signupSchema = z.object({
   type: z.enum(['staff', 'agent']),
   mobile: z.string().min(10),
+  // The address the person signs up with — stored as-is. Logins accept either
+  // the email or the mobile (users/repo.ts findByLoginWithSecret).
+  // .trim() runs BEFORE .email(), so a pasted address with stray whitespace
+  // isn't rejected outright.
+  email: z.string().trim().email('Enter a valid email address'),
   password: z.string().min(8),
   full_name: z.string().optional(),
   employee_id: z.string().optional(),

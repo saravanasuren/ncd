@@ -279,23 +279,27 @@ export async function neftSheetForDate(db: Db, payoutDate: string): Promise<Buff
   const withBank = await db.query<Record<string, unknown>>(
     `SELECT l.id AS line_id, c.email,
             COALESCE(pb.account_number, cb.account_number) AS payee_account,
-            COALESCE(pb.ifsc, cb.ifsc) AS payee_ifsc
+            COALESCE(pb.ifsc, cb.ifsc) AS payee_ifsc,
+            COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
+            s.name AS series_name
        FROM application_lines l
        JOIN applications a ON a.id = l.application_id
        JOIN customers c ON c.id = a.customer_id
+       LEFT JOIN series s ON s.id = a.series_id
        LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
        LEFT JOIN customer_bank_accounts cb ON cb.customer_id = a.customer_id AND cb.is_active = TRUE`);
   const bank = new Map(withBank.rows.map((b) => [Number(b.line_id), b]));
   const { buildNeftSheet } = await import('../../lib/neft.js');
   return buildNeftSheet(
-    { debitAccount, sheetName: 'Interest', valueDate: new Date() },
+    { debitAccount, sheetName: 'Sheet 1', valueDate: new Date(), beneficiaryEmail: fallbackEmail },
     (due.rows as Record<string, unknown>[]).map((r) => {
       const b = bank.get(Number(r.line_id)) ?? {};
       return {
         amount: Number(r.net_amount), valueDate: payoutDate,
-        beneAccount: String(b.payee_account ?? ''), beneName: String(r.customer_name ?? ''),
-        ifsc: String(b.payee_ifsc ?? ''), email: (b.email as string) || fallbackEmail || '',
-        creditRemark: `NCD interest ${r.application_no}`, reference: `UPTO-${payoutDate}`,
+        beneAccount: String(b.payee_account ?? ''),
+        beneName: String(b.beneficiary_name || r.customer_name || ''),
+        ifsc: String(b.payee_ifsc ?? ''),
+        seriesName: String(b.series_name ?? ''), reference: `UPTO-${payoutDate}`,
       };
     })
   );
@@ -318,18 +322,23 @@ export async function neftForBatch(db: Db, batchId: number): Promise<{ buffer: B
   const fallbackEmail = asText(settings['payouts.neft_beneficiary_email']);
   const debit = (await db.query<{ account_number: string }>("SELECT account_number FROM banks WHERE is_disbursement_account = TRUE AND is_active = TRUE ORDER BY id LIMIT 1")).rows[0];
   const rows = (await db.query<Record<string, unknown>>(
-    `SELECT ds.net_amount, ds.due_date, ds.payee_account, ds.payee_ifsc, c.full_name AS name, c.email, a.application_no
+    `SELECT ds.net_amount, ds.due_date, ds.payee_account, ds.payee_ifsc, c.full_name AS name, c.email, a.application_no,
+            cba.holder_name AS beneficiary_name, s.name AS series_name
      FROM disbursement_schedule ds JOIN applications a ON a.id = ds.application_id JOIN customers c ON c.id = a.customer_id
+     LEFT JOIN series s ON s.id = a.series_id
+     LEFT JOIN customer_bank_accounts cba ON cba.customer_id = c.id AND cba.is_active = TRUE
      WHERE ds.batch_id = $1 AND ds.status = 'Scheduled' ORDER BY c.full_name`, [batchId])).rows;
   const { buildNeftSheet } = await import('../../lib/neft.js');
   const buffer = await buildNeftSheet(
     { debitAccount: debitSetting || debit?.account_number || 'DISBURSEMENT-ACCT',
-      sheetName: 'Interest',
-      valueDate: new Date() },   // value date = the day the sheet is generated
+      sheetName: 'Sheet 1',
+      valueDate: new Date(),     // value date = the day the sheet is generated
+      beneficiaryEmail: fallbackEmail },
     rows.map((r) => ({
       amount: Number(r.net_amount), valueDate: String(r.due_date),
-      beneAccount: String(r.payee_account ?? ''), beneName: String(r.name), ifsc: String(r.payee_ifsc ?? ''),
-      email: ((r.email as string) || fallbackEmail) ?? '', creditRemark: `NCD interest ${r.application_no}`, reference: batch.batch_no,
+      beneAccount: String(r.payee_account ?? ''),
+      beneName: String(r.beneficiary_name || r.name || ''), ifsc: String(r.payee_ifsc ?? ''),
+      seriesName: String(r.series_name ?? ''), reference: batch.batch_no,
     }))
   );
   if (batch.status === 'Approved') await db.query("UPDATE payout_batches SET status = 'Downloaded' WHERE id = $1", [batchId]);
@@ -342,4 +351,59 @@ export async function markRowFailed(db: Db, actor: AuthUser, scheduleId: number,
   if (!upd.rowCount) throw errors.conflict('Row is not in a failable state');
   await writeAudit(db, { actorId: actor.id, action: 'payout.row.failed', entityType: 'disbursement_schedule', entityId: scheduleId, after: { reason } });
   return { ok: true };
+}
+
+// ── Summary sheet (wealth parity) ─────────────────────────────────────────
+// The human companion to the bank NEFT file. Ops reconcile one against the
+// other, so it names the customer, the interest period and the gross/TDS/net
+// split that the bank sheet (net only) can't show.
+const SUMMARY_SELECT = `
+  SELECT a.application_no, c.full_name AS customer_name, c.date_of_birth, c.pan,
+         s.name AS series_name, l.amount AS investment_amount, l.coupon_rate_pct,
+         COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
+         COALESCE(ds.payee_account, pb.account_number, cb.account_number) AS account_number,
+         COALESCE(ds.payee_ifsc, pb.ifsc, cb.ifsc) AS ifsc,
+         ds.due_date AS period_to, ds.gross_amount, ds.tds_amount, ds.net_amount,
+         -- Days accrued = this due date minus the previous PAID cut-off for the
+         -- same line (or the interest start for a brand-new investment).
+         (ds.due_date - COALESCE(
+            (SELECT max(p.due_date) FROM disbursement_schedule p
+              WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
+                AND p.due_type IN ('Interest','BrokenInterest') AND p.status = 'Paid'),
+            a.interest_start_date)) AS period_days,
+         CASE
+           WHEN ds.due_type IN ('Redemption','Premature') THEN 'Redemption'
+           WHEN NOT EXISTS (SELECT 1 FROM disbursement_schedule q
+                             WHERE q.line_id = ds.line_id AND q.due_date < ds.due_date AND q.status = 'Paid')
+             THEN 'Addition'
+           ELSE 'Live'
+         END AS row_type
+    FROM disbursement_schedule ds
+    JOIN applications a ON a.id = ds.application_id
+    JOIN application_lines l ON l.id = ds.line_id
+    JOIN customers c ON c.id = a.customer_id
+    LEFT JOIN series s ON s.id = a.series_id
+    LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
+    LEFT JOIN customer_bank_accounts cb ON cb.customer_id = c.id AND cb.is_active = TRUE`;
+
+/** Summary sheet for a stored batch. */
+export async function summaryForBatch(db: Db, batchId: number): Promise<{ buffer: Buffer; batchNo: string }> {
+  const batch = (await db.query<{ batch_no: string }>('SELECT batch_no FROM payout_batches WHERE id = $1', [batchId])).rows[0];
+  if (!batch) throw errors.notFound('Batch not found');
+  const { rows } = await db.query<Record<string, unknown>>(
+    `${SUMMARY_SELECT} WHERE ds.batch_id = $1 ORDER BY c.full_name`, [batchId]);
+  const { buildSummarySheet } = await import('../../lib/payout-summary.js');
+  return { buffer: await buildSummarySheet(rows as never[]), batchNo: batch.batch_no };
+}
+
+/** Summary sheet for the un-batched preview up to a cut-off date. */
+export async function summaryForDate(db: Db, payoutDate: string): Promise<Buffer> {
+  const { rows } = await db.query<Record<string, unknown>>(
+    `${SUMMARY_SELECT}
+      WHERE ds.status = 'Scheduled' AND ds.batch_id IS NULL AND ds.due_date <= $1::date
+        AND ds.due_type IN ('Interest','BrokenInterest')
+      ORDER BY c.full_name`, [payoutDate]);
+  if (!rows.length) throw errors.unprocessable('No interest has accrued up to that date');
+  const { buildSummarySheet } = await import('../../lib/payout-summary.js');
+  return buildSummarySheet(rows as never[]);
 }

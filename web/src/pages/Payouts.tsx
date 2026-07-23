@@ -46,6 +46,9 @@ export function PayoutsPage() {
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="px-2.5 py-1.5 text-sm border border-border-strong rounded" />
         <a href={`/api/payouts/sheet.xlsx?date=${date}`}
            className={`text-xs border border-border-strong rounded px-3 py-1.5 no-underline ${!preview.data || preview.data.count === 0 ? 'pointer-events-none opacity-40' : 'hover:bg-bg'}`}>↓ NEFT sheet</a>
+        {/* The human companion to the bank file — same pair wealth produced. */}
+        <a href={`/api/payouts/preview.summary.xlsx?date=${date}`}
+           className={`text-xs border border-border-strong rounded px-3 py-1.5 no-underline ${!preview.data || preview.data.count === 0 ? 'pointer-events-none opacity-40' : 'hover:bg-bg'}`}>↓ Summary sheet</a>
         <button disabled={!preview.data || preview.data.count === 0 || create.isPending}
           onClick={() => { if (window.confirm(`Confirm the interest up to ${date} has actually been paid out?\n\nThis sends it to a checker; on approval the period is settled and interest resets.`)) { setMsg(''); create.mutate(); } }}
           className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Mark as paid…</button>
@@ -67,6 +70,7 @@ export function PayoutsPage() {
             render: (b) => (
               <span className="inline-flex gap-2 justify-end">
                 <a href={`/api/payouts/${b.id}/download.xlsx`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ NEFT sheet</a>
+                <a href={`/api/payouts/${b.id}/summary.xlsx`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ Summary sheet</a>
                 {b.status === 'PendingChecker' && <span className="text-xs text-text-muted italic">awaiting checker</span>}
                 {b.status === 'Paid' && (
                   <button disabled={notifyWa.isPending}

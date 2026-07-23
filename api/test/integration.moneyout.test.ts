@@ -56,8 +56,8 @@ describe('Federal NEFT sheet', () => {
     const ws = wb.worksheets[0]!;
     const header = (ws.getRow(1).values as unknown[]).filter(Boolean);
     expect(header).toEqual([
-      'Transaction Type', 'Debit Account', 'Transaction Amount', 'Value Date',
-      'Beneficiary Account', 'Beneficiary Name', 'IFSC Code', 'Beneficiary Email ID',
+      'Transaction Type', 'Debit Account Number', 'Transaction Amount', 'Value Date',
+      'Beneficiary Account Number', 'Beneficiary Name', 'IFSC Code', 'Beneficiary Email ID',
       'Beneficiary ID', 'Credit Remarks', 'Debit Remarks', 'Unique Customer Reference Number',
     ]);
     // first data row carries the disbursement debit account

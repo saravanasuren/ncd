@@ -351,19 +351,25 @@ export async function redemptionNeft(db: Db): Promise<Buffer> {
   const fallbackEmail = asText(neftSettings['payouts.neft_beneficiary_email']);
   const rows = (await db.query<Record<string, unknown>>(
     `SELECT r.redemption_no, r.net_payment, r.redemption_date, c.full_name AS name, c.email,
-            cba.account_number AS payee_account, cba.ifsc AS payee_ifsc
+            cba.account_number AS payee_account, cba.ifsc AS payee_ifsc,
+            cba.holder_name AS beneficiary_name, s.name AS series_name
      FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
      LEFT JOIN customer_bank_accounts cba ON cba.customer_id = c.id AND cba.is_active = TRUE
+     LEFT JOIN series s ON s.id = a.series_id
      WHERE r.status = 'Approved' AND r.utr IS NULL ORDER BY c.full_name`)).rows;
   const { buildNeftSheet } = await import('../../lib/neft.js');
   return buildNeftSheet(
     { debitAccount: debitSetting || debit?.account_number || 'DISBURSEMENT-ACCT',
-      sheetName: 'Redemptions',
-      valueDate: new Date() },   // value date = the day the sheet is generated
+      sheetName: 'Sheet 1',
+      valueDate: new Date(),     // value date = the day the sheet is generated
+      beneficiaryEmail: fallbackEmail },
     rows.map((r) => ({
       amount: Number(r.net_payment), valueDate: String(r.redemption_date ?? new Date().toISOString().slice(0, 10)),
-      beneAccount: String(r.payee_account ?? ''), beneName: String(r.name), ifsc: String(r.payee_ifsc ?? ''),
-      email: ((r.email as string) || fallbackEmail) ?? '', creditRemark: `NCD redemption ${r.redemption_no}`, reference: String(r.redemption_no),
+      beneAccount: String(r.payee_account ?? ''),
+      // Beneficiary Name is the bank account's own holder, not the customer
+      // record — joint/differently-named accounts must match the bank.
+      beneName: String(r.beneficiary_name || r.name || ''), ifsc: String(r.payee_ifsc ?? ''),
+      seriesName: String(r.series_name ?? ''), reference: String(r.redemption_no),
     }))
   );
 }

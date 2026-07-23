@@ -50,6 +50,24 @@ payoutsRouter.get('/:id/download.xlsx', requirePermission('payouts:generate'),
     res.end(buffer);
   }));
 
+// Summary sheet — the human companion to the bank NEFT file (wealth parity).
+payoutsRouter.get('/:id/summary.xlsx', requirePermission('payouts:generate'),
+  asyncHandler(async (req, res) => {
+    const { buffer, batchNo } = await s.summaryForBatch(getDb(), Number(req.params.id));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${batchNo}-summary.xlsx"`);
+    res.end(buffer);
+  }));
+
+payoutsRouter.get('/preview.summary.xlsx', requirePermission('payouts:generate'),
+  asyncHandler(async (req, res) => {
+    const date = String(req.query.date ?? new Date().toISOString().slice(0, 10));
+    const buffer = await s.summaryForDate(getDb(), date);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="NEFT-preview-summary-${date}.xlsx"`);
+    res.end(buffer);
+  }));
+
 payoutsRouter.post('/rows/:scheduleId/mark-failed', requirePermission('payouts:mark-paid-manual'),
   asyncHandler(async (req, res) => {
     const { reason } = z.object({ reason: z.string().min(2) }).parse(req.body);

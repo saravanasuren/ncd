@@ -310,3 +310,96 @@ export async function customerLockers(db: Db, customerId: number) {
     })),
   };
 }
+
+/**
+ * Locker tenants, branch-wise.
+ *
+ * LockerHub has NO tenant-roster endpoint. Their GET /lockers?branch_id= is a
+ * pick-a-locker helper for enrolment (contract A4) and returns VACANT lockers
+ * only — id, locker_number, size, status, no tenant fields (confirmed against
+ * live data 2026-07-23: 81 rows at RS Puram, 433 at Hosur, every one `vacant`).
+ * So it can never answer "who holds a locker here", and waiting on it would be
+ * waiting for the wrong thing.
+ *
+ * What we CAN resolve is every locker application NCD is involved in (a deposit
+ * pledge or a recorded cheque) via getLockerApplication, which does return
+ * branch_id, tenant name, phone, status and allotment. That's an accurate
+ * NCD-side tenant list; it is NOT the complete branch roster, and the response
+ * says so via `roster_complete: false` so the UI can't imply otherwise.
+ * Completing it needs a new endpoint from LockerHub carrying occupied lockers +
+ * tenant identity — scope pending, since it exposes customer PII to NCD.
+ */
+export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
+  const ours = (await db.query<Record<string, unknown>>(
+    `SELECT x.lockerhub_application_id,
+            max(x.customer_id) AS customer_id,
+            sum(x.pledged)::numeric AS pledged,
+            max(x.cheque_pending)::int AS cheque_pending
+       FROM (
+         SELECT l.lockerhub_application_id, a.customer_id,
+                CASE WHEN l.status = 'active' THEN l.linked_amount ELSE 0 END AS pledged,
+                0 AS cheque_pending
+           FROM locker_deposit_links l JOIN applications a ON a.id = l.application_id
+         UNION ALL
+         SELECT q.lockerhub_application_id, q.customer_id, 0 AS pledged,
+                CASE WHEN q.status = 'Pending' THEN 1 ELSE 0 END AS cheque_pending
+           FROM locker_cheques q
+       ) x
+      GROUP BY x.lockerhub_application_id
+      ORDER BY x.lockerhub_application_id
+      LIMIT 300`)).rows;
+
+  // Resolve each against LockerHub (they hold branch + tenant + allotment).
+  // Bounded concurrency: this is a staff screen, not a hot path.
+  const CHUNK = 6;
+  const resolved: Array<Record<string, unknown>> = [];
+  let lockerhub_error: string | null = null;
+  for (let i = 0; i < ours.length; i += CHUNK) {
+    const slice = ours.slice(i, i + CHUNK);
+    const out = await Promise.all(slice.map(async (r) => {
+      const id = String(r.lockerhub_application_id);
+      try {
+        const a = await lh.getLockerApplication(id) as Record<string, any>;
+        return { row: r, app: a, error: null as string | null };
+      } catch (e) {
+        if (!lockerhub_error) lockerhub_error = (e as Error).message;
+        return { row: r, app: null, error: (e as Error).message };
+      }
+    }));
+    resolved.push(...out as Array<Record<string, unknown>>);
+  }
+
+  const custIds = ours.map((r) => Number(r.customer_id)).filter((n) => Number.isFinite(n) && n > 0);
+  const custs = custIds.length
+    ? (await db.query<Record<string, unknown>>(
+        'SELECT id, full_name, customer_code, phone FROM customers WHERE id = ANY($1)', [custIds])).rows
+    : [];
+  const custById = new Map(custs.map((c) => [Number(c.id), c]));
+
+  const rows = resolved.map((x: any) => {
+    const r = x.row as Record<string, unknown>;
+    const a = x.app as Record<string, any> | null;
+    const c = custById.get(Number(r.customer_id));
+    return {
+      lockerhub_application_id: String(r.lockerhub_application_id),
+      application_no: a?.application_no ?? null,
+      branch_id: a?.branch_id ?? null,
+      locker_size: a?.locker_size ?? null,
+      status: a?.status ?? a?.application_status ?? null,
+      locker_no: a?.allotment?.locker_number ?? a?.allotment?.locker_no ?? null,
+      tenant_name: a?.name ?? (c?.full_name ?? null),
+      tenant_phone: a?.phone ?? (c?.phone ?? null),
+      customer_id: c ? Number(c.id) : null,
+      customer_code: c?.customer_code ?? null,
+      pledged_amount: Number(r.pledged ?? 0),
+      cheque_pending: Number(r.cheque_pending ?? 0) > 0,
+      unresolved: !a,
+    };
+  }).filter((r) => (opts.branchId ? r.branch_id === opts.branchId : true));
+
+  return {
+    rows,
+    roster_complete: false, // see the note above — their /lockers is down
+    lockerhub_error,
+  };
+}

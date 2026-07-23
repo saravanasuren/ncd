@@ -16,6 +16,7 @@ import { LeadsPage } from './pages/Leads.js';
 import { CustomersPage } from './pages/Customers.js';
 import { CustomerDetailPage } from './pages/CustomerDetail.js';
 import { LockerEnrollmentPage } from './pages/LockerEnrollment.js';
+import { LockerTenantsPage } from './pages/LockerTenants.js';
 import { ApprovalsPage } from './pages/Approvals.js';
 import { ApplicationsPage } from './pages/Applications.js';
 import { ApplicationDetailPage } from './pages/ApplicationDetail.js';
@@ -100,6 +101,7 @@ export function App() {
           <Route path="background-verification" element={<RequirePerm perm="customers:read"><BackgroundVerificationPage /></RequirePerm>} />
           <Route path="people/:type/:id" element={<RequirePerm perm="dashboard:drilldown"><PersonDetailPage /></RequirePerm>} />
           <Route path="locker-enrollment" element={<RequirePerm perm="lockers:enroll"><LockerEnrollmentPage /></RequirePerm>} />
+          <Route path="locker-tenants" element={<RequirePerm perm="lockers:enroll"><LockerTenantsPage /></RequirePerm>} />
           <Route path="applications" element={<RequirePerm perm="customers:read"><ApplicationsPage /></RequirePerm>} />
           <Route path="applications/:id" element={<RequirePerm perm="customers:read"><ApplicationDetailPage /></RequirePerm>} />
           <Route path="approvals" element={<RequirePerm perm={['approvals:check', 'approvals:check-premature', 'approvals:check-handover']}><ApprovalsPage /></RequirePerm>} />

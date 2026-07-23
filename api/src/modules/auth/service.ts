@@ -84,8 +84,10 @@ export async function signup(db: Db, input: SignupInput): Promise<{ id: number; 
   const email = input.email.trim().toLowerCase();
   if (!email) throw errors.badRequest('Email is required');
   assertStrongPassword(input.password);
+  // Agents give their real name too — the agent list has to show people, not
+  // codes (owner 2026-07-23). The generated AG-#### stays as the agent_code.
+  if (!input.full_name?.trim()) throw errors.badRequest('Name is required');
   if (input.type === 'staff') {
-    if (!input.full_name?.trim()) throw errors.badRequest('Name is required');
     if (!input.employee_id?.trim()) throw errors.badRequest('Employee ID is required');
     if (!input.branch_id) throw errors.badRequest('Branch is required');
   }
@@ -106,8 +108,9 @@ export async function signup(db: Db, input: SignupInput): Promise<{ id: number; 
     let branchId = input.branch_id ?? null;
     let fullName = input.full_name?.trim() ?? '';
     if (input.type === 'agent') {
+      // The code identifies the agent; the name they typed is kept as-is so the
+      // agent list, reports and incentive payees read as people.
       agentCode = `AG-${String(await nextSeq(tx, 'agent')).padStart(4, '0')}`;
-      fullName = `Agent ${agentCode}`;
       branchId = Number((await tx.query<{ id: string }>("SELECT id FROM branches WHERE code = 'HO'")).rows[0]?.id ?? null) || null; // HO
     }
 

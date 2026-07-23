@@ -33,16 +33,16 @@ export function SignupPage() {
     if (!emailOk) { setErr('Enter a valid email address.'); return; }
     if (!pwOk) { setErr('Password must be at least 8 characters and include a letter and a number.'); return; }
     if (f.password !== f.confirm) { setErr('Passwords do not match.'); return; }
+    if (!f.full_name.trim()) { setErr('Name is required.'); return; }
     if (type === 'staff') {
-      if (!f.full_name.trim()) { setErr('Name is required.'); return; }
       if (!f.employee_id.trim()) { setErr('Employee ID is required.'); return; }
       if (!f.branch_id) { setErr('Branch is required.'); return; }
     }
     setBusy(true);
     try {
       const body: Record<string, unknown> = { type, mobile: f.mobile.replace(/\D/g, ''), email: f.email.trim(), password: f.password };
+      body.full_name = f.full_name.trim();
       if (type === 'staff') {
-        body.full_name = f.full_name.trim();
         if (f.employee_id.trim()) body.employee_id = f.employee_id.trim();
         if (f.branch_id) body.branch_id = Number(f.branch_id);
       }
@@ -82,12 +82,15 @@ export function SignupPage() {
           <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
             <div className="text-xs text-text-muted mb-1">Signing up as <strong className="capitalize text-text">{type}</strong> · <button type="button" onClick={() => setType(null)} className="text-primary hover:underline">change</button></div>
 
+            {/* Agents give their name too — the agent list must show people, not
+                codes. Their AG-#### is generated and shown after signing up. */}
+            <label className={label}>Name *</label>
+            <input className={input} value={f.full_name} onChange={(e) => set({ full_name: e.target.value })} autoFocus />
+
             {type === 'staff' && (
               <>
                 <label className={label}>Employee ID *</label>
                 <input className={input} value={f.employee_id} onChange={(e) => set({ employee_id: e.target.value })} />
-                <label className={label}>Name *</label>
-                <input className={input} value={f.full_name} onChange={(e) => set({ full_name: e.target.value })} autoFocus />
                 <label className={label}>Branch *</label>
                 <select className={input} value={f.branch_id} onChange={(e) => set({ branch_id: e.target.value })}>
                   <option value="">Select branch…</option>
@@ -98,7 +101,7 @@ export function SignupPage() {
 
             <label className={label}>Official mobile number *</label>
             <input className={input} inputMode="numeric" maxLength={10} placeholder="10-digit mobile"
-              value={f.mobile} onChange={(e) => set({ mobile: e.target.value.replace(/\D/g, '') })} autoFocus={type === 'agent'} />
+              value={f.mobile} onChange={(e) => set({ mobile: e.target.value.replace(/\D/g, '') })} />
 
             <label className={label}>Email address *</label>
             <input type="email" className={input} placeholder="name@example.com" autoComplete="email"

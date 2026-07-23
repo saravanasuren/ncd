@@ -47,6 +47,53 @@ async function sheetOf(buffer: Buffer) {
   return wb.worksheets[0]!;
 }
 
+describe('preview documents agree (the mid-cycle 422)', () => {
+  // The bug this pins: the summary/PDF used to read PROJECTED schedule rows
+  // (due_date <= cut-off) while the NEFT sheet computes pro-rata accrual.
+  // Projections sit on month-ends, so mid-cycle the summary 422'd "no interest
+  // accrued" while the NEFT sheet for the same date produced hundreds of rows
+  // — seen live 2026-07-23. All three previews must be views of one dataset.
+  // A date a few days after interest starts — accrual exists, but the first
+  // month-end projection hasn't come due, which is the state that 422'd live.
+  let MID_CYCLE = '';
+  beforeAll(async () => {
+    MID_CYCLE = String((await ctx.db.query(
+      `SELECT (min(COALESCE(a.interest_start_date, se.deemed_date))::date + 5)::text AS d
+         FROM applications a JOIN series se ON se.id = a.series_id`)).rows[0]!.d).slice(0, 10);
+  });
+
+  it('summary + PDF produce for a mid-cycle date whenever the NEFT sheet does', async () => {
+    const a = await admin();
+    const neft = await a.raw(`/api/payouts/sheet.xlsx?date=${MID_CYCLE}`);
+    expect(neft.status).toBe(200); // accrual exists → the pair must both work
+    expect((await a.raw(`/api/payouts/preview.summary.xlsx?date=${MID_CYCLE}`)).status).toBe(200);
+    expect((await a.raw(`/api/payouts/preview.pdf?date=${MID_CYCLE}`)).status).toBe(200);
+  });
+
+  it('summary row count equals the preview count for the same date', async () => {
+    const a = await admin();
+    const preview = await a.get(`/api/payouts/preview?date=${MID_CYCLE}`);
+    const ws = await sheetOf((await a.raw(`/api/payouts/preview.summary.xlsx?date=${MID_CYCLE}`)).buffer);
+    expect(ws.rowCount - 1).toBe(preview.json.count); // minus the header row
+  });
+
+  it('an EMPTY date param falls back to today instead of 422ing', async () => {
+    // ?date= (cleared field) is an empty string — `?? today` never fires on it,
+    // and an empty payoutDate compares before every watermark: previewDue
+    // returned zero rows and the download dumped raw JSON at the user.
+    const a = await admin();
+    const today = new Date().toISOString().slice(0, 10);
+    const empty = await a.get('/api/payouts/preview?date=');
+    const explicit = await a.get(`/api/payouts/preview?date=${today}`);
+    expect(empty.status).toBe(200);
+    expect(empty.json.count).toBe(explicit.json.count);
+    expect((await a.raw('/api/payouts/preview.summary.xlsx?date=')).status)
+      .toBe((await a.raw(`/api/payouts/preview.summary.xlsx?date=${today}`)).status);
+    expect((await a.raw('/api/payouts/sheet.xlsx?date=banana')).status)
+      .toBe((await a.raw(`/api/payouts/sheet.xlsx?date=${today}`)).status);
+  });
+});
+
 describe('payout summary sheet', () => {
   it('preview carries wealth\'s 18 columns, in order', async () => {
     const a = await admin();

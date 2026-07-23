@@ -93,7 +93,7 @@ export async function previewDue(db: Db, payoutDate: string) {
 export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: string, utr?: string) {
   return db.withTx(async (tx) => {
     const due = await previewDue(tx, payoutDate);
-    if (due.count === 0) throw errors.unprocessable('No interest has accrued up to that date');
+    if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
     const batchNo = await nextCode(tx, 'redemption', 'NEFT-{yyyy}-{seq:6}');
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO payout_batches (batch_no, kind, payout_date, total_gross, total_tds, total_net, status, created_by_user_id)
@@ -279,7 +279,7 @@ async function neftHeaderBits(db: Db) {
  */
 export async function neftSheetForDate(db: Db, payoutDate: string): Promise<Buffer> {
   const due = await previewDue(db, payoutDate);
-  if (due.count === 0) throw errors.unprocessable('No interest has accrued up to that date');
+  if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
   const { debitAccount, fallbackEmail } = await neftHeaderBits(db);
   const withBank = await db.query<Record<string, unknown>>(
     `SELECT l.id AS line_id, c.email,
@@ -414,14 +414,58 @@ export async function summaryForBatch(db: Db, batchId: number): Promise<{ buffer
   return { buffer: await buildSummarySheet(rows as never[]), batchNo: batch.batch_no };
 }
 
+/**
+ * Preview summary/PDF rows — built from previewDue, the SAME pro-rata rows the
+ * preview NEFT sheet pays, enriched with the static per-line fields.
+ *
+ * They used to read projected schedule rows (due_date <= cut-off) instead,
+ * which is a different universe: projections sit on month-ends, so mid-cycle
+ * the summary 422'd "no interest accrued" while the NEFT sheet for the very
+ * same date happily produced 655 rows — and when both did produce, the row
+ * sets (and totals) disagreed. Ops reconcile these two documents against each
+ * other; they must be two views of one dataset.
+ */
+async function summaryRowsForDate(db: Db, payoutDate: string): Promise<Record<string, unknown>[]> {
+  const due = await previewDue(db, payoutDate);
+  if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
+  const lineIds = (due.rows as Record<string, unknown>[]).map((r) => Number(r.line_id));
+  const statics = (await db.query<Record<string, unknown>>(
+    `SELECT l.id AS line_id, c.dob AS date_of_birth, c.pan,
+            s.name AS series_name, l.amount AS investment_amount, l.coupon_rate_pct,
+            COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
+            COALESCE(pb.account_number, cb.account_number) AS account_number,
+            COALESCE(pb.ifsc, cb.ifsc) AS ifsc,
+            EXISTS (SELECT 1 FROM disbursement_schedule q
+                     WHERE q.line_id = l.id AND q.due_type IN ('Interest','BrokenInterest')
+                       AND q.status = 'Paid') AS paid_before
+       FROM application_lines l
+       JOIN applications a ON a.id = l.application_id
+       JOIN customers c ON c.id = a.customer_id
+       LEFT JOIN series s ON s.id = a.series_id
+       LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
+       LEFT JOIN customer_bank_accounts cb ON cb.customer_id = c.id AND cb.is_active = TRUE
+      WHERE l.id = ANY($1)`, [lineIds])).rows;
+  const byLine = new Map(statics.map((r) => [Number(r.line_id), r]));
+  return (due.rows as Record<string, unknown>[]).map((r) => {
+    const st = byLine.get(Number(r.line_id)) ?? {};
+    return {
+      ...st,
+      application_no: r.application_no,
+      customer_name: r.customer_name,
+      row_type: (st as Record<string, unknown>).paid_before ? 'Live' : 'Addition',
+      period_from: r.from_date,
+      period_to: r.due_date,
+      period_days: r.days,
+      gross_amount: r.gross_amount,
+      tds_amount: r.tds_amount,
+      net_amount: r.net_amount,
+    };
+  });
+}
+
 /** Summary sheet for the un-batched preview up to a cut-off date. */
 export async function summaryForDate(db: Db, payoutDate: string): Promise<Buffer> {
-  const { rows } = await db.query<Record<string, unknown>>(
-    `${SUMMARY_SELECT}
-      WHERE ds.status = 'Scheduled' AND ds.batch_id IS NULL AND ds.due_date <= $1::date
-        AND ds.due_type IN ('Interest','BrokenInterest')
-      ORDER BY c.full_name`, [payoutDate]);
-  if (!rows.length) throw errors.unprocessable('No interest has accrued up to that date');
+  const rows = await summaryRowsForDate(db, payoutDate);
   const { buildSummarySheet } = await import('../../lib/payout-summary.js');
   return buildSummarySheet(rows as never[]);
 }
@@ -491,12 +535,8 @@ export async function summaryPdfForBatch(db: Db, batchId: number): Promise<{ buf
 }
 
 export async function previewPdf(db: Db, payoutDate: string): Promise<Buffer> {
-  const { rows } = await db.query<Record<string, unknown>>(
-    `${SUMMARY_SELECT}
-      WHERE ds.status = 'Scheduled' AND ds.batch_id IS NULL AND ds.due_date <= $1::date
-        AND ds.due_type IN ('Interest','BrokenInterest')
-      ORDER BY c.full_name`, [payoutDate]);
-  if (!rows.length) throw errors.unprocessable('No interest has accrued up to that date');
+  // Same rows as the preview NEFT + summary sheets — one dataset, three views.
+  const rows = await summaryRowsForDate(db, payoutDate);
   return summaryPdf(rows, 'Interest payout preview', `Everything accrued up to ${payoutDate} · not yet batched`);
 }
 

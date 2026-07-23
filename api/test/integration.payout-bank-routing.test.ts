@@ -92,6 +92,43 @@ describe('payout bank routing', () => {
     }
   });
 
+  it('batch creation refreshes the bank on a row that was projected without one', async () => {
+    // The batch INSERT resolves the bank live, but collides with the projected
+    // row for that date. If ON CONFLICT drops the fresh details, a row projected
+    // before the customer had an account reaches the bank file blank — which is
+    // how 293 live customers were set up to be paid nowhere.
+    const a = await admin();
+    const { cid } = await customerWithSchedule(a, 'Batch Refresh Cust', '9520000004');
+    await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '77770007777', ifsc: 'ICIC0001234' });
+
+    // Force the stale state the projection used to leave behind.
+    await ctx.db.query(
+      `UPDATE disbursement_schedule ds SET payee_account = NULL, payee_ifsc = NULL
+         FROM applications a WHERE a.id = ds.application_id AND a.customer_id = $1`, [cid]);
+
+    // Bill on a date a projected Interest row ALREADY occupies, so the batch
+    // INSERT collides and takes the ON CONFLICT path. Billing a date with no
+    // projected row takes the plain INSERT and proves nothing.
+    const projected = await ctx.db.query<{ due_date: string; line_id: string }>(
+      `SELECT ds.due_date, ds.line_id FROM disbursement_schedule ds
+         JOIN applications a ON a.id = ds.application_id
+        WHERE a.customer_id = $1 AND ds.due_type = 'Interest' AND ds.status = 'Scheduled'
+        ORDER BY ds.due_date LIMIT 1`, [cid]);
+    const dueDate = String(projected.rows[0]!.due_date).slice(0, 10);
+    const lineId = Number(projected.rows[0]!.line_id);
+
+    const batch = await a.post('/api/payouts', { payout_date: dueDate });
+    expect(batch.status).toBe(201);
+
+    const collided = await ctx.db.query<Record<string, unknown>>(
+      `SELECT payee_account, payee_ifsc, batch_id FROM disbursement_schedule
+        WHERE line_id = $1 AND due_date = $2 AND due_type = 'Interest'`, [lineId, dueDate]);
+    expect(collided.rows.length).toBe(1);              // updated in place, not duplicated
+    expect(collided.rows[0]!.batch_id).toBeTruthy();   // it really took the batch path
+    expect(collided.rows[0]!.payee_account).toBe('77770007777');
+    expect(collided.rows[0]!.payee_ifsc).toBe('ICIC0001234');
+  });
+
   it('an NCD pinned to its own account ignores the customer default', async () => {
     const a = await admin();
     const { cid, appId } = await customerWithSchedule(a, 'Pinned Bank Cust', '9520000003');

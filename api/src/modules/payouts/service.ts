@@ -122,7 +122,12 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
          VALUES ($1,$2,$3,'Interest',$4,$5,$6,'Scheduled',$7,$8,$9)
          ON CONFLICT (line_id, due_date, due_type) DO UPDATE
            SET gross_amount = EXCLUDED.gross_amount, tds_amount = EXCLUDED.tds_amount,
-               net_amount = EXCLUDED.net_amount, batch_id = EXCLUDED.batch_id`,
+               net_amount = EXCLUDED.net_amount, batch_id = EXCLUDED.batch_id,
+               -- The bank resolved just now beats whatever the projected row was
+               -- carrying. Without these two the INSERT's fresh details are
+               -- discarded on collision, and a row projected before the customer
+               -- had an account stays blank all the way to the bank.
+               payee_account = EXCLUDED.payee_account, payee_ifsc = EXCLUDED.payee_ifsc`,
         [r.line_id, r.application_id, payoutDate, r.gross_amount, r.tds_amount, r.net_amount,
          batchId, bank?.account_number ?? null, bank?.ifsc ?? null]
       );

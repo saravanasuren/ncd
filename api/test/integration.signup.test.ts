@@ -42,7 +42,7 @@ describe('self-service sign-up', () => {
 
   it('agent signup auto-generates an agent number + links a user, branch HO', async () => {
     const c = new Client(ctx.base);
-    const su = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000002', email: 'u9800000002@example.com', password: 'Secret99' });
+    const su = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000002', email: 'u9800000002@example.com', password: 'Secret99', full_name: 'Ravi Kumar' });
     expect(su.status).toBe(201);
     expect(su.json.agent_code).toMatch(/^AG-/);
     const row = (await ctx.db.query("SELECT agent_code, user_id FROM agents WHERE phone = '9800000002'")).rows[0]!;
@@ -69,7 +69,7 @@ describe('self-service sign-up', () => {
 
   it('a weak password (no number) is rejected', async () => {
     const c = new Client(ctx.base);
-    const su = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000009', email: 'u9800000009@example.com', password: 'abcdefgh' });
+    const su = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000009', email: 'u9800000009@example.com', password: 'abcdefgh', full_name: 'Weak Pw Agent' });
     expect(su.status).toBe(400);
   });
 
@@ -116,16 +116,48 @@ describe('self-service sign-up', () => {
 
   it('rejects a missing/invalid email, and a duplicate one with a clean 409', async () => {
     const c = new Client(ctx.base);
-    const noEmail = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000022', password: 'Passw0rd' });
+    const noEmail = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000022', password: 'Passw0rd', full_name: 'No Email Agent' });
     expect(noEmail.status).toBe(400);
-    const bad = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000022', email: 'not-an-email', password: 'Passw0rd' });
+    const bad = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000022', email: 'not-an-email', password: 'Passw0rd', full_name: 'Bad Email Agent' });
     expect(bad.status).toBe(400);
 
-    const first = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000023', email: 'shared@example.com', password: 'Passw0rd' });
+    const first = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000023', email: 'shared@example.com', password: 'Passw0rd', full_name: 'Shared A' });
     expect(first.status).toBe(201);
     // Same email, different mobile → 409, not a unique-violation 500.
-    const dup = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000024', email: 'shared@example.com', password: 'Passw0rd' });
+    const dup = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000024', email: 'shared@example.com', password: 'Passw0rd', full_name: 'Shared B' });
     expect(dup.status).toBe(409);
     expect(dup.json.error.message).toMatch(/email address already exists/i);
+  });
+
+  // Owner 2026-07-23: the agent list must show people, not codes.
+  it('keeps the agent\'s real name on both the login and the agent record', async () => {
+    const c = new Client(ctx.base);
+    const su = await c.post('/api/auth/signup', {
+      type: 'agent', mobile: '9800000031', email: 'meena@example.com', password: 'Passw0rd', full_name: '  Meena Raghavan  ',
+    });
+    expect(su.status).toBe(201);
+    expect(su.json.agent_code).toMatch(/^AG-/);
+
+    // The generated code identifies them; the NAME is what they typed.
+    const agent = (await ctx.db.query("SELECT agent_code, full_name FROM agents WHERE phone = '9800000031'")).rows[0]! as any;
+    expect(agent.agent_code).toBe(su.json.agent_code);
+    expect(agent.full_name).toBe('Meena Raghavan');
+    expect(agent.full_name).not.toMatch(/^Agent AG-/);
+
+    const user = (await ctx.db.query("SELECT full_name FROM users WHERE phone = '9800000031'")).rows[0]! as any;
+    expect(user.full_name).toBe('Meena Raghavan');
+
+    // The approver sees the person, not the code.
+    const a = await admin();
+    const q = await a.get('/api/approvals/queue');
+    const req = q.json.rows.find((x: any) => x.request_type === 'user_verification' && x.metadata.mobile === '9800000031');
+    expect(req.metadata.name).toBe('Meena Raghavan');
+  });
+
+  it('an agent signing up without a name is refused', async () => {
+    const c = new Client(ctx.base);
+    const r = await c.post('/api/auth/signup', { type: 'agent', mobile: '9800000032', email: 'noname@example.com', password: 'Passw0rd' });
+    expect(r.status).toBe(400);
+    expect(r.json.error.message).toMatch(/Name is required/i);
   });
 });

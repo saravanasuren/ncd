@@ -153,7 +153,8 @@ export async function myEarnings(db: Db, actor: AuthUser) {
   const bal = await payeeBalance(db, payeeType, payeeId);
 
   const paidItems = (await db.query(
-    `SELECT ia.amount, ia.accrual_date, ia.paid_at, a.application_no
+    `SELECT ia.amount, ia.accrual_date, ia.paid_at, a.application_no,
+            c.full_name AS customer_name, c.customer_code
      ${ACCRUAL_FROM}
      WHERE ia.payee_type = $1 AND ia.payee_id = $2 AND ia.paid_at IS NOT NULL AND ${NOT_SELF}
      ORDER BY ia.paid_at DESC`, [payeeType, payeeId])).rows;

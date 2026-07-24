@@ -32,6 +32,26 @@ beforeAll(async () => {
       if (p === '/ping') return send(200, { ok: true, service: 'lockerhub', time: 't' });
       if (p === '/branches') return send(200, { branches: [{ id: 'br_1', name: 'HO', address: 'A' }] });
       if (p === '/locker-availability') return send(200, { branch_id: url.searchParams.get('branch_id'), sizes: [{ size: 'Medium', annual_fee: 3000, rent_incl_gst: 3540, deposit: 25000, gst_pct: 18, vacant_count: 12 }] });
+      // A15 locker-inventory — the stock position. Unlike availability above it
+      // reports the zeroes: 'Large' is sold out and stays in the payload, and one
+      // locker is reserved (mid-allocation, NOT sellable). Both are here so the
+      // proxy can be pinned against dropping or folding either.
+      if (p === '/locker-inventory') {
+        const b = url.searchParams.get('branch_id');
+        if (b && b !== 'br_1') return send(404, { error: 'Unknown branch' });
+        const sz = (size: string, total: number, vacant: number, occupied: number, reserved = 0) =>
+          ({ size, total, vacant, occupied, reserved, other: 0, by_status: { vacant, occupied, reserved } });
+        const by_size = [sz('Medium', 21, 14, 7), sz('Large', 8, 0, 7, 1), sz('Extra Large', 5, 5, 0)];
+        const totals = { total: 34, vacant: 19, occupied: 14, reserved: 1, other: 0,
+          by_status: { vacant: 19, occupied: 14, reserved: 1 }, occupancy_pct: 41.2, branches: 1 };
+        return send(200, {
+          as_of: '2026-07-24T09:15:00.000Z', branch_id: b, totals, by_size,
+          pricing: [{ size: 'Medium', annual_fee: 3000, rent_incl_gst: 3540, deposit: 25000, gst_pct: 18 },
+                    { size: 'Large', annual_fee: 5000, rent_incl_gst: 5900, deposit: 50000, gst_pct: 18 },
+                    { size: 'Extra Large', annual_fee: 8000, rent_incl_gst: 9440, deposit: 100000, gst_pct: 18 }],
+          branches: [{ branch_id: 'br_1', branch_name: 'HO', address: 'A', ...totals, by_size }],
+        });
+      }
       if (p === '/customers/9800011122') return send(200, { found: false });
       if (p === '/customers' && req.method === 'POST') return send(200, { success: true, phone: body.phone, created: true });
       if (p === '/locker-applications' && req.method === 'POST') return send(201, { success: true, application_id: 'la_1', application_no: 'APP-L-1', status: 'payment_pending', pricing: { locker_size: 'Medium', annual_fee: 3000, rent_incl_gst: 3540, deposit: 25000, gst_pct: 18 } });
@@ -101,6 +121,63 @@ describe('locker enrollment proxy (Part A)', () => {
     const br = await staff.get('/api/lockers/branches');
     expect(br.json.branches[0].id).toBe('br_1');
     expect(seen.every((s) => s.key === config.LOCKERHUB_INTEGRATION_KEY)).toBe(true);
+  });
+
+  // ── A15 stock position ──────────────────────────────────────────────────
+  // The reason this endpoint exists is that /locker-availability answers a
+  // different question: it quotes a sale and omits what it cannot sell. A stock
+  // screen has to say "none left" out loud, so these pin the two properties that
+  // make it useful — the zeroes survive, and reserved never reads as available.
+  describe('locker inventory (A15)', () => {
+    it('proxies through with the integration key, scoped to a branch', async () => {
+      seen = [];
+      const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+      const r = await staff.get('/api/lockers/inventory?branch_id=br_1');
+      expect(r.status).toBe(200);
+      expect(r.json.totals.total).toBe(34);
+      const call = seen.find((s) => s.path === '/locker-inventory');
+      expect(call?.key).toBe(config.LOCKERHUB_INTEGRATION_KEY);
+    });
+
+    it('answers with no branch chosen, for the network-wide total', async () => {
+      const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+      const r = await staff.get('/api/lockers/inventory');
+      expect(r.status).toBe(200);
+      expect(r.json.totals.branches).toBe(1);
+    });
+
+    it('keeps sold-out sizes in the payload instead of dropping them', async () => {
+      const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+      const r = await staff.get('/api/lockers/inventory?branch_id=br_1');
+      const large = (r.json.by_size as any[]).find((s) => s.size === 'Large');
+      // /locker-availability would have omitted this row entirely — the whole
+      // point of A15 is that the sales screen can still say "0 Large left".
+      expect(large).toBeTruthy();
+      expect(large.vacant).toBe(0);
+      expect(large.total).toBe(8);
+    });
+
+    it('reports reserved apart from vacant — it is not sellable stock', async () => {
+      const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+      const r = await staff.get('/api/lockers/inventory?branch_id=br_1');
+      expect(r.json.totals.reserved).toBe(1);
+      // 19 vacant + 14 occupied + 1 reserved = 34. If anything ever adds
+      // reserved into vacant to make a nicer number, this fails.
+      expect(r.json.totals.vacant).toBe(19);
+      expect(r.json.totals.vacant + r.json.totals.occupied + r.json.totals.reserved + r.json.totals.other)
+        .toBe(r.json.totals.total);
+    });
+
+    it('surfaces their 404 for an unknown branch rather than an empty stock sheet', async () => {
+      const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+      const r = await staff.get('/api/lockers/inventory?branch_id=br_nope');
+      expect(r.status).toBe(404);
+    });
+
+    it('is gated by lockers:enroll like the rest of Part A', async () => {
+      const agent = await login('agent@demo.local');
+      expect((await agent.get('/api/lockers/inventory')).status).toBe(403);
+    });
   });
 
   it('online flow: create customer → application → payment link per leg', async () => {

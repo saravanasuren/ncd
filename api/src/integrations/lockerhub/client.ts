@@ -62,6 +62,45 @@ export const ping = () => lhFetch<{ ok: boolean; service: string; time: string }
 export const branches = () => lhFetch<{ branches: Array<{ id: string; name: string; address?: string }> }>('GET', '/branches');
 export const lockerAvailability = (branchId?: string) =>
   lhFetch<Record<string, unknown>>('GET', '/locker-availability', { query: { branch_id: branchId } });
+
+/**
+ * A15 — the whole stock position: totals, what's left, branch-wise and size-wise.
+ *
+ * NOT interchangeable with lockerAvailability (A3). A3 is a sell-right-now price
+ * quote and OMITS sizes with zero vacancy; A15 hides nothing — every canonical
+ * size at every branch comes back, zeroes included, because "0 Extra Large left
+ * at Hosur" is the fact a stock screen exists to state. Quote a sale from A3,
+ * show stock from A15.
+ *
+ * `vacant` is what is actually sellable. `reserved` is a locker mid-allocation —
+ * never add it to `vacant` when telling a customer what's available. Statuses
+ * LockerHub adds later land in `other` and are itemised in `by_status`, so
+ * `total` always equals the real row count and nothing is silently dropped.
+ *
+ * Omit branchId for the whole network; pass one to scope everything (totals
+ * included) to that branch. An unknown id is a 404 from them, surfaced as-is.
+ * Counts are read live off the same rows allocation reads, and they do not
+ * cache — call it as often as the page needs.
+ */
+export interface LockerStockCounts {
+  total: number; vacant: number; occupied: number; reserved: number; other: number;
+  by_status: Record<string, number>;
+}
+export interface LockerSizeStock extends LockerStockCounts { size: string }
+export interface LockerBranchStock extends LockerStockCounts {
+  branch_id: string; branch_name: string; address?: string | null;
+  occupancy_pct: number; by_size: LockerSizeStock[];
+}
+export interface LockerInventory {
+  as_of: string;
+  branch_id: string | null;
+  totals: LockerStockCounts & { occupancy_pct: number; branches: number };
+  by_size: LockerSizeStock[];
+  pricing: Array<{ size: string; annual_fee: number; rent_incl_gst: number; deposit: number; gst_pct: number }>;
+  branches: LockerBranchStock[];
+}
+export const lockerInventory = (branchId?: string) =>
+  lhFetch<LockerInventory>('GET', '/locker-inventory', { query: { branch_id: branchId } });
 export const lockers = (branchId: string, size?: string) =>
   lhFetch<{ lockers: Array<Record<string, unknown>> }>('GET', '/lockers', { query: { branch_id: branchId, size } });
 /**

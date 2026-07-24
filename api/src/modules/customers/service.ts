@@ -10,7 +10,12 @@ import { writeAudit } from '../../lib/audit.js';
 import { nextCode } from '../../lib/sequences.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
 import { getSettingsMap } from '../settings/service.js';
-import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
+import {
+  OUTSTANDING_APPLICATION_STATUSES,
+  CORRECTABLE_CUSTOMER_KEYS,
+  isCorrectableCustomerField,
+  normaliseCustomerFieldValue,
+} from '@new-wealth/shared';
 
 const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((s) => `'${s}'`).join(',');
 import { kycProvider } from '../../integrations/kyc/index.js';
@@ -272,6 +277,50 @@ export async function updateBankAccountName(db: Db, actor: AuthUser, customerId:
       after: { holder_name: name, account_number: before.account_number },
     });
     return { ok: true, id: bankId, holder_name: name };
+  });
+}
+
+/**
+ * A customer's tax position: whether TDS applies, and any 15G/15H on file.
+ *
+ * These drive computeTds on every payout, but were settable ONLY at enrolment —
+ * the correction whitelist doesn't carry them — so a customer who later filed a
+ * 15G/15H had TDS deducted anyway, with no way for staff to record the form.
+ * Changing it is real money, so every change is audited with before/after.
+ *
+ * A form without an expiry is refused: 15G/15H are per financial year, and
+ * isFormValid() treats a missing expiry as "not valid", so accepting one would
+ * silently do nothing.
+ */
+export async function updateTaxStatus(
+  db: Db, actor: AuthUser, customerId: number,
+  input: { tds_applicable?: boolean; tax_form?: string | null; tax_form_expires_on?: string | null },
+) {
+  await assertVisible(db, actor, customerId);
+  const form = input.tax_form?.trim() || null;
+  if (form && !['15G', '15H'].includes(form)) throw errors.badRequest('Tax form must be 15G or 15H');
+  if (form && !input.tax_form_expires_on) {
+    throw errors.badRequest('A 15G/15H needs its validity date — without one it is ignored when TDS is computed');
+  }
+  return db.withTx(async (tx) => {
+    const before = (await tx.query<Record<string, unknown>>(
+      'SELECT tds_applicable, tax_form, tax_form_expires_on FROM customers WHERE id = $1', [customerId])).rows[0];
+    if (!before) throw errors.notFound('Customer not found');
+    await tx.query(
+      `UPDATE customers SET
+         tds_applicable      = COALESCE($1, tds_applicable),
+         tax_form            = $2,
+         tax_form_expires_on = $3,
+         updated_at = now()
+       WHERE id = $4`,
+      [input.tds_applicable ?? null, form, form ? input.tax_form_expires_on : null, customerId]);
+    const after = (await tx.query<Record<string, unknown>>(
+      'SELECT tds_applicable, tax_form, tax_form_expires_on FROM customers WHERE id = $1', [customerId])).rows[0];
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'customer.tax-status', entityType: 'customers', entityId: customerId,
+      before, after,
+    });
+    return { ok: true, ...after };
   });
 }
 
@@ -570,6 +619,14 @@ export async function completeDigilocker(db: Db, actor: AuthUser, customerId: nu
 /** Correction request → approval; applies the diff on final approve. */
 export async function requestCorrection(db: Db, actor: AuthUser, customerId: number, changes: Record<string, unknown>, reason: string): Promise<ApprovalRow> {
   await assertVisible(db, actor, customerId);
+  // Reject unknown fields here rather than dropping them at apply time — a
+  // maker who asks to correct something we cannot change must be told now,
+  // not have the request approved and quietly do nothing.
+  const unknown = Object.keys(changes).filter((k) => !isCorrectableCustomerField(k));
+  if (unknown.length) {
+    throw errors.badRequest(`Cannot correct: ${unknown.join(', ')}. Correctable fields are: ${CORRECTABLE_CUSTOMER_KEYS.join(', ')}`);
+  }
+  if (!Object.keys(changes).length) throw errors.badRequest('No changes to submit');
   return db.withTx(async (tx) => {
     const req = await createApprovalRequest(tx, {
       type: 'customer_correction',
@@ -584,14 +641,18 @@ export async function requestCorrection(db: Db, actor: AuthUser, customerId: num
   });
 }
 
-const CORRECTABLE = new Set(['full_name', 'phone', 'email', 'address', 'city', 'district', 'state']);
 registerOnFinalApprove('customer_correction', async (tx, req) => {
   const changes = (req.metadata.changes ?? {}) as Record<string, unknown>;
   const sets: string[] = [];
   const params: unknown[] = [];
   let p = 0;
   for (const [k, v] of Object.entries(changes)) {
-    if (CORRECTABLE.has(k)) { sets.push(`${k} = $${++p}`); params.push(v); }
+    // Allow-list is CORRECTABLE_CUSTOMER_KEYS (shared with the UI that renders
+    // the form), so `k` is never attacker-chosen SQL.
+    const value = normaliseCustomerFieldValue(k, v);
+    if (value === undefined) continue;
+    sets.push(`${k} = $${++p}`);
+    params.push(value);
   }
   if (sets.length && req.entity_id) {
     params.push(Number(req.entity_id));

@@ -12,6 +12,8 @@ web/dist/
 api/dist/
 packages/*/dist/
 
-# runtime upload dir (tests write here in dev)
+# runtime upload dir + PGlite dev DB (root `npm run dev` writes ./data, the
+# api workspace writes ./api/data)
 api/data/
+/data/
 .claude/worktrees/

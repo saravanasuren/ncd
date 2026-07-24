@@ -248,7 +248,7 @@ describe('redemption interest lands in that month\'s payout sheet', () => {
     const cust = await a.post('/api/customers', { full_name: 'Redeeming Investor', phone: '9600000031' });
     await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '66660009999', ifsc: 'ICIC0001234', holder_name: 'Redeeming Investor' });
     const app = await a.post('/api/applications', {
-      customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000, date_money_received: '2026-07-12',
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000, date_money_received: '2026-07-12',
     });
     appId = Number(app.json.id);
     await approveInvestment(await as('ncd@demo.local'), app);

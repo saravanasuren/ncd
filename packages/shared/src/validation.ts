@@ -26,6 +26,20 @@ export const NAME_RE = /^[A-Za-z][A-Za-z .'-]*$/;
 export const sanitizeName = (v: string): string => v.replace(/[^A-Za-z .'-]/g, '');
 
 /**
+ * Demat DP ID — exactly 8 characters, in one of the two depository forms:
+ * NSDL letter-form (2 uppercase letters + 6 digits, e.g. IN300456) or CDSL
+ * numeric-form (8 digits). A letters-only rule would make CDSL accounts
+ * un-enterable, so both are accepted.
+ */
+export const DP_ID_RE = /^([A-Z]{2}[0-9]{6}|[0-9]{8})$/;
+
+/** IFSC: 4 uppercase letters, a literal 0, then 6 alphanumerics (SBIN0001234). */
+export const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+
+/** Bank account number: digits only (leading zeros are meaningful), min 4. */
+export const ACCOUNT_NUMBER_RE = /^[0-9]{4,}$/;
+
+/**
  * Parse a DD/MM/YYYY string to ISO (YYYY-MM-DD). Returns null unless the
  * input is exactly that format AND a real calendar date (rejects 31/02/2024).
  */

@@ -115,7 +115,7 @@ describe('customers — relations, deceased, KYC docs', () => {
     const a = await admin();
     const cid = await newCustomer(a, 'Relations Cust', '9500000005');
     expect((await a.put(`/api/customers/${cid}/joint-holders`, { holders: [{ full_name: 'JH One', relationship: 'Spouse' }] })).status).toBe(200);
-    expect((await a.put(`/api/customers/${cid}/nominees`, { nominees: [{ full_name: 'Nom', share_pct: 60 }, { full_name: 'Nom2', share_pct: 50 }] })).status).toBe(400);
+    expect((await a.put(`/api/customers/${cid}/nominees`, { nominees: [{ full_name: 'Nom', share_pct: 60 }, { full_name: 'Nom Two', share_pct: 50 }] })).status).toBe(400);
     expect((await a.put(`/api/customers/${cid}/nominees`, { nominees: [{ full_name: 'Nom', share_pct: 100 }] })).status).toBe(200);
     const detail = await a.get(`/api/customers/${cid}`);
     // Regression: the UI round-trips existing rows whose blank fields come back

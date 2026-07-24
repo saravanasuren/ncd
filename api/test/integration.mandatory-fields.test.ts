@@ -5,6 +5,8 @@
  * is stored in the same transaction, so no application row can ever exist
  * without one. POST /:id/receipt remains for replacing a receipt later.
  */
+import { existsSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, requiredInvestmentFields, type TestCtx } from './helpers/server.js';
 
@@ -68,6 +70,22 @@ describe('POST /api/applications — mandatory payment evidence', () => {
     // The replace endpoint still works for correcting a receipt later.
     const up = await a.post(`/api/applications/${r.json.id}/receipt`, { filename: 'better.pdf', mime: 'application/pdf', data_base64: Buffer.from('%PDF-1.4 better').toString('base64') });
     expect(up.status).toBe(201);
+  });
+
+  it('a failed create leaves no orphaned receipt file behind', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Mandatory Fields Orphan', phone: '9500009905' });
+    // Unique filename so the check is immune to other tests writing receipts in parallel.
+    const marker = 'orphan-check-4f9a.pdf';
+    const r = await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: 999999, amount: 100000,
+      receipt: { filename: marker, mime: 'application/pdf', data_base64: Buffer.from('%PDF-1.4 orphan').toString('base64') },
+    });
+    expect(r.status).toBe(400);
+    expect(await appCount(cust.json.id)).toBe(0);
+    const receiptsDir = join(process.env.FILE_STORAGE_DIR || resolve(process.cwd(), 'data', 'uploads'), 'receipts');
+    const leftovers = existsSync(receiptsDir) ? readdirSync(receiptsDir).filter((f) => f.endsWith(marker)) : [];
+    expect(leftovers).toEqual([]);
   });
 
   it('a clubbed line also requires the evidence, and its receipt lands on the target app', async () => {

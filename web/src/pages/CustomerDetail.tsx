@@ -639,7 +639,12 @@ function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onEr
   // by the profile header, far above the bank section — so a refused delete
   // looked like nothing happened at all.
   const [cardErr, setCardErr] = useState('');
-  const fail = (e: unknown) => { const m = e instanceof ApiError ? e.message : 'Failed'; setCardErr(m); onError(m); };
+  // Accepts a thrown error OR a plain message, so client-side validation lands
+  // in the same inline slot as a server refusal rather than the page banner.
+  const fail = (e: unknown) => {
+    const m = typeof e === 'string' ? e : e instanceof ApiError ? e.message : 'Failed';
+    setCardErr(m); onError(m);
+  };
 
   const add = useMutation({
     mutationFn: () => api.post(`/api/customers/${customerId}/bank-accounts`, {
@@ -680,7 +685,7 @@ function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onEr
                 <button onClick={() => {
                   const next = window.prompt('Beneficiary name as it should appear on the bank file:', b.holder_name ?? '');
                   if (next === null) return;
-                  if (next.trim().length < 2) { onError('Beneficiary name is required.'); return; }
+                  if (next.trim().length < 2) { fail('Beneficiary name is required.'); return; }
                   wrapSet(api.patch(`/api/customers/${customerId}/bank-accounts/${b.id}`, { holder_name: next.trim() }));
                 }} className="text-xs text-primary hover:underline">Edit name</button>
               )}

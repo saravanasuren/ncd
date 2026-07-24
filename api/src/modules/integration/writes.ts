@@ -357,6 +357,8 @@ const NCD_COLUMN_MAP: Record<string, string> = {
   address_line: 'address',
   city: 'city',
   state: 'state',
+  pan: 'pan',
+  aadhaar_last4: 'aadhaar_last4',
 };
 
 customerWritesRouter.post('/customers/:id/profile-update-request', asyncHandler(async (req, res) => {

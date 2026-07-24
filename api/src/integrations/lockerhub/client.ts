@@ -120,8 +120,17 @@ export const getLockerApplication = (id: string) =>
 export const upsertCustomer = (staff: ActingStaff, profile: Record<string, unknown>) =>
   lhFetch<{ success: boolean; phone: string; created: boolean }>('POST', '/customers', { body: { ...profile, staff } });
 
-export const createLockerApplication = (staff: ActingStaff, input: { phone: string; name?: string; email?: string; branch_id: string; locker_size: string }) =>
-  lhFetch<Record<string, unknown>>('POST', '/locker-applications', { body: { ...input, staff } });
+/**
+ * A7 — open a locker application. The optional `applicant` block (contract
+ * 2026-07-24) carries the full profile — address, nominee, KYC, bank — so the
+ * tenancy is complete on their side and nobody has to open LockerHub to finish
+ * it. Built by `modules/lockers/applicant.ts` from our own customer record;
+ * see that file for why Aadhaar is last-four only.
+ */
+export const createLockerApplication = (
+  staff: ActingStaff,
+  input: { phone: string; name?: string; email?: string; branch_id: string; locker_size: string; applicant?: Record<string, unknown> },
+) => lhFetch<Record<string, unknown>>('POST', '/locker-applications', { body: { ...input, staff } });
 
 export const paymentLink = (staff: ActingStaff, applicationId: string, leg: 'rent' | 'deposit') =>
   lhFetch<Record<string, unknown>>('POST', `/locker-applications/${encodeURIComponent(applicationId)}/payment-link`, { body: { leg, staff } });
@@ -147,5 +156,24 @@ export const paymentLink = (staff: ActingStaff, applicationId: string, leg: 'ren
 export const linkNcd = (staff: ActingStaff, applicationId: string, input: { ncd_id: string }) =>
   lhFetch<Record<string, unknown>>('POST', `/locker-applications/${encodeURIComponent(applicationId)}/link-ncd`, { body: { ...input, staff } });
 
+/**
+ * A11 — allocate. This is the APPROVAL step: it is what creates the tenant on
+ * LockerHub, so `staff` is mandatory and lands in their audit log as
+ * "<name> (NCD app)". Omit `locker_id` to let them auto-pick the lowest vacant
+ * locker of the requested size; `lease_months` defaults to 12 on their side.
+ *
+ * A tenant is ONE LOCKER RENTAL, not a customer account — one person with three
+ * lockers is three tenant rows sharing a phone. Never treat a tenant row as an
+ * identity.
+ *
+ * Failure modes worth knowing (surfaced with their status + body by lhFetch):
+ *   409 obligations_pending + missing:["rent"|"deposit"] — money unsettled. This
+ *       gate is deliberate on their side; a tenancy is never created against
+ *       unpaid rent, and there is no override over this channel.
+ *   400 no_vacancy — nothing left in that size.
+ *   400 "Locker is no longer vacant" — a race; retry (re-picks if no locker_id).
+ *   200 already:true — already allocated. Treated as SUCCESS by callers, since a
+ *       re-drive of a completed allocation is the queue doing its job.
+ */
 export const allocate = (staff: ActingStaff, applicationId: string, input: { locker_id?: string; lease_months?: number }) =>
   lhFetch<Record<string, unknown>>('POST', `/locker-applications/${encodeURIComponent(applicationId)}/allocate`, { body: { ...input, staff } });

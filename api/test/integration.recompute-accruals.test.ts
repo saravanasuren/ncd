@@ -4,7 +4,7 @@
  * creates the missing one and is idempotent (no duplicate on a second run).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 import { accrueForApplication } from '../src/modules/incentives/accrual.js';
 
 let ctx: TestCtx;
@@ -26,7 +26,7 @@ describe('recompute accruals for a late referrer', () => {
     // Enrol + approve (go live) WITHOUT a referrer (a "Direct" app).
     const cust = await a.post('/api/customers', { full_name: 'Late Ref Cust', phone: '9733300021' });
     await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '5551110022', ifsc: 'ICIC0001111' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 300000, date_money_received: '2026-07-10' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 300000, date_money_received: '2026-07-10' });
     const appId = Number(app.json.id);
     const ncd = new Client(ctx.base); await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
     await approveInvestment(ncd, app);

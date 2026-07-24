@@ -8,7 +8,7 @@
  * and cancelled money must NOT count.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -37,7 +37,7 @@ async function makeActiveApp(a: Client, checker: Client, name: string, amount: n
   const cust = await a.post('/api/customers', { full_name: name, phone: `9${Math.floor(amount)}` });
   const cid = cust.json.id;
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: `2222${amount}`, ifsc: 'ICIC0001111' });
-  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-10' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-10' });
   await approveInvestment(checker, app);
   return app.json.id as number;
 }
@@ -74,7 +74,7 @@ describe('outstanding book — open series (pre-allotment)', () => {
     const before = Number((await a.get('/api/dashboard/overview')).json.kpis.outstanding_book);
     const cust = await a.post('/api/customers', { full_name: 'Unapproved Investor', phone: '9755500777' });
     await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '2222777', ifsc: 'ICIC0001111' });
-    await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 300000, date_money_received: '2026-07-10' });
+    await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 300000, date_money_received: '2026-07-10' });
     const after = Number((await a.get('/api/dashboard/overview')).json.kpis.outstanding_book);
     expect(after).toBe(before); // still awaiting approval → not in the book yet
   });

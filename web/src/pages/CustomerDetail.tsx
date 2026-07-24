@@ -418,23 +418,33 @@ function NewInvestment({ customerId }: { customerId: number }) {
   });
   const create = useMutation({
     mutationFn: async () => {
+      // The payment evidence (credited date, method, reference, receipt photo)
+      // is mandatory — the API rejects the create without the first three, and
+      // the receipt is read up-front so a bad file fails before anything is created.
+      if (!receipt) throw new ApiError('VALIDATION', 400, 'Receipt photo is required');
+      if (receipt.size > 4 * 1024 * 1024) throw new ApiError('too_large', 400, 'Receipt must be under 4 MB');
+      const data_base64 = await readFileB64(receipt);
       const r = await api.post<{ id: number }>('/api/applications', {
         customer_id: customerId, series_id: Number(seriesId), scheme_id: Number(schemeId), amount: Number(amount),
-        ...(dateReceived ? { date_money_received: dateReceived } : {}),
-        ...(method.trim() ? { collection_method: method.trim() } : {}),
-        ...(reference.trim() ? { collection_reference: reference.trim() } : {}),
+        date_money_received: dateReceived,
+        collection_method: method.trim(),
+        collection_reference: reference.trim(),
         ...(clubWith ? { club_with_application_id: Number(clubWith) } : {}),
         ...(lockerDeposit ? { is_locker_deposit: true } : {}),
       });
-      if (receipt) {
-        if (receipt.size > 4 * 1024 * 1024) throw new ApiError('too_large', 400, 'Receipt must be under 4 MB');
-        await api.post(`/api/applications/${r.id}/receipt`, { filename: receipt.name, mime: receipt.type || 'application/octet-stream', data_base64: await readFileB64(receipt) });
-      }
+      await api.post(`/api/applications/${r.id}/receipt`, { filename: receipt.name, mime: receipt.type || 'application/octet-stream', data_base64 });
       return r;
     },
     onSuccess: (r) => nav(`/app/applications/${r.id}`),
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
+  // Mandatory before Create is allowed — mirrors the API schema.
+  const missingRequired = () => [
+    !dateReceived && 'credited date',
+    !method && 'payment method',
+    !reference.trim() && 'reference / cheque no.',
+    !receipt && 'receipt photo',
+  ].filter((f): f is string => !!f);
   const sel = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
   const clubOptions = candidates.data?.rows ?? [];
   return (
@@ -455,22 +465,30 @@ function NewInvestment({ customerId }: { customerId: number }) {
         <input className={sel} placeholder="Amount (₹1,00,000 units)" type="number" min={LAKH} step={LAKH}
           value={amount} onChange={(e) => setAmount(e.target.value)} />
         <label className="text-xs flex items-center gap-1.5" title="Date the money was credited to Dhanam's account — interest starts from here once approved">
-          Credited <input className={sel} type="date" value={dateReceived} onChange={(e) => setDateReceived(e.target.value)} />
+          Credited<span className="text-danger">*</span> <input className={sel} type="date" value={dateReceived} onChange={(e) => setDateReceived(e.target.value)} />
         </label>
         <select className={sel} value={method} onChange={(e) => setMethod(e.target.value)}>
-          <option value="">Payment method…</option>
+          <option value="">Payment method… *</option>
           <option value="NEFT/RTGS">NEFT/RTGS</option>
           <option value="Cheque">Cheque</option>
         </select>
-        <input className={sel} placeholder="Reference / cheque no." value={reference} onChange={(e) => setReference(e.target.value)} />
+        <input className={sel} placeholder="Reference / cheque no. *" value={reference} onChange={(e) => setReference(e.target.value)} />
         <label className="text-xs flex items-center gap-1.5 cursor-pointer border border-border-strong rounded px-2.5 py-1.5" title="Receipt / cheque photo (image or PDF, under 4 MB)">
-          {receipt ? `📎 ${receipt.name.length > 18 ? receipt.name.slice(0, 15) + '…' : receipt.name}` : '📎 Receipt photo'}
+          {receipt ? `📎 ${receipt.name.length > 18 ? receipt.name.slice(0, 15) + '…' : receipt.name}` : <>📎 Receipt photo<span className="text-danger">*</span></>}
           <input type="file" accept="image/*,.pdf" className="hidden" onChange={(e) => setReceipt(e.target.files?.[0] ?? null)} />
         </label>
         <label className="text-xs flex items-center gap-1.5" title="Money came from a locker (LockerHub-originated deposits flag themselves automatically)">
           <input type="checkbox" checked={lockerDeposit} onChange={(e) => setLockerDeposit(e.target.checked)} /> Locker deposit
         </label>
-        <button disabled={!seriesId || !schemeId || !amount || !ticketOk || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
+        <button disabled={!seriesId || !schemeId || !amount || !ticketOk || create.isPending} onClick={() => {
+          const missing = missingRequired();
+          if (missing.length) {
+            const list = missing.join(', ');
+            setErr(`${list.charAt(0).toUpperCase()}${list.slice(1)} ${missing.length > 1 ? 'are' : 'is'} required.`);
+            return;
+          }
+          setErr(''); create.mutate();
+        }}
           className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
           {clubWith ? 'Add to application' : 'Create investment'}
         </button>

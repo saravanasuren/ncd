@@ -6,7 +6,7 @@
  * endpoint returns readable facts about the underlying entity.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -26,7 +26,7 @@ describe('approvals queue — readable subject + detail', () => {
   it('an investment approval names the customer, application and amount', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Queue Subject Cust', phone: '9844000001' });
-    const app = await a.post('/api/applications', {
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000, date_money_received: '2026-07-11',
     });
     const reqId = Number(app.json.subscription_request.id);

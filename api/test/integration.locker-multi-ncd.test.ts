@@ -9,7 +9,7 @@
  * A partial pledge must never tell them the deposit is secured.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number, custId: number;
@@ -32,7 +32,7 @@ const admin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
 /** An Active investment of `amount` for our customer. */
 async function activeNcd(amount: number) {
   const a = await admin();
-  const app = await a.post('/api/applications', {
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
     customer_id: custId, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-12',
   });
   await approveInvestment(await as('ncd@demo.local'), app);

@@ -6,7 +6,7 @@
  * approval needs a second person.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -40,7 +40,7 @@ describe('build an Active investment', () => {
 
     // Staff enter the money-credited date at enrolment; the app waits in the
     // one approval gate with an investment approval raised.
-    const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-15', collection_method: 'NEFT', collection_reference: 'UTR123' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-15', collection_method: 'NEFT', collection_reference: 'UTR123' });
     expect(app.status).toBe(201);
     appId = app.json.id;
     subReqId = app.json.subscription_request.id;

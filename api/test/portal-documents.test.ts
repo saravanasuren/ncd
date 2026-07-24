@@ -1,6 +1,6 @@
 /** Portal + staff document PDFs: bond certificate, allotment letter, SOA. */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let appId: number, customerId: number;
@@ -13,7 +13,7 @@ beforeAll(async () => {
   const cust = await a.post('/api/customers', { full_name: 'Doc Cust', phone: '9990003333' });
   customerId = cust.json.id; // live on creation — no approval step
   const ncd = new Client(ctx.base); await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
-  const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
   appId = app.json.id;
   await approveInvestment(ncd, app);
   const allot = await ncd.post(`/api/allotments/series/${seriesId}`, { allotment_date: '2026-07-20' });

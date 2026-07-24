@@ -4,7 +4,7 @@
  * application, and the endpoints are permission-gated.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let appId: number;
@@ -26,7 +26,7 @@ beforeAll(async () => {
   const cid = cust.json.id;
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '1234567890', ifsc: 'ICIC0001111' });
   await a.put(`/api/customers/${cid}/demat`, { dp_id: 'IN300513', client_id: '92151856', depository: 'NSDL' });
-  const app = await a.post('/api/applications', {
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
     customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 500000,
     date_money_received: '2026-07-10', collection_method: 'NEFT/RTGS', collection_reference: 'UTR9988',
   });

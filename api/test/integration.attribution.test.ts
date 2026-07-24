@@ -6,7 +6,7 @@
  * Admin" bug.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -29,7 +29,7 @@ async function fund(a: Client, name: string, amount: number, referredBy: string)
   const cust = await a.post('/api/customers', { full_name: name, phone: `9${Math.floor(amount)}`, referred_by_text: referredBy });
   const cid = cust.json.id;
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: `3333${amount}`, ifsc: 'ICIC0001111' });
-  return a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-10' });
+  return a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-10' });
 }
 
 async function buildBook() {

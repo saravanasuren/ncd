@@ -3,7 +3,7 @@
  * Verifies the Phase 3 "done" criteria + the no-self-approve rule (docs/11, docs/03).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 beforeAll(async () => { ctx = await startTestServer(); });
@@ -105,7 +105,7 @@ describe('no-self-approve rule (docs/03 rule zero)', () => {
     const a = await admin();
     const { seriesId, schemeId } = await ncdIds();
     const cust = await a.post('/api/customers', { full_name: 'Self Test', phone: '9000000003' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
     const reqId = app.json.subscription_request.id;
 
     // Admin is the maker → cannot self-approve (only a Super Admin may, with a reason).
@@ -122,7 +122,7 @@ describe('no-self-approve rule (docs/03 rule zero)', () => {
     const a = await admin();
     const { seriesId, schemeId } = await ncdIds();
     const cust = await a.post('/api/customers', { full_name: 'Perm Test', phone: '9000000004' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
     const staff = await as('staff@demo.local');
     expect((await staff.post(`/api/approvals/${app.json.subscription_request.id}/approve`)).status).toBe(403);
   });

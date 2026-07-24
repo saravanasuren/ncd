@@ -5,7 +5,7 @@
  *    distinct checker approves, which is the go-live (Active).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -24,7 +24,7 @@ async function activeApp(a: Client, phone: string): Promise<number> {
   const cust = await a.post('/api/customers', { full_name: `Cust ${phone}`, phone });
   const cid = cust.json.id;
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: `55${phone}`, ifsc: 'ICIC0001234' });
-  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-12' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
   const ncd = await as('ncd@demo.local');
   await approveInvestment(ncd, app);
@@ -51,7 +51,7 @@ describe('every investment goes through one approval gate', () => {
   it('new application waits in PendingApproval with an investment approval raised', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Gated', phone: '9300000003' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12' });
     expect(app.json.subscription_request).toBeTruthy();
     expect((await a.get(`/api/applications/${app.json.id}`)).json.application.status).toBe('PendingApproval');
   });
@@ -59,7 +59,7 @@ describe('every investment goes through one approval gate', () => {
   it('the maker cannot self-approve; a distinct checker approves → the NCD goes live (Active)', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'GoLive', phone: '9300000004' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12' });
     // maker (admin, who created it) is refused
     const self = await a.post(`/api/approvals/${app.json.subscription_request.id}/approve`);
     expect(self.status).toBe(403);

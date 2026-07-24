@@ -3,7 +3,7 @@
  * plus rollover / transfer / transformation. PGlite HTTP.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -27,7 +27,7 @@ async function activeInvestment(name: string, phone: string, amount = 500000) {
   const cid = cust.json.id; // customers are created live now — no approval step
   const ncd = await as('ncd@demo.local');
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: `88${phone}`, ifsc: 'ICIC0001234' });
-  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-12' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
   await approveInvestment(ncd, app);
   const detail = await a.get(`/api/applications/${app.json.id}`);

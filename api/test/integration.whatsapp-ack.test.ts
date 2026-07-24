@@ -5,7 +5,7 @@
  * for its exact document; no token (and no session) is refused.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 import { templateFor } from '../src/integrations/notify/wappcloud.js';
 import { config } from '../src/config.js';
 
@@ -21,7 +21,7 @@ beforeAll(async () => {
   const cust = await a.post('/api/customers', { full_name: 'Ack Cust', phone: '9765500001', email: 'ack@ex.com' });
   const ncd = await as('ncd@demo.local');
   await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '889765500001', ifsc: 'ICIC0001234' });
-  const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
   await approveInvestment(ncd, app); // Active → the ack PDF renders
   appId = app.json.id;
@@ -70,7 +70,7 @@ describe('WhatsApp acknowledgement', () => {
   it('a customer with no phone cannot be sent (clear 400)', async () => {
     const a = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const cust = await a.post('/api/customers', { full_name: 'No Phone Ack', phone: '9765500009' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
     await ctx.db.query('UPDATE customers SET phone = NULL WHERE id = $1', [cust.json.id]);
     const r = await a.post(`/api/applications/${app.json.id}/whatsapp-ack`);
     expect(r.status).toBe(400);

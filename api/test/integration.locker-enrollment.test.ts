@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 import { config } from '../src/config.js';
 
 let ctx: TestCtx;
@@ -140,7 +140,7 @@ describe('locker deposit links (NCD backs the deposit)', () => {
 
   async function liveInvestment(staff: Client, amount: number, phone: string) {
     const cust = await staff.post('/api/customers', { full_name: 'Locker Cust ' + phone, phone });
-    const app = await staff.post('/api/applications', {
+    const app = await staff.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cust.json.id, series_id: await seriesId(), scheme_id: await schemeId(), amount, date_money_received: '2026-07-01',
     });
     const ncd = await login('ncd@demo.local');

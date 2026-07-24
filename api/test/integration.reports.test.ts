@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import ExcelJS from 'exceljs';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -30,7 +30,7 @@ async function makeActiveApp(a: Client, name: string, amount: number) {
   const cust = await a.post('/api/customers', { full_name: name, phone: `9${Math.floor(amount)}` });
   const cid = cust.json.id;
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: `1111${amount}`, ifsc: 'ICIC0001111' });
-  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-10' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-10' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
   return app;
 }

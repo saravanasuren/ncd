@@ -8,7 +8,7 @@
  * Branch staff additionally cannot open the company-wide dashboard.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -36,7 +36,7 @@ describe('My Earnings — brought-in book + paid incentive only', () => {
 
     for (const [name, phone, amount] of [['My Cust A', '9866000001', 200000], ['My Cust B', '9866000002', 300000]] as const) {
       const cust = await staff.post('/api/customers', { full_name: name, phone });
-      const app = await staff.post('/api/applications', {
+      const app = await staff.post('/api/applications', { ...requiredInvestmentFields(),
         customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-10',
       });
       expect(app.status).toBe(201);
@@ -46,7 +46,7 @@ describe('My Earnings — brought-in book + paid incentive only', () => {
     // Somebody else's investment must not leak into the staff member's book.
     const a = await admin();
     const other = await a.post('/api/customers', { full_name: 'Not Mine', phone: '9866000009' });
-    const otherApp = await a.post('/api/applications', {
+    const otherApp = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: other.json.id, series_id: seriesId, scheme_id: schemeId, amount: 900000, date_money_received: '2026-07-10',
     });
     await approveInvestment(ncd, otherApp);
@@ -97,7 +97,7 @@ describe('My Earnings — brought-in book + paid incentive only', () => {
     const staff = await as('staff@demo.local');
     const before = Number((await staff.get('/api/incentives/my-earnings')).json.totals.amount);
     const cust = await staff.post('/api/customers', { full_name: 'Cancelled Cust', phone: '9866000003' });
-    const app = await staff.post('/api/applications', {
+    const app = await staff.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-10',
     });
     await ctx.db.query("UPDATE applications SET status = 'Cancelled' WHERE id = $1", [app.json.id]);

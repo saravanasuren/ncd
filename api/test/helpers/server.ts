@@ -34,6 +34,19 @@ export async function startTestServer(): Promise<TestCtx> {
 }
 
 /**
+ * POST /api/applications requires the payment evidence (credited date, method,
+ * reference; the receipt photo follows via POST /:id/receipt). Spread this
+ * FIRST into a create body; per-test values placed after it override the defaults.
+ */
+export function requiredInvestmentFields() {
+  return {
+    date_money_received: '2026-07-10',
+    collection_method: 'NEFT/RTGS',
+    collection_reference: 'TEST-REF-001',
+  };
+}
+
+/**
  * Take a just-created application live via the investment approval (the new
  * one-gate go-live). `create` is the POST /api/applications response; `checker`
  * must be a DISTINCT user from the app's maker (maker ≠ checker rule). Returns

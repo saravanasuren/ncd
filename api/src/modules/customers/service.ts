@@ -244,12 +244,48 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
   return { customer: c, referredBy, bankAccounts, nominees, jointHolders, documents, applications };
 }
 
+/**
+ * Correct the beneficiary name on an existing account (owner 2026-07-24).
+ *
+ * There was no way to edit a bank account at all — only add, set-active and
+ * delete — so a misspelt beneficiary name was unfixable: re-adding the same
+ * account is refused as a duplicate, and deleting it is blocked while unpaid
+ * payouts point at it. The name matters: it is what prints in the Beneficiary
+ * Name column of the Federal NEFT file.
+ *
+ * Only the name changes. Account number and IFSC are identity — changing those
+ * is a different account, so it stays add-then-delete and keeps its penny-drop.
+ */
+export async function updateBankAccountName(db: Db, actor: AuthUser, customerId: number, bankId: number, holderName: string) {
+  await assertVisible(db, actor, customerId);
+  const name = holderName.trim();
+  if (name.length < 2) throw errors.badRequest('Beneficiary name is required');
+  return db.withTx(async (tx) => {
+    const before = (await tx.query<{ holder_name: string | null; account_number: string }>(
+      'SELECT holder_name, account_number FROM customer_bank_accounts WHERE id = $1 AND customer_id = $2',
+      [bankId, customerId])).rows[0];
+    if (!before) throw errors.notFound('Bank account not found for this customer');
+    await tx.query('UPDATE customer_bank_accounts SET holder_name = $1 WHERE id = $2', [name, bankId]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'customer.bank.rename', entityType: 'customer_bank_accounts', entityId: bankId,
+      before: { holder_name: before.holder_name },
+      after: { holder_name: name, account_number: before.account_number },
+    });
+    return { ok: true, id: bankId, holder_name: name };
+  });
+}
+
 export async function addBankAccount(db: Db, actor: AuthUser, customerId: number, input: { account_number: string; ifsc: string; bank_name?: string; branch_name?: string; branch_city?: string; account_type?: string; holder_name?: string; tds_applicable?: boolean }) {
   await assertVisible(db, actor, customerId);
   const pd = await kycProvider().pennyDrop(input.account_number, input.ifsc);
   return db.withTx(async (tx) => {
     const dup = await tx.query('SELECT 1 FROM customer_bank_accounts WHERE customer_id = $1 AND account_number = $2 AND ifsc = $3', [customerId, input.account_number, input.ifsc]);
-    if (dup.rowCount) throw errors.conflict('This bank account is already on file');
+    if (dup.rowCount) {
+      // The usual reason for re-adding the same account is a typo in the
+      // beneficiary name — say how to fix that instead of just refusing.
+      throw errors.conflict(
+        'This bank account is already on file. To correct the beneficiary name on it, use "Edit name" on the existing account — you do not need to add it again.');
+    }
     const anyActive = await tx.query('SELECT 1 FROM customer_bank_accounts WHERE customer_id = $1 AND is_active = TRUE', [customerId]);
     const makeActive = anyActive.rowCount === 0 && pd.status === 'Verified';
     const { rows } = await tx.query<{ id: string }>(

@@ -106,11 +106,12 @@ async function createRequest(
   // TDS on the broken interest (same rule the interest run uses), then fold the
   // net into the settlement. net_payment = (principal − penalty) + brokenNet.
   let brokenNet = 0;
+  let brokenTds = 0;
   if (calc.brokenInterest > 0 && brokenLine) {
     const tdsRule = brokenLine.scheme_id
       ? (await tx.query<{ rate_pct: number }>('SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [brokenLine.scheme_id])).rows[0] ?? null
       : null;
-    const brokenTds = round2(computeTds(
+    brokenTds = round2(computeTds(
       tdsRule,
       { is_nri: brokenLine.is_nri as boolean, tds_applicable: brokenLine.cust_tds as boolean,
         tax_form: brokenLine.tax_form as string | null, tax_form_expires_on: toISODate(brokenLine.tax_form_expires_on as string | null) },
@@ -119,12 +120,16 @@ async function createRequest(
     ));
     brokenNet = round2(calc.brokenInterest - brokenTds);
   }
-  const netPayment = round2(calc.netPayment + brokenNet);
+  // Owner 2026-07-24: the broken interest is NOT bundled into the redemption
+  // transfer any more — it is paid in that month's interest batch as a
+  // 'Redemption' row. So the redemption pays principal less penalty only.
+  // brokenNet/brokenTds are still recorded so the batch can pay them exactly.
+  const netPayment = calc.netPayment;
   const redNo = await nextCode(tx, 'redemption', 'MCR-{yyyy}-{seq:6}');
   const { rows } = await tx.query<{ id: string }>(
-    `INSERT INTO redemptions (redemption_no, application_id, type, principal, penalty, net_payment, broken_interest, requested_date, redemption_date, reason, status, source, requested_by_customer, created_by_user_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Requested',$11,$12,$13) RETURNING id`,
-    [redNo, input.applicationId, input.type, calc.principal, calc.penalty, netPayment, calc.brokenInterest, redDate, redDate, input.reason, input.source, input.byCustomer, input.createdBy]
+    `INSERT INTO redemptions (redemption_no, application_id, type, principal, penalty, net_payment, broken_interest, broken_tds, requested_date, redemption_date, reason, status, source, requested_by_customer, created_by_user_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'Requested',$12,$13,$14) RETURNING id`,
+    [redNo, input.applicationId, input.type, calc.principal, calc.penalty, netPayment, calc.brokenInterest, brokenTds, redDate, redDate, input.reason, input.source, input.byCustomer, input.createdBy]
   );
   return { id: Number(rows[0]!.id), redemption_no: redNo, principal: calc.principal, penalty: calc.penalty, netPayment, brokenInterest: calc.brokenInterest };
 }
@@ -312,19 +317,22 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
     await tx.query("UPDATE application_lines SET status = 'PrematureWithdrawn', outstanding_amount = 0 WHERE application_id = $1 AND status = 'Active'", [appId]);
     await tx.query("UPDATE disbursement_schedule SET status = 'Skipped' WHERE application_id = $1 AND status = 'Scheduled'", [appId]);
   }
-  const red = (await tx.query<{ principal: string; penalty: string; net_payment: string; broken_interest: string }>(
-    'SELECT principal, penalty, net_payment, broken_interest FROM redemptions WHERE id = $1', [redId])).rows[0]!;
+  const red = (await tx.query<{ principal: string; penalty: string; net_payment: string; broken_interest: string; broken_tds: string }>(
+    'SELECT principal, penalty, net_payment, broken_interest, broken_tds FROM redemptions WHERE id = $1', [redId])).rows[0]!;
   const lineId = (await tx.query<{ id: string }>('SELECT id FROM application_lines WHERE application_id = $1 ORDER BY id LIMIT 1', [appId])).rows[0]?.id;
   if (lineId) {
-    // The payout (net_payment) = principal redemption + net broken interest.
-    // Record them as two rows: 'Premature' (principal, no TDS) and, when there
-    // is accrued interest, 'BrokenInterest' (with its TDS) — so TDS reporting
-    // captures the interest tax. Together they sum to net_payment (paid in one
-    // NEFT transfer from the redemptions ledger).
+    // Two rows, paid through DIFFERENT sheets (owner 2026-07-24):
+    //  · 'Premature'      — principal less penalty, paid by the redemption NEFT
+    //                       sheet. This IS net_payment now.
+    //  · 'BrokenInterest' — the accrued interest, left Scheduled for THAT
+    //                       month's interest batch to pick up and pay as a
+    //                       'Redemption' row. Its TDS was computed and stored at
+    //                       request time (it can no longer be derived from
+    //                       net_payment, which excludes the interest).
     const principalNet = round2(Number(red.principal) - Number(red.penalty));
     const brokenGross = Number(red.broken_interest);
-    const brokenNet = round2(Number(red.net_payment) - principalNet);
-    const brokenTds = round2(brokenGross - brokenNet);
+    const brokenTds = Number(red.broken_tds);
+    const brokenNet = round2(brokenGross - brokenTds);
     await tx.query(
       `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status)
        VALUES ($1,$2,$3,'Premature',$4,0,$4,'Scheduled') ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,

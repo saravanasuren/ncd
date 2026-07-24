@@ -46,6 +46,9 @@ export const PERMISSIONS = [
   // Record a deposit waiver/exception on a locker tenancy — NCD Manager+ makes,
   // Admin/CXO approves (approvals:check-premature).
   'lockers:waive',
+  // Remove a locker tenancy from NCD's roster view. super_admin ONLY — it hides
+  // OUR row; the locker itself stays allotted on LockerHub, which owns it.
+  'lockers:remove-tenant',
   // activations (funded → Active, maker-checker)
   'activations:execute',
   // allotments
@@ -119,7 +122,7 @@ const STAFF_FUNNEL: Permission[] = [
  * delete permissions (users / customers / applications) — only the Super Admin
  * may delete or purge people and money records.
  */
-const SUPER_ADMIN_ONLY: Permission[] = ['users:delete', 'customers:delete', 'applications:delete'];
+const SUPER_ADMIN_ONLY: Permission[] = ['users:delete', 'customers:delete', 'applications:delete', 'lockers:remove-tenant'];
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   super_admin: ALL,

@@ -19,6 +19,7 @@ import * as lh from '../../integrations/lockerhub/client.js';
 // silently side-effect-free until the first waiver request after a restart —
 // the exact failure the agent-registration flow hit on 2026-07-23.
 import { createWaiver, cancelWaiver } from './waivers.js';
+import { linkTenant, removeTenant, restoreTenant } from './tenantOverrides.js';
 import { errors } from '../../lib/errors.js';
 
 export const lockersRouter = Router();
@@ -132,6 +133,29 @@ lockersRouter.post('/waivers', requirePermission('lockers:waive'), asyncHandler(
     customer_id: z.number().int().positive().nullish(),
   }).parse(req.body);
   res.status(201).json(await createWaiver(getDb(), req.user!, b));
+}));
+
+// ── Roster overrides (owner 2026-07-24) ──────────────────────────────────
+// Link a tenant to an NCD customer BY HAND. Automatic matching needs phone +
+// a full name agreement, and LockerHub exposes no PAN to settle the rest
+// (profile is null for these tenants; where present the PAN is masked).
+const TENANT_SNAP = z.object({
+  tenant_name: z.string().nullish(), locker_no: z.string().nullish(), branch_id: z.string().nullish(),
+});
+lockersRouter.post('/tenants/:tenantId/link', requirePermission('lockers:waive'), asyncHandler(async (req, res) => {
+  const b = TENANT_SNAP.extend({ customer_id: z.number().int().positive().nullable() }).parse(req.body ?? {});
+  res.json(await linkTenant(getDb(), req.user!, String(req.params.tenantId), b.customer_id, b));
+}));
+
+// Remove from NCD's roster — super_admin only. LockerHub owns the tenancy and
+// has no close endpoint, so this hides OUR row; the locker stays allotted there.
+lockersRouter.post('/tenants/:tenantId/remove', requirePermission('lockers:remove-tenant'), asyncHandler(async (req, res) => {
+  const b = TENANT_SNAP.extend({ reason: z.string().trim().min(3, 'A reason is required') }).parse(req.body ?? {});
+  res.json(await removeTenant(getDb(), req.user!, String(req.params.tenantId), b.reason, b));
+}));
+
+lockersRouter.post('/tenants/:tenantId/restore', requirePermission('lockers:remove-tenant'), asyncHandler(async (req, res) => {
+  res.json(await restoreTenant(getDb(), req.user!, String(req.params.tenantId)));
 }));
 
 lockersRouter.post('/waivers/:id/cancel', requirePermission('lockers:waive'), asyncHandler(async (req, res) => {

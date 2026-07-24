@@ -16,7 +16,9 @@ beforeAll(async () => { ctx = await startTestServer(); });
 afterAll(async () => { await ctx.close(); });
 
 async function customer(phone: string) {
-  const c = await (await admin()).post('/api/customers', { full_name: 'Tax ' + phone, phone });
+  // Letters only: identity validation refuses digits in a name, and the phone
+  // already makes each customer unique — the name doesn't need to.
+  const c = await (await admin()).post('/api/customers', { full_name: 'Tax Customer', phone });
   return Number(c.json.id);
 }
 

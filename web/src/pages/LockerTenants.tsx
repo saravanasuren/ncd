@@ -45,6 +45,9 @@ interface Tenant {
   locker_size: string | null; status: string | null; account_status: string | null; locker_no: string | null;
   tenant_name: string | null; tenant_phone: string | null; tenant_email: string | null;
   allotted_on: string | null; lease_expires_on: string | null;
+  // From LockerHub's customer record — the tenant roster carries none of this.
+  annual_rent?: number | string | null; deposit_amount?: number | string | null;
+  lease_start?: string | null; lockers_held?: number | null; open_applications?: number | null;
   customer_id: number | null; customer_code: string | null;
   pledged_amount: number; cheque_pending: boolean; ncd_backed: boolean; unresolved: boolean;
   waiver_id: number | null; waiver_status: string | null; waiver_reason: string | null;
@@ -257,6 +260,8 @@ export function LockerTenantsPage() {
                 <th className="py-2 pr-3">Locker</th>
                 <th className="py-2 pr-3">Size</th>
                 <th className="py-2 pr-3">Status</th>
+                <th className="py-2 pr-3 text-right">Rent</th>
+                <th className="py-2 pr-3 text-right">Deposit</th>
                 <th className="py-2 pr-3">Lease</th>
                 <th className="py-2 pr-3 text-right">NCD pledged</th>
                 <th className="py-2 pr-3">Locker app</th>
@@ -313,8 +318,10 @@ export function LockerTenantsPage() {
                         }}>waive…</button>
                     )}
                   </td>
+                  <td className="py-2 pr-3 text-right mono">{r.annual_rent != null ? formatINR(r.annual_rent) : '—'}</td>
+                  <td className="py-2 pr-3 text-right mono">{r.deposit_amount != null ? formatINR(r.deposit_amount) : '—'}</td>
                   <td className="py-2 pr-3 text-xs text-text-muted whitespace-nowrap">
-                    {r.allotted_on ? <>{r.allotted_on}{r.lease_expires_on ? <> → {r.lease_expires_on}</> : null}</> : '—'}
+                    {(r.lease_start ?? r.allotted_on) ? <>{r.lease_start ?? r.allotted_on}{r.lease_expires_on ? <> → {r.lease_expires_on}</> : null}</> : '—'}
                   </td>
                   <td className="py-2 pr-3 text-right mono">{r.pledged_amount > 0 ? formatINR(r.pledged_amount) : '—'}</td>
                   <td className="py-2 pr-3 font-mono text-xs text-text-muted">

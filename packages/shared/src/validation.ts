@@ -7,13 +7,23 @@
 /** Standard PAN: 5 uppercase letters, 4 digits, 1 uppercase letter. */
 export const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
-/** Names / occupation / city / district / state: letters and spaces only. */
+/** Occupation / city / district / state: letters and spaces only. */
 export const ALPHA_SPACE_RE = /^[A-Za-z ]+$/;
 
 export const isAlphaSpace = (v: string): boolean => ALPHA_SPACE_RE.test(v);
 
 /** Type-time guard for alpha-space fields — drops anything else as it's typed. */
 export const sanitizeAlphaSpace = (v: string): string => v.replace(/[^A-Za-z ]/g, '');
+
+/**
+ * Person names: no digits, but the punctuation real names carry is allowed —
+ * dotted initials ("K. Pallavi", the local convention), apostrophes
+ * ("D'Souza") and hyphens ("Mary-Anne"). Must start with a letter.
+ */
+export const NAME_RE = /^[A-Za-z][A-Za-z .'-]*$/;
+
+/** Type-time guard for name fields — drops anything the name rule disallows. */
+export const sanitizeName = (v: string): string => v.replace(/[^A-Za-z .'-]/g, '');
 
 /**
  * Parse a DD/MM/YYYY string to ISO (YYYY-MM-DD). Returns null unless the

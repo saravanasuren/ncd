@@ -1,7 +1,7 @@
 /** Customers routes (docs/04 §2). */
 import { Router } from 'express';
 import { z } from 'zod';
-import { ALPHA_SPACE_RE, PAN_RE, ddmmyyyyToISO, isoToDDMMYYYY } from '@new-wealth/shared';
+import { ALPHA_SPACE_RE, NAME_RE, PAN_RE, ddmmyyyyToISO, isoToDDMMYYYY } from '@new-wealth/shared';
 import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
@@ -18,17 +18,20 @@ customersRouter.get('/', requirePermission('customers:read'),
   }));
 
 // Identity fields share the client's rules (shared/validation) so the wizard's
-// checks can't be bypassed: names/occupation/city/district/state are letters
-// and spaces only (trimmed), PAN is ABCDE1234F (uppercased server-side too),
-// dob arrives as ISO — the DD/MM/YYYY rule is the FORM's input format; the
-// wizard converts before sending — and must be a real calendar date.
+// checks can't be bypassed: person names take letters, spaces and the
+// punctuation real names carry (. ' -) but never digits; occupation and
+// city/district/state are letters and spaces only (all trimmed); PAN is
+// ABCDE1234F (uppercased server-side too); dob arrives as ISO — the
+// DD/MM/YYYY rule is the FORM's input format; the wizard converts before
+// sending — and must be a real calendar date.
+const personName = (label: string) => z.string().trim().min(1).regex(NAME_RE, `${label} may contain letters, spaces, dots, apostrophes and hyphens only`);
 const alphaSpace = (label: string) => z.string().trim().min(1).regex(ALPHA_SPACE_RE, `${label} may contain letters and spaces only`);
 const isoDate = z.string().trim()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD')
   .refine((v) => ddmmyyyyToISO(isoToDDMMYYYY(v)) !== null, 'Date must be a real calendar date');
 
 const createSchema = z.object({
-  full_name: alphaSpace('Full name'),
+  full_name: personName('Full name'),
   pan: z.preprocess((v) => (typeof v === 'string' ? v.trim().toUpperCase() : v),
     z.string().regex(PAN_RE, 'PAN must be in the format ABCDE1234F').optional()),
   dob: isoDate.optional(),
@@ -41,7 +44,7 @@ const createSchema = z.object({
   state: alphaSpace('State').optional(),
   is_nri: z.boolean().optional(),
   referred_by_text: z.string().optional(),
-  father_name: alphaSpace("Father's name").optional(),
+  father_name: personName("Father's name").optional(),
   occupation: alphaSpace('Occupation').optional(),
   aadhaar_last4: z.string().optional(),
   aadhaar: z.string().optional(), // full 12-digit; last4 is derived from it

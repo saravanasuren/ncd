@@ -1,7 +1,7 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { PAN_RE, sanitizeAlphaSpace, ddmmyyyyToISO, isoToDDMMYYYY } from '@new-wealth/shared';
+import { PAN_RE, sanitizeAlphaSpace, sanitizeName, ddmmyyyyToISO, isoToDDMMYYYY } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { ReferredByPicker } from './ReferredByPicker.js';
 
@@ -98,7 +98,8 @@ function formatDobInput(v: string): string {
  */
 function normalizeIncoming(f: Form): Form {
   const out = { ...f };
-  for (const k of ['full_name', 'father_name', 'occupation', 'city', 'district', 'state'] as const) out[k] = sanitizeAlphaSpace(out[k]);
+  for (const k of ['full_name', 'father_name'] as const) out[k] = sanitizeName(out[k]);
+  for (const k of ['occupation', 'city', 'district', 'state'] as const) out[k] = sanitizeAlphaSpace(out[k]);
   if (out.dob && /^\d{4}-\d{2}-\d{2}/.test(out.dob)) out.dob = isoToDDMMYYYY(out.dob);
   return out;
 }
@@ -166,6 +167,8 @@ export function CustomerWizard(
   const [pennyBusy, setPennyBusy] = useState(false);
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
   const setFile = (k: DocKey, file: File | null) => setFiles((prev) => ({ ...prev, [k]: file }));
+  // The hidden native date input behind the DOB calendar button (showPicker()).
+  const dobPickerRef = useRef<HTMLInputElement>(null);
 
   // PIN → city/state autofill (India Post). Non-blocking: a miss leaves the
   // fields editable. Fires when the PIN reaches 6 digits.
@@ -332,13 +335,27 @@ export function CustomerWizard(
         <div className="p-5 max-h-[65vh] overflow-y-auto">
           {step === 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
-              {/* Name / place fields are letters-and-spaces only — invalid characters
-                  are dropped as they're typed (same rule enforced by the API). */}
-              <div className="sm:col-span-2"><Field label="Full name" required><input className={inp} value={f.full_name} onChange={(e) => set({ full_name: sanitizeAlphaSpace(e.target.value) })} autoFocus /></Field></div>
-              <Field label="Father's name"><input className={inp} value={f.father_name} onChange={(e) => set({ father_name: sanitizeAlphaSpace(e.target.value) })} /></Field>
+              {/* Names allow letters, spaces and . ' - (never digits); occupation and
+                  place fields are letters-and-spaces only — invalid characters are
+                  dropped as they're typed (same rules enforced by the API). */}
+              <div className="sm:col-span-2"><Field label="Full name" required><input className={inp} value={f.full_name} onChange={(e) => set({ full_name: sanitizeName(e.target.value) })} autoFocus /></Field></div>
+              <Field label="Father's name"><input className={inp} value={f.father_name} onChange={(e) => set({ father_name: sanitizeName(e.target.value) })} /></Field>
               <Field label="Occupation" hint="e.g. Salaried, Business, Retired"><input className={inp} value={f.occupation} onChange={(e) => set({ occupation: sanitizeAlphaSpace(e.target.value) })} /></Field>
               <Field label="Date of birth" hint="DD/MM/YYYY">
-                <input className={inp} inputMode="numeric" placeholder="DD/MM/YYYY" maxLength={10} value={f.dob} onChange={(e) => set({ dob: formatDobInput(e.target.value) })} />
+                {/* Text entry shows DD/MM/YYYY always (a native date input's display
+                    format follows the OS locale and can't be forced); the 📅 button
+                    opens a REAL native picker via a visually-hidden date input whose
+                    pick is written back as DD/MM/YYYY. API still receives ISO. */}
+                <div className="relative">
+                  <input className={`${inp} pr-9`} inputMode="numeric" placeholder="DD/MM/YYYY" maxLength={10} value={f.dob} onChange={(e) => set({ dob: formatDobInput(e.target.value) })} />
+                  <input ref={dobPickerRef} type="date" tabIndex={-1} aria-label="Pick date of birth from calendar"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 opacity-0"
+                    value={ddmmyyyyToISO(f.dob) ?? ''}
+                    onChange={(e) => set({ dob: e.target.value ? isoToDDMMYYYY(e.target.value) : '' })} />
+                  <button type="button" title="Open calendar" aria-hidden tabIndex={-1}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 text-text-muted hover:text-text"
+                    onClick={() => { const el = dobPickerRef.current; try { el?.showPicker(); } catch { el?.focus(); } }}>📅</button>
+                </div>
                 {f.dob.length === 10 && !ddmmyyyyToISO(f.dob) && <span className="text-[11px] text-danger">Not a valid date — use DD/MM/YYYY.</span>}
               </Field>
               <Field label="Age / category" hint="Auto from DOB; senior citizen = 60+ (drives TDS filing category)">

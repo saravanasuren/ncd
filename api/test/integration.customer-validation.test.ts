@@ -1,6 +1,7 @@
 /**
- * Customer create validation (shared/validation): names, occupation and
- * city/district/state are letters-and-spaces only (trimmed); PAN must be
+ * Customer create validation (shared/validation): person names take letters,
+ * spaces and real-name punctuation (. ' -) but never digits; occupation and
+ * city/district/state are letters-and-spaces only (all trimmed); PAN must be
  * ABCDE1234F (uppercased server-side); dob must be a real ISO date — the
  * wizard's DD/MM/YYYY input converts before sending.
  */
@@ -15,11 +16,12 @@ afterAll(async () => { await ctx.close(); });
 const admin = async () => { const c = new Client(ctx.base); await c.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' }); return c; };
 
 describe('POST /api/customers — identity-field validation', () => {
-  it('rejects digits / special characters in the alpha-space fields', async () => {
+  it('rejects digits / disallowed characters per field', async () => {
     const a = await admin();
     const cases: Array<Record<string, string>> = [
       { full_name: 'Cust 123' },
-      { full_name: 'Valid Name', father_name: 'Father-1' },
+      { full_name: 'Cust@Home' },
+      { full_name: 'Valid Name', father_name: 'Father 1' },
       { full_name: 'Valid Name', occupation: 'IT/Software' },
       { full_name: 'Valid Name', city: 'Chennai 600001' },
       { full_name: 'Valid Name', district: 'Erode!' },
@@ -29,6 +31,17 @@ describe('POST /api/customers — identity-field validation', () => {
       const r = await a.post('/api/customers', { phone: '9700000001', ...body });
       expect(r.status, JSON.stringify(body)).toBe(400);
       expect(r.json.error.code).toBe('VALIDATION');
+    }
+  });
+
+  it('accepts the punctuation real names carry — dots, apostrophes, hyphens', async () => {
+    const a = await admin();
+    const names = ['K. Pallavi', "Antony D'Souza", 'Mary-Anne Joseph', 'A.R. Rahman'];
+    for (let i = 0; i < names.length; i++) {
+      const r = await a.post('/api/customers', { full_name: names[i], father_name: names[i], phone: `970001000${i}` });
+      expect(r.status, names[i]).toBe(201);
+      const detail = await a.get(`/api/customers/${r.json.id}`);
+      expect(detail.json.customer.full_name).toBe(names[i]);
     }
   });
 

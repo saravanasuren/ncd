@@ -175,18 +175,85 @@ describe('premature penalty waiver (CXO)', () => {
     // Cannot increase the penalty.
     expect((await cxo.post(`/api/redemptions/${redId}/waive-penalty`, { new_penalty: 999999, reason: 'nope' })).status).toBe(400);
 
-    // Waive fully → penalty 0, net = principal + accrued interest (interest is
-    // preserved across the waiver, so net ≥ principal).
+    // Waive fully → penalty 0, net = principal EXACTLY. The accrued interest is
+    // settled on its own BrokenInterest row and never rides in net_payment
+    // (owner 2026-07-24), so the waived net is the redemption amount, no more.
     const w = await cxo.post(`/api/redemptions/${redId}/waive-penalty`, { new_penalty: 0, reason: 'genuine hardship' });
     expect(w.status).toBe(200);
     expect(Number(w.json.penalty)).toBe(0);
-    expect(Number(w.json.net_payment)).toBeGreaterThanOrEqual(500000);
+    expect(Number(w.json.net_payment)).toBe(500000);
     const row = (await ctx.db.query('SELECT penalty, net_payment, penalty_original FROM redemptions WHERE id = $1', [redId])).rows[0] as any;
     expect(Number(row.penalty)).toBe(0);
-    expect(Number(row.net_payment)).toBeGreaterThanOrEqual(500000);
+    expect(Number(row.net_payment)).toBe(500000);
     expect(Number(row.penalty_original)).toBe(5000);
 
     // Approve → app Redeemed at the waived net.
     expect((await cxo.post(`/api/approvals/${init.json.request.id}/approve`)).json.request.status).toBe('Approved');
+  });
+});
+
+/**
+ * A redemption pays the REDEMPTION amount, never the interest (owner
+ * 2026-07-24). The regression this pins: net_payment had started folding the
+ * accrued (broken) interest in, so a ₹2,00,000 premature withdrawal asked the
+ * checker to approve ₹2,01,852.05 — against 96 of 97 live redemptions, which
+ * all read net_payment = principal − penalty.
+ */
+describe('redemption pays principal, not interest', () => {
+  it('net_payment excludes accrued interest, which is recorded separately with its TDS', async () => {
+    const inv = await activeInvestment('Principal Only Cust', '9333300002', 200000);
+    const ncd = await as('ncd@demo.local');
+    const init = await ncd.post('/api/redemptions/premature', { application_id: inv.appId, reason: 'principal only' });
+    expect(init.status).toBe(201);
+
+    const red = (await ctx.db.query(
+      'SELECT principal, penalty, broken_interest, broken_tds, net_payment FROM redemptions WHERE id = $1',
+      [init.json.redemption_id])).rows[0] as any;
+
+    // The whole point: the payable figure is the redemption amount.
+    expect(Number(red.net_payment)).toBe(Number(red.principal) - Number(red.penalty));
+    // Interest is still computed and still carries its TDS — just not paid here.
+    expect(Number(red.broken_interest)).toBeGreaterThan(0);
+    expect(Number(red.broken_tds)).toBeGreaterThanOrEqual(0);
+
+    // The approval card reads net_payment from the request metadata.
+    const req = (await ctx.db.query(
+      `SELECT metadata FROM approval_requests WHERE entity_type = 'redemptions' AND entity_id = $1 ORDER BY id DESC LIMIT 1`,
+      [String(init.json.redemption_id)])).rows[0] as any;
+    if (req) expect(Number(req.metadata.net_payment)).toBe(Number(red.net_payment));
+  });
+
+  it('on approval the interest becomes its own BrokenInterest row, taxed correctly', async () => {
+    const inv = await activeInvestment('Broken Row Cust', '9333300003', 300000);
+    const ncd = await as('ncd@demo.local');
+    const init = await ncd.post('/api/redemptions/premature', { application_id: inv.appId, reason: 'check rows' });
+    const cxo = await as('cxo@demo.local');
+    const reqId = (await ctx.db.query(
+      `SELECT id FROM approval_requests WHERE entity_type = 'redemptions' AND entity_id = $1 ORDER BY id DESC LIMIT 1`,
+      [String(init.json.redemption_id)])).rows[0] as any;
+    expect((await cxo.post(`/api/approvals/${reqId.id}/approve`)).status).toBe(200);
+
+    const rows = (await ctx.db.query(
+      `SELECT due_type, gross_amount, tds_amount, net_amount FROM disbursement_schedule
+        WHERE application_id = $1 AND due_type IN ('Premature','BrokenInterest') ORDER BY due_type`,
+      [inv.appId])).rows as any[];
+    const principalRow = rows.find((r) => r.due_type === 'Premature');
+    const interestRow = rows.find((r) => r.due_type === 'BrokenInterest');
+    const red = (await ctx.db.query(
+      'SELECT principal, penalty, net_payment FROM redemptions WHERE id = $1', [init.json.redemption_id])).rows[0] as any;
+    expect(principalRow).toBeTruthy();
+    // The principal row IS the payable figure: principal − penalty (1% here),
+    // and it carries no TDS.
+    expect(Number(principalRow.net_amount)).toBe(Number(red.principal) - Number(red.penalty));
+    expect(Number(principalRow.net_amount)).toBe(Number(red.net_payment));
+    expect(Number(principalRow.tds_amount)).toBe(0);
+
+    // The interest row must NOT book its whole gross as tax — the bug that
+    // deriving TDS from net_payment would have caused.
+    if (interestRow) {
+      expect(Number(interestRow.net_amount)).toBeGreaterThan(0);
+      expect(Number(interestRow.gross_amount)).toBe(
+        Number(interestRow.tds_amount) + Number(interestRow.net_amount));
+    }
   });
 });

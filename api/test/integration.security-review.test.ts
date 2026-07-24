@@ -91,15 +91,20 @@ describe('security review — lifecycle reject cleanup', () => {
     expect(again.status).toBe(201);
   });
 
-  it('premature settlement now includes accrued broken-period interest', async () => {
+  it('premature settlement computes accrued interest but pays the redemption amount', async () => {
+    // REVERSED 2026-07-24 (owner): this used to assert the interest was folded
+    // into net_payment. It made a ₹2,00,000 withdrawal ask the checker to
+    // approve ₹2,01,852.05, against 96 of 97 live redemptions where
+    // net_payment = principal − penalty. The interest is still computed and
+    // still settles on its own BrokenInterest row with its TDS.
     const inv = await activeInvestment('Broken Interest', '9722200006');
     const ncd = await as('ncd@demo.local');
     const init = await ncd.post('/api/redemptions/premature', { application_id: inv.appId, reason: 'exit' });
     expect(init.status).toBe(201);
     // Accrued interest is computed (>0 for a funded, days-elapsed investment)…
     expect(Number(init.json.brokenInterest)).toBeGreaterThan(0);
-    // …and folded (net of TDS) into the payout — so net > principal − penalty.
-    expect(Number(init.json.netPayment)).toBeGreaterThan(Number(init.json.principal) - Number(init.json.penalty));
+    // …but the payable figure is the redemption amount, exactly.
+    expect(Number(init.json.netPayment)).toBe(Number(init.json.principal) - Number(init.json.penalty));
   });
 
   it('rejecting an interest batch frees the period (rows released, batch Failed)', async () => {

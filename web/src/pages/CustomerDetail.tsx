@@ -599,18 +599,27 @@ function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onEr
     return () => { cancelled = true; clearTimeout(t); };
   }, [f.ifsc]);
 
+  // Errors from THIS card are shown INSIDE it. The page-level banner renders up
+  // by the profile header, far above the bank section — so a refused delete
+  // looked like nothing happened at all.
+  const [cardErr, setCardErr] = useState('');
+  const fail = (e: unknown) => { const m = e instanceof ApiError ? e.message : 'Failed'; setCardErr(m); onError(m); };
+
   const add = useMutation({
     mutationFn: () => api.post(`/api/customers/${customerId}/bank-accounts`, {
       ...f, ifsc: f.ifsc.trim().toUpperCase(), holder_name: f.holder_name.trim() || undefined,
     }),
     onSuccess: () => { setF(empty); setIfscState('idle'); onChange(); },
-    onError: (e) => onError(e instanceof ApiError ? e.message : 'Failed'),
+    onError: fail,
   });
-  const wrapSet = (p: Promise<unknown>) => p.then(onChange).catch((e) => onError(e instanceof ApiError ? e.message : 'Failed'));
+  const wrapSet = (p: Promise<unknown>) => p.then(() => { setCardErr(''); onChange(); }).catch(fail);
   const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
 
   return (
     <>
+      {cardErr && (
+        <div className="text-xs text-danger bg-[color:var(--danger-bg)] border border-danger/30 rounded px-3 py-2 mb-3">{cardErr}</div>
+      )}
       <div className="divide-y divide-border">
         {accounts.map((b: any) => (
           <div key={b.id} className="py-2.5 flex items-center gap-3 text-sm flex-wrap">

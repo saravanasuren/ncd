@@ -7,7 +7,7 @@ import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
-import { round2, toISODate, daysBetween } from '../../lib/dates.js';
+import { round2, toISODate, daysBetween, addDays } from '../../lib/dates.js';
 import { denominatorFor, type DayCountConvention } from '../../lib/interest.js';
 import { computeTds } from '../../lib/tds.js';
 import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
@@ -97,7 +97,7 @@ export async function previewDue(db: Db, payoutDate: string) {
   // interest is still owed.
   const { rows: redemptionSlices } = await db.query<Record<string, unknown>>(
     `SELECT ds.id AS schedule_id, ds.line_id, ds.application_id, ds.due_date,
-            ds.gross_amount, ds.tds_amount, ds.net_amount,
+            ds.gross_amount, ds.tds_amount, ds.net_amount, ds.principal_basis,
             a.application_no, c.full_name AS customer_name,
             COALESCE((SELECT max(p.due_date) FROM disbursement_schedule p
                        WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
@@ -113,14 +113,24 @@ export async function previewDue(db: Db, payoutDate: string) {
     const gross = Number(r.gross_amount);
     if (!(gross > 0)) continue;
     const from = toISODate(r.from_date as string | null);
+    const due = toISODate(r.due_date as string | null)!;
+    const basis = r.principal_basis != null ? Number(r.principal_basis) : null;
     totals.gross += gross; totals.tds += Number(r.tds_amount); totals.net += Number(r.net_amount);
     out.push({
       schedule_id: Number(r.schedule_id),
       line_id: Number(r.line_id), application_id: Number(r.application_id),
       application_no: r.application_no, customer_name: r.customer_name,
-      due_date: toISODate(r.due_date as string | null), due_type: 'BrokenInterest',
+      due_date: due, due_type: 'BrokenInterest',
       row_type: 'Redemption',
-      from_date: from, days: from ? daysBetween(from, toISODate(r.due_date as string | null)!) : null,
+      // Wealth's rule: a REDEMPTION slice (it carries a principal basis) accrues
+      // up to the day BEFORE the redemption, so the sheet's period ends there. A
+      // maturity catch-up has no basis and ends on its own due date. Only the
+      // printed window moves — due_date stays the row's real settlement date,
+      // which the batch, the NEFT sheet and the watermark all key off.
+      display_to: basis != null ? addDays(due, -1) : due,
+      // The principal this interest was earned on, not the line's face amount.
+      investment_amount: basis,
+      from_date: from, days: from ? daysBetween(from, due) : null,
       gross_amount: gross, tds_amount: Number(r.tds_amount), net_amount: Number(r.net_amount),
       addition_amount: 0, deduction_amount: 0, total_amount: Number(r.net_amount),
     });
@@ -156,6 +166,16 @@ export async function previewDue(db: Db, payoutDate: string) {
     row.total_amount = round2(Number(row.net_amount) + Number(a.addition) - Number(a.deduction));
     addTotal += Number(a.addition); dedTotal += Number(a.deduction);
   }
+
+  // Same order as the saved-batch sheet (wealth's): each application's rows
+  // together, regular interest first and its redemption slices under it. Built
+  // in two passes above, so without this every Redemption row lands in a block
+  // at the BOTTOM of the sheet, detached from the customer it belongs to.
+  const key = (r: Record<string, unknown>) => String(r.customer_name ?? '') + ' ' + String(r.application_no ?? '');
+  out.sort((a, b) =>
+    key(a).localeCompare(key(b))
+    || (a.schedule_id ? 1 : 0) - (b.schedule_id ? 1 : 0)
+    || String(a.due_date).localeCompare(String(b.due_date)));
 
   return {
     rows: out,
@@ -343,12 +363,21 @@ registerOnReject('interest_batch', async (tx, req) => {
   if (!batchId) return;
   // 1) Un-supersede the rows this batch skipped (they carry the batch_id).
   await tx.query("UPDATE disbursement_schedule SET status = 'Scheduled', batch_id = NULL WHERE batch_id = $1 AND status = 'Skipped'", [batchId]);
-  // 2) Drop the batch's own materialised (still-Scheduled) rows.
+  // 2) RELEASE the redemption slices first. A batch never CREATES a
+  //    BrokenInterest row — it only attaches one the redemption approval wrote —
+  //    so the delete below would destroy it outright, taking the customer's
+  //    broken-period interest with it and leaving nothing for any later batch to
+  //    pay. Freeing the batch_id puts the row back in the queue, which is what
+  //    cancelBatch already does for the whole batch.
+  await tx.query(
+    "UPDATE disbursement_schedule SET batch_id = NULL WHERE batch_id = $1 AND status = 'Scheduled' AND due_type = 'BrokenInterest'",
+    [batchId]);
+  // 3) Drop the batch's own materialised (still-Scheduled) rows.
   await tx.query("DELETE FROM disbursement_schedule WHERE batch_id = $1 AND status = 'Scheduled'", [batchId]);
-  // 3) Release the one-time adjustments this batch had consumed — they were
+  // 4) Release the one-time adjustments this batch had consumed — they were
   //    never paid, so they apply to the next settlement instead.
   await tx.query("UPDATE payout_adjustments SET status = 'Approved', batch_id = NULL, updated_at = now() WHERE batch_id = $1 AND status = 'Consumed'", [batchId]);
-  // 4) Mark the batch failed.
+  // 5) Mark the batch failed.
   await tx.query("UPDATE payout_batches SET status = 'Failed' WHERE id = $1", [batchId]);
 });
 
@@ -505,11 +534,20 @@ export async function markRowFailed(db: Db, actor: AuthUser, scheduleId: number,
 const SUMMARY_SELECT = `
   SELECT a.application_no, c.full_name AS customer_name, c.dob AS date_of_birth, c.pan,
          c.gender, c.investor_category AS category,
-         s.name AS series_name, l.amount AS investment_amount, l.coupon_rate_pct,
+         s.name AS series_name,
+         -- A redemption slice was earned on its own principal basis, not on the
+         -- line's face amount (wealth's principal_basis); everything else shows
+         -- the line.
+         COALESCE(ds.principal_basis, l.amount) AS investment_amount,
+         l.coupon_rate_pct,
          COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
          COALESCE(ds.payee_account, pb.account_number, cb.account_number) AS account_number,
          COALESCE(ds.payee_ifsc, pb.ifsc, cb.ifsc) AS ifsc,
-         ds.due_date AS period_to, ds.gross_amount, ds.tds_amount,
+         -- Printed period end. A redemption slice stops the day BEFORE the
+         -- redemption; a maturity catch-up ends on its own due date. The day
+         -- COUNT is untouched — only the window the sheet prints moves.
+         CASE WHEN ds.principal_basis IS NOT NULL THEN ds.due_date - 1 ELSE ds.due_date END AS period_to,
+         ds.gross_amount, ds.tds_amount,
          -- Net = pure interest (gross − TDS). What the bank actually pays is
          -- ds.net_amount, which carries any one-time adjustment — shown as Total.
          (ds.gross_amount - ds.tds_amount) AS net_amount,
@@ -558,7 +596,11 @@ export async function summaryForBatch(db: Db, batchId: number): Promise<{ buffer
   const batch = (await db.query<{ batch_no: string }>('SELECT batch_no FROM payout_batches WHERE id = $1', [batchId])).rows[0];
   if (!batch) throw errors.notFound('Batch not found');
   const { rows } = await db.query<Record<string, unknown>>(
-    `${SUMMARY_SELECT} WHERE ds.batch_id = $1 AND ds.status <> 'Skipped' ORDER BY c.full_name`, [batchId]);
+    // Wealth's order: each application's rows sit together, its regular interest
+    // first and its redemption slices under it. Ordering by name alone left a
+    // customer's Redemption row detached from the interest row it belongs with.
+    `${SUMMARY_SELECT} WHERE ds.batch_id = $1 AND ds.status <> 'Skipped'
+      ORDER BY c.full_name, a.application_no, (ds.due_type = 'BrokenInterest'), ds.due_date`, [batchId]);
   const { buildSummarySheet } = await import('../../lib/payout-summary.js');
   return { buffer: await buildSummarySheet(rows as never[]), batchNo: batch.batch_no };
 }
@@ -602,8 +644,12 @@ async function summaryRowsForDate(db: Db, payoutDate: string): Promise<Record<st
       application_no: r.application_no,
       customer_name: r.customer_name,
       row_type: r.row_type ?? ((st as Record<string, unknown>).paid_before ? 'Balance After Redemption' : 'Addition'),
+      // A redemption slice brings its own basis and its own period end (see
+      // previewDue); everything else takes the line's amount and the cut-off.
+      // `?? st.investment_amount` — not `||` — so a genuine 0 basis still wins.
+      investment_amount: r.investment_amount ?? (st as Record<string, unknown>).investment_amount,
       period_from: r.from_date,
-      period_to: r.due_date,
+      period_to: r.display_to ?? r.due_date,
       period_days: r.days,
       gross_amount: r.gross_amount,
       tds_amount: r.tds_amount,

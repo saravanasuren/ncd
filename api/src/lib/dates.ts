@@ -82,6 +82,13 @@ export function daysBetween(d1Str: ISODate, d2Str: ISODate): number {
   return Math.round((d2.getTime() - d1.getTime()) / 86400000);
 }
 
+/** Shift an ISO date by whole days (negative to go back). */
+export function addDays(dateStr: ISODate, days: number): ISODate {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 /** Half-up money rounding to 2 decimals (returns a number). */
 export function round2(v: number): number {
   return Math.round(Number(v) * 100) / 100;

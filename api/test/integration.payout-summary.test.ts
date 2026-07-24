@@ -301,4 +301,132 @@ describe('redemption interest lands in that month\'s payout sheet', () => {
     expect(String(found!.from)).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);  // dates present, not blank
     expect(String(found!.to)).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);
   });
+
+  // Wealth parity (_segmentSummaryRows): a redemption slice prints the principal
+  // it was EARNED on and stops the day BEFORE the redemption date — the row is
+  // interest up to the exit, not interest on the exit day.
+  it('the Redemption row carries its own principal basis and ends the day before the exit', async () => {
+    const a = await admin();
+    const basis = (await ctx.db.query(
+      "SELECT principal_basis FROM disbursement_schedule WHERE application_id=$1 AND due_type='BrokenInterest' AND due_date=$2::date",
+      [appId, redDate])).rows[0] as any;
+    expect(Number(basis.principal_basis)).toBe(1000000);   // stamped at approval
+
+    const batchId = Number((await ctx.db.query(
+      "SELECT batch_id FROM disbursement_schedule WHERE application_id=$1 AND due_type='BrokenInterest' AND due_date=$2::date",
+      [appId, redDate])).rows[0]!.batch_id);
+    const ws = await sheetOf((await a.raw(`/api/payouts/${batchId}/summary.xlsx`)).buffer);
+    let row: ExcelJS.Row | null = null;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      if (String(ws.getRow(r).getCell(10).value) === 'Redemption'
+        && String(ws.getRow(r).getCell(3).value) === 'Redeeming Investor') row = ws.getRow(r);
+    }
+    expect(row).toBeTruthy();
+    expect(Number(row!.getCell(11).value)).toBe(1000000);  // Invested = the basis, not the face amount
+    expect(String(row!.getCell(17).value)).toBe('14/09/2026'); // Interest To = redemption date − 1
+  });
+});
+
+/**
+ * A rejected batch must give the redemption slice BACK, not destroy it. The
+ * batch never creates a BrokenInterest row — it attaches one the redemption
+ * approval wrote — so the reject handler's blanket "delete this batch's
+ * still-Scheduled rows" was deleting the customer's broken-period interest
+ * outright: gone from the schedule, unpayable by any later batch, and silently
+ * absent from every future summary sheet.
+ */
+describe('a rejected batch releases the redemption slice instead of deleting it', () => {
+  it('the slice survives the reject, unbatched and still Scheduled', async () => {
+    const a = await admin();
+    const cxo = await as('cxo@demo.local');
+    const ncd = await as('ncd@demo.local');
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    const cust = await a.post('/api/customers', { full_name: 'Rejected Batch Investor', phone: '9600000032' });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '66660008888', ifsc: 'ICIC0001234', holder_name: 'Rejected Batch Investor' });
+    const app = await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000, date_money_received: '2026-07-12',
+    });
+    const id = Number(app.json.id);
+    await approveInvestment(ncd, app);
+
+    const rDate = '2026-11-15';
+    const red = await a.post('/api/redemptions/premature', { application_id: id, reason: 'exit', redemption_date: rDate });
+    await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
+    const before = (await ctx.db.query(
+      "SELECT id, gross_amount FROM disbursement_schedule WHERE application_id=$1 AND due_type='BrokenInterest' AND due_date=$2::date", [id, rDate])).rows[0] as any;
+    expect(Number(before.gross_amount)).toBeGreaterThan(0);
+
+    const batch = await ncd.post('/api/payouts', { payout_date: '2026-11-28' });
+    expect(batch.status).toBe(201);
+    await a.post(`/api/approvals/${batch.json.request.id}/reject`, { reason: 'wrong cut-off date' });
+
+    const after = (await ctx.db.query(
+      'SELECT status, batch_id, gross_amount FROM disbursement_schedule WHERE id = $1', [Number(before.id)])).rows[0] as any;
+    expect(after).toBeTruthy();                       // NOT deleted
+    expect(after.status).toBe('Scheduled');
+    expect(after.batch_id).toBeNull();                // free for the next batch
+    expect(Number(after.gross_amount)).toBe(Number(before.gross_amount));
+
+    // …and the next batch really does pick it up again.
+    const retry = await ncd.post('/api/payouts', { payout_date: '2026-11-30' });
+    expect(retry.status).toBe(201);
+    expect(Number((await ctx.db.query('SELECT batch_id FROM disbursement_schedule WHERE id = $1', [Number(before.id)])).rows[0]!.batch_id))
+      .toBe(Number(retry.json.batch_id));
+  });
+});
+
+/**
+ * Sheet ORDER: previewDue builds regular interest and redemption slices in two
+ * separate passes, so unsorted every Redemption row piles up at the bottom of
+ * the sheet, detached from the customer it belongs to. Wealth groups each
+ * application's rows together, interest first, slices under it.
+ */
+describe('a customer\'s redemption row sits with their interest rows', () => {
+  it('the preview sheet groups by customer, not by row type', async () => {
+    const a = await admin();
+    const cxo = await as('cxo@demo.local');
+    const ncd = await as('ncd@demo.local');
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    // Two investors. The one that PART-redeems sorts BEFORE the other, so its
+    // Redemption row must sit next to its own interest row — not shoved past
+    // the later customer to the bottom of the sheet.
+    const mk = async (name: string, phone: string) => {
+      const cust = await a.post('/api/customers', { full_name: name, phone });
+      await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '6666' + phone, ifsc: 'ICIC0001234', holder_name: name });
+      const app = await a.post('/api/applications', {
+        ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000, date_money_received: '2026-07-12',
+      });
+      await approveInvestment(ncd, app);
+      return Number(app.json.id);
+    };
+    const midId = await mk('Order Mid Investor', '9600000041');
+    await mk('Order Zed Investor', '9600000042');
+
+    // A PARTIAL exit: the line stays live, so this customer has both a regular
+    // interest row and a redemption slice in the same sheet.
+    const red = await a.post('/api/redemptions/premature', {
+      application_id: midId, reason: 'part exit', redemption_date: '2027-01-15', amount: 400000,
+    });
+    expect(red.status).toBe(201);
+    await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
+
+    const preview = await a.get('/api/payouts/preview?date=2027-01-28');
+    const rows = preview.json.rows as Array<{ customer_name: string; row_type?: string }>;
+    const mine = rows.filter((r) => String(r.customer_name).startsWith('Order '));
+    expect(mine.some((r) => r.row_type === 'Redemption')).toBe(true);
+
+    // Every customer's rows are contiguous — a name never reappears after
+    // someone else's row, which is exactly what the two-pass build produced.
+    const names = rows.map((r) => r.customer_name);
+    const firstSeen = new Map<string, number>();
+    names.forEach((n, i) => { if (!firstSeen.has(n)) firstSeen.set(n, i); });
+    for (const [n, start] of firstSeen) {
+      const last = names.lastIndexOf(n);
+      for (let i = start; i <= last; i++) expect(names[i]).toBe(n);
+    }
+    // Specifically: the redemption slice did not get stranded after Zed's row.
+    expect(names.lastIndexOf('Order Mid Investor')).toBeLessThan(names.indexOf('Order Zed Investor'));
+  });
 });

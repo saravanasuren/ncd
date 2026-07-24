@@ -275,6 +275,50 @@ export async function updateBankAccountName(db: Db, actor: AuthUser, customerId:
   });
 }
 
+/**
+ * A customer's tax position: whether TDS applies, and any 15G/15H on file.
+ *
+ * These drive computeTds on every payout, but were settable ONLY at enrolment —
+ * the correction whitelist doesn't carry them — so a customer who later filed a
+ * 15G/15H had TDS deducted anyway, with no way for staff to record the form.
+ * Changing it is real money, so every change is audited with before/after.
+ *
+ * A form without an expiry is refused: 15G/15H are per financial year, and
+ * isFormValid() treats a missing expiry as "not valid", so accepting one would
+ * silently do nothing.
+ */
+export async function updateTaxStatus(
+  db: Db, actor: AuthUser, customerId: number,
+  input: { tds_applicable?: boolean; tax_form?: string | null; tax_form_expires_on?: string | null },
+) {
+  await assertVisible(db, actor, customerId);
+  const form = input.tax_form?.trim() || null;
+  if (form && !['15G', '15H'].includes(form)) throw errors.badRequest('Tax form must be 15G or 15H');
+  if (form && !input.tax_form_expires_on) {
+    throw errors.badRequest('A 15G/15H needs its validity date — without one it is ignored when TDS is computed');
+  }
+  return db.withTx(async (tx) => {
+    const before = (await tx.query<Record<string, unknown>>(
+      'SELECT tds_applicable, tax_form, tax_form_expires_on FROM customers WHERE id = $1', [customerId])).rows[0];
+    if (!before) throw errors.notFound('Customer not found');
+    await tx.query(
+      `UPDATE customers SET
+         tds_applicable      = COALESCE($1, tds_applicable),
+         tax_form            = $2,
+         tax_form_expires_on = $3,
+         updated_at = now()
+       WHERE id = $4`,
+      [input.tds_applicable ?? null, form, form ? input.tax_form_expires_on : null, customerId]);
+    const after = (await tx.query<Record<string, unknown>>(
+      'SELECT tds_applicable, tax_form, tax_form_expires_on FROM customers WHERE id = $1', [customerId])).rows[0];
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'customer.tax-status', entityType: 'customers', entityId: customerId,
+      before, after,
+    });
+    return { ok: true, ...after };
+  });
+}
+
 export async function addBankAccount(db: Db, actor: AuthUser, customerId: number, input: { account_number: string; ifsc: string; bank_name?: string; branch_name?: string; branch_city?: string; account_type?: string; holder_name?: string; tds_applicable?: boolean }) {
   await assertVisible(db, actor, customerId);
   const pd = await kycProvider().pennyDrop(input.account_number, input.ifsc);

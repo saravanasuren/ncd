@@ -5,7 +5,7 @@
  * account being deleted is the only one on file (owner report 2026-07-24).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, requiredInvestmentFields, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
 const as = async (email: string, password = 'Demo_1234') => { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; };
@@ -22,7 +22,12 @@ async function customerWithPayouts(phone: string) {
   const cust = await a.post('/api/customers', { full_name: 'Bank Delete ' + phone, phone });
   const cid = Number(cust.json.id);
   const bank = await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '112611500000' + phone.slice(-4), ifsc: 'KVBL0001126' });
+  // Payment evidence is mandatory on create (#127) — without it the POST is
+  // rejected and there is no investment to approve, which is what broke this
+  // file. The explicit date_money_received still wins over the helper's default:
+  // these payouts are scheduled from it.
   const app = await a.post('/api/applications', {
+    ...requiredInvestmentFields(),
     customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 1000000, date_money_received: '2026-07-01',
   });
   await approveInvestment(await as('ncd@demo.local'), app);

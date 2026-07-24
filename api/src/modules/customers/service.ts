@@ -440,15 +440,33 @@ export interface NomineeInput {
   pan?: string | null; phone?: string | null; address?: string | null; guardian_name?: string | null; guardian_pan?: string | null;
   kyc_id_type?: string | null; kyc_id_number?: string | null;
 }
-export async function setNominees(db: Db, actor: AuthUser, customerId: number, nominees: NomineeInput[]) {
+/**
+ * Fill in the shares nobody stated (owner 2026-07-24: "everything should go to
+ * the nominee only"). A nominee added without a share used to land at 0%, which
+ * says the opposite of what was meant. Unstated shares split whatever is left
+ * equally — so ONE nominee gets 100, two get 50/50 — while an explicit split
+ * (60/40) is preserved exactly as typed.
+ */
+export function withNomineeShares<T extends { share_pct?: number | null }>(nominees: T[]): Array<T & { share_pct: number }> {
+  const stated = (n: T) => Number(n.share_pct) > 0;
+  const allocated = nominees.filter(stated).reduce((s, n) => s + Number(n.share_pct), 0);
+  const unstated = nominees.filter((n) => !stated(n)).length;
+  // Nothing left to share out (an explicit 100 plus an extra name) leaves the
+  // remainder at 0 rather than inventing percentage points from nowhere.
+  const each = unstated > 0 ? Math.max(0, Math.round(((100 - allocated) / unstated) * 100) / 100) : 0;
+  return nominees.map((n) => ({ ...n, share_pct: stated(n) ? Number(n.share_pct) : each }));
+}
+
+export async function setNominees(db: Db, actor: AuthUser, customerId: number, nomineesIn: NomineeInput[]) {
   await assertVisible(db, actor, customerId);
-  const total = nominees.reduce((s, n) => s + (n.share_pct ?? 0), 0);
-  if (nominees.length && total > 100.01) throw errors.badRequest('Nominee shares exceed 100%');
+  const stated = nomineesIn.reduce((s, n) => s + (Number(n.share_pct) > 0 ? Number(n.share_pct) : 0), 0);
+  if (nomineesIn.length && stated > 100.01) throw errors.badRequest('Nominee shares exceed 100%');
+  const nominees = withNomineeShares(nomineesIn);
   await db.withTx(async (tx) => {
     await tx.query('DELETE FROM nominees WHERE customer_id = $1', [customerId]);
     for (const n of nominees) {
       await tx.query('INSERT INTO nominees (customer_id, full_name, relationship, share_pct, dob, pan, phone, address, guardian_name, guardian_pan, kyc_id_type, kyc_id_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
-        [customerId, n.full_name, n.relationship ?? null, n.share_pct ?? null, n.dob ?? null,
+        [customerId, n.full_name, n.relationship ?? null, n.share_pct, n.dob ?? null,
          n.pan ?? null, n.phone ?? null, n.address ?? null, n.guardian_name ?? null, n.guardian_pan ?? null,
          n.kyc_id_type ?? null, n.kyc_id_number ?? null]);
     }

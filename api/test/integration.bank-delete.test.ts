@@ -5,7 +5,7 @@
  * account being deleted is the only one on file (owner report 2026-07-24).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, requiredInvestmentFields, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, requiredInvestmentFields, type TestCtx, uniqueName } from './helpers/server.js';
 
 let ctx: TestCtx;
 const as = async (email: string, password = 'Demo_1234') => { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; };
@@ -19,7 +19,7 @@ async function customerWithPayouts(phone: string) {
   const a = await admin();
   const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
   const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
-  const cust = await a.post('/api/customers', { full_name: 'Bank Delete ' + phone, phone });
+  const cust = await a.post('/api/customers', { full_name: uniqueName('Bank Delete', phone), phone });
   const cid = Number(cust.json.id);
   const bank = await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '112611500000' + phone.slice(-4), ifsc: 'KVBL0001126' });
   const app = await a.post('/api/applications', {

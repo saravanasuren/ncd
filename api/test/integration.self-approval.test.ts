@@ -7,7 +7,7 @@
  * two-person rule, so it is pinned down hard here.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields, uniqueName } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -25,7 +25,7 @@ const as = async (email: string, password = 'Demo_1234') => { const c = new Clie
 const superAdmin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
 
 async function ownInvestment(c: Client, phone: string, amount: number) {
-  const cust = await c.post('/api/customers', { full_name: `Self ${phone}`, phone });
+  const cust = await c.post('/api/customers', { full_name: uniqueName('Self', phone), phone });
   const app = await c.post('/api/applications', { ...requiredInvestmentFields(),
     customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-12',
   });

@@ -1,6 +1,7 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { DP_ID_RE, IFSC_RE, PAN_RE, sanitizeAlphaSpace, sanitizeName, ddmmyyyyToISO, isoToDDMMYYYY } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { ReferredByPicker } from './ReferredByPicker.js';
 
@@ -68,16 +69,40 @@ function readBase64(file: File): Promise<string> {
   });
 }
 
-/** Whole-year age from an ISO DOB, or null. Senior citizen = 60+. */
+/** Whole-year age from a DD/MM/YYYY DOB, or null. Senior citizen = 60+. */
 function ageFromDob(dob: string): number | null {
-  if (!dob) return null;
-  const d = new Date(dob + 'T00:00:00');
+  const iso = ddmmyyyyToISO(dob);
+  if (!iso) return null;
+  const d = new Date(iso + 'T00:00:00');
   if (isNaN(d.getTime())) return null;
   const now = new Date();
   let a = now.getFullYear() - d.getFullYear();
   const m = now.getMonth() - d.getMonth();
   if (m < 0 || (m === 0 && now.getDate() < d.getDate())) a--;
   return a >= 0 && a < 130 ? a : null;
+}
+
+/** DOB is typed as DD/MM/YYYY — digits only, slashes inserted as you type. */
+function formatDobInput(v: string): string {
+  const digits = v.replace(/\D/g, '').slice(0, 8);
+  if (digits.length > 4) return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+  if (digits.length > 2) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return digits;
+}
+
+/**
+ * Normalise values entering the form from outside the typing guards — a lead
+ * prefill, a resumed draft, or the PIN autofill: alpha-space fields drop
+ * invalid characters (the API enforces the same rule) and an ISO dob from an
+ * old draft converts to the DD/MM/YYYY display format.
+ */
+function normalizeIncoming(f: Form): Form {
+  const out = { ...f };
+  for (const k of ['full_name', 'father_name', 'bank_holder_name', 'bank_name', 'branch_name', 'branch_city', 'nom_full_name'] as const) out[k] = sanitizeName(out[k]);
+  for (const k of ['occupation', 'city', 'district', 'state'] as const) out[k] = sanitizeAlphaSpace(out[k]);
+  out.account_number = out.account_number.replace(/\D/g, '');
+  if (out.dob && /^\d{4}-\d{2}-\d{2}/.test(out.dob)) out.dob = isoToDDMMYYYY(out.dob);
+  return out;
 }
 
 /** Depository from a DP ID: NSDL DP IDs start with "IN"; CDSL are 8-digit numeric. */
@@ -127,8 +152,8 @@ export function CustomerWizard(
   // unrelated autosaved enrolment draft, and it isn't the resumable draft.
   const [step, setStep] = useState<number>(() => (prefill ? 0 : loadDraft()?.step ?? 0));
   const [f, setF] = useState<Form>(() => {
-    if (prefill) return { ...EMPTY, ...prefill };
-    const d = loadDraft(); return d?.f ? { ...EMPTY, ...d.f } : EMPTY;
+    if (prefill) return normalizeIncoming({ ...EMPTY, ...prefill });
+    const d = loadDraft(); return d?.f ? normalizeIncoming({ ...EMPTY, ...d.f }) : EMPTY;
   });
   const [restored, setRestored] = useState<boolean>(() => !prefill && !!loadDraft());
   const [files, setFiles] = useState<Record<DocKey, File | null>>({
@@ -143,6 +168,8 @@ export function CustomerWizard(
   const [pennyBusy, setPennyBusy] = useState(false);
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
   const setFile = (k: DocKey, file: File | null) => setFiles((prev) => ({ ...prev, [k]: file }));
+  // The hidden native date input behind the DOB calendar button (showPicker()).
+  const dobPickerRef = useRef<HTMLInputElement>(null);
 
   // PIN → city/state autofill (India Post). Non-blocking: a miss leaves the
   // fields editable. Fires when the PIN reaches 6 digits.
@@ -153,7 +180,9 @@ export function CustomerWizard(
     setPinState('looking');
     try {
       const r = await api.get<{ found: boolean; state?: string; city?: string }>(`/api/lookups/pincode/${pin}`);
-      if (r.found) { set({ state: r.state ?? '', city: r.city ?? '', district: r.city ?? '' }); setPinState('ok'); }
+      // India Post names can carry punctuation ("Basti (Jalandhar)") — the
+      // fields are letters-and-spaces only, so sanitise the autofill too.
+      if (r.found) { set({ state: sanitizeAlphaSpace(r.state ?? ''), city: sanitizeAlphaSpace(r.city ?? ''), district: sanitizeAlphaSpace(r.city ?? '') }); setPinState('ok'); }
       else setPinState('miss');
     } catch { setPinState('miss'); }
   }
@@ -161,14 +190,16 @@ export function CustomerWizard(
   // IFSC → bank/branch autofill (debounced), mirroring the bank-account form.
   useEffect(() => {
     const code = f.ifsc.trim().toUpperCase();
-    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(code)) { setIfscState('idle'); return; }
+    if (!IFSC_RE.test(code)) { setIfscState('idle'); return; }
     let cancelled = false;
     setIfscState('looking');
     const t = setTimeout(async () => {
       try {
         const r = await api.get<{ found: boolean; bank?: string; branch?: string; city?: string }>(`/api/lookups/ifsc/${code}`);
         if (cancelled) return;
-        if (r.found) { set({ bank_name: r.bank ?? '', branch_name: r.branch ?? '', branch_city: r.city ?? '' }); setIfscState('ok'); }
+        // Lookup data can carry digits/punctuation ("Sector 17") — these fields
+        // take the person-name rule, so the autofill is sanitised the same way.
+        if (r.found) { set({ bank_name: sanitizeName(r.bank ?? ''), branch_name: sanitizeName(r.branch ?? ''), branch_city: sanitizeName(r.city ?? '') }); setIfscState('ok'); }
         else setIfscState('miss');
       } catch { if (!cancelled) setIfscState('miss'); }
     }, 400);
@@ -182,7 +213,7 @@ export function CustomerWizard(
         account_number: f.account_number.trim(), ifsc: f.ifsc.trim().toUpperCase(), name: f.bank_holder_name.trim() || undefined,
       });
       setPenny({ status: r.status, name: r.name_on_record, detail: r.detail });
-      if (r.status === 'Verified' && r.name_on_record && !f.bank_holder_name.trim()) set({ bank_holder_name: r.name_on_record });
+      if (r.status === 'Verified' && r.name_on_record && !f.bank_holder_name.trim()) set({ bank_holder_name: sanitizeName(r.name_on_record) });
     } catch (e) { setPenny({ status: 'Failed', detail: e instanceof ApiError ? e.message : 'Verification failed' }); }
     finally { setPennyBusy(false); }
   }
@@ -209,7 +240,8 @@ export function CustomerWizard(
   async function persist(): Promise<number> {
     const personal: Record<string, unknown> = { full_name: f.full_name.trim(), is_nri: f.is_nri, tds_applicable: f.tds !== 'no' };
     const put = (k: string, v: string) => { if (v.trim()) personal[k] = v.trim(); };
-    put('pan', f.pan); put('dob', f.dob); put('gender', f.gender); put('phone', f.phone);
+    // The form takes DOB as DD/MM/YYYY; the API stores ISO.
+    put('pan', f.pan); put('dob', ddmmyyyyToISO(f.dob) ?? ''); put('gender', f.gender); put('phone', f.phone);
     put('email', f.email); put('address', f.address); put('pincode', f.pincode); put('city', f.city); put('district', f.district); put('state', f.state);
     put('referred_by_text', f.referred_by_text); put('father_name', f.father_name); put('occupation', f.occupation);
     put('phone_secondary', f.phone_secondary); put('investor_category', f.investor_category); put('ckyc_number', f.ckyc_number);
@@ -253,7 +285,13 @@ export function CustomerWizard(
   // Customer is created live (no approval — owner 2026-07-21). goInvest → open
   // their profile, where the "Add investment" form is ready; else just close.
   async function finish(goInvest: boolean) {
+    // Mirrors the API schema (shared/validation) so the operator gets the
+    // message here instead of a request round-trip.
     if (!f.full_name.trim()) { setErr('Full name is required.'); setStep(0); return; }
+    if (f.dob.trim() && !ddmmyyyyToISO(f.dob)) { setErr('Date of birth must be a valid date in DD/MM/YYYY format.'); setStep(0); return; }
+    if (f.pan && !PAN_RE.test(f.pan)) { setErr('PAN must be in the format ABCDE1234F — 5 letters, 4 digits, then a letter.'); setStep(0); return; }
+    if (f.dp_id.trim() && !DP_ID_RE.test(f.dp_id.trim())) { setErr('DP ID must be 8 characters — two letters + six digits (e.g. IN300456) or eight digits (CDSL).'); setStep(1); return; }
+    if (f.account_number.trim() && f.ifsc.trim() && !IFSC_RE.test(f.ifsc.trim())) { setErr('IFSC must be 11 characters like SBIN0001234.'); setStep(3); return; }
     setErr(''); setDup(null); setBusy(true);
     try {
       const id = await persist();
@@ -302,10 +340,29 @@ export function CustomerWizard(
         <div className="p-5 max-h-[65vh] overflow-y-auto">
           {step === 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
-              <div className="sm:col-span-2"><Field label="Full name" required><input className={inp} value={f.full_name} onChange={(e) => set({ full_name: e.target.value })} autoFocus /></Field></div>
-              <Field label="Father's name"><input className={inp} value={f.father_name} onChange={(e) => set({ father_name: e.target.value })} /></Field>
-              <Field label="Occupation" hint="e.g. Salaried, Business, Retired"><input className={inp} value={f.occupation} onChange={(e) => set({ occupation: e.target.value })} /></Field>
-              <Field label="Date of birth"><input className={inp} type="date" value={f.dob} onChange={(e) => set({ dob: e.target.value })} /></Field>
+              {/* Names allow letters, spaces and . ' - (never digits); occupation and
+                  place fields are letters-and-spaces only — invalid characters are
+                  dropped as they're typed (same rules enforced by the API). */}
+              <div className="sm:col-span-2"><Field label="Full name" required><input className={inp} value={f.full_name} onChange={(e) => set({ full_name: sanitizeName(e.target.value) })} autoFocus /></Field></div>
+              <Field label="Father's name"><input className={inp} value={f.father_name} onChange={(e) => set({ father_name: sanitizeName(e.target.value) })} /></Field>
+              <Field label="Occupation" hint="e.g. Salaried, Business, Retired"><input className={inp} value={f.occupation} onChange={(e) => set({ occupation: sanitizeAlphaSpace(e.target.value) })} /></Field>
+              <Field label="Date of birth" hint="DD/MM/YYYY">
+                {/* Text entry shows DD/MM/YYYY always (a native date input's display
+                    format follows the OS locale and can't be forced); the 📅 button
+                    opens a REAL native picker via a visually-hidden date input whose
+                    pick is written back as DD/MM/YYYY. API still receives ISO. */}
+                <div className="relative">
+                  <input className={`${inp} pr-9`} inputMode="numeric" placeholder="DD/MM/YYYY" maxLength={10} value={f.dob} onChange={(e) => set({ dob: formatDobInput(e.target.value) })} />
+                  <input ref={dobPickerRef} type="date" tabIndex={-1} aria-label="Pick date of birth from calendar"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 opacity-0"
+                    value={ddmmyyyyToISO(f.dob) ?? ''}
+                    onChange={(e) => set({ dob: e.target.value ? isoToDDMMYYYY(e.target.value) : '' })} />
+                  <button type="button" title="Open calendar" aria-hidden tabIndex={-1}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 w-7 h-7 text-text-muted hover:text-text"
+                    onClick={() => { const el = dobPickerRef.current; try { el?.showPicker(); } catch { el?.focus(); } }}>📅</button>
+                </div>
+                {f.dob.length === 10 && !ddmmyyyyToISO(f.dob) && <span className="text-[11px] text-danger">Not a valid date — use DD/MM/YYYY.</span>}
+              </Field>
               <Field label="Age / category" hint="Auto from DOB; senior citizen = 60+ (drives TDS filing category)">
                 <div className={`${inp} flex items-center gap-2 bg-bg`}>
                   {ageFromDob(f.dob) != null ? (<>
@@ -315,7 +372,10 @@ export function CustomerWizard(
                 </div>
               </Field>
               <Field label="Gender"><select className={inp} value={f.gender} onChange={(e) => set({ gender: e.target.value })}><option value="">—</option>{GENDERS.map((g) => <option key={g}>{g}</option>)}</select></Field>
-              <Field label="PAN"><input className={`${inp} uppercase`} placeholder="ABCDE1234F" maxLength={10} value={f.pan} onChange={(e) => set({ pan: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) })} /></Field>
+              <Field label="PAN">
+                <input className={`${inp} uppercase`} placeholder="ABCDE1234F" maxLength={10} value={f.pan} onChange={(e) => set({ pan: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) })} />
+                {f.pan.length === 10 && !PAN_RE.test(f.pan) && <span className="text-[11px] text-danger">PAN must be ABCDE1234F — 5 letters, 4 digits, then a letter.</span>}
+              </Field>
               <Field label="Aadhaar (12 digits)" hint="Enter all 12 digits — the full Aadhaar is stored and printed on the application form."><input className={inp} inputMode="numeric" maxLength={12} placeholder="Full 12-digit Aadhaar" value={f.aadhaar} onChange={(e) => set({ aadhaar: e.target.value.replace(/\D/g, '') })} /></Field>
               <Field label="Phone (primary)"><input className={inp} inputMode="numeric" maxLength={10} value={f.phone} onChange={(e) => set({ phone: e.target.value.replace(/\D/g, '') })} /></Field>
               <Field label="Phone (secondary)"><input className={inp} inputMode="numeric" maxLength={10} value={f.phone_secondary} onChange={(e) => set({ phone_secondary: e.target.value.replace(/\D/g, '') })} /></Field>
@@ -325,9 +385,9 @@ export function CustomerWizard(
               <Field label="Pincode" hint={pinState === 'looking' ? 'Looking up…' : pinState === 'ok' ? '✓ City/State filled — edit if needed' : pinState === 'miss' ? 'Not found — enter city/state manually' : 'Auto-fills city & state'}>
                 <input className={inp} inputMode="numeric" maxLength={6} placeholder="6-digit PIN" value={f.pincode} onChange={(e) => onPincode(e.target.value)} />
               </Field>
-              <Field label="City"><input className={inp} value={f.city} onChange={(e) => set({ city: e.target.value })} /></Field>
-              <Field label="District"><input className={inp} value={f.district} onChange={(e) => set({ district: e.target.value })} /></Field>
-              <Field label="State"><input className={inp} value={f.state} onChange={(e) => set({ state: e.target.value })} /></Field>
+              <Field label="City"><input className={inp} value={f.city} onChange={(e) => set({ city: sanitizeAlphaSpace(e.target.value) })} /></Field>
+              <Field label="District"><input className={inp} value={f.district} onChange={(e) => set({ district: sanitizeAlphaSpace(e.target.value) })} /></Field>
+              <Field label="State"><input className={inp} value={f.state} onChange={(e) => set({ state: sanitizeAlphaSpace(e.target.value) })} /></Field>
               <Field label="Referred by" hint="Pick an agent/staff code — or type a new name (becomes an agent after approval)"><ReferredByPicker value={f.referred_by_text} onChange={(v) => set({ referred_by_text: v })} /></Field>
               <label className="text-xs flex items-center gap-1.5 mt-1"><input type="checkbox" checked={f.is_nri} onChange={(e) => set({ is_nri: e.target.checked })} />NRI</label>
             </div>
@@ -338,7 +398,10 @@ export function CustomerWizard(
               <p className="sm:col-span-2 text-xs text-text-muted -mb-1">DP ID and Client ID are 8 characters each (NSDL/CDSL standard). Optional at this stage.</p>
               <Field label="Depository"><select className={inp} value={f.depository} onChange={(e) => set({ depository: e.target.value })}><option value="">—</option>{DEPOSITORIES.map((d) => <option key={d}>{d}</option>)}</select></Field>
               <div />
-              <Field label="DP ID (8 chars)" hint="NSDL starts with IN; 8-digit numeric = CDSL — depository auto-fills"><input className={`${inp} uppercase`} placeholder="e.g. IN300456" maxLength={8} value={f.dp_id} onChange={(e) => { const v = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); const dep = depositoryFromDpId(v); set(dep ? { dp_id: v, depository: dep } : { dp_id: v }); }} /></Field>
+              <Field label="DP ID (8 chars)" hint="NSDL starts with IN; 8-digit numeric = CDSL — depository auto-fills">
+                <input className={`${inp} uppercase`} placeholder="e.g. IN300456" maxLength={8} value={f.dp_id} onChange={(e) => { const v = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); const dep = depositoryFromDpId(v); set(dep ? { dp_id: v, depository: dep } : { dp_id: v }); }} />
+                {f.dp_id.length === 8 && !DP_ID_RE.test(f.dp_id) && <span className="text-[11px] text-danger">DP ID must be two letters + six digits (e.g. IN300456) or eight digits (CDSL).</span>}
+              </Field>
               <Field label="Client ID (8 digits)"><input className={inp} inputMode="numeric" placeholder="e.g. 12345678" maxLength={8} value={f.client_id} onChange={(e) => set({ client_id: e.target.value.replace(/\D/g, '').slice(0, 8) })} /></Field>
               <div className="sm:col-span-2"><FilePick label="CML copy" hint="Client Master List from depository — PDF or image scan" file={files.cml} onPick={(x) => setFile('cml', x)} /></div>
             </div>
@@ -361,8 +424,9 @@ export function CustomerWizard(
           {step === 3 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
               <p className="sm:col-span-2 text-xs text-text-muted -mb-1">Where monthly interest lands. Enter an account + IFSC to save it now, or add it later.</p>
-              <div className="sm:col-span-2"><Field label="Beneficiary name (as on passbook)"><input className={inp} value={f.bank_holder_name} onChange={(e) => set({ bank_holder_name: e.target.value })} /></Field></div>
-              <Field label="Account number"><input className={inp} value={f.account_number} onChange={(e) => set({ account_number: e.target.value.replace(/\s/g, '') })} /></Field>
+              <div className="sm:col-span-2"><Field label="Beneficiary name (as on passbook)"><input className={inp} value={f.bank_holder_name} onChange={(e) => set({ bank_holder_name: sanitizeName(e.target.value) })} /></Field></div>
+              {/* Digits only — leading zeros are meaningful, so it stays a string. */}
+              <Field label="Account number"><input className={inp} inputMode="numeric" value={f.account_number} onChange={(e) => set({ account_number: e.target.value.replace(/\D/g, '') })} /></Field>
               <Field label="Account type"><select className={inp} value={f.account_type} onChange={(e) => set({ account_type: e.target.value })}><option value="">—</option>{ACCOUNT_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
               <div className="sm:col-span-2">
                 <Field label="TDS applicable on interest payouts?">
@@ -372,13 +436,16 @@ export function CustomerWizard(
                   </div>
                 </Field>
               </div>
-              <Field label="IFSC" hint={ifscState === 'looking' ? 'Looking up…' : ifscState === 'ok' ? '✓ Bank/branch filled' : ifscState === 'miss' ? 'Not found — enter bank/branch manually' : 'Auto-fills bank & branch'}><input className={`${inp} uppercase`} placeholder="e.g. SBIN0001234" value={f.ifsc} onChange={(e) => set({ ifsc: e.target.value.toUpperCase() })} /></Field>
-              <Field label="Bank name"><input className={inp} value={f.bank_name} onChange={(e) => set({ bank_name: e.target.value })} /></Field>
-              <Field label="Branch name"><input className={inp} value={f.branch_name} onChange={(e) => set({ branch_name: e.target.value })} /></Field>
-              <Field label="Branch city"><input className={inp} value={f.branch_city} onChange={(e) => set({ branch_city: e.target.value })} /></Field>
+              <Field label="IFSC" hint={ifscState === 'looking' ? 'Looking up…' : ifscState === 'ok' ? '✓ Bank/branch filled' : ifscState === 'miss' ? 'Not found — enter bank/branch manually' : 'Auto-fills bank & branch'}>
+                <input className={`${inp} uppercase`} placeholder="e.g. SBIN0001234" maxLength={11} value={f.ifsc} onChange={(e) => set({ ifsc: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11) })} />
+                {f.ifsc.length === 11 && !IFSC_RE.test(f.ifsc) && <span className="text-[11px] text-danger">IFSC must be 4 letters, a 0, then 6 letters/digits — e.g. SBIN0001234.</span>}
+              </Field>
+              <Field label="Bank name"><input className={inp} value={f.bank_name} onChange={(e) => set({ bank_name: sanitizeName(e.target.value) })} /></Field>
+              <Field label="Branch name"><input className={inp} value={f.branch_name} onChange={(e) => set({ branch_name: sanitizeName(e.target.value) })} /></Field>
+              <Field label="Branch city"><input className={inp} value={f.branch_city} onChange={(e) => set({ branch_city: sanitizeName(e.target.value) })} /></Field>
               <div className="sm:col-span-2">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <button type="button" disabled={pennyBusy || f.account_number.trim().length < 4 || !/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/.test(f.ifsc.trim())}
+                  <button type="button" disabled={pennyBusy || f.account_number.trim().length < 4 || !IFSC_RE.test(f.ifsc.trim())}
                     onClick={runPennyDrop} className="text-xs border border-border-strong rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40">
                     {pennyBusy ? 'Verifying…' : '⛃ Penny-drop verify'}
                   </button>
@@ -396,7 +463,7 @@ export function CustomerWizard(
           {step === 4 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
               <p className="sm:col-span-2 text-xs text-text-muted -mb-1">Optional. Only the nominee's name is required if a nominee is being added.</p>
-              <div className="sm:col-span-2"><Field label="Full name" hint="Required only if a nominee is being added"><input className={inp} value={f.nom_full_name} onChange={(e) => set({ nom_full_name: e.target.value })} /></Field></div>
+              <div className="sm:col-span-2"><Field label="Full name" hint="Required only if a nominee is being added"><input className={inp} value={f.nom_full_name} onChange={(e) => set({ nom_full_name: sanitizeName(e.target.value) })} /></Field></div>
               <Field label="Date of birth"><input className={inp} type="date" value={f.nom_dob} onChange={(e) => set({ nom_dob: e.target.value })} /></Field>
               <Field label="Relationship"><select className={inp} value={f.nom_relationship} onChange={(e) => set({ nom_relationship: e.target.value })}><option value="">—</option>{RELATIONSHIPS.map((r) => <option key={r}>{r}</option>)}</select></Field>
               <Field label="Nominee phone"><input className={inp} inputMode="numeric" maxLength={10} value={f.nom_phone} onChange={(e) => set({ nom_phone: e.target.value.replace(/\D/g, '') })} /></Field>

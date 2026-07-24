@@ -8,7 +8,7 @@
  * Name column of the bank file, so it has to be correctable.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, uniqueName } from './helpers/server.js';
 
 let ctx: TestCtx;
 const as = async (email: string, password = 'Demo_1234') => { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; };
@@ -19,7 +19,7 @@ afterAll(async () => { await ctx.close(); });
 
 async function customerWithBank(phone: string, holder: string) {
   const a = await admin();
-  const cust = await a.post('/api/customers', { full_name: 'Rename ' + phone, phone });
+  const cust = await a.post('/api/customers', { full_name: uniqueName('Rename', phone), phone });
   const cid = Number(cust.json.id);
   const bank = await a.post(`/api/customers/${cid}/bank-accounts`,
     { account_number: '11261150000' + phone.slice(-5), ifsc: 'KVBL0001126', holder_name: holder });

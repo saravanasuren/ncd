@@ -1,6 +1,7 @@
 /** Customers routes (docs/04 §2). */
 import { Router } from 'express';
 import { z } from 'zod';
+import { ACCOUNT_NUMBER_RE, ALPHA_SPACE_RE, DP_ID_RE, IFSC_RE, NAME_RE, PAN_RE, ddmmyyyyToISO, isoToDDMMYYYY } from '@new-wealth/shared';
 import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
@@ -16,21 +17,36 @@ customersRouter.get('/', requirePermission('customers:read'),
     res.json(await s.listCustomers(getDb(), req.user!, filters));
   }));
 
+// Identity fields share the client's rules (shared/validation) so the wizard's
+// checks can't be bypassed: person names take letters, spaces and the
+// punctuation real names carry (. ' -) but never digits; occupation and
+// city/district/state are letters and spaces only (all trimmed); PAN is
+// ABCDE1234F (uppercased server-side too); dob arrives as ISO — the
+// DD/MM/YYYY rule is the FORM's input format; the wizard converts before
+// sending — and must be a real calendar date.
+const personName = (label: string) => z.string().trim().min(1).regex(NAME_RE, `${label} may contain letters, spaces, dots, apostrophes and hyphens only`);
+const alphaSpace = (label: string) => z.string().trim().min(1).regex(ALPHA_SPACE_RE, `${label} may contain letters and spaces only`);
+const upper = <T extends z.ZodTypeAny>(schema: T) => z.preprocess((v) => (typeof v === 'string' ? v.trim().toUpperCase() : v), schema);
+const isoDate = z.string().trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD')
+  .refine((v) => ddmmyyyyToISO(isoToDDMMYYYY(v)) !== null, 'Date must be a real calendar date');
+
 const createSchema = z.object({
-  full_name: z.string().min(1),
-  pan: z.string().optional(),
-  dob: z.string().optional(),
+  full_name: personName('Full name'),
+  pan: z.preprocess((v) => (typeof v === 'string' ? v.trim().toUpperCase() : v),
+    z.string().regex(PAN_RE, 'PAN must be in the format ABCDE1234F').optional()),
+  dob: isoDate.optional(),
   gender: z.string().optional(),
   phone: z.string().optional(),
   email: z.string().email().optional(),
   address: z.string().optional(),
-  city: z.string().optional(),
-  district: z.string().optional(),
-  state: z.string().optional(),
+  city: alphaSpace('City').optional(),
+  district: alphaSpace('District').optional(),
+  state: alphaSpace('State').optional(),
   is_nri: z.boolean().optional(),
   referred_by_text: z.string().optional(),
-  father_name: z.string().optional(),
-  occupation: z.string().optional(),
+  father_name: personName("Father's name").optional(),
+  occupation: alphaSpace('Occupation').optional(),
   aadhaar_last4: z.string().optional(),
   aadhaar: z.string().optional(), // full 12-digit; last4 is derived from it
   phone_secondary: z.string().optional(),
@@ -66,10 +82,14 @@ customersRouter.patch('/:id/tax', requirePermission('customers:update'),
 
 customersRouter.post('/:id/bank-accounts', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
+    // Account number is digits-only (leading zeros are meaningful — it stays a
+    // string); IFSC is the standard SBIN0001234 shape, uppercased server-side;
+    // the name fields take the shared person-name rule (no digits).
     const b = z.object({
-      account_number: z.string().min(4), ifsc: z.string().min(4),
-      bank_name: z.string().optional(), branch_name: z.string().optional(), branch_city: z.string().optional(),
-      account_type: z.string().optional(), holder_name: z.string().optional(), tds_applicable: z.boolean().optional(),
+      account_number: z.string().trim().regex(ACCOUNT_NUMBER_RE, 'Account number must be digits only (at least 4)'),
+      ifsc: upper(z.string().regex(IFSC_RE, 'IFSC must be 11 characters like SBIN0001234')),
+      bank_name: personName('Bank name').optional(), branch_name: personName('Branch name').optional(), branch_city: personName('Branch city').optional(),
+      account_type: z.string().optional(), holder_name: personName('Beneficiary name').optional(), tds_applicable: z.boolean().optional(),
     }).parse(req.body);
     res.status(201).json(await s.addBankAccount(getDb(), req.user!, Number(req.params.id), b));
   }));
@@ -78,7 +98,10 @@ customersRouter.post('/:id/bank-accounts', requirePermission('customers:update')
 // super-admin delete gate) — fixing a typo must not need a destructive right.
 customersRouter.patch('/:id/bank-accounts/:bankId', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
-    const { holder_name } = z.object({ holder_name: z.string().trim().min(2, 'Beneficiary name is required') }).parse(req.body ?? {});
+    const { holder_name } = z.object({
+      holder_name: z.string().trim().min(2, 'Beneficiary name is required')
+        .regex(NAME_RE, 'Beneficiary name may contain letters, spaces, dots, apostrophes and hyphens only'),
+    }).parse(req.body ?? {});
     res.json(await s.updateBankAccountName(getDb(), req.user!, Number(req.params.id), Number(req.params.bankId), holder_name));
   }));
 
@@ -135,7 +158,7 @@ customersRouter.put('/:id/joint-holders', requirePermission('customers:update'),
 customersRouter.put('/:id/nominees', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
     const { nominees } = z.object({ nominees: z.array(z.object({
-      full_name: z.string().min(1), relationship: z.string().nullish(), share_pct: z.number().nullish(), dob: z.string().nullish(),
+      full_name: personName('Nominee name'), relationship: z.string().nullish(), share_pct: z.number().nullish(), dob: z.string().nullish(),
       pan: z.string().nullish(), phone: z.string().nullish(), address: z.string().nullish(), guardian_name: z.string().nullish(), guardian_pan: z.string().nullish(),
       kyc_id_type: z.string().nullish(), kyc_id_number: z.string().nullish(),
     })) }).parse(req.body);
@@ -143,7 +166,13 @@ customersRouter.put('/:id/nominees', requirePermission('customers:update'),
   }));
 customersRouter.put('/:id/demat', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
-    const { dp_id, client_id, depository } = z.object({ dp_id: z.string(), client_id: z.string(), depository: z.string().nullish() }).parse(req.body);
+    // Blank clears the demat fields, so '' passes; anything else must be a full
+    // 8-char DP ID — IN300456-style NSDL or 8-digit CDSL (shared DP_ID_RE).
+    const { dp_id, client_id, depository } = z.object({
+      dp_id: upper(z.string().refine((v) => v === '' || DP_ID_RE.test(v), 'DP ID must be 8 characters — two letters + six digits (e.g. IN300456) or eight digits (CDSL)')),
+      client_id: z.string(),
+      depository: z.string().nullish(),
+    }).parse(req.body);
     res.json(await s.setDemat(getDb(), req.user!, Number(req.params.id), dp_id, client_id, depository));
   }));
 

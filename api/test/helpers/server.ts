@@ -34,6 +34,16 @@ export async function startTestServer(): Promise<TestCtx> {
 }
 
 /**
+ * Customer names are letters-and-spaces only (create validation). Tests used
+ * to embed the phone number for uniqueness — this keeps the uniqueness by
+ * spelling the digits as letters instead ("98111" → "JIBBB").
+ */
+export function uniqueName(prefix: string, seed: string): string {
+  const letters = seed.replace(/\D/g, '').split('').map((d) => 'ABCDEFGHIJ'[Number(d)]).join('');
+  return letters ? `${prefix} ${letters}` : prefix;
+}
+
+/**
  * POST /api/applications requires the payment evidence (credited date, method,
  * reference AND the receipt photo, stored in the create transaction). Spread
  * this FIRST into a create body; per-test values placed after it override the

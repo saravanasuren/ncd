@@ -7,23 +7,38 @@
 /** Standard PAN: 5 uppercase letters, 4 digits, 1 uppercase letter. */
 export const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 
-/** Occupation / city / district / state: letters and spaces only. */
-export const ALPHA_SPACE_RE = /^[A-Za-z ]+$/;
+/**
+ * Occupation / city / district / state: letters plus the punctuation real
+ * place names carry, but never digits.
+ *
+ * Letters-and-spaces-only was too tight for the live book — it rejected
+ * Paramathi-velur, V.Sathiram Periyavalasu, Surampatti - PO, Kambam(m),
+ * Thindal (Kel) Erode and Krishnagiri. while catching nothing extra: every
+ * junk value in the data ("1233344", "45678gda") contains a digit, which is
+ * still refused.
+ */
+export const ALPHA_SPACE_RE = /^[A-Za-z][A-Za-z .'()-]*$/;
 
 export const isAlphaSpace = (v: string): boolean => ALPHA_SPACE_RE.test(v);
 
-/** Type-time guard for alpha-space fields — drops anything else as it's typed. */
-export const sanitizeAlphaSpace = (v: string): string => v.replace(/[^A-Za-z ]/g, '');
+/** Type-time guard for these fields — drops anything else as it's typed. */
+export const sanitizeAlphaSpace = (v: string): string => v.replace(/[^A-Za-z .'()-]/g, '');
 
 /**
- * Person names: no digits, but the punctuation real names carry is allowed —
- * dotted initials ("K. Pallavi", the local convention), apostrophes
- * ("D'Souza") and hyphens ("Mary-Anne"). Must start with a letter.
+ * Names: no digits, but everything real names carry — dotted initials
+ * ("K. Pallavi", the local convention), apostrophes ("D'Souza"), hyphens
+ * ("Mary-Anne"), and the ampersand and brackets a NON-INDIVIDUAL customer
+ * needs: the book holds "KSPV & CO", "M Pragadeeshkanna (HUF)" and
+ * "P A Sports Academy (Madhukshara Rajendran)", and HUF/Trust/Company are
+ * first-class investor categories. Must start with a letter.
+ *
+ * Digits stay refused, which is what actually catches the junk in the data
+ * ("9443132741", "993179", "DHN1134").
  */
-export const NAME_RE = /^[A-Za-z][A-Za-z .'-]*$/;
+export const NAME_RE = /^[A-Za-z][A-Za-z .'()&-]*$/;
 
 /** Type-time guard for name fields — drops anything the name rule disallows. */
-export const sanitizeName = (v: string): string => v.replace(/[^A-Za-z .'-]/g, '');
+export const sanitizeName = (v: string): string => v.replace(/[^A-Za-z .'()&-]/g, '');
 
 /**
  * Demat DP ID — exactly 8 characters, in one of the two depository forms:

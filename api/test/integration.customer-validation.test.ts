@@ -25,12 +25,34 @@ describe('POST /api/customers — identity-field validation', () => {
       { full_name: 'Valid Name', occupation: 'IT/Software' },
       { full_name: 'Valid Name', city: 'Chennai 600001' },
       { full_name: 'Valid Name', district: 'Erode!' },
-      { full_name: 'Valid Name', state: 'T.N.' },
+      // Digits are what actually mark a place value as junk — every bad one in
+      // the live book carries them ("1233344", "45678gda", "43211114567889").
+      { full_name: 'Valid Name', state: 'TN 33' },
     ];
     for (const body of cases) {
       const r = await a.post('/api/customers', { phone: '9700000001', ...body });
       expect(r.status, JSON.stringify(body)).toBe(400);
       expect(r.json.error.code).toBe('VALIDATION');
+    }
+  });
+
+  it('accepts the real place names and entity names in the live book', async () => {
+    // Letters-and-spaces-only rejected 11 legitimate records on production:
+    // 8 place names (Paramathi-velur, V.Sathiram Periyavalasu, Surampatti - PO,
+    // Kambam(m), Thindal (Kel) Erode, Krishnagiri.) and 3 non-individual
+    // customers (KSPV & CO, M Pragadeeshkanna (HUF), P A Sports Academy
+    // (Madhukshara Rajendran)) — HUF/Trust/Company are first-class investor
+    // categories, so their names must be enterable.
+    const a = await admin();
+    const places = ['Paramathi-velur', 'V.Sathiram Periyavalasu', 'Surampatti - PO', 'Kambam(m)', 'Thindal (Kel) Erode', 'Krishnagiri.', 'T.N.'];
+    for (let i = 0; i < places.length; i++) {
+      const r = await a.post('/api/customers', { full_name: 'Place Cust ' + String.fromCharCode(65 + i), phone: `97100000${10 + i}`, city: places[i] });
+      expect(r.status, places[i]).toBe(201);
+    }
+    const entities = ['KSPV & CO', 'M Pragadeeshkanna (HUF)', 'P A Sports Academy (Madhukshara Rajendran)'];
+    for (let i = 0; i < entities.length; i++) {
+      const r = await a.post('/api/customers', { full_name: entities[i], phone: `97200000${10 + i}` });
+      expect(r.status, entities[i]).toBe(201);
     }
   });
 

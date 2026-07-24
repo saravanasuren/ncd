@@ -16,7 +16,15 @@ const btn = 'bg-primary hover:bg-primary-hover disabled:opacity-40 text-white ro
 const btnGhost = 'text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40';
 const money = (n: unknown) => '₹' + Number(n ?? 0).toLocaleString('en-IN');
 
-interface Size { size: string; annual_fee: number; rent_incl_gst: number; deposit: number; gst_pct: number; vacant_count: number }
+// rent_waiver_pct / rent_waiver_amount / rent_payable are the rent-only waiver
+// breakdown from the LockerHub pricing CR (owner 2026-07-24). OPTIONAL: until
+// LockerHub ships them, the UI shows the plain rent — NCD never computes the
+// waiver itself, because LockerHub's payment link collects THEIR figure and a
+// locally-invented discount would contradict the amount actually charged.
+interface Size {
+  size: string; annual_fee: number; rent_incl_gst: number; deposit: number; gst_pct: number; vacant_count: number;
+  rent_waiver_pct?: number; rent_waiver_amount?: number; rent_payable?: number;
+}
 
 export function LockerEnrollmentPage() {
   const { can } = useAuth();
@@ -241,11 +249,20 @@ export function LockerEnrollmentPage() {
           </select>
           <select className={inp} value={size} disabled={!branchId || avail.isLoading} onChange={(e) => { setSize(e.target.value); setApp(null); }}>
             <option value="">{avail.isLoading ? 'Loading…' : 'Size…'}</option>
-            {(avail.data?.sizes ?? []).map((s) => <option key={s.size} value={s.size} disabled={s.vacant_count <= 0}>{s.size} · {money(s.rent_incl_gst)} rent · {money(s.deposit)} deposit · {s.vacant_count} vacant</option>)}
+            {(avail.data?.sizes ?? []).map((s) => <option key={s.size} value={s.size} disabled={s.vacant_count <= 0}>{s.size} · {money(s.rent_payable ?? s.rent_incl_gst)} rent · {money(s.deposit)} deposit · {s.vacant_count} vacant</option>)}
           </select>
         </div>
         {chosen && (
-          <div className="text-xs text-text-muted mt-2">Rent (incl. GST {chosen.gst_pct}%): <b className="text-text">{money(chosen.rent_incl_gst)}</b> · Deposit: <b className="text-text">{money(chosen.deposit)}</b></div>
+          chosen.rent_payable != null ? (
+            <div className="text-xs text-text-muted mt-2">
+              Rent (incl. GST {chosen.gst_pct}%): <s>{money(chosen.rent_incl_gst)}</s>
+              {' '}· Waiver{chosen.rent_waiver_pct != null ? ` (${chosen.rent_waiver_pct}%)` : ''}: −{money(chosen.rent_waiver_amount ?? chosen.rent_incl_gst - chosen.rent_payable)}
+              {' '}· Payable: <b className="text-text">{money(chosen.rent_payable)}</b>
+              {' '}· Deposit: <b className="text-text">{money(chosen.deposit)}</b>
+            </div>
+          ) : (
+            <div className="text-xs text-text-muted mt-2">Rent (incl. GST {chosen.gst_pct}%): <b className="text-text">{money(chosen.rent_incl_gst)}</b> · Deposit: <b className="text-text">{money(chosen.deposit)}</b></div>
+          )
         )}
       </div>
 
@@ -308,7 +325,17 @@ export function LockerEnrollmentPage() {
                 <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{app.status}</span>
                 <button className={`${btnGhost} ml-auto`} disabled={busy} onClick={refreshApp}>Refresh</button>
               </div>
-              {app.pricing && <div className="text-xs text-text-muted">Rent {money(app.pricing.rent_incl_gst)} · Deposit {money(app.pricing.deposit)}</div>}
+              {app.pricing && (
+                app.pricing.rent_payable != null ? (
+                  <div className="text-xs text-text-muted">
+                    Rent <s>{money(app.pricing.rent_incl_gst)}</s>
+                    {' '}− waiver{app.pricing.rent_waiver_pct != null ? ` ${app.pricing.rent_waiver_pct}%` : ''} = <b className="text-text">{money(app.pricing.rent_payable)}</b>
+                    {' '}· Deposit {money(app.pricing.deposit)}
+                  </div>
+                ) : (
+                  <div className="text-xs text-text-muted">Rent {money(app.pricing.rent_incl_gst)} · Deposit {money(app.pricing.deposit)}</div>
+                )
+              )}
             </div>
           )}
         </div>
@@ -328,6 +355,13 @@ export function LockerEnrollmentPage() {
                   <button className={btnGhost} disabled={busy || settled} onClick={() => getPaymentLink(leg)}>
                     {settled ? `✓ ${leg} settled` : `${link ? 'New link' : 'Payment link'} · ${leg}${st?.amount ? ' · ' + money(st.amount) : ''}`}
                   </button>
+                  {/* Rent-only waiver breakdown (LockerHub CR): legs.rent.amount IS the
+                      payable; the original + waiver ride along for transparency. */}
+                  {leg === 'rent' && !settled && st?.original_amount != null && (
+                    <span className="text-xs text-text-muted">
+                      original {money(st.original_amount)} − waiver{st.waiver_pct != null ? ` ${st.waiver_pct}%` : ''} ({money(st.waiver_amount ?? st.original_amount - (st.amount ?? 0))})
+                    </span>
+                  )}
                   {!settled && link && (
                     <>
                       <input className={`${inp} flex-1 min-w-[16rem] font-mono text-xs`} readOnly value={link.url} onFocus={(e) => e.currentTarget.select()} />

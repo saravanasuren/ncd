@@ -23,7 +23,7 @@ describe('full Aadhaar capture', () => {
 
   it('keeps last-4 only when no full Aadhaar is supplied', async () => {
     const a = await admin();
-    const r = await a.post('/api/customers', { full_name: 'Aadhaar Last4 Cust', phone: '9846500012', aadhaar_last4: '5678' });
+    const r = await a.post('/api/customers', { full_name: 'Aadhaar LastFour Cust', phone: '9846500012', aadhaar_last4: '5678' });
     const c = await row(r.json.id);
     expect(c.aadhaar).toBeNull();
     expect(c.aadhaar_last4).toBe('5678');

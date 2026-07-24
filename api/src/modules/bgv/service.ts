@@ -20,6 +20,7 @@
  *    almost none of them (PIN 0, address 1, email 127 of 563), so blocking on
  *    them would paint every customer red and make the screen useless.
  */
+import { PAN_RE } from '@new-wealth/shared';
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
@@ -47,7 +48,6 @@ const canonicalOf = (raw: string): string | null => {
   return null;
 };
 
-const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const AADHAAR_RE = /^\d{12}$/;

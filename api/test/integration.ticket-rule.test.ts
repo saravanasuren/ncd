@@ -4,7 +4,7 @@
  * investment live (so an inbound LockerHub write can't sneak past either).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields, uniqueName } from './helpers/server.js';
 
 let ctx: TestCtx;
 async function login(email: string, password = 'Demo_1234') { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; }
@@ -15,7 +15,7 @@ beforeAll(async () => { ctx = await startTestServer(); });
 afterAll(async () => { await ctx.close(); });
 
 async function customer(staff: Client, phone: string) {
-  const c = await staff.post('/api/customers', { full_name: 'Ticket Cust ' + phone, phone });
+  const c = await staff.post('/api/customers', { full_name: uniqueName('Ticket Cust', phone), phone });
   return Number(c.json.id);
 }
 

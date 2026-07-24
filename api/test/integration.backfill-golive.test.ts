@@ -7,7 +7,7 @@
  * Approvals queue, and can never go live. The backfill must heal them.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields, uniqueName } from './helpers/server.js';
 import { backfillGoLive } from '../src/db/backfill-golive.js';
 
 let ctx: TestCtx;
@@ -27,7 +27,7 @@ const admin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
 /** An app exactly as the legacy importer leaves it: PendingApproval, no request. */
 async function strandedApp(amount: number, phone: string): Promise<number> {
   const a = await admin();
-  const cust = await a.post('/api/customers', { full_name: `Stranded ${phone}`, phone });
+  const cust = await a.post('/api/customers', { full_name: uniqueName('Stranded', phone), phone });
   const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount });
   const id = Number(app.json.id);
   // Strip the approval the app created, leaving it stranded like the import does.

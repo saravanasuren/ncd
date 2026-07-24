@@ -4,7 +4,7 @@
  * only for an investment that has actually issued.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields, uniqueName } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -58,7 +58,7 @@ describe('bond certificate number', () => {
     const { bondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
     const made: string[] = [];
     for (const phone of ['9550000003', '9550000004']) {
-      const cust = await a.post('/api/customers', { full_name: `Bond Uniq ${phone}`, phone });
+      const cust = await a.post('/api/customers', { full_name: uniqueName('Bond Uniq', phone), phone });
       const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12' });
       await approveInvestment(await as('ncd@demo.local'), app);
       await bondCertificatePdf(ctx.db, app.json.id);

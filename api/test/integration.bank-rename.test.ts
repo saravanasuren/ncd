@@ -70,3 +70,53 @@ describe('correcting the beneficiary name', () => {
     expect(dup.json.error.message).toMatch(/Edit name/i);
   });
 });
+
+describe('a failed penny-drop must not strand the customer', () => {
+  it('an unverified account can be retried, and force-activated with a reason', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Stranded', phone: '9933000001' });
+    const cid = Number(cust.json.id);
+    // Two accounts: one Active-but-unverified (as migrated rows really are),
+    // and the CORRECT one whose penny-drop failed.
+    const good = await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '01701050007260', ifsc: 'HDFC0000178' });
+    const goodId = Number(good.json.id);
+    await ctx.db.query("UPDATE customer_bank_accounts SET penny_drop_status='Failed', is_active=FALSE WHERE id=$1", [goodId]);
+
+    // Plain activation is refused, and says what to do about it.
+    const refused = await a.post(`/api/customers/${cid}/bank-accounts/${goodId}/set-active`, {});
+    expect(refused.status).toBe(422);
+    expect(refused.json.error.message).toMatch(/Retry the verification/i);
+
+    // Forcing without a reason is refused too — the override must be explained.
+    expect((await a.post(`/api/customers/${cid}/bank-accounts/${goodId}/set-active`, { force: true })).status).toBe(400);
+
+    // Forced WITH a reason works, and the reason is on the audit trail.
+    const ok = await a.post(`/api/customers/${cid}/bank-accounts/${goodId}/set-active`, { force: true, reason: 'confirmed on a bank statement' });
+    expect(ok.status).toBe(200);
+    expect((await ctx.db.query('SELECT is_active FROM customer_bank_accounts WHERE id=$1', [goodId])).rows[0].is_active).toBe(true);
+    const log = (await ctx.db.query(
+      "SELECT after_data FROM audit_log WHERE action='customer.bank.set-active' AND entity_id=$1 ORDER BY id DESC LIMIT 1", [String(goodId)])).rows[0] as any;
+    expect(log.after_data.forced).toBe(true);
+    expect(log.after_data.reason).toMatch(/bank statement/);
+  });
+
+  it('retrying re-runs the penny drop; an account with no IFSC says so', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Retry Me', phone: '9933000002' });
+    const cid = Number(cust.json.id);
+    const bank = await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '12345678901', ifsc: 'HDFC0001234' });
+    const bid = Number(bank.json.id);
+    await ctx.db.query("UPDATE customer_bank_accounts SET penny_drop_status='Failed' WHERE id=$1", [bid]);
+
+    const r = await a.post(`/api/customers/${cid}/bank-accounts/${bid}/reverify`, {});
+    expect(r.status).toBe(200);
+    expect(r.json.pennyDrop.status).toBe('Verified');   // stub verifies a good account
+    expect((await ctx.db.query('SELECT penny_drop_status FROM customer_bank_accounts WHERE id=$1', [bid])).rows[0].penny_drop_status).toBe('Verified');
+
+    // A migrated row with no IFSC cannot be verified — say that plainly.
+    await ctx.db.query('UPDATE customer_bank_accounts SET ifsc = NULL WHERE id=$1', [bid]);
+    const noIfsc = await a.post(`/api/customers/${cid}/bank-accounts/${bid}/reverify`, {});
+    expect(noIfsc.status).toBe(422);
+    expect(noIfsc.json.error.message).toMatch(/no IFSC/i);
+  });
+});

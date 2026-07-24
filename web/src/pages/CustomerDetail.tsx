@@ -696,8 +696,24 @@ function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onEr
                   wrapSet(api.patch(`/api/customers/${customerId}/bank-accounts/${b.id}`, { holder_name: next.trim() }));
                 }} className="text-xs text-primary hover:underline">Edit name</button>
               )}
-              {!b.is_active && b.penny_drop_status === 'Verified' && canEdit && (
-                <button onClick={() => wrapSet(api.post(`/api/customers/${customerId}/bank-accounts/${b.id}/set-active`))} className="text-xs text-primary hover:underline">Make active</button>
+              {/* A failed penny-drop must not strand the customer on the wrong
+                  account: offer a retry, and allow an explicit override. */}
+              {b.penny_drop_status !== 'Verified' && canEdit && (
+                <button onClick={() => wrapSet(api.post(`/api/customers/${customerId}/bank-accounts/${b.id}/reverify`))}
+                  className="text-xs text-primary hover:underline">Retry verification</button>
+              )}
+              {!b.is_active && canEdit && (
+                <button onClick={() => {
+                  if (b.penny_drop_status === 'Verified') {
+                    wrapSet(api.post(`/api/customers/${customerId}/bank-accounts/${b.id}/set-active`));
+                    return;
+                  }
+                  const reason = window.prompt(
+                    `This account's penny-drop is ${b.penny_drop_status}, not Verified.\n\nActivate it anyway only if you have confirmed the details another way — future payouts will go here.\n\nReason (recorded):`);
+                  if (reason === null) return;
+                  if (reason.trim().length < 3) { fail('A reason is required to activate an unverified account.'); return; }
+                  wrapSet(api.post(`/api/customers/${customerId}/bank-accounts/${b.id}/set-active`, { force: true, reason: reason.trim() }));
+                }} className="text-xs text-primary hover:underline">Make active</button>
               )}
               {/* Super-admin only. The server refuses while an NCD is pinned to
                   it or unpaid payouts point at it, and says which. */}

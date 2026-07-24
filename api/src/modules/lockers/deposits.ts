@@ -459,6 +459,42 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
     : [];
   const custByPhone = new Map(byPhone.map((c) => [last10(c.phone), c]));
 
+  // Enrich each tenancy with the money/lease facts LockerHub keeps on the
+  // CUSTOMER record but omits from the roster: annual rent, deposit, lease
+  // start, and how many other lockers they hold. One A5 call per unique PHONE
+  // (not per tenancy — a customer with three lockers costs one call), bounded
+  // and failure-tolerant: a lookup that fails leaves the fields null and the
+  // page still renders. Ask Prem to fold these into /locker-tenants and this
+  // whole pass can be deleted.
+  const detailByPhone = new Map<string, Record<string, any>>();
+  if (rosterRead) {
+    const phones = [...new Set(roster.map((t) => last10(t.tenant?.phone)).filter((p) => p.length === 10))];
+    const STEP = 6;
+    for (let i = 0; i < phones.length; i += STEP) {
+      await Promise.all(phones.slice(i, i + STEP).map(async (ph) => {
+        try {
+          const d = await lh.getCustomer(ph) as Record<string, any>;
+          if (d?.found) detailByPhone.set(ph, d);
+        } catch { /* one tenant's detail is never worth failing the page */ }
+      }));
+    }
+  }
+  /** That customer's LockerHub record for THIS locker, plus their wider holding. */
+  const detailFor = (t: Record<string, any>) => {
+    const d = detailByPhone.get(last10(t.tenant?.phone));
+    const mine = (d?.lockers ?? []).find((l: any) =>
+      String(l.locker_id ?? '') === String(t.locker_id ?? '') ||
+      String(l.locker_number ?? '') === String(t.locker_number ?? ''));
+    return {
+      annual_rent: mine?.annual_rent ?? null,
+      deposit_amount: mine?.deposit ?? null,
+      lease_start: mine?.lease_start ?? null,
+      profile: d?.profile ?? null,
+      lockers_held: (d?.lockers ?? []).length || null,
+      open_applications: (d?.open_locker_applications ?? []).length || null,
+    };
+  };
+
   // Merge. A roster row wins on identity (it is the allotted truth); NCD's
   // pledge/cheque is layered onto it. Anything of ours the roster doesn't cover
   // — not allotted yet — is appended so it can't silently disappear.
@@ -498,6 +534,8 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
       cheque_pending: mine?.cheque_pending ?? false,
       ncd_backed: !!mine,
       unresolved: false,
+      // From the customer record — the roster itself carries none of this.
+      ...detailFor(t),
     };
   });
 

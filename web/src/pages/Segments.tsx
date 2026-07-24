@@ -104,6 +104,22 @@ function CustomerProfileModal({ id, name, onClose }: { id: number; name: string;
   });
   const c = data?.customer;
   const apps: any[] = data?.applications ?? [];
+  const banks: any[] = data?.bankAccounts ?? [];
+  const noms: any[] = data?.nominees ?? [];
+  const joints: any[] = data?.jointHolders ?? [];
+  const docs: any[] = data?.documents ?? [];
+  const h3 = 'text-xs font-semibold text-text-label uppercase tracking-wide mb-2';
+  const dmy = (v: unknown) => { const m = String(v ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : null; };
+  const age = (v: unknown) => { const m = String(v ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/); if (!m) return null;
+    const d = new Date(`${m[0]}T00:00:00`), n = new Date(); let a = n.getFullYear() - d.getFullYear();
+    if (n.getMonth() < d.getMonth() || (n.getMonth() === d.getMonth() && n.getDate() < d.getDate())) a--;
+    return a >= 0 && a < 130 ? a : null; };
+  const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
+    <>
+      <h3 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">{title}</h3>
+      <dl className="grid grid-cols-[max-content_1fr] sm:grid-cols-[max-content_1fr_max-content_1fr] gap-x-4 gap-y-1.5 text-sm bg-bg rounded p-3 mb-4">{children}</dl>
+    </>
+  );
   const invested = apps.reduce((s, a) => s + Number(a.amount ?? 0), 0);
   const live = apps.reduce((s, a) => s + Number(a.outstanding ?? 0), 0);
   const Field = ({ label, value }: { label: string; value: unknown }) => (
@@ -121,6 +137,8 @@ function CustomerProfileModal({ id, name, onClose }: { id: number; name: string;
             <h2 className="text-base font-bold m-0">{c?.full_name ?? name}</h2>
             <div className="text-xs text-text-muted mt-0.5 font-mono">{c?.customer_code ?? ''}</div>
           </div>
+          <a href={`/app/customers/${id}`} target="_blank" rel="noreferrer"
+             className="text-xs text-primary hover:underline ml-auto mr-3 no-underline">Open full record ↗</a>
           <button onClick={onClose} className="text-text-muted hover:text-text text-lg leading-none" aria-label="Close">✕</button>
         </div>
         <div className="p-4 max-h-[70vh] overflow-y-auto">
@@ -128,14 +146,93 @@ function CustomerProfileModal({ id, name, onClose }: { id: number; name: string;
             : error ? <div className="text-sm text-danger">Couldn't load this customer (they may be outside your scope).</div>
             : (
             <>
-              <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1.5 text-sm bg-bg rounded p-3 mb-4">
+              {/* The whole profile, not a teaser — this endpoint already returns
+                  every field, bank accounts, demat, nominees and documents. */}
+              <Section title="Personal">
                 <Field label="Phone" value={c?.phone} />
+                <Field label="Alt. phone" value={c?.phone_secondary} />
                 <Field label="Email" value={c?.email} />
                 <Field label="PAN" value={c?.pan} />
+                <Field label="Aadhaar" value={c?.aadhaar_last ? `xxxx xxxx ${c.aadhaar_last}` : c?.aadhaar} />
+                <Field label="Date of birth" value={dmy(c?.dob)} />
+                <Field label="Age" value={age(c?.dob)} />
+                <Field label="Gender" value={c?.gender} />
+                <Field label="Father / spouse" value={c?.father_name} />
+                <Field label="Occupation" value={c?.occupation} />
+                <Field label="Category" value={c?.investor_category} />
+                <Field label="NRI" value={c?.is_nri ? 'Yes' : 'No'} />
+              </Section>
+              <Section title="Address">
+                <Field label="Address" value={c?.address} />
+                <Field label="City" value={c?.city} />
                 <Field label="District" value={c?.district} />
+                <Field label="State" value={c?.state} />
+                <Field label="Pincode" value={c?.pincode} />
+              </Section>
+              <Section title="Status & attribution">
                 <Field label="KYC" value={c?.kyc_status} />
+                <Field label="Record status" value={c?.creation_status} />
+                <Field label="Active" value={c?.is_active ? 'Yes' : 'No'} />
+                <Field label="Enrolled by" value={c?.enrolled_by_name
+                  ? `${c.enrolled_by_name}${c.enrolled_by_kind === 'agent' ? ` (agent${c.enrolled_by_agent_code ? ' ' + c.enrolled_by_agent_code : ''})` : ' (staff)'}` : null} />
                 <Field label="Referred by" value={c?.referred_by_text} />
-              </dl>
+                <Field label="CKYC no." value={c?.ckyc_number} />
+                <Field label="TDS applicable" value={c?.tds_applicable === false ? 'No' : 'Yes'} />
+                <Field label="Tax form" value={c?.tax_form} />
+              </Section>
+              {(c?.demat_dp_id || c?.demat_client_id) && (
+                <Section title="Demat">
+                  <Field label="Depository" value={c?.depository} />
+                  <Field label="DP ID" value={c?.demat_dp_id} />
+                  <Field label="Client ID" value={c?.demat_client_id} />
+                </Section>
+              )}
+              {banks.length > 0 && (
+                <>
+                  <h3 className={h3}>Bank accounts</h3>
+                  <div className="text-xs mb-4">
+                    {banks.map((b: any) => (
+                      <div key={b.id} className="flex flex-wrap gap-x-3 items-center border-b border-border/60 last:border-0 py-1.5">
+                        <span className="font-mono">{b.account_number}</span>
+                        <span className="font-mono text-text-muted">{b.ifsc}</span>
+                        <span className="text-text-muted">{[b.bank_name, b.branch_name].filter(Boolean).join(' · ') || '—'}</span>
+                        {b.holder_name && <span className="text-text-muted">{b.holder_name}</span>}
+                        {b.is_active && <span className="rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">Active</span>}
+                        {b.penny_drop_status && <span className="rounded px-1.5 py-0.5 bg-bg">{b.penny_drop_status}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              {(noms.length > 0 || joints.length > 0) && (
+                <>
+                  <h3 className={h3}>Nominees &amp; joint holders</h3>
+                  <div className="text-xs mb-4">
+                    {noms.map((n: any) => (
+                      <div key={`n${n.id}`} className="flex flex-wrap gap-x-3 border-b border-border/60 last:border-0 py-1.5">
+                        <span className="font-medium">{n.full_name}</span>
+                        <span className="text-text-muted">nominee{n.relationship ? ` · ${n.relationship}` : ''}{n.share_pct != null ? ` · ${n.share_pct}%` : ''}</span>
+                      </div>
+                    ))}
+                    {joints.map((j: any) => (
+                      <div key={`j${j.id}`} className="flex flex-wrap gap-x-3 border-b border-border/60 last:border-0 py-1.5">
+                        <span className="font-medium">{j.full_name}</span>
+                        <span className="text-text-muted">joint holder{j.relationship ? ` · ${j.relationship}` : ''}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+              {docs.length > 0 && (
+                <>
+                  <h3 className={h3}>KYC documents</h3>
+                  <div className="text-xs mb-4 flex flex-wrap gap-x-4 gap-y-1">
+                    {docs.map((d: any) => (
+                      <span key={d.id} className="text-text-muted">{d.doc_type}{d.origin ? ` (${d.origin})` : ''}</span>
+                    ))}
+                  </div>
+                </>
+              )}
               <div className="flex gap-3 mb-3 text-sm">
                 <div className="flex-1 bg-bg rounded p-3">
                   <div className="text-xs text-text-muted uppercase tracking-wide">Invested</div>

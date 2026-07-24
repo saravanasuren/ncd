@@ -23,6 +23,7 @@ import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { toISODate } from '../../lib/dates.js';
+import * as lh from '../../integrations/lockerhub/client.js';
 
 export type ChequeLeg = 'rent' | 'deposit';
 
@@ -35,6 +36,10 @@ export const SETTLEMENT_NOTE =
 export interface RecordChequeInput {
   lockerApplicationId: string;
   customerId?: number | null;
+  /** Name/phone known at the moment of recording — carried when there's no
+   * customerId to join against (see migration 042). */
+  applicantName?: string | null;
+  applicantPhone?: string | null;
   leg: ChequeLeg;
   amount: number;
   chequeNo: string;
@@ -75,10 +80,10 @@ export async function recordCheque(db: Db, actor: AuthUser, input: RecordChequeI
 
   return db.withTx(async (tx) => {
     const row = (await tx.query<Record<string, unknown>>(
-      `INSERT INTO locker_cheques (lockerhub_application_id, customer_id, leg, amount, cheque_no, bank_name, received_on, notes, recorded_by_user_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [appId, input.customerId ?? null, input.leg, input.amount, chequeNo,
-       input.bankName ?? null, input.receivedOn, input.notes ?? null, actor.id])).rows[0]!;
+      `INSERT INTO locker_cheques (lockerhub_application_id, customer_id, applicant_name, applicant_phone, leg, amount, cheque_no, bank_name, received_on, notes, recorded_by_user_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [appId, input.customerId ?? null, input.applicantName?.trim() || null, input.applicantPhone?.trim() || null,
+       input.leg, input.amount, chequeNo, input.bankName ?? null, input.receivedOn, input.notes ?? null, actor.id])).rows[0]!;
     await writeAudit(tx, {
       actorId: actor.id, action: 'locker.cheque.record', entityType: 'locker_cheques', entityId: Number(row.id),
       after: { locker_application: appId, leg: input.leg, amount: input.amount, cheque_no: chequeNo },
@@ -94,11 +99,38 @@ export async function listCheques(db: Db, filters: { status?: string; lockerAppl
   if (filters.status) { params.push(filters.status); where.push(`q.status = $${params.length}`); }
   if (filters.lockerApplicationId) { params.push(filters.lockerApplicationId); where.push(`q.lockerhub_application_id = $${params.length}`); }
   const rows = (await db.query<Record<string, unknown>>(
-    `SELECT q.*, c.full_name AS customer_name, c.customer_code
+    `SELECT q.*, COALESCE(c.full_name, q.applicant_name) AS customer_name, c.customer_code
        FROM locker_cheques q LEFT JOIN customers c ON c.id = q.customer_id
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
       ORDER BY (q.status = 'Pending') DESC, q.received_on DESC, q.id DESC
       LIMIT 500`, params)).rows;
+
+  // Rows recorded before migration 042 (or before the frontend started sending
+  // a name) have neither customer_id nor a snapshot — resolve those against
+  // LockerHub once and cache the answer on the row so this never repeats.
+  // Bounded concurrency + per-row try/catch: this is a staff screen showing at
+  // most a handful of pending cheques, not a hot path, and a LockerHub outage
+  // must degrade to a blank name, not fail the whole register.
+  const blank = rows.filter((r) => !r.customer_id && !r.customer_name);
+  if (blank.length && lh.lockerHubConfigured()) {
+    const CHUNK = 6;
+    for (let i = 0; i < blank.length; i += CHUNK) {
+      const slice = blank.slice(i, i + CHUNK);
+      await Promise.all(slice.map(async (r) => {
+        try {
+          const a = await lh.getLockerApplication(String(r.lockerhub_application_id)) as Record<string, unknown>;
+          const applicantName = (a?.name as string | null) ?? null;
+          const applicantPhone = (a?.phone as string | null) ?? null;
+          if (!applicantName) return;
+          await db.query(
+            'UPDATE locker_cheques SET applicant_name = $1, applicant_phone = $2 WHERE id = $3',
+            [applicantName, applicantPhone, r.id]);
+          r.customer_name = applicantName;
+        } catch { /* LockerHub unreachable/unknown id — leave the row blank */ }
+      }));
+    }
+  }
+
   return { rows: rows.map(shape), note: SETTLEMENT_NOTE };
 }
 

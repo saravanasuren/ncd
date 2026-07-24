@@ -141,6 +141,10 @@ export function LockerEnrollmentPage() {
     const r = await run(api.post<any>('/api/lockers/cheques', {
       lockerhub_application_id: String(app.application_id),
       customer_id: ncdCust?.id ?? undefined,
+      // Carried for display when there's no NCD customer_id to join against —
+      // `name`/`phone` are already resolved on screen (LockerHub match, or typed).
+      applicant_name: name.trim() || undefined,
+      applicant_phone: phone || undefined,
       leg: chqLeg,
       amount: Number(chq.amount),
       cheque_no: chq.cheque_no.trim(),

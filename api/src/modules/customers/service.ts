@@ -353,11 +353,22 @@ export async function deleteBankAccount(db: Db, actor: AuthUser, customerId: num
     }
 
     if (bank.is_active === true) {
-      const unpaid = await tx.query(
-        `SELECT 1 FROM disbursement_schedule ds JOIN applications a ON a.id = ds.application_id
-          WHERE a.customer_id = $1 AND ds.status = 'Scheduled' LIMIT 1`, [customerId]);
-      if (unpaid.rowCount) {
-        throw errors.conflict('This is the active payout account and unpaid payouts point at it — make another account active first');
+      const unpaid = Number((await tx.query<{ n: string }>(
+        `SELECT count(*) AS n FROM disbursement_schedule ds JOIN applications a ON a.id = ds.application_id
+          WHERE a.customer_id = $1 AND ds.status = 'Scheduled'`, [customerId])).rows[0]!.n);
+      if (unpaid > 0) {
+        // Telling someone to "make another account active" is a dead end when
+        // this is the only one on file — say what actually unblocks them.
+        const others = Number((await tx.query<{ n: string }>(
+          'SELECT count(*) AS n FROM customer_bank_accounts WHERE customer_id = $1 AND id <> $2',
+          [customerId, bankId])).rows[0]!.n);
+        throw errors.conflict(
+          others > 0
+            ? `${unpaid} unpaid payout(s) are due to this active account — make one of the customer's other accounts active first, then delete this one.`
+            // NB: adding an account does NOT activate it — it has to be made
+            // active explicitly, so say all three steps or the advice dead-ends.
+            : `${unpaid} unpaid payout(s) are due to this account and it is the customer's only one — deleting it would leave those payouts with nowhere to go. Add the replacement account, click "Make active" on it, then delete this one.`
+        );
       }
     }
 

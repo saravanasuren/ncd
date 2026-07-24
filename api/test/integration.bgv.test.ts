@@ -140,3 +140,48 @@ describe('BGV — scope', () => {
     expect((r.json.rows as any[]).some((x) => x.id === custId)).toBe(false); // admin-enrolled
   });
 });
+
+// ── Series-wise view + passbook/cheque check (owner 2026-07-24) ───────────
+describe('BGV — series filter and bank-proof visibility', () => {
+  it('?series_id narrows the grid to customers invested in that series, counters included', async () => {
+    const a = await admin();
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    const inSeries = await a.post('/api/customers', { full_name: 'Series Member', phone: '9880000002' });
+    await a.post('/api/applications', {
+      customer_id: inSeries.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12',
+    });
+
+    const filtered = await a.get(`/api/background-verification?series_id=${seriesId}`);
+    const ids = (filtered.json.rows as any[]).map((x) => x.id);
+    expect(ids).toContain(inSeries.json.id);
+    expect(ids).not.toContain(custId); // BGV Subject holds no investment in the series
+    // Counters describe the FILTERED set, so the tiles are series-scoped too.
+    expect(filtered.json.counters.customers).toBe(ids.length);
+
+    // A series nobody belongs to yields an empty, well-formed grid.
+    const none = await a.get('/api/background-verification?series_id=999999');
+    expect(none.json.rows).toEqual([]);
+  });
+
+  it('the passbook/cheque photo (bank_proof) is counted, and uploading clears it', async () => {
+    const a = await admin();
+    const before = await a.get('/api/background-verification');
+    expect(before.json.counters.bank_proof_missing).toBeGreaterThan(0);
+    const meBefore = (before.json.rows as any[]).find((x) => x.id === custId);
+    expect(meBefore.docs.BankProof).toBeFalsy();
+
+    // The wizard's "Cheque / passbook image" slot uploads doc_type=bank_proof.
+    const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
+    const up = await a.post(`/api/customers/${custId}/documents`, {
+      doc_type: 'bank_proof', filename: 'cheque.png', mime: 'image/png',
+      data_base64: png.toString('base64'),
+    });
+    expect([200, 201]).toContain(up.status);
+
+    const after = await a.get('/api/background-verification');
+    const me = (after.json.rows as any[]).find((x) => x.id === custId);
+    expect(me.docs.BankProof).toBeTruthy();
+    expect(after.json.counters.bank_proof_missing).toBe(before.json.counters.bank_proof_missing - 1);
+  });
+});

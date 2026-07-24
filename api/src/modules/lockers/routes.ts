@@ -36,6 +36,12 @@ lockersRouter.get('/ping', asyncHandler(async (_req, res) => res.json(await lh.p
 lockersRouter.get('/branches', asyncHandler(async (_req, res) => res.json(await lh.branches())));
 lockersRouter.get('/availability', asyncHandler(async (req, res) =>
   res.json(await lh.lockerAvailability(req.query.branch_id ? String(req.query.branch_id) : undefined))));
+// Stock position (A15) — the counterpart to /availability above, NOT a
+// replacement for it. /availability quotes a sale and omits sold-out sizes;
+// this reports every size at every branch including the zeroes, which is what
+// a stock screen has to say. branch_id is optional: omit for the whole network.
+lockersRouter.get('/inventory', asyncHandler(async (req, res) =>
+  res.json(await lh.lockerInventory(req.query.branch_id ? String(req.query.branch_id) : undefined))));
 lockersRouter.get('/lockers', asyncHandler(async (req, res) => {
   const branchId = String(req.query.branch_id ?? '');
   if (!branchId) return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'branch_id required' } });

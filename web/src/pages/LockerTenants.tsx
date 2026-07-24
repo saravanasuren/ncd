@@ -9,8 +9,9 @@ import { useAuth } from '../auth/AuthContext.js';
  * Locker tenants, branch-wise — every tenant, not only the ones NCD backs. The
  * roster is one call to LockerHub's /locker-tenants (all branches, or scoped to
  * one); NCD's own pledges and cheques are layered on top, and lockers of ours
- * not allotted yet are appended. Availability per size comes from their
- * availability endpoint.
+ * not allotted yet are appended. The stock panel is their /locker-inventory
+ * (A15) — every size including the sold-out ones, which the older
+ * /locker-availability quote deliberately omits.
  *
  * Status shown is `account_status` (Active | Closure Requested) — the locker's
  * own status is always "occupied" here, since their query filters on it, and a
@@ -19,8 +20,25 @@ import { useAuth } from '../auth/AuthContext.js';
 const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
 const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
 
+function Stat({ label, value, tone, hint }: { label: string; value: number | string; tone?: string; hint?: string }) {
+  return (
+    <div title={hint}>
+      <div className={`text-lg font-semibold leading-tight ${tone ?? ''}`}>{value}</div>
+      <div className="text-[11px] text-text-muted uppercase tracking-wide">{label}</div>
+      {hint && <div className="text-[11px] text-text-muted">{hint}</div>}
+    </div>
+  );
+}
+
 interface Branch { id: string; name: string; address?: string }
-interface Size { size: string; rent_incl_gst: number; deposit: number; vacant_count: number }
+interface Counts { total: number; vacant: number; occupied: number; reserved: number; other: number }
+interface SizeStock extends Counts { size: string }
+interface Inventory {
+  as_of: string;
+  totals: Counts & { occupancy_pct: number; branches: number };
+  by_size: SizeStock[];
+  pricing: Array<{ size: string; rent_incl_gst: number; deposit: number }>;
+}
 interface Tenant {
   tenant_id: string | null; lockerhub_application_id: string | null;
   application_no: string | null; branch_id: string | null; branch_name: string | null;
@@ -83,10 +101,13 @@ export function LockerTenantsPage() {
     queryKey: ['locker-branches'],
     queryFn: () => api.get<{ branches: Branch[] }>('/api/lockers/branches'),
   });
-  const avail = useQuery({
-    queryKey: ['locker-availability', branchId],
-    queryFn: () => api.get<{ sizes: Size[] }>(`/api/lockers/availability?branch_id=${encodeURIComponent(branchId)}`),
-    enabled: !!branchId,
+  // Stock comes from LockerHub's /locker-inventory (A15), NOT /locker-availability
+  // (A3): A3 is a price quote for a sale and drops sizes with zero vacancy, so
+  // "Extra Large sold out" used to vanish from this panel instead of being
+  // stated. A15 also answers with no branch chosen, so the network total shows.
+  const stock = useQuery({
+    queryKey: ['locker-inventory', branchId],
+    queryFn: () => api.get<Inventory>(`/api/lockers/inventory${branchId ? `?branch_id=${encodeURIComponent(branchId)}` : ''}`),
   });
   const tenants = useQuery({
     queryKey: ['locker-tenants', branchId],
@@ -132,17 +153,49 @@ export function LockerTenantsPage() {
       </div>
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
 
-      {/* Occupancy for the chosen branch — this comes from LockerHub and is live. */}
-      {branchId && (avail.data?.sizes ?? []).length > 0 && (
+      {/* Stock position — live from LockerHub, zeroes included. `vacant` is what
+          is actually sellable; `reserved` is a locker mid-allocation and is kept
+          in its own tile on purpose — it must never be counted as available. */}
+      {stock.data && (
         <div className={card}>
-          <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">{branchName(branchId)} · availability</h2>
-          <div className="flex flex-wrap gap-2 text-xs">
-            {(avail.data?.sizes ?? []).map((s) => (
-              <span key={s.size} className="border border-border rounded px-3 py-1.5">
-                <b>{s.size}</b> · {s.vacant_count} vacant · rent {formatINR(s.rent_incl_gst)} · deposit {formatINR(s.deposit)}
-              </span>
-            ))}
+          <div className="flex items-baseline justify-between gap-3 flex-wrap mb-3">
+            <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide m-0">
+              {branchId ? branchName(branchId) : 'All branches'} · stock
+            </h2>
+            <span className="text-[11px] text-text-muted">
+              {stock.isFetching ? 'Refreshing…' : `Live from LockerHub · ${stock.data.totals.branches} branch${stock.data.totals.branches === 1 ? '' : 'es'}`}
+            </span>
           </div>
+          <div className="flex flex-wrap gap-x-6 gap-y-3 mb-4">
+            <Stat label="Total" value={stock.data.totals.total} />
+            <Stat label="Vacant" value={stock.data.totals.vacant} tone="text-success" hint="Sellable right now" />
+            <Stat label="Occupied" value={stock.data.totals.occupied} />
+            {stock.data.totals.reserved > 0 && (
+              <Stat label="Reserved" value={stock.data.totals.reserved} hint="Mid-allocation — do not promise these" />
+            )}
+            {stock.data.totals.other > 0 && (
+              <Stat label="Other" value={stock.data.totals.other} hint="Maintenance and any status added since" />
+            )}
+            <Stat label="Occupancy" value={`${stock.data.totals.occupancy_pct}%`} />
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            {stock.data.by_size.map((s) => {
+              const p = stock.data!.pricing.find((x) => x.size === s.size);
+              const out = s.vacant === 0;
+              return (
+                <span key={s.size} className={`border border-border rounded px-3 py-1.5 ${out ? 'text-text-muted bg-bg' : ''}`}>
+                  <b>{s.size}</b> · {out ? <span className="text-danger">none left</span> : <>{s.vacant} of {s.total} vacant</>}
+                  {s.reserved > 0 && <> · {s.reserved} reserved</>}
+                  {p && <> · rent {formatINR(p.rent_incl_gst)} · deposit {formatINR(p.deposit)}</>}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {stock.isError && (
+        <div className={`${card} text-xs text-text-muted`}>
+          Stock position unavailable — LockerHub could not be reached. The tenant list below is unaffected.
         </div>
       )}
 

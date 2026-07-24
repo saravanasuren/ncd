@@ -141,6 +141,10 @@ export function CustomerDetailPage() {
           <Field label="Phone" value={c.phone} /><Field label="District" value={c.district} />
           <Field label="KYC" value={c.kyc_status} /><Field label="Active" value={c.is_active ? 'Yes' : 'No'} />
           <Field label="PAN" value={c.pan} /><Field label="Email" value={c.email} />
+          {/* Who brought this customer in — staff or agent (owner 2026-07-24). */}
+          <Field label="Enrolled by" value={c.enrolled_by_name
+            ? `${c.enrolled_by_name}${c.enrolled_by_kind === 'agent' ? ` (agent${c.enrolled_by_agent_code ? ' ' + c.enrolled_by_agent_code : ''})` : ' (staff)'}`
+            : null} />
         </dl>
         <div className="flex gap-2 mt-4">
           {can('kyc:verify') && c.kyc_status !== 'Verified' && (

@@ -257,7 +257,7 @@ export function ApprovalsPage() {
                 <div className="flex gap-2">
                   <button onClick={() => setOpenId(openId === r.id ? null : r.id)}
                     className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">
-                    {openId === r.id ? 'Close' : (r.request_type === 'app_investment' ? 'Review & acknowledge' : 'Review & approve')}
+                    {openId === r.id ? 'Close' : (['app_investment', 'customer_creation'].includes(r.request_type) ? 'Review & acknowledge' : 'Review & approve')}
                   </button>
                   {r.request_type !== 'app_investment' && (
                     <button onClick={() => {
@@ -290,7 +290,7 @@ export function ApprovalsPage() {
             )}
             {openId === r.id && (
               <Detail id={r.id} canAct={r.canAct} selfApproval={r.selfApproval}
-                actionLabel={r.request_type === 'app_investment' ? 'Confirm acknowledgement' : 'Confirm approval'}
+                actionLabel={['app_investment', 'customer_creation'].includes(r.request_type) ? 'Confirm acknowledgement' : 'Confirm approval'}
                 onDone={() => { setOpenId(null); qc.invalidateQueries({ queryKey: ['approvals'] }); }} />
             )}
           </div>

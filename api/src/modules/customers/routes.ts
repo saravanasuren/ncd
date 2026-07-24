@@ -51,6 +51,19 @@ customersRouter.get('/assignable-staff', requirePermission('customers:handover-r
 customersRouter.get('/:id', requirePermission('customers:read'),
   asyncHandler(async (req, res) => res.json(await s.getCustomerDetail(getDb(), req.user!, Number(req.params.id)))));
 
+// Tax position — drives TDS on every payout, so it is audited. Not in the
+// correction whitelist because it is not a typo fix: it changes what the
+// customer is paid.
+customersRouter.patch('/:id/tax', requirePermission('customers:update'),
+  asyncHandler(async (req, res) => {
+    const b = z.object({
+      tds_applicable: z.boolean().optional(),
+      tax_form: z.string().nullish(),
+      tax_form_expires_on: z.string().nullish(),
+    }).parse(req.body ?? {});
+    res.json(await s.updateTaxStatus(getDb(), req.user!, Number(req.params.id), b));
+  }));
+
 customersRouter.post('/:id/bank-accounts', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
     const b = z.object({

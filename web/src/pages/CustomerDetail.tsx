@@ -142,6 +142,13 @@ export function CustomerDetailPage() {
           <Field label="KYC" value={c.kyc_status} /><Field label="Active" value={c.is_active ? 'Yes' : 'No'} />
           <Field label="PAN" value={c.pan} /><Field label="Email" value={c.email} />
           {/* Who brought this customer in — staff or agent (owner 2026-07-24). */}
+          {/* Tax position — this is what decides TDS on every payout, so it
+              belongs on the profile, not buried in the enrolment wizard. */}
+          <Field label="TDS applicable" value={c.tds_applicable === false ? 'No' : 'Yes'} />
+          <Field label="Form 15G/15H" value={c.tax_form
+            ? `${c.tax_form}${c.tax_form_expires_on ? ` · valid to ${String(c.tax_form_expires_on).slice(0, 10)}` : ' · no validity date (ignored)'}`
+            : null} />
+          <Field label="NRI" value={c.is_nri ? 'Yes' : 'No'} />
           <Field label="Enrolled by" value={c.enrolled_by_name
             ? `${c.enrolled_by_name}${c.enrolled_by_kind === 'agent' ? ` (agent${c.enrolled_by_agent_code ? ' ' + c.enrolled_by_agent_code : ''})` : ' (staff)'}`
             : null} />
@@ -180,6 +187,24 @@ export function CustomerDetailPage() {
               is live on creation; the only approval gate is the investment. */}
           {can('customers:correction-request') && c.creation_status !== 'Draft' && (
             <button onClick={() => setPanel(panel === 'correction' ? null : 'correction')} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Request correction</button>
+          )}
+          {can('customers:update') && (
+            <button onClick={() => {
+              const applies = window.confirm(
+                `Deduct TDS on this customer's payouts?\n\nOK = Yes, deduct TDS.\nCancel = No (they have filed a valid 15G/15H).\n\nCurrently: ${c.tds_applicable === false ? 'NOT deducted' : 'deducted'}.`);
+              if (applies) {
+                wrap(api.patch(`/api/customers/${id}/tax`, { tds_applicable: true, tax_form: null, tax_form_expires_on: null }));
+                return;
+              }
+              const form = window.prompt('Which form is on file — 15G or 15H?', c.tax_form ?? '15G');
+              if (form === null) return;
+              const upper = form.trim().toUpperCase();
+              if (!['15G', '15H'].includes(upper)) { setMsg('Tax form must be 15G or 15H.'); return; }
+              const until = window.prompt('Valid until (YYYY-MM-DD) — 15G/15H run per financial year:', c.tax_form_expires_on ? String(c.tax_form_expires_on).slice(0, 10) : '');
+              if (until === null) return;
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(until.trim())) { setMsg('Enter the validity date as YYYY-MM-DD — without it the form is ignored.'); return; }
+              wrap(api.patch(`/api/customers/${id}/tax`, { tds_applicable: false, tax_form: upper, tax_form_expires_on: until.trim() }));
+            }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Set TDS / 15G-15H</button>
           )}
           {can('customers:handover-request') && (
             <button onClick={() => setPanel(panel === 'handover' ? null : 'handover')} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Request handover</button>

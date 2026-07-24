@@ -60,11 +60,16 @@ describe('lead → customer → hand-off to NCD Manager queue', () => {
     // Live immediately: usable for investments, no customer-approval gate.
     expect(detail.json.customer.creation_status).toBe('Approved');
     expect(detail.json.customer.is_active).toBe(true);
-    // No customer_creation approval is ever raised.
+    // A customer_creation item DOES exist — but as a NOTICE, not a gate
+    // (owner 2026-07-24: "doesn't require approval, but notify me to check it").
+    // The proof it isn't a gate is above: the customer is already Approved+active
+    // while this item is still Pending.
     const ncd = await as('ncd@demo.local');
     const queue = await ncd.get('/api/approvals/queue');
     const item = queue.json.rows.find((r: any) => r.entity_id === String(customerId) && r.request_type === 'customer_creation');
-    expect(item).toBeFalsy();
+    expect(item).toBeTruthy();
+    expect(item.status).toBe('Pending');
+    expect(item.metadata.notice).toBe(true);
   });
 });
 
@@ -216,5 +221,25 @@ describe('lead type (NCD vs locker) + conversion linking', () => {
     expect((await staff.post(`/api/leads/${lead.json.id}/link-customer`, { customer_id: c1.json.id })).status).toBe(201);
     const c2 = await staff.post('/api/customers', { full_name: 'Twice Cust B', phone: '9000000055' });
     expect((await staff.post(`/api/leads/${lead.json.id}/link-customer`, { customer_id: c2.json.id })).status).toBe(409);
+  });
+});
+
+// Owner 2026-07-24: the profile must name who brought the customer in.
+describe('customer enroller is visible', () => {
+  it('customer detail names the staff member who enrolled them', async () => {
+    const staff = await as('staff@demo.local');
+    const cust = await staff.post('/api/customers', { full_name: 'Enroller Check', phone: '9000000061' });
+    const detail = await staff.get(`/api/customers/${cust.json.id}`);
+    expect(detail.status).toBe(200);
+    expect(detail.json.customer.enrolled_by_name).toBe('Demo Branch Staff');
+    expect(detail.json.customer.enrolled_by_kind).toBe('staff');
+  });
+
+  it('an agent-enrolled customer names the agent, with their code', async () => {
+    const agent = await as('agent@demo.local');
+    const cust = await agent.post('/api/customers', { full_name: 'Agent Enrolled', phone: '9000000062' });
+    const detail = await agent.get(`/api/customers/${cust.json.id}`);
+    expect(detail.json.customer.enrolled_by_kind).toBe('agent');
+    expect(detail.json.customer.enrolled_by_name).toBeTruthy();
   });
 });

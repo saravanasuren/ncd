@@ -103,7 +103,19 @@ export async function createCustomer(db: Db, actor: AuthUser, input: CreateCusto
       const known = await resolveReferrer(tx, refText);
       if (!known) await ensurePendingAgentForName(tx, actor, refText);
     }
-    await writeAudit(tx, { actorId: actor.id, action: 'customer.create', entityType: 'customers', entityId: id, after: { code, name: input.full_name } });
+    // Customer creation is NOT gated (owner 2026-07-21 — the customer is live on
+    // creation; the investment is the only maker/checker gate). But it should be
+    // VISIBLE (owner 2026-07-24): raise a notice on the Approvals page so an
+    // admin can eyeball each new customer. Acknowledging it clears the notice —
+    // the registered handler only re-affirms the status it already has.
+    const notice = await createApprovalRequest(tx, {
+      type: 'customer_creation',
+      entityType: 'customers',
+      entityId: id,
+      makerUserId: actor.id,
+      metadata: { customerName: input.full_name, customer_code: code, notice: true },
+    });
+    await writeAudit(tx, { actorId: actor.id, action: 'customer.create', entityType: 'customers', entityId: id, after: { code, name: input.full_name, notice_no: notice.request_no } });
     return { id, customer_code: code };
   });
 }
@@ -159,7 +171,19 @@ async function assertVisible(db: Db, actor: AuthUser, customerId: number): Promi
 
 export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
   await assertVisible(db, actor, id);
-  const c = (await db.query('SELECT * FROM customers WHERE id = $1', [id])).rows[0];
+  // Who enrolled this customer — a staff user or an agent (owner 2026-07-24).
+  // Resolved to a NAME here so the profile can just print it.
+  const c = (await db.query(
+    `SELECT c.*,
+            -- An agent also HAS a user row, so the agent identity wins: enrolling
+            -- as an agent is what the book attributes the customer to.
+            COALESCE(ag.full_name, u.full_name) AS enrolled_by_name,
+            CASE WHEN ag.id IS NOT NULL THEN 'agent' WHEN u.id IS NOT NULL THEN 'staff' END AS enrolled_by_kind,
+            ag.agent_code AS enrolled_by_agent_code
+       FROM customers c
+       LEFT JOIN users  u  ON u.id  = c.enrolled_by_user_id
+       LEFT JOIN agents ag ON ag.id = c.enrolled_by_agent_id
+      WHERE c.id = $1`, [id])).rows[0];
   const bankAccounts = (await db.query('SELECT * FROM customer_bank_accounts WHERE customer_id = $1 ORDER BY is_active DESC, id', [id])).rows;
   const nominees = (await db.query('SELECT * FROM nominees WHERE customer_id = $1', [id])).rows;
   const jointHolders = (await db.query('SELECT * FROM joint_holders WHERE customer_id = $1', [id])).rows;

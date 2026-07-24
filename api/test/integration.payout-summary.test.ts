@@ -233,3 +233,72 @@ describe('payout PDFs, cancel and cut-off history', () => {
     expect(h.json).toHaveProperty('has_more');
   });
 });
+
+// Owner 2026-07-24: a month's redemptions belong in THAT month's payout sheet.
+// The redemption transfer pays principal only; the broken-period interest is
+// swept into the interest batch and shown as a 'Redemption' row.
+describe('redemption interest lands in that month\'s payout sheet', () => {
+  let appId = 0, redDate = '';
+
+  it('the redemption transfer pays principal only — interest is left for the batch', async () => {
+    const a = await admin();
+    const cxo = await as('cxo@demo.local');
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    const cust = await a.post('/api/customers', { full_name: 'Redeeming Investor', phone: '9600000031' });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '66660009999', ifsc: 'ICIC0001234', holder_name: 'Redeeming Investor' });
+    const app = await a.post('/api/applications', {
+      customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000, date_money_received: '2026-07-12',
+    });
+    appId = Number(app.json.id);
+    await approveInvestment(await as('ncd@demo.local'), app);
+
+    // Redeem mid-cycle so a real broken-period slice accrues.
+    redDate = '2026-09-15';
+    const red = await a.post('/api/redemptions/premature', { application_id: appId, reason: 'exit', redemption_date: redDate });
+    expect(red.status).toBe(201);
+    await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
+
+    const r = (await ctx.db.query('SELECT principal, penalty, net_payment, broken_interest, broken_tds FROM redemptions WHERE application_id = $1', [appId])).rows[0] as any;
+    expect(Number(r.broken_interest)).toBeGreaterThan(0);          // interest really accrued
+    // net_payment is principal − penalty ONLY; the interest is NOT bundled in.
+    expect(Number(r.net_payment)).toBe(Number(r.principal) - Number(r.penalty));
+
+    // …and it is waiting as a Scheduled BrokenInterest row for the batch.
+    const slice = (await ctx.db.query(
+      "SELECT gross_amount, tds_amount, net_amount, status, batch_id FROM disbursement_schedule WHERE application_id=$1 AND due_type='BrokenInterest' AND due_date=$2::date", [appId, redDate])).rows[0] as any;
+    expect(slice.status).toBe('Scheduled');
+    expect(slice.batch_id).toBeNull();
+    expect(Number(slice.gross_amount)).toBe(Number(r.broken_interest));
+    expect(Number(slice.tds_amount)).toBe(Number(r.broken_tds));
+  });
+
+  it("that month's batch sweeps it and the sheet types it 'Redemption'", async () => {
+    const a = await admin();
+    const ncd = await as('ncd@demo.local');
+    const batch = await ncd.post('/api/payouts', { payout_date: '2026-09-28' }); // the month it was redeemed in
+    expect(batch.status).toBe(201);
+
+    // The slice is now attached to the batch, not orphaned.
+    const slice = (await ctx.db.query(
+      "SELECT batch_id, status FROM disbursement_schedule WHERE application_id=$1 AND due_type='BrokenInterest' AND due_date=$2::date", [appId, redDate])).rows[0] as any;
+    expect(Number(slice.batch_id)).toBe(Number(batch.json.batch_id));
+    expect(slice.status).not.toBe('Skipped');   // it must NOT be superseded away
+
+    const ws = await sheetOf((await a.raw(`/api/payouts/${batch.json.batch_id}/summary.xlsx`)).buffer);
+    const types = new Set<string>();
+    let found = null as null | { from: unknown; to: unknown; gross: number };
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      types.add(String(row.getCell(10).value));
+      if (String(row.getCell(3).value) === 'Redeeming Investor' && String(row.getCell(10).value) === 'Redemption') {
+        found = { from: row.getCell(16).value, to: row.getCell(17).value, gross: Number(row.getCell(19).value) };
+      }
+    }
+    expect(types.has('Redemption')).toBe(true);   // the third type finally appears
+    expect(found).toBeTruthy();
+    expect(found!.gross).toBeGreaterThan(0);
+    expect(String(found!.from)).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);  // dates present, not blank
+    expect(String(found!.to)).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);
+  });
+});

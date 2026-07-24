@@ -89,6 +89,43 @@ export async function previewDue(db: Db, payoutDate: string) {
     });
   }
 
+  // Redemption slices (owner 2026-07-24): a redemption's broken-period interest
+  // is paid in THAT month's batch, not bundled into the redemption transfer. Its
+  // row already exists with exact gross/TDS/net from the redemption request, so
+  // it is taken AS IS — never recomputed — and rides along typed 'Redemption'.
+  // Not line-status-filtered: a fully redeemed line is no longer Active, but its
+  // interest is still owed.
+  const { rows: redemptionSlices } = await db.query<Record<string, unknown>>(
+    `SELECT ds.id AS schedule_id, ds.line_id, ds.application_id, ds.due_date,
+            ds.gross_amount, ds.tds_amount, ds.net_amount,
+            a.application_no, c.full_name AS customer_name,
+            COALESCE((SELECT max(p.due_date) FROM disbursement_schedule p
+                       WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
+                         AND p.due_type IN ${DUE_TYPES} AND p.status = 'Paid'),
+                     a.interest_start_date) AS from_date
+       FROM disbursement_schedule ds
+       JOIN applications a ON a.id = ds.application_id
+       JOIN customers c ON c.id = a.customer_id
+      WHERE ds.due_type = 'BrokenInterest' AND ds.status = 'Scheduled'
+        AND ds.batch_id IS NULL AND ds.due_date <= $1::date
+      ORDER BY c.full_name`, [payoutDate]);
+  for (const r of redemptionSlices) {
+    const gross = Number(r.gross_amount);
+    if (!(gross > 0)) continue;
+    const from = toISODate(r.from_date as string | null);
+    totals.gross += gross; totals.tds += Number(r.tds_amount); totals.net += Number(r.net_amount);
+    out.push({
+      schedule_id: Number(r.schedule_id),
+      line_id: Number(r.line_id), application_id: Number(r.application_id),
+      application_no: r.application_no, customer_name: r.customer_name,
+      due_date: toISODate(r.due_date as string | null), due_type: 'BrokenInterest',
+      row_type: 'Redemption',
+      from_date: from, days: from ? daysBetween(from, toISODate(r.due_date as string | null)!) : null,
+      gross_amount: gross, tds_amount: Number(r.tds_amount), net_amount: Number(r.net_amount),
+      addition_amount: 0, deduction_amount: 0, total_amount: Number(r.net_amount),
+    });
+  }
+
   // One-time APPROVED adjustments (owner 2026-07-23) land on the application's
   // next settlement. Net-only: gross/TDS stay pure interest math — gross 1000,
   // TDS 10, net 990, +100 addition → the bank pays 1090. Attached to the
@@ -154,7 +191,26 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
     // reconciliation) already works off batch_id, so it needs no change. Paying
     // the row advances the line's paid-through watermark, so the next sheet
     // starts fresh from this date.
-    for (const r of due.rows as Record<string, unknown>[]) {
+    // Redemption slices FIRST: they are existing rows, so attaching them stamps
+    // batch_id before the pro-rata pass runs its supersede sweep — which only
+    // touches rows still `batch_id IS NULL`. Reversed, a partially-withdrawn
+    // line's own slice would be Skipped by its pro-rata sibling and never paid.
+    for (const r of (due.rows as Record<string, unknown>[]).filter((x) => x.schedule_id)) {
+      const bank = (await tx.query<{ account_number: string; ifsc: string }>(
+        `SELECT COALESCE(pb.account_number, cb.account_number) AS account_number,
+                COALESCE(pb.ifsc, cb.ifsc) AS ifsc
+           FROM applications a
+           LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
+           LEFT JOIN customer_bank_accounts cb ON cb.customer_id = a.customer_id AND cb.is_active = TRUE
+          WHERE a.id = $1 LIMIT 1`, [r.application_id])).rows[0];
+      await tx.query(
+        `UPDATE disbursement_schedule
+            SET batch_id = $2, payee_account = COALESCE($3, payee_account), payee_ifsc = COALESCE($4, payee_ifsc)
+          WHERE id = $1 AND status = 'Scheduled' AND batch_id IS NULL`,
+        [r.schedule_id, batchId, bank?.account_number ?? null, bank?.ifsc ?? null]);
+    }
+
+    for (const r of (due.rows as Record<string, unknown>[]).filter((x) => !x.schedule_id)) {
       const bank = (await tx.query<{ account_number: string; ifsc: string }>(
         `SELECT COALESCE(pb.account_number, cb.account_number) AS account_number,
                 COALESCE(pb.ifsc, cb.ifsc) AS ifsc
@@ -468,7 +524,10 @@ const SUMMARY_SELECT = `
                 AND p.due_type IN ('Interest','BrokenInterest') AND p.status = 'Paid'),
             a.interest_start_date)) AS period_days,
          CASE
-           WHEN ds.due_type IN ('Redemption','Premature') THEN 'Redemption'
+           -- The redemption slice: a BrokenInterest row swept into this batch.
+           -- (An interest batch never holds 'Redemption'/'Premature' due_types —
+           -- it materialises 'Interest' — so keying off those never fired.)
+           WHEN ds.due_type IN ('BrokenInterest','Redemption','Premature') THEN 'Redemption'
            WHEN NOT EXISTS (SELECT 1 FROM disbursement_schedule q
                              WHERE q.line_id = ds.line_id AND q.due_date < ds.due_date AND q.status = 'Paid')
              THEN 'Addition'
@@ -542,7 +601,7 @@ async function summaryRowsForDate(db: Db, payoutDate: string): Promise<Record<st
       ...st,
       application_no: r.application_no,
       customer_name: r.customer_name,
-      row_type: (st as Record<string, unknown>).paid_before ? 'Balance After Redemption' : 'Addition',
+      row_type: r.row_type ?? ((st as Record<string, unknown>).paid_before ? 'Balance After Redemption' : 'Addition'),
       period_from: r.from_date,
       period_to: r.due_date,
       period_days: r.days,

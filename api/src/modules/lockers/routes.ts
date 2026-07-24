@@ -14,6 +14,11 @@ import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
 import * as lh from '../../integrations/lockerhub/client.js';
+// Static import ON PURPOSE: it registers the locker_deposit_waiver approval
+// handlers at boot. A dynamic import inside the route would leave approvals
+// silently side-effect-free until the first waiver request after a restart —
+// the exact failure the agent-registration flow hit on 2026-07-23.
+import { createWaiver, cancelWaiver } from './waivers.js';
 import { errors } from '../../lib/errors.js';
 
 export const lockersRouter = Router();
@@ -111,6 +116,26 @@ lockersRouter.get('/customers/:customerId/lockers', asyncHandler(async (req, res
 lockersRouter.get('/tenants', asyncHandler(async (req, res) => {
   const { lockerTenants } = await import('./deposits.js');
   res.json(await lockerTenants(getDb(), { branchId: req.query.branch_id ? String(req.query.branch_id) : undefined }));
+}));
+
+// ── Deposit waivers (owner 2026-07-24): exception cases holding a locker with
+// no NCD backing. NCD Manager+ records with a reason; Admin/CXO approves.
+// The router-level lockers:enroll still applies; these add the stricter perm.
+lockersRouter.post('/waivers', requirePermission('lockers:waive'), asyncHandler(async (req, res) => {
+  const b = z.object({
+    lockerhub_tenant_id: z.string().trim().min(1),
+    reason: z.string().trim().min(3, 'Reason is required'),
+    locker_no: z.string().nullish(),
+    branch_id: z.string().nullish(),
+    tenant_name: z.string().nullish(),
+    tenant_phone: z.string().nullish(),
+    customer_id: z.number().int().positive().nullish(),
+  }).parse(req.body);
+  res.status(201).json(await createWaiver(getDb(), req.user!, b));
+}));
+
+lockersRouter.post('/waivers/:id/cancel', requirePermission('lockers:waive'), asyncHandler(async (req, res) => {
+  res.json(await cancelWaiver(getDb(), req.user!, Number(req.params.id)));
 }));
 
 lockersRouter.get('/deposit-links/candidates', asyncHandler(async (req, res) => {

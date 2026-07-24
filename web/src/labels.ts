@@ -69,6 +69,7 @@ export const APPROVAL_TYPE_LABELS: Record<string, string> = {
   commission_eligibility: 'Agent Commission',
   interest_batch: 'Interest Payout',
   payout_adjustment: 'Payout Adjustment',
+  locker_deposit_waiver: 'Locker Deposit Waiver',
 };
 
 export function approvalTypeLabel(t: string): string {

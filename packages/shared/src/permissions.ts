@@ -43,6 +43,9 @@ export const PERMISSIONS = [
   'applications:delete',
   // locker enrollment (staff enroll a customer for a LockerHub locker; contract Part A)
   'lockers:enroll',
+  // Record a deposit waiver/exception on a locker tenancy — NCD Manager+ makes,
+  // Admin/CXO approves (approvals:check-premature).
+  'lockers:waive',
   // activations (funded → Active, maker-checker)
   'activations:execute',
   // allotments
@@ -165,6 +168,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'settings:workflow-config',
     'imports:run',
     'lockers:enroll',
+    'lockers:waive',
   ],
 
   branch_manager: [

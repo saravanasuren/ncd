@@ -484,6 +484,25 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
     };
   }
 
+  if (id && req.entity_type === 'locker_deposit_waivers') {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT w.tenant_name, w.tenant_phone, w.locker_no, w.branch_id, w.reason, c.full_name AS customer, c.customer_code
+         FROM locker_deposit_waivers w LEFT JOIN customers c ON c.id = w.customer_id
+        WHERE w.id = $1`, [id])).rows[0];
+    if (r) return {
+      subject: `${r.tenant_name ?? r.customer ?? 'Locker tenant'}${r.locker_no ? ` · locker ${r.locker_no}` : ''}`,
+      amount: null,
+      facts: clean([
+        fact('Tenant', r.tenant_name),
+        fact('Phone', r.tenant_phone),
+        fact('Locker', r.locker_no),
+        fact('NCD customer', r.customer ? `${r.customer}${r.customer_code ? ` (${r.customer_code})` : ''}` : null),
+        fact('Exception', 'Locker held with NO NCD deposit backing — deliberate waiver'),
+        fact('Reason', r.reason),
+      ]),
+    };
+  }
+
   if (id && req.entity_type === 'payout_batches') {
     const r = (await db.query<Record<string, unknown>>(
       `SELECT b.payout_date, b.total_net, b.status,

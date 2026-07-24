@@ -9,7 +9,7 @@
  *   pays the referrer 0.25% and the staff 0.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -134,7 +134,7 @@ describe('handover approval — any one of Admin / CXO / Branch Manager', () => 
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Pay Details Cust', phone: '9700099234' });
     await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '4242424242', ifsc: 'ICIC0001111' });
-    const app = await a.post('/api/applications', {
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000,
       date_money_received: '2026-07-05', collection_method: 'Cheque', collection_reference: 'CHQ-99881',
     });
@@ -154,7 +154,7 @@ describe('handover approval — any one of Admin / CXO / Branch Manager', () => 
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Edit On Approve', phone: '9700088123' });
     await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '4141414141', ifsc: 'ICIC0001111' });
-    const app = await a.post('/api/applications', {
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000,
       date_money_received: '2026-07-02', collection_method: 'NEFT', collection_reference: 'WRONG-REF',
     });
@@ -203,7 +203,7 @@ describe('incentive accrual routing', () => {
     const cust = await a.post('/api/customers', custBody);
     const cid = cust.json.id;
     await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: `9${amount}${cid}`, ifsc: 'ICIC0001111' });
-    const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-10' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-10' });
     const ncd = await as('ncd@demo.local');
     await approveInvestment(ncd, app);
     return { cid, appId: Number(app.json.id) };
@@ -261,7 +261,7 @@ describe('incentive accrual routing', () => {
     const { cid } = await invest(a, { full_name: 'Repeat Investor', phone: '9811110006' }, 100000);
     // second investment for the SAME customer, brought by the agent
     await ctx.db.query('UPDATE customers SET referred_by_text = $1 WHERE id = $2', ['AG-COMM', cid]);
-    const app2 = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-11' });
+    const app2 = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-11' });
     const ncd = await as('ncd@demo.local');
     await approveInvestment(ncd, app2);
     const acc = (await ctx.db.query("SELECT payee_type, amount FROM incentive_accruals WHERE application_id=$1", [app2.json.id])).rows as any[];

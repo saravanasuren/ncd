@@ -4,7 +4,7 @@
  * completes. Both are defensive — a PDF failure must not break the flow.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let appId: number;
@@ -19,7 +19,7 @@ beforeAll(async () => {
   const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
   const a = await admin();
   const cust = await a.post('/api/customers', { full_name: 'Trigger Cust', phone: '9848111222' });
-  const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-18' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-18' });
   appId = Number(app.json.id);
   await approveInvestment(await login('ncd@demo.local'), app); // → Active (fires the ack trigger)
 });

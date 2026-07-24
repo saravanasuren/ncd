@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { createHmac } from 'node:crypto';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 import { config } from '../src/config.js';
 import { dispatchPending } from '../src/integrations/lockerhub/dispatcher.js';
 
@@ -60,7 +60,7 @@ afterAll(async () => {
 /** Take an investment referred by `agentName` all the way to Active. */
 async function liveInvestmentReferredBy(staff: Client, agentName: string, phone: string, amount = 500000) {
   const cust = await staff.post('/api/customers', { full_name: 'Agent Cust ' + phone, phone, referred_by_text: agentName });
-  const app = await staff.post('/api/applications', {
+  const app = await staff.post('/api/applications', { ...requiredInvestmentFields(),
     customer_id: cust.json.id, series_id: await seriesId(), scheme_id: await schemeId(), amount, date_money_received: '2026-07-01',
   });
   const ncd = await login('ncd@demo.local');

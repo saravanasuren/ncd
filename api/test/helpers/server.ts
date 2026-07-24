@@ -34,6 +34,22 @@ export async function startTestServer(): Promise<TestCtx> {
 }
 
 /**
+ * POST /api/applications requires the payment evidence (credited date, method,
+ * reference AND the receipt photo, stored in the create transaction). Spread
+ * this FIRST into a create body; per-test values placed after it override the
+ * defaults. Receipt bytes must pass the magic-byte sniff (lib/uploads), hence
+ * the real PDF header.
+ */
+export function requiredInvestmentFields() {
+  return {
+    date_money_received: '2026-07-10',
+    collection_method: 'NEFT/RTGS',
+    collection_reference: 'TEST-REF-001',
+    receipt: { filename: 'receipt.pdf', mime: 'application/pdf', data_base64: Buffer.from('%PDF-1.4 test-receipt').toString('base64') },
+  };
+}
+
+/**
  * Take a just-created application live via the investment approval (the new
  * one-gate go-live). `create` is the POST /api/applications response; `checker`
  * must be a DISTINCT user from the app's maker (maker ≠ checker rule). Returns

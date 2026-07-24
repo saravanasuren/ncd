@@ -3,7 +3,7 @@
  * can see at a glance which are signed without opening each one.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 beforeAll(async () => { ctx = await startTestServer(); });
@@ -16,7 +16,7 @@ describe('customer investments — eSign state', () => {
     const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
     const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
     const cust = await a.post('/api/customers', { full_name: 'Esign Column Cust', phone: '9660000001' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
 
     // Unsigned → the column reads "not signed".
     let row = (await a.get(`/api/customers/${cust.json.id}`)).json.applications.find((x: any) => x.id === app.json.id);

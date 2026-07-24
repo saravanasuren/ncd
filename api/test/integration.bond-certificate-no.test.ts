@@ -4,7 +4,7 @@
  * only for an investment that has actually issued.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -27,7 +27,7 @@ describe('bond certificate number', () => {
   it('is assigned on first generation and stays stable afterwards', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Bond Cert Cust', phone: '9550000001' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12' });
     await approveInvestment(await as('ncd@demo.local'), app); // → Active (issuable)
     const id = app.json.id;
     expect(await serialOf(id)).toBeNull();
@@ -46,7 +46,7 @@ describe('bond certificate number', () => {
   it('does not burn a number on an investment that has not issued', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Pending Bond Cust', phone: '9550000002' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
     // Left PendingApproval on purpose.
     const { bondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
     await bondCertificatePdf(ctx.db, app.json.id);
@@ -59,7 +59,7 @@ describe('bond certificate number', () => {
     const made: string[] = [];
     for (const phone of ['9550000003', '9550000004']) {
       const cust = await a.post('/api/customers', { full_name: `Bond Uniq ${phone}`, phone });
-      const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12' });
+      const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12' });
       await approveInvestment(await as('ncd@demo.local'), app);
       await bondCertificatePdf(ctx.db, app.json.id);
       made.push((await serialOf(app.json.id))!);

@@ -8,7 +8,7 @@
  * roster when it couldn't read one.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let custId: number, appId: number;
@@ -20,7 +20,7 @@ beforeAll(async () => {
   const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
   const c = await a.post('/api/customers', { full_name: 'Tenant Cust', phone: '9510000001' });
   custId = c.json.id;
-  const app = await a.post('/api/applications', {
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
     customer_id: custId, series_id: seriesId, scheme_id: schemeId, amount: 300000, date_money_received: '2026-07-12',
   });
   await approveInvestment(await as('ncd@demo.local'), app);

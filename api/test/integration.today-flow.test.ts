@@ -2,7 +2,7 @@
  * cards need per-row detail + a channel/type split, not just aggregate totals.
  * Isolated server so the added app doesn't perturb the shared reports suite. */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -23,7 +23,7 @@ describe("today's flow cards", () => {
     const cust = await a.post('/api/customers', { full_name: 'Today Investor', phone: '9880001111' });
     await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '2222333344', ifsc: 'ICIC0001111' });
     const today = new Date().toISOString().slice(0, 10);
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000, date_money_received: today, collection_method: 'NEFT' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000, date_money_received: today, collection_method: 'NEFT' });
     // Approve (distinct checker) → the NCD goes live with today's credit date.
     const ncd = new Client(ctx.base);
     await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
@@ -63,7 +63,7 @@ describe("today's flow cards", () => {
     const before = Number((await a.get('/api/dashboard/overview')).json.kpis.outstanding_book);
     // A PendingApproval app (subscription gate, no money received) must not count.
     const cust = await a.post('/api/customers', { full_name: 'Pending Approval Cust', phone: '9744400009' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000 });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000 });
     await ctx.db.query("UPDATE applications SET status='PendingApproval' WHERE id=$1", [app.json.id]);
     const after = Number((await a.get('/api/dashboard/overview')).json.kpis.outstanding_book);
     expect(after).toBe(before); // unchanged — pending-approval money excluded
@@ -120,7 +120,7 @@ describe("today's flow cards", () => {
     const cust = await a.post('/api/customers', { full_name: 'Locker Today', phone: '9880002222' });
     await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '5555666677', ifsc: 'ICIC0001111' });
     const today = new Date().toISOString().slice(0, 10);
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, is_locker_deposit: true, date_money_received: today, collection_method: 'Cash' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, is_locker_deposit: true, date_money_received: today, collection_method: 'Cash' });
 
     const tb = (await a.get('/api/dashboard/overview')).json.today_book;
     const row = tb.additions.rows.find((r: any) => r.application_no === app.json.application_no);

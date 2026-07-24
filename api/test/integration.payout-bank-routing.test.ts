@@ -14,7 +14,7 @@
  * and 18k scheduled rows with none, so the bank file would have paid nobody.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -35,7 +35,7 @@ const admin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
 async function customerWithSchedule(a: Client, name: string, phone: string) {
   const c = await a.post('/api/customers', { full_name: name, phone });
   const cid = Number(c.json.id);
-  const app = await a.post('/api/applications', {
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
     customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-01',
   });
   await approveInvestment(await as('ncd@demo.local'), app);

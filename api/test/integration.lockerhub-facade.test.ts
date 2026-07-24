@@ -4,7 +4,7 @@
  * (customer reads L1–L10, auth LA1–LA4, writes, agent auth + webview session).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number, customerId: number;
@@ -49,7 +49,7 @@ beforeAll(async () => {
   const ncd = await as('ncd@demo.local');
   await a.post(`/api/customers/${customerId}/bank-accounts`, { account_number: '55550009999', ifsc: 'HDFC0005555' });
   await a.put(`/api/customers/${customerId}/nominees`, { nominees: [{ full_name: 'Facade Nominee', share_pct: 100 }] });
-  const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
   await approveInvestment(ncd, app);
   // Allot so the investment carries an allotment_date (bond certificate exists).

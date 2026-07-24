@@ -35,12 +35,36 @@ export interface CreateApplicationInput {
   amount: number;
   // Date the money hit Dhanam's account, entered by staff at enrolment. Stored
   // now; interest starts from it once the investment is approved (go-live).
-  date_money_received?: string;
-  collection_method?: string;
-  collection_reference?: string;
+  date_money_received: string;
+  collection_method: string;
+  collection_reference: string;
   club_with_application_id?: number; // append this line to an in-flight app
-  receipt?: { file_path: string; original_filename: string; mime: string };
+  // Receipt / cheque photo — mandatory: an investment never exists without it.
+  // Same wire shape as POST /:id/receipt (the client mime is ignored — sniffed).
+  receipt: { filename: string; mime: string; data_base64: string };
   is_locker_deposit?: boolean; // staff-keyed locker money; the LockerHub flow sets its own flag
+}
+
+/** Validate + persist receipt bytes; returns the stored path and SNIFFED mime
+ * (the client-declared one is never trusted). Throws 400 on a bad file. */
+async function storeReceiptFile(filename: string, dataBase64: string): Promise<{ file_path: string; mime: string }> {
+  const { validateUpload } = await import('../../lib/uploads.js');
+  const { buffer, mime } = validateUpload(dataBase64);
+  const { saveBuffer } = await import('../../lib/storage.js');
+  const { path } = saveBuffer('receipts', filename, buffer);
+  return { file_path: path, mime };
+}
+
+/** Attach already-stored receipt bytes to an application row (audited). */
+async function attachReceipt(db: Db, actor: AuthUser, appId: number, filename: string, stored: { file_path: string; mime: string }) {
+  const upd = await db.query('UPDATE applications SET receipt_file_path = $1, receipt_original_filename = $2, receipt_mime = $3, receipt_uploaded_at = now() WHERE id = $4',
+    [stored.file_path, filename, stored.mime, appId]);
+  if (!upd.rowCount) {
+    const { removeStored } = await import('../../lib/storage.js');
+    removeStored(stored.file_path); // no row to own the file — don't orphan it
+    throw errors.notFound('Application not found');
+  }
+  await writeAudit(db, { actorId: actor.id, action: 'application.receipt', entityType: 'applications', entityId: appId, after: { filename } });
 }
 
 async function addLine(tx: Db, appId: number, scheme: Record<string, unknown>, amount: number) {
@@ -53,57 +77,71 @@ async function addLine(tx: Db, appId: number, scheme: Record<string, unknown>, a
 export async function createApplication(db: Db, actor: AuthUser, input: CreateApplicationInput) {
   const settings = await getSettingsMap(db);
   const appFmt = String(settings['numbering.application_format'] ?? 'APP-{yyyy}-{seq:6}');
-  return db.withTx(async (tx) => {
-    const scheme = (await tx.query<Record<string, unknown>>('SELECT * FROM schemes WHERE id = $1', [input.scheme_id])).rows[0];
-    if (!scheme) throw errors.badRequest('Unknown scheme');
-    // NCDs are issued in whole ₹1,00,000 units (scheme min_ticket/multiple_of).
-    // Checked here so it also covers the clubbing branch below: every line is a
-    // whole number of units, so any total built from them is one too.
-    assertTicket(input.amount, {
-      min: Number(scheme.min_ticket) || 100000,
-      multiple: Number(scheme.multiple_of) || 100000,
+  // The receipt photo is mandatory and attached inside the create transaction,
+  // so an application row never exists without one. Bad bytes 400 here, before
+  // any row is written; if the transaction fails the stored file is removed —
+  // no orphaned rows OR files either way.
+  const storedReceipt = await storeReceiptFile(input.receipt.filename, input.receipt.data_base64);
+  try {
+    return await db.withTx(async (tx) => {
+      const scheme = (await tx.query<Record<string, unknown>>('SELECT * FROM schemes WHERE id = $1', [input.scheme_id])).rows[0];
+      if (!scheme) throw errors.badRequest('Unknown scheme');
+      // NCDs are issued in whole ₹1,00,000 units (scheme min_ticket/multiple_of).
+      // Checked here so it also covers the clubbing branch below: every line is a
+      // whole number of units, so any total built from them is one too.
+      assertTicket(input.amount, {
+        min: Number(scheme.min_ticket) || 100000,
+        multiple: Number(scheme.multiple_of) || 100000,
+      });
+
+      // Clubbing: append this line's amount to an existing in-flight application.
+      if (input.club_with_application_id) {
+        const target = (await tx.query<{ id: string; status: string; series_id: string; total_amount: string }>(
+          'SELECT id, status, series_id, total_amount FROM applications WHERE id = $1', [input.club_with_application_id])).rows[0];
+        if (!target) throw errors.notFound('Clubbing target not found');
+        if (Number(target.series_id) !== input.series_id) throw errors.badRequest('Can only club within the same series');
+        if (!['PendingFundVerification', 'PendingEsign', 'PendingApproval'].includes(target.status)) throw errors.conflict('Target application is no longer in-flight');
+        await addLine(tx, Number(target.id), scheme, input.amount);
+        await tx.query('UPDATE applications SET total_amount = total_amount + $1, updated_at = now() WHERE id = $2', [input.amount, Number(target.id)]);
+        await writeAudit(tx, { actorId: actor.id, action: 'application.club', entityType: 'applications', entityId: Number(target.id), after: { added: input.amount } });
+        // The new line's receipt lands on the target app — same as the old
+        // client-side follow-up upload did.
+        await attachReceipt(tx, actor, Number(target.id), input.receipt.filename, storedReceipt);
+        const no = (await tx.query<{ application_no: string }>('SELECT application_no FROM applications WHERE id = $1', [Number(target.id)])).rows[0]!.application_no;
+        return { id: Number(target.id), application_no: no, clubbed: true };
+      }
+
+      const customer = (await tx.query<{ referred_by_text: string | null }>('SELECT referred_by_text FROM customers WHERE id = $1', [input.customer_id])).rows[0];
+      if (!customer) throw errors.badRequest('Unknown customer');
+      const priorCount = Number((await tx.query<{ n: string }>('SELECT count(*)::int AS n FROM applications WHERE customer_id = $1', [input.customer_id])).rows[0]!.n);
+      const isNew = priorCount === 0;
+      const appNo = await nextCode(tx, 'application', appFmt);
+
+      // Every staff-enrolled investment goes through one gate: it lands in
+      // PendingApproval and an investment approval is raised. The admin verifies
+      // the money is in Dhanam's account and approves — that approval is the
+      // go-live (Active + schedule + incentives). Staff record the credit date
+      // here so interest can start from it (owner spec 2026-07-19).
+      const { rows } = await tx.query<{ id: string }>(
+        `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, is_locker_deposit, date_money_received, collection_method, collection_reference)
+         VALUES ($1,$2,$3,'PendingApproval',$4,$5,$6,'staff',$7,$8,$9,$10,$11,$12) RETURNING id`,
+        [appNo, input.customer_id, input.series_id, input.amount, isNew, customer.referred_by_text ?? null, actor.id, actor.agentId,
+         input.is_locker_deposit ?? false, input.date_money_received, input.collection_method, input.collection_reference]
+      );
+      const appId = Number(rows[0]!.id);
+      await addLine(tx, appId, scheme, input.amount);
+      // Tell LockerHub a subscription intent was created (contract event). No-op unless configured.
+      await emitForApplication(tx, 'subscription.created', appId);
+      const subscriptionRequest = await createApprovalRequest(tx, { type: 'subscription', entityType: 'applications', entityId: appId, makerUserId: actor.id, metadata: { application_no: appNo } });
+      await writeAudit(tx, { actorId: actor.id, action: 'application.create', entityType: 'applications', entityId: appId, after: { appNo, amount: input.amount, isNew } });
+      await attachReceipt(tx, actor, appId, input.receipt.filename, storedReceipt);
+      return { id: appId, application_no: appNo, clubbed: false, subscription_request: subscriptionRequest };
     });
-
-    // Clubbing: append this line's amount to an existing in-flight application.
-    if (input.club_with_application_id) {
-      const target = (await tx.query<{ id: string; status: string; series_id: string; total_amount: string }>(
-        'SELECT id, status, series_id, total_amount FROM applications WHERE id = $1', [input.club_with_application_id])).rows[0];
-      if (!target) throw errors.notFound('Clubbing target not found');
-      if (Number(target.series_id) !== input.series_id) throw errors.badRequest('Can only club within the same series');
-      if (!['PendingFundVerification', 'PendingEsign', 'PendingApproval'].includes(target.status)) throw errors.conflict('Target application is no longer in-flight');
-      await addLine(tx, Number(target.id), scheme, input.amount);
-      await tx.query('UPDATE applications SET total_amount = total_amount + $1, updated_at = now() WHERE id = $2', [input.amount, Number(target.id)]);
-      await writeAudit(tx, { actorId: actor.id, action: 'application.club', entityType: 'applications', entityId: Number(target.id), after: { added: input.amount } });
-      const no = (await tx.query<{ application_no: string }>('SELECT application_no FROM applications WHERE id = $1', [Number(target.id)])).rows[0]!.application_no;
-      return { id: Number(target.id), application_no: no, clubbed: true };
-    }
-
-    const customer = (await tx.query<{ referred_by_text: string | null }>('SELECT referred_by_text FROM customers WHERE id = $1', [input.customer_id])).rows[0];
-    if (!customer) throw errors.badRequest('Unknown customer');
-    const priorCount = Number((await tx.query<{ n: string }>('SELECT count(*)::int AS n FROM applications WHERE customer_id = $1', [input.customer_id])).rows[0]!.n);
-    const isNew = priorCount === 0;
-    const appNo = await nextCode(tx, 'application', appFmt);
-
-    // Every staff-enrolled investment goes through one gate: it lands in
-    // PendingApproval and an investment approval is raised. The admin verifies
-    // the money is in Dhanam's account and approves — that approval is the
-    // go-live (Active + schedule + incentives). Staff record the credit date
-    // here so interest can start from it (owner spec 2026-07-19).
-    const { rows } = await tx.query<{ id: string }>(
-      `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, receipt_file_path, receipt_original_filename, receipt_mime, is_locker_deposit, date_money_received, collection_method, collection_reference)
-       VALUES ($1,$2,$3,'PendingApproval',$4,$5,$6,'staff',$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
-      [appNo, input.customer_id, input.series_id, input.amount, isNew, customer.referred_by_text ?? null, actor.id, actor.agentId,
-       input.receipt?.file_path ?? null, input.receipt?.original_filename ?? null, input.receipt?.mime ?? null,
-       input.is_locker_deposit ?? false, input.date_money_received ?? null, input.collection_method ?? null, input.collection_reference ?? null]
-    );
-    const appId = Number(rows[0]!.id);
-    await addLine(tx, appId, scheme, input.amount);
-    // Tell LockerHub a subscription intent was created (contract event). No-op unless configured.
-    await emitForApplication(tx, 'subscription.created', appId);
-    const subscriptionRequest = await createApprovalRequest(tx, { type: 'subscription', entityType: 'applications', entityId: appId, makerUserId: actor.id, metadata: { application_no: appNo } });
-    await writeAudit(tx, { actorId: actor.id, action: 'application.create', entityType: 'applications', entityId: appId, after: { appNo, amount: input.amount, isNew } });
-    return { id: appId, application_no: appNo, clubbed: false, subscription_request: subscriptionRequest };
-  });
+  } catch (e) {
+    const { removeStored } = await import('../../lib/storage.js');
+    removeStored(storedReceipt.file_path);
+    throw e;
+  }
 }
 
 // Investment approval = go-live. The admin has verified the money is in
@@ -199,14 +237,8 @@ export async function setPayoutAccount(db: Db, actor: AuthUser, appId: number, b
 }
 
 export async function uploadReceipt(db: Db, actor: AuthUser, appId: number, filename: string, _clientMime: string, dataBase64: string) {
-  const { validateUpload } = await import('../../lib/uploads.js');
-  const { buffer, mime } = validateUpload(dataBase64); // sniffed mime — client's is ignored
-  const { saveBuffer } = await import('../../lib/storage.js');
-  const { path } = saveBuffer('receipts', filename, buffer);
-  const upd = await db.query('UPDATE applications SET receipt_file_path = $1, receipt_original_filename = $2, receipt_mime = $3, receipt_uploaded_at = now() WHERE id = $4',
-    [path, filename, mime, appId]);
-  if (!upd.rowCount) throw errors.notFound('Application not found');
-  await writeAudit(db, { actorId: actor.id, action: 'application.receipt', entityType: 'applications', entityId: appId, after: { filename } });
+  const stored = await storeReceiptFile(filename, dataBase64); // sniffed mime — client's is ignored
+  await attachReceipt(db, actor, appId, filename, stored);
   return { ok: true };
 }
 

@@ -1,6 +1,6 @@
 /** Digio eSign: initiate (stub), webhook secret gate, completion stamps esigned_at. */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let appId: number;
@@ -11,7 +11,7 @@ beforeAll(async () => {
   const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
   const a = new Client(ctx.base); await a.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' });
   const cust = await a.post('/api/customers', { full_name: 'Esign Cust', phone: '9990004444', email: 'es@example.com' }); // live on creation
-  const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 400000 });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 400000 });
   appId = app.json.id;
 });
 afterAll(async () => { await ctx.close(); });
@@ -64,7 +64,7 @@ describe('esign auto-poll', () => {
     const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
     const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
     const cust = await a.post('/api/customers', { full_name: 'Poll Cust', phone: '9990005555' });
-    const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000 });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000 });
     const id = app.json.id;
 
     // Before any signing session → not pending.

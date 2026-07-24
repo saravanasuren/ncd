@@ -5,7 +5,7 @@
  * so the next sheet starts fresh — a period can never be paid twice.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -26,7 +26,7 @@ beforeAll(async () => {
   const cust = await a.post('/api/customers', { full_name: 'Prorata Investor', phone: '9800011122' });
   await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '9090909090', ifsc: 'ICIC0001111' });
   // Staff enter the credit date at enrolment; one approval gate = go-live.
-  const app = await a.post('/api/applications', {
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
     customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: AMOUNT,
     date_money_received: START, collection_method: 'NEFT', collection_reference: 'UTR-PRORATA',
   });

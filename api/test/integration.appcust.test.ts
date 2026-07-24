@@ -3,7 +3,7 @@
  * relations/KYC (joint holders, nominees, deceased, docs, DigiLocker, mirror).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -30,10 +30,10 @@ describe('applications — clubbing', () => {
   it('a second line clubs into the in-flight application', async () => {
     const a = await admin();
     const cid = await newCustomer(a, 'Club Cust', '9500000001');
-    const app1 = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 200000 });
+    const app1 = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 200000 });
     const cand = await a.get(`/api/applications/clubbing-candidates?customer_id=${cid}&series_id=${seriesId}`);
     expect(cand.json.rows.some((r: any) => r.id === app1.json.id)).toBe(true);
-    const app2 = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 300000, club_with_application_id: app1.json.id });
+    const app2 = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 300000, club_with_application_id: app1.json.id });
     expect(app2.json.clubbed).toBe(true);
     expect(app2.json.id).toBe(app1.json.id);
     const detail = await a.get(`/api/applications/${app1.json.id}`);
@@ -46,7 +46,7 @@ describe('applications — receipt upload', () => {
   it('uploads and streams back the receipt', async () => {
     const a = await admin();
     const cid = await newCustomer(a, 'Receipt Cust', '9500000002');
-    const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 100000 });
     const up = await a.post(`/api/applications/${app.json.id}/receipt`, { filename: 'r.pdf', mime: 'text/plain', data_base64: B64 });
     expect(up.status).toBe(201);
     const dl = await a.raw(`/api/applications/${app.json.id}/receipt`);
@@ -60,7 +60,7 @@ describe('applications — receipt upload', () => {
 });
 
 async function activeApp(a: Client, cid: number, amount = 500000) {
-  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-12' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount, date_money_received: '2026-07-12' });
   // Approving the investment (money credited + maker-checker) is what makes it
   // Active + builds the schedule. A distinct checker approves.
   const ncd = await as('ncd@demo.local');

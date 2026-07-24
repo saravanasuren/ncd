@@ -5,7 +5,7 @@
  * patch whitelist, and that verification is gated on all five KYC documents.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let custId: number;
@@ -148,7 +148,7 @@ describe('BGV — series filter and bank-proof visibility', () => {
     const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
     const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
     const inSeries = await a.post('/api/customers', { full_name: 'Series Member', phone: '9880000002' });
-    await a.post('/api/applications', {
+    await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: inSeries.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000, date_money_received: '2026-07-12',
     });
 

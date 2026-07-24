@@ -4,7 +4,7 @@
  * investment live (so an inbound LockerHub write can't sneak past either).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 async function login(email: string, password = 'Demo_1234') { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; }
@@ -25,22 +25,22 @@ describe('investment ticket rule (whole ₹1,00,000 units)', () => {
     const cid = await customer(staff, '9895000001');
     const base = { customer_id: cid, series_id: await seriesId(), scheme_id: await schemeId(), date_money_received: '2026-07-01' };
 
-    const bad = await staff.post('/api/applications', { ...base, amount: 2580369 });
+    const bad = await staff.post('/api/applications', { ...requiredInvestmentFields(), ...base, amount: 2580369 });
     expect(bad.status).toBe(400);
     expect(bad.json.error.message).toMatch(/units of ₹1,00,000/);
 
-    const below = await staff.post('/api/applications', { ...base, amount: 50000 });
+    const below = await staff.post('/api/applications', { ...requiredInvestmentFields(), ...base, amount: 50000 });
     expect(below.status).toBe(400);
     expect(below.json.error.message).toMatch(/Minimum investment/);
 
-    const good = await staff.post('/api/applications', { ...base, amount: 2600000 });
+    const good = await staff.post('/api/applications', { ...requiredInvestmentFields(), ...base, amount: 2600000 });
     expect(good.status).toBe(201);
   });
 
   it('refuses half-lakh amounts — 2.5L is not a whole unit', async () => {
     const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const cid = await customer(staff, '9895000002');
-    const r = await staff.post('/api/applications', {
+    const r = await staff.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cid, series_id: await seriesId(), scheme_id: await schemeId(), amount: 250000,
     });
     expect(r.status).toBe(400);
@@ -50,7 +50,7 @@ describe('investment ticket rule (whole ₹1,00,000 units)', () => {
     const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const ncd = await login('ncd@demo.local');
     const cid = await customer(staff, '9895000003');
-    const app = await staff.post('/api/applications', {
+    const app = await staff.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cid, series_id: await seriesId(), scheme_id: await schemeId(), amount: 600000, date_money_received: '2026-07-01',
     });
     const appId = Number(app.json.id);
@@ -79,7 +79,7 @@ describe('investment ticket rule (whole ₹1,00,000 units)', () => {
     const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const ncd = await login('ncd@demo.local');
     const cid = await customer(staff, '9895000004');
-    const app = await staff.post('/api/applications', {
+    const app = await staff.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cid, series_id: await seriesId(), scheme_id: await schemeId(), amount: 500000, date_money_received: '2026-07-01',
     });
     const ok = await ncd.post(`/api/approvals/${app.json.subscription_request.id}/approve`);

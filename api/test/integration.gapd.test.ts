@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import ExcelJS from 'exceljs';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number, customerId: number, appId: number;
@@ -26,7 +26,7 @@ async function build() {
   customerId = cust.json.id; // live on creation — no approval step
   const ncd = await as('ncd@demo.local');
   await a.post(`/api/customers/${customerId}/bank-accounts`, { account_number: '44440001111', ifsc: 'ICIC0001234' });
-  const app = await a.post('/api/applications', { customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-12' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-12' });
   appId = app.json.id;
   await a.post(`/api/applications/${appId}/mark-esigned`);
   await approveInvestment(ncd, app);

@@ -4,7 +4,7 @@
  * money they brought in, and their incentive ledger. Management-only.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number, staffId: number;
@@ -29,7 +29,7 @@ describe('enroller performance (staff/agent detail)', () => {
     const staff = await as('staff@demo.local');
     const cust = await staff.post('/api/customers', { full_name: 'Perf Cust', phone: '9770000001' });
     expect(cust.status).toBe(201);
-    const app = await staff.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 300000, date_money_received: '2026-07-12' });
+    const app = await staff.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 300000, date_money_received: '2026-07-12' });
     expect(app.status).toBe(201);
     await approveInvestment(await as('ncd@demo.local'), app);
 
@@ -48,7 +48,7 @@ describe('enroller performance (staff/agent detail)', () => {
   it('counts investments migrated with no enroller of their own (via the customer’s enroller)', async () => {
     const staff = await as('staff@demo.local');
     const cust = await staff.post('/api/customers', { full_name: 'Migrated Cust', phone: '9770000002' });
-    const app = await staff.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000, date_money_received: '2026-07-12' });
+    const app = await staff.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000, date_money_received: '2026-07-12' });
     // Simulate a wealth-migrated investment: enroller stripped from the app,
     // kept only on the customer (real prod state for imported investments).
     await ctx.db.query('UPDATE applications SET enrolled_by_user_id = NULL, enrolled_by_agent_id = NULL WHERE id = $1', [app.json.id]);

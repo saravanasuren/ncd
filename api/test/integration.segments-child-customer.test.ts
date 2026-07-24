@@ -4,7 +4,7 @@
  * nothing to fetch. Also guards that the id actually resolves to that customer.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -25,7 +25,7 @@ describe('segments — customer rows are clickable through to a profile', () => 
     const a = await admin();
     const ncd = await as('ncd@demo.local');
     const cust = await a.post('/api/customers', { full_name: 'Clickable Investor', phone: '9833000001' });
-    const app = await a.post('/api/applications', {
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12',
     });
     await approveInvestment(ncd, app);

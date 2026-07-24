@@ -6,7 +6,7 @@
  * the ₹25L Jaya/Balavinod/Ananthaprabha case).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -21,7 +21,7 @@ beforeAll(async () => {
   await a.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' });
   const cust = await a.post('/api/customers', { full_name: 'Partial Investor', phone: '9755500001' });
   await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '4444555566', ifsc: 'ICIC0001111' });
-  const app = await a.post('/api/applications', { customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1500000, date_money_received: '2026-07-10' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1500000, date_money_received: '2026-07-10' });
   appId = Number(app.json.id);
   const ncd = new Client(ctx.base);
   await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });

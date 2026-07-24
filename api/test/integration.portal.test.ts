@@ -3,7 +3,7 @@
  * DhanamFin integration façade (key auth + contract shapes). PGlite HTTP.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -41,7 +41,7 @@ async function buildActiveCustomer() {
   const cust = await a.post('/api/customers', { full_name: 'Portal Customer', phone: customerPhone, email: 'portal.cust@example.com' });
   const cid = cust.json.id; // live on creation — no approval step
   await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '77770001111', ifsc: 'HDFC0009999' });
-  const app = await a.post('/api/applications', { customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
+  const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
   const ncd = await as('ncd@demo.local');
   await approveInvestment(ncd, app);

@@ -1,6 +1,6 @@
 /** Local file storage for uploads (KYC docs, receipts). In prod this is
  * /var/lib/dhanam-newwealth; in dev a ./data dir. (docs/01 §4) */
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -18,6 +18,14 @@ export function saveBuffer(subdir: string, originalName: string, buffer: Buffer)
   const full = join(dir, name);
   writeFileSync(full, buffer);
   return { path: join(subdir, name) };
+}
+
+/** Best-effort delete of a stored upload — used to clean up when the DB write
+ * the file belongs to fails, so a rolled-back row never leaves an orphan file. */
+export function removeStored(relativePath: string): void {
+  const full = join(baseDir(), relativePath);
+  if (!full.startsWith(baseDir())) return; // path-traversal guard
+  try { unlinkSync(full); } catch { /* already gone */ }
 }
 
 export function readStored(relativePath: string): Buffer | null {

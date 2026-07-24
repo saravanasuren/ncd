@@ -5,7 +5,7 @@
  * - Hard delete purges the application (and cascades a customer's apps).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -24,7 +24,7 @@ const plainAdmin = () => as('admin@demo.local');                        // seede
 
 async function makeCustomerWithApp(sa: Client) {
   const cust = await sa.post('/api/customers', { full_name: 'Purge Target', phone: '9700055501' });
-  const app = await sa.post('/api/applications', {
+  const app = await sa.post('/api/applications', { ...requiredInvestmentFields(),
     customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 100000,
   });
   return { custId: Number(cust.json.id), appId: Number(app.json.id), app };

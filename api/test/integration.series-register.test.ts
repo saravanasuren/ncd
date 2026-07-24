@@ -10,7 +10,7 @@
  *     which the UI rendered as "Invalid Date".
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -33,14 +33,14 @@ describe('series register — issued excludes unapproved money; window is a real
 
     // Live money: approved → Active, with a money-received date.
     const c1 = await a.post('/api/customers', { full_name: 'Register Live', phone: '9877000001' });
-    const live = await a.post('/api/applications', {
+    const live = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: c1.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000, date_money_received: '2026-07-18',
     });
     await approveInvestment(ncd, live);
 
     // Unapproved subscription: sits in PendingApproval with NO money received.
     const c2 = await a.post('/api/customers', { full_name: 'Register Pending', phone: '9877000002' });
-    const pending = await a.post('/api/applications', {
+    const pending = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: c2.json.id, series_id: seriesId, scheme_id: schemeId, amount: 500000,
     });
     expect((await a.get(`/api/applications/${pending.json.id}`)).json.application.status).toBe('PendingApproval');
@@ -65,7 +65,7 @@ describe('series register — issued excludes unapproved money; window is a real
     const a = await admin();
     const ncd = await as('ncd@demo.local');
     const c = await a.post('/api/customers', { full_name: 'Register Later', phone: '9877000003' });
-    const app = await a.post('/api/applications', {
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: c.json.id, series_id: seriesId, scheme_id: schemeId, amount: 700000, date_money_received: '2026-07-19',
     });
 

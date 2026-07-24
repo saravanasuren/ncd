@@ -12,6 +12,11 @@ import { useAuth } from '../auth/AuthContext.js';
 const KYC_DOCS = ['PAN', 'Aadhaar', 'Photo', 'Signature', 'AddressProof'] as const;
 const EXTRA_DOCS = ['BankProof', 'CML'] as const;
 const DOC_SHORT: Record<string, string> = { PAN: 'PAN', Aadhaar: 'AAD', Photo: 'PHO', Signature: 'SIG', AddressProof: 'ADR', BankProof: 'BNK', CML: 'CML' };
+/** Tooltip names — the grid chips are 3 letters, the hover says what they mean. */
+const DOC_LONG: Record<string, string> = {
+  PAN: 'PAN card', Aadhaar: 'Aadhaar card', Photo: 'Customer photo', Signature: 'Signature',
+  AddressProof: 'Address proof', BankProof: 'Bank passbook / cancelled cheque', CML: 'CML copy',
+};
 
 interface Check { key: string; label: string; present: boolean; valid: boolean; partial?: boolean; optional?: boolean; value?: string | null }
 interface Doc { id: number; original_filename?: string; uploaded_at?: string; origin?: string }
@@ -51,6 +56,7 @@ export function BackgroundVerificationPage() {
   const qc = useQueryClient();
   const [q, setQ] = useState('');
   const [kyc, setKyc] = useState('');
+  const [seriesId, setSeriesId] = useState('');
   const [msg, setMsg] = useState('');
   const [edit, setEdit] = useState<{ cid: number; key: string; label: string; value: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -58,11 +64,13 @@ export function BackgroundVerificationPage() {
   const params = new URLSearchParams();
   if (q.trim().length >= 2) params.set('q', q.trim());
   if (kyc) params.set('kyc_status', kyc);
+  if (seriesId) params.set('series_id', seriesId);
   const key = ['bgv', params.toString()];
   const { data, isLoading, error } = useQuery({
     queryKey: key,
     queryFn: () => api.get<{ rows: Row[]; counters: Record<string, number> }>(`/api/background-verification?${params.toString()}`),
   });
+  const series = useQuery({ queryKey: ['series'], queryFn: () => api.get<{ rows: { id: number; code: string }[] }>('/api/series') });
   const refresh = () => qc.invalidateQueries({ queryKey: ['bgv'] });
   const fail = (e: unknown) => setMsg(e instanceof ApiError ? e.message : 'Failed');
 
@@ -104,6 +112,10 @@ export function BackgroundVerificationPage() {
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, code or PAN…"
           className="px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary min-w-[220px]" />
+        <select value={seriesId} onChange={(e) => setSeriesId(e.target.value)} className="px-2.5 py-1.5 text-sm border border-border-strong rounded">
+          <option value="">All NCD series</option>
+          {(series.data?.rows ?? []).map((sr) => <option key={sr.id} value={sr.id}>{sr.code}</option>)}
+        </select>
         <select value={kyc} onChange={(e) => setKyc(e.target.value)} className="px-2.5 py-1.5 text-sm border border-border-strong rounded">
           <option value="">All KYC statuses</option>
           <option value="Pending">Pending</option>
@@ -113,7 +125,7 @@ export function BackgroundVerificationPage() {
       </div>
 
       <div className="flex flex-wrap gap-2 mb-3 text-xs">
-        {[['Customers', c.customers], ['KYC verified', c.kyc_verified], ['KYC pending', c.kyc_pending], ['Data complete', c.data_complete], ['Needs attention', c.needs_attention]].map(([label, v]) => (
+        {[['Customers', c.customers], ['KYC verified', c.kyc_verified], ['KYC pending', c.kyc_pending], ['Data complete', c.data_complete], ['Needs attention', c.needs_attention], ['No passbook/cheque photo', c.bank_proof_missing]].map(([label, v]) => (
           <span key={String(label)} className="bg-surface border border-border rounded px-3 py-1.5">
             <span className="text-text-muted">{label}: </span><span className="font-semibold">{Number(v ?? 0)}</span>
           </span>
@@ -152,7 +164,7 @@ export function BackgroundVerificationPage() {
                     return (
                       <label key={t} className="inline-block">
                         <Tick label={DOC_SHORT[t] ?? t} tone={doc ? 'green' : optional ? 'orange' : 'red'}
-                          title={doc ? `${t}: ${doc.original_filename ?? 'on file'}` : `${t}: missing${optional ? ' (optional)' : ''} — click to upload`} />
+                          title={doc ? `${DOC_LONG[t] ?? t}: ${doc.original_filename ?? 'on file'}` : `${DOC_LONG[t] ?? t}: missing${optional ? ' (optional)' : ''} — click to upload`} />
                         <input type="file" accept="application/pdf,image/jpeg,image/png" className="hidden"
                           onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadDoc(r.id, t, f); }} />
                       </label>

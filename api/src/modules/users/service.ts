@@ -182,7 +182,8 @@ export async function deleteUser(db: Db, actor: AuthUser, id: number): Promise<v
       for (const ag of agents) {
         const agentId = Number(ag.id);
         const c = await tx.query('UPDATE customers SET enrolled_by_agent_id = NULL, referred_by_text = NULL, updated_at = now() WHERE enrolled_by_agent_id = $1', [agentId]);
-        await tx.query('UPDATE customers SET created_by_agent_id = NULL WHERE created_by_agent_id = $1', [agentId]);
+        // created_by_agent_id lives on investor_leads, not customers.
+        await tx.query('UPDATE investor_leads SET created_by_agent_id = NULL WHERE created_by_agent_id = $1', [agentId]);
         const a = await tx.query('UPDATE applications SET enrolled_by_agent_id = NULL WHERE enrolled_by_agent_id = $1', [agentId]);
         movedToDirect += (c.rowCount ?? 0) + (a.rowCount ?? 0);
         await tx.query(

@@ -145,6 +145,26 @@ export function CustomerDetailPage() {
           <Field label="Enrolled by" value={c.enrolled_by_name
             ? `${c.enrolled_by_name}${c.enrolled_by_kind === 'agent' ? ` (agent${c.enrolled_by_agent_code ? ' ' + c.enrolled_by_agent_code : ''})` : ' (staff)'}`
             : null} />
+          {/* Referred by is NOT the same as enrolled by: staff enrol, but the
+              customer may have been introduced by another customer or an agent.
+              Free text on the record, resolved to a person server-side. */}
+          <div>
+            <dt className="text-xs text-text-label uppercase tracking-wide">Referred by</dt>
+            <dd className="text-sm m-0 mt-0.5">
+              {!data.referredBy ? <span className="text-text-muted">—</span>
+                : data.referredBy.kind === 'customer'
+                  ? <Link to={`/app/customers/${data.referredBy.id}`} className="text-primary hover:underline">
+                      {data.referredBy.name} <span className="text-text-muted">({data.referredBy.code})</span>
+                    </Link>
+                : data.referredBy.kind === 'agent'
+                  ? <>{data.referredBy.name} <span className="text-text-muted">(agent {data.referredBy.code})</span></>
+                : data.referredBy.kind === 'staff'
+                  ? <>{data.referredBy.name} <span className="text-text-muted">(staff)</span></>
+                : <span title="Recorded as free text — no matching customer, agent or staff member">
+                    {data.referredBy.text} <span className="text-text-muted">(unmatched)</span>
+                  </span>}
+            </dd>
+          </div>
         </dl>
         <div className="flex gap-2 mt-4">
           {can('kyc:verify') && c.kyc_status !== 'Verified' && (

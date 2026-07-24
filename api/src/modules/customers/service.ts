@@ -169,6 +169,30 @@ async function assertVisible(db: Db, actor: AuthUser, customerId: number): Promi
   if (!rowCount) throw errors.notFound('Customer not found');
 }
 
+/**
+ * Resolve a free-text "referred by" to a person. Order matters: a DHN code is
+ * unambiguous, then an agent (code or name), then staff. Returns the raw text
+ * with kind 'text' when nothing matches, so the UI still shows what was typed.
+ */
+export async function resolveReferredBy(db: Db, raw: string | null) {
+  const t = (raw ?? '').trim();
+  if (!t) return null;
+  if (/^DHN\d+$/i.test(t)) {
+    const cust = (await db.query<{ id: string; full_name: string; customer_code: string }>(
+      'SELECT id, full_name, customer_code FROM customers WHERE upper(customer_code) = upper($1) LIMIT 1', [t])).rows[0];
+    if (cust) return { kind: 'customer' as const, id: Number(cust.id), name: cust.full_name, code: cust.customer_code, text: t };
+  }
+  const ag = (await db.query<{ id: string; full_name: string; agent_code: string }>(
+    `SELECT id, full_name, agent_code FROM agents
+      WHERE deleted_at IS NULL AND (upper(agent_code) = upper($1) OR lower(btrim(full_name)) = lower(btrim($1))) LIMIT 1`, [t])).rows[0];
+  if (ag) return { kind: 'agent' as const, id: Number(ag.id), name: ag.full_name, code: ag.agent_code, text: t };
+  const u = (await db.query<{ id: string; full_name: string; code: string | null }>(
+    `SELECT u.id, u.full_name, u.code FROM users u JOIN roles r ON r.id = u.role_id
+      WHERE r.name <> 'customer' AND (upper(COALESCE(u.code,'')) = upper($1) OR lower(btrim(u.full_name)) = lower(btrim($1))) LIMIT 1`, [t])).rows[0];
+  if (u) return { kind: 'staff' as const, id: Number(u.id), name: u.full_name, code: u.code, text: t };
+  return { kind: 'text' as const, id: null, name: null, code: null, text: t };
+}
+
 export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
   await assertVisible(db, actor, id);
   // Who enrolled this customer — a staff user or an agent (owner 2026-07-24).
@@ -184,6 +208,13 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
        LEFT JOIN users  u  ON u.id  = c.enrolled_by_user_id
        LEFT JOIN agents ag ON ag.id = c.enrolled_by_agent_id
       WHERE c.id = $1`, [id])).rows[0];
+
+  // Who REFERRED this customer (owner 2026-07-24). Distinct from who enrolled
+  // them: 402 of 565 customers carry a referrer, and the profile never showed
+  // it. It's free text — 357 are names, 41 a customer code, 4 an agent code —
+  // so resolve it to a real person where we can, and print the raw text where
+  // we can't (some codes, e.g. DHN1084, point at records not in this book).
+  const referredBy = await resolveReferredBy(db, (c?.referred_by_text as string | null) ?? null);
   const bankAccounts = (await db.query('SELECT * FROM customer_bank_accounts WHERE customer_id = $1 ORDER BY is_active DESC, id', [id])).rows;
   const nominees = (await db.query('SELECT * FROM nominees WHERE customer_id = $1', [id])).rows;
   const jointHolders = (await db.query('SELECT * FROM joint_holders WHERE customer_id = $1', [id])).rows;
@@ -210,7 +241,7 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
      ) bk ON TRUE
      WHERE a.customer_id = $1
      ORDER BY a.date_money_received DESC NULLS LAST, a.id DESC`, [id])).rows;
-  return { customer: c, bankAccounts, nominees, jointHolders, documents, applications };
+  return { customer: c, referredBy, bankAccounts, nominees, jointHolders, documents, applications };
 }
 
 export async function addBankAccount(db: Db, actor: AuthUser, customerId: number, input: { account_number: string; ifsc: string; bank_name?: string; branch_name?: string; branch_city?: string; account_type?: string; holder_name?: string; tds_applicable?: boolean }) {

@@ -22,9 +22,16 @@ applicationsRouter.get('/:id', requirePermission('customers:read'),
 
 applicationsRouter.post('/', requirePermission('applications:create'),
   asyncHandler(async (req, res) => {
-    // Payment evidence is mandatory: credited date, method and reference must
-    // arrive with the create (the receipt photo follows via POST /:id/receipt).
-    const input = z.object({ customer_id: z.number(), series_id: z.number(), scheme_id: z.number(), amount: z.number().positive(), date_money_received: z.string().min(1), collection_method: z.string().min(1), collection_reference: z.string().min(1), club_with_application_id: z.number().optional(), is_locker_deposit: z.boolean().optional() }).parse(req.body);
+    // Payment evidence is mandatory: credited date, method, reference AND the
+    // receipt photo all arrive with the create — the receipt is stored in the
+    // same transaction, so no application ever exists without one. The bare
+    // POST /:id/receipt endpoint remains for replacing a receipt later.
+    const input = z.object({
+      customer_id: z.number(), series_id: z.number(), scheme_id: z.number(), amount: z.number().positive(),
+      date_money_received: z.string().min(1), collection_method: z.string().min(1), collection_reference: z.string().min(1),
+      receipt: z.object({ filename: z.string().min(1), mime: z.string(), data_base64: z.string().min(1) }),
+      club_with_application_id: z.number().optional(), is_locker_deposit: z.boolean().optional(),
+    }).parse(req.body);
     res.status(201).json(await s.createApplication(getDb(), req.user!, input));
   }));
 

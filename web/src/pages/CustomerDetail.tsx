@@ -419,21 +419,19 @@ function NewInvestment({ customerId }: { customerId: number }) {
   const create = useMutation({
     mutationFn: async () => {
       // The payment evidence (credited date, method, reference, receipt photo)
-      // is mandatory — the API rejects the create without the first three, and
-      // the receipt is read up-front so a bad file fails before anything is created.
+      // is mandatory. The receipt travels WITH the create — the API stores it in
+      // the same transaction, so no investment can exist without one.
       if (!receipt) throw new ApiError('VALIDATION', 400, 'Receipt photo is required');
       if (receipt.size > 4 * 1024 * 1024) throw new ApiError('too_large', 400, 'Receipt must be under 4 MB');
-      const data_base64 = await readFileB64(receipt);
-      const r = await api.post<{ id: number }>('/api/applications', {
+      return api.post<{ id: number }>('/api/applications', {
         customer_id: customerId, series_id: Number(seriesId), scheme_id: Number(schemeId), amount: Number(amount),
         date_money_received: dateReceived,
         collection_method: method.trim(),
         collection_reference: reference.trim(),
+        receipt: { filename: receipt.name, mime: receipt.type || 'application/octet-stream', data_base64: await readFileB64(receipt) },
         ...(clubWith ? { club_with_application_id: Number(clubWith) } : {}),
         ...(lockerDeposit ? { is_locker_deposit: true } : {}),
       });
-      await api.post(`/api/applications/${r.id}/receipt`, { filename: receipt.name, mime: receipt.type || 'application/octet-stream', data_base64 });
-      return r;
     },
     onSuccess: (r) => nav(`/app/applications/${r.id}`),
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),

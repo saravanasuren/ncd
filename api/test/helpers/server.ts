@@ -35,14 +35,17 @@ export async function startTestServer(): Promise<TestCtx> {
 
 /**
  * POST /api/applications requires the payment evidence (credited date, method,
- * reference; the receipt photo follows via POST /:id/receipt). Spread this
- * FIRST into a create body; per-test values placed after it override the defaults.
+ * reference AND the receipt photo, stored in the create transaction). Spread
+ * this FIRST into a create body; per-test values placed after it override the
+ * defaults. Receipt bytes must pass the magic-byte sniff (lib/uploads), hence
+ * the real PDF header.
  */
 export function requiredInvestmentFields() {
   return {
     date_money_received: '2026-07-10',
     collection_method: 'NEFT/RTGS',
     collection_reference: 'TEST-REF-001',
+    receipt: { filename: 'receipt.pdf', mime: 'application/pdf', data_base64: Buffer.from('%PDF-1.4 test-receipt').toString('base64') },
   };
 }
 

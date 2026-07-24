@@ -311,18 +311,58 @@ export async function addBankAccount(db: Db, actor: AuthUser, customerId: number
   });
 }
 
-export async function setActiveBank(db: Db, actor: AuthUser, customerId: number, bankId: number) {
+/**
+ * Re-run the penny drop on an account already on file. A Failed status can be
+ * transient (provider down) or stale (the beneficiary name has since been
+ * corrected), and without this the account is stuck Failed forever — which in
+ * turn blocks activating it.
+ */
+export async function reverifyBankAccount(db: Db, actor: AuthUser, customerId: number, bankId: number) {
+  await assertVisible(db, actor, customerId);
+  const b = (await db.query<{ account_number: string; ifsc: string | null; penny_drop_status: string }>(
+    'SELECT account_number, ifsc, penny_drop_status FROM customer_bank_accounts WHERE id = $1 AND customer_id = $2',
+    [bankId, customerId])).rows[0];
+  if (!b) throw errors.notFound('Bank account not found for this customer');
+  if (!b.ifsc) throw errors.unprocessable('This account has no IFSC on file — it cannot be verified. Add the account again with its IFSC.');
+  const pd = await kycProvider().pennyDrop(b.account_number, b.ifsc);
+  await db.withTx(async (tx) => {
+    await tx.query(
+      'UPDATE customer_bank_accounts SET penny_drop_status = $1, penny_drop_detail = $2, verified_at = CASE WHEN $1 = $3 THEN now() ELSE verified_at END WHERE id = $4',
+      [pd.status, pd.detail ?? null, 'Verified', bankId]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'customer.bank.reverify', entityType: 'customer_bank_accounts', entityId: bankId,
+      before: { penny_drop_status: b.penny_drop_status }, after: { penny_drop_status: pd.status, detail: pd.detail ?? null },
+    });
+  });
+  return { ok: true, pennyDrop: pd };
+}
+
+export async function setActiveBank(db: Db, actor: AuthUser, customerId: number, bankId: number, opts?: { force?: boolean; reason?: string }) {
   await assertVisible(db, actor, customerId);
   await db.withTx(async (tx) => {
     const chk = await tx.query<{ penny_drop_status: string }>('SELECT penny_drop_status FROM customer_bank_accounts WHERE id = $1 AND customer_id = $2', [bankId, customerId]);
     if (!chk.rows[0]) throw errors.notFound('Bank account not found');
-    if (chk.rows[0].penny_drop_status !== 'Verified') throw errors.unprocessable('Cannot activate an unverified account');
+    // A failed/pending penny-drop must not strand a customer on the WRONG
+    // account. Penny drop fails for reasons that say nothing about the account
+    // (provider down, name mismatch since corrected), and the book already
+    // contains Active accounts that were never Verified — the NEFT file is
+    // deliberately permissive and eyeballed. So: Verified activates freely;
+    // anything else needs an explicit override with a written reason, audited.
+    const pdStatus = chk.rows[0].penny_drop_status;
+    if (pdStatus !== 'Verified' && !opts?.force) {
+      throw errors.unprocessable(
+        `This account's penny-drop is ${pdStatus}, not Verified. Retry the verification, or activate it anyway with a reason if you have confirmed the details another way.`);
+    }
+    if (pdStatus !== 'Verified' && !(opts?.reason ?? '').trim()) {
+      throw errors.badRequest('A written reason is required to activate an unverified account');
+    }
     await tx.query('UPDATE customer_bank_accounts SET is_active = FALSE WHERE customer_id = $1', [customerId]);
     await tx.query('UPDATE customer_bank_accounts SET is_active = TRUE WHERE id = $1', [bankId]);
     // Future unpaid payouts follow the new default; paid ones keep their bank.
     const { resnapshotPayeeBank } = await import('../schedule/materialize.js');
     const moved = await resnapshotPayeeBank(tx, customerId);
-    await writeAudit(tx, { actorId: actor.id, action: 'customer.bank.set-active', entityType: 'customer_bank_accounts', entityId: bankId, after: { customerId, futureRowsRepointed: moved } });
+    await writeAudit(tx, { actorId: actor.id, action: 'customer.bank.set-active', entityType: 'customer_bank_accounts', entityId: bankId,
+      after: { customerId, futureRowsRepointed: moved, penny_drop_status: pdStatus, forced: pdStatus !== 'Verified', reason: opts?.reason?.trim() || null } });
   });
 }
 

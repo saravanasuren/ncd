@@ -69,8 +69,18 @@ customersRouter.patch('/:id/bank-accounts/:bankId', requirePermission('customers
     res.json(await s.updateBankAccountName(getDb(), req.user!, Number(req.params.id), Number(req.params.bankId), holder_name));
   }));
 
+// Re-run the penny drop on an account already on file (a Failed status can be
+// transient, or stale after the name was corrected).
+customersRouter.post('/:id/bank-accounts/:bankId/reverify', requirePermission('customers:update'),
+  asyncHandler(async (req, res) =>
+    res.json(await s.reverifyBankAccount(getDb(), req.user!, Number(req.params.id), Number(req.params.bankId)))));
+
 customersRouter.post('/:id/bank-accounts/:bankId/set-active', requirePermission('customers:update'),
-  asyncHandler(async (req, res) => { await s.setActiveBank(getDb(), req.user!, Number(req.params.id), Number(req.params.bankId)); res.json({ ok: true }); }));
+  asyncHandler(async (req, res) => {
+    const b = z.object({ force: z.boolean().optional(), reason: z.string().optional() }).parse(req.body ?? {});
+    await s.setActiveBank(getDb(), req.user!, Number(req.params.id), Number(req.params.bankId), b);
+    res.json({ ok: true });
+  }));
 
 // Super-admin only — customers:delete is the same gate as customer delete.
 customersRouter.delete('/:id/bank-accounts/:bankId', requirePermission('customers:delete'),

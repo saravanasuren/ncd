@@ -1,12 +1,31 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { formatINR } from '@new-wealth/shared';
+import { formatINR, KYC_DOCUMENT_TYPES, CORRECTABLE_CUSTOMER_FIELDS, type CustomerField } from '@new-wealth/shared';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 
 /** NCDs are issued in whole ₹1,00,000 units (owner spec 2026-07-23). */
 const LAKH = 100000;
+
+/** Human label for a stored doc_type; unknown/legacy values show as-is. */
+function docLabel(t: string): string {
+  return KYC_DOCUMENT_TYPES.find((d) => d.key === t)?.label ?? t;
+}
+
+/** Field groups, in display order, derived from the shared field list. */
+const CORRECTION_GROUPS = [...new Set(CORRECTABLE_CUSTOMER_FIELDS.map((f) => f.group))];
+
+/** The customer's present value, shaped for the input that renders it —
+ *  dates trimmed to YYYY-MM-DD, NULLs to '', booleans left as booleans.
+ *  Also the baseline the dirty-check compares against. */
+function currentValue(c: any, f: CustomerField): string | boolean {
+  const raw = c[f.key];
+  if (f.kind === 'boolean') return raw === true;
+  if (raw == null) return '';
+  if (f.kind === 'date') return String(raw).slice(0, 10);
+  return String(raw);
+}
 
 /** Customer 360 (docs/05 §5) — profile + bank accounts + KYC + hand-off. */
 /**
@@ -95,7 +114,7 @@ export function CustomerDetailPage() {
   const { can } = useAuth();
   const [msg, setMsg] = useState('');
   const [panel, setPanel] = useState<'correction' | 'handover' | null>(null);
-  const [corr, setCorr] = useState<Record<string, string>>({});
+  const [corr, setCorr] = useState<Record<string, string | boolean>>({});
   const [corrReason, setCorrReason] = useState('');
   const [handoverTo, setHandoverTo] = useState('');
   const [handoverReason, setHandoverReason] = useState('');
@@ -223,24 +242,50 @@ export function CustomerDetailPage() {
         {panel === 'correction' && (
           <div className="mt-4 border-t border-border pt-4">
             <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Correction request (needs approval)</div>
-            <div className="grid grid-cols-2 gap-2 max-w-xl">
-              {(['full_name', 'phone', 'email', 'district', 'pan'] as const).map((f) => (
-                <label key={f} className="text-xs text-text-muted">
-                  {f}
-                  <input className={`${inp} w-full mt-1`} defaultValue={c[f] ?? ''}
-                    onChange={(e) => setCorr((s) => ({ ...s, [f]: e.target.value }))} />
-                </label>
-              ))}
-              <label className="text-xs text-text-muted col-span-2">
-                Reason
-                <input className={`${inp} w-full mt-1`} value={corrReason} onChange={(e) => setCorrReason(e.target.value)} placeholder="Why is this correction needed?" />
-              </label>
-            </div>
+            <p className="text-xs text-text-muted mb-3">Edit anything that needs fixing — only the fields you actually change are sent for approval.</p>
+            {CORRECTION_GROUPS.map((g) => (
+              <div key={g} className="mb-3">
+                <div className="text-xs font-semibold text-text-label mb-1">{g}</div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-w-3xl">
+                  {CORRECTABLE_CUSTOMER_FIELDS.filter((f) => f.group === g).map((f) => {
+                    const cur = currentValue(c, f);
+                    const val = corr[f.key] ?? cur;
+                    const dirty = val !== cur;
+                    const set = (v: string | boolean) => setCorr((s) => ({ ...s, [f.key]: v }));
+                    return (
+                      <label key={f.key} className={`text-xs ${dirty ? 'text-primary font-semibold' : 'text-text-muted'}`}>
+                        {f.label}
+                        {f.kind === 'boolean' ? (
+                          <div className="mt-1"><input type="checkbox" checked={val === true} onChange={(e) => set(e.target.checked)} /></div>
+                        ) : f.kind === 'select' ? (
+                          <select className={`${inp} w-full mt-1`} value={String(val)} onChange={(e) => set(e.target.value)}>
+                            <option value="">—</option>
+                            {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+                          </select>
+                        ) : (
+                          <input className={`${inp} w-full mt-1`} type={f.kind === 'date' ? 'date' : f.kind === 'email' ? 'email' : 'text'}
+                            maxLength={f.maxLength} placeholder={f.hint} value={String(val)}
+                            onChange={(e) => set(f.uppercase ? e.target.value.toUpperCase() : e.target.value)} />
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            <label className="text-xs text-text-muted block max-w-3xl">
+              Reason
+              <input className={`${inp} w-full mt-1`} value={corrReason} onChange={(e) => setCorrReason(e.target.value)} placeholder="Why is this correction needed?" />
+            </label>
             <button
               disabled={corrReason.trim().length < 2}
               onClick={() => {
-                const changes: Record<string, string> = {};
-                for (const [k, v] of Object.entries(corr)) if (v !== (c[k] ?? '')) changes[k] = v;
+                const changes: Record<string, string | boolean> = {};
+                for (const f of CORRECTABLE_CUSTOMER_FIELDS) {
+                  if (!(f.key in corr)) continue;
+                  const v = corr[f.key]!;
+                  if (v !== currentValue(c, f)) changes[f.key] = v;
+                }
                 if (!Object.keys(changes).length) { setMsg('No fields changed.'); return; }
                 wrap(api.post(`/api/customers/${id}/correction-request`, { changes, reason: corrReason.trim() }).then(() => { setPanel(null); setCorr({}); setCorrReason(''); }));
               }}
@@ -372,8 +417,11 @@ function InvestmentsCard({ rows, canDelete, onChange, onError }: { rows: any[]; 
 
 function RelationsKyc({ customerId, data, onChange, can }: { customerId: number; data: any; onChange: () => void; can: (...p: any[]) => boolean }) {
   const [msg, setMsg] = useState('');
+  const [docType, setDocType] = useState('');
+  const [uploadOpen, setUploadOpen] = useState(false);
   const wrap = (p: Promise<unknown>) => p.then(() => { setMsg(''); onChange(); }).catch((e) => setMsg(e instanceof ApiError ? e.message : 'Failed'));
   const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
+  const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
 
   async function addNominee() {
     const name = window.prompt('Nominee full name'); if (!name) return;
@@ -393,19 +441,23 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
     const existing = (data.jointHolders ?? []).map((h: any) => ({ full_name: h.full_name, relationship: h.relationship, pan: h.pan, phone: h.phone }));
     await wrap(api.put(`/api/customers/${customerId}/joint-holders`, { holders: [...existing, { full_name: name }] }));
   }
-  async function uploadDoc() {
-    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*,.pdf';
-    inp.onchange = () => {
-      const file = inp.files?.[0]; if (!file) return;
+  /** Upload against the type the operator picked. The type is not cosmetic —
+   *  background verification looks up `customer_photo`, `pan_card` etc. by
+   *  name, so a photo filed as generic 'KYC' is invisible to it. */
+  function uploadDoc(doc_type: string) {
+    const picker = document.createElement('input'); picker.type = 'file'; picker.accept = 'image/*,.pdf';
+    picker.onchange = () => {
+      const file = picker.files?.[0]; if (!file) return;
       if (file.size > 4 * 1024 * 1024) { setMsg('Document must be under 4 MB.'); return; }
       const reader = new FileReader();
       reader.onload = () => {
         const data_base64 = String(reader.result).split(',')[1] ?? '';
-        void wrap(api.post(`/api/customers/${customerId}/documents`, { doc_type: 'KYC', filename: file.name, mime: file.type || 'application/octet-stream', data_base64 }));
+        void wrap(api.post(`/api/customers/${customerId}/documents`, { doc_type, filename: file.name, mime: file.type || 'application/octet-stream', data_base64 })
+          .then(() => { setUploadOpen(false); setDocType(''); }));
       };
       reader.readAsDataURL(file);
     };
-    inp.click();
+    picker.click();
   }
 
   return (
@@ -431,8 +483,21 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
       <div className={card}>
         <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">KYC</h2>
         <div>
-          <div className="flex items-center justify-between"><span className="font-semibold text-sm">Documents</span>{can('customers:update') && <button onClick={uploadDoc} className="text-xs text-primary hover:underline">+ Upload</button>}</div>
-          <ul className="mt-1 text-text-muted text-sm">{(data.documents ?? []).map((d: any) => <li key={d.id}><a href={`/api/customers/${customerId}/documents/${d.id}`} target="_blank" rel="noreferrer" className="text-primary hover:underline">{d.doc_type} — {d.original_filename ?? d.id}</a> <span className="text-xs">({d.origin})</span></li>)}{!(data.documents ?? []).length && <li>None</li>}</ul>
+          <div className="flex items-center justify-between"><span className="font-semibold text-sm">Documents</span>{can('customers:update') && <button onClick={() => setUploadOpen((o) => !o)} className="text-xs text-primary hover:underline">+ Upload</button>}</div>
+          <ul className="mt-1 text-text-muted text-sm">{(data.documents ?? []).map((d: any) => <li key={d.id}><a href={`/api/customers/${customerId}/documents/${d.id}`} target="_blank" rel="noreferrer" className="text-primary hover:underline">{docLabel(d.doc_type)} — {d.original_filename ?? d.id}</a> <span className="text-xs">({d.origin})</span></li>)}{!(data.documents ?? []).length && <li>None</li>}</ul>
+          {uploadOpen && (
+            <div className="mt-3 border-t border-border pt-3 flex flex-wrap gap-2 items-center">
+              <label className="text-xs text-text-muted">What are you uploading?</label>
+              <select className={inp} value={docType} onChange={(e) => setDocType(e.target.value)}>
+                <option value="">Select document type…</option>
+                {KYC_DOCUMENT_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+              </select>
+              <button disabled={!docType} onClick={() => uploadDoc(docType)}
+                className="text-xs bg-primary text-white rounded px-4 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Choose file…</button>
+              <button onClick={() => { setUploadOpen(false); setDocType(''); }} className="text-xs text-text-muted hover:underline">Cancel</button>
+              <span className="text-xs text-text-muted w-full">JPEG, PNG, WebP or PDF, up to 4 MB.</span>
+            </div>
+          )}
         </div>
         <div className="flex gap-2 mt-4">
           {can('kyc:verify') && <button onClick={() => wrap(api.post(`/api/customers/${customerId}/kyc/digilocker/start`).then(() => api.post(`/api/customers/${customerId}/kyc/digilocker/complete`)))} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">DigiLocker verify</button>}

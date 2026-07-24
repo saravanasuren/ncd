@@ -157,3 +157,56 @@ describe('customers — relations, deceased, KYC docs', () => {
     expect(c2.is_deceased).toBe(true);
   });
 });
+
+/**
+ * "Referred by" on the customer profile (owner 2026-07-24).
+ *
+ * Distinct from "Enrolled by": staff enrol the customer, but someone else may
+ * have introduced them. 402 of 565 live customers carry a referrer and the
+ * profile never displayed it — the owner asked where to see it, and the answer
+ * was nowhere. It is free text (names, DHN codes, agent codes), so it resolves
+ * to a person where possible and prints what was typed where not.
+ */
+describe('customer profile — referred by', () => {
+  it('resolves a customer code to that customer', async () => {
+    const a = await admin();
+    const referrer = await a.post('/api/customers', { full_name: 'The Referrer', phone: '9550000201' });
+    const code = referrer.json.customer_code;
+    const c = await a.post('/api/customers', { full_name: 'Referred Cust', phone: '9550000202', referred_by_text: code });
+    const d = await a.get(`/api/customers/${c.json.id}`);
+    expect(d.json.referredBy).toMatchObject({ kind: 'customer', id: referrer.json.id, code });
+    expect(d.json.referredBy.name).toBe('The Referrer');
+  });
+
+  it('resolves an agent by name or code', async () => {
+    const a = await admin();
+    const ag = await a.post('/api/agents', { full_name: 'Referring Agent' });
+    const byName = await a.post('/api/customers', { full_name: 'Via Agent Name', phone: '9550000203', referred_by_text: 'Referring Agent' });
+    const d1 = await a.get(`/api/customers/${byName.json.id}`);
+    expect(d1.json.referredBy).toMatchObject({ kind: 'agent', id: ag.json.id });
+
+    const byCode = await a.post('/api/customers', { full_name: 'Via Agent Code', phone: '9550000204', referred_by_text: ag.json.agent_code });
+    const d2 = await a.get(`/api/customers/${byCode.json.id}`);
+    expect(d2.json.referredBy).toMatchObject({ kind: 'agent', id: ag.json.id });
+  });
+
+  it('keeps unmatched text visible rather than dropping it', async () => {
+    // Live data carries codes like DHN1084 that point at no record in this
+    // book — they arrived with the wealth migration, which writes the column
+    // directly. (Creating a customer through the API can't reproduce this: an
+    // unrecognised referrer auto-raises a PendingApproval agent by that name,
+    // so it always resolves.) Set the column the way the migration does.
+    const a = await admin();
+    const c = await a.post('/api/customers', { full_name: 'Via Ghost Code', phone: '9550000205' });
+    await ctx.db.query("UPDATE customers SET referred_by_text = 'DHN999999' WHERE id = $1", [c.json.id]);
+    const d = await a.get(`/api/customers/${c.json.id}`);
+    expect(d.json.referredBy).toMatchObject({ kind: 'text', text: 'DHN999999', id: null });
+  });
+
+  it('is null when nobody referred them', async () => {
+    const a = await admin();
+    const c = await a.post('/api/customers', { full_name: 'Walk In', phone: '9550000206' });
+    const d = await a.get(`/api/customers/${c.json.id}`);
+    expect(d.json.referredBy).toBeNull();
+  });
+});

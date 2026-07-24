@@ -338,10 +338,18 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
        VALUES ($1,$2,$3,'Premature',$4,0,$4,'Scheduled') ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,
       [Number(lineId), appId, redDate, principalNet]);
     if (brokenGross > 0) {
+      // principal_basis = the principal this interest was actually earned on,
+      // which is what the summary sheet prints as "Invested". Note it is the
+      // outstanding BEFORE the withdrawal, not the withdrawn slice: the accrual
+      // above deliberately runs on the full outstanding (owner 2026-07-22) so
+      // the portion that stays invested doesn't lose the interest it has already
+      // earned. For a full redemption the two are the same number.
+      // It also marks this row as a REDEMPTION slice rather than a maturity
+      // catch-up — the sheet reads it to end the period a day early.
       await tx.query(
-        `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status)
-         VALUES ($1,$2,$3,'BrokenInterest',$4,$5,$6,'Scheduled') ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,
-        [Number(lineId), appId, redDate, brokenGross, brokenTds, brokenNet]);
+        `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status, principal_basis)
+         VALUES ($1,$2,$3,'BrokenInterest',$4,$5,$6,'Scheduled',$7) ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,
+        [Number(lineId), appId, redDate, brokenGross, brokenTds, brokenNet, outstandingBefore]);
     }
   }
   await tx.query("UPDATE redemptions SET status = 'Approved', redemption_date = $1 WHERE id = $2", [redDate, redId]);

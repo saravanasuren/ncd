@@ -1,0 +1,13 @@
+-- The principal a broken-interest row was earned ON. Wealth stamps this on
+-- every redemption slice (alter_v81) and its summary sheet prints it in the
+-- "Invested (Rs)" column — so a ₹1L withdrawal out of a ₹10L investment reads
+-- 1,00,000, not 10,00,000.
+--
+-- It is also wealth's discriminator between the two kinds of broken row:
+--   • principal_basis IS NOT NULL → a REDEMPTION slice; interest stops the day
+--     BEFORE the redemption date, so the sheet shows period_to = due_date − 1.
+--   • principal_basis IS NULL     → a MATURITY catch-up; it ends ON its own due
+--     date and shows that date unchanged.
+-- Nullable on purpose: every historical row is a maturity row by that rule,
+-- which is exactly how they should read.
+ALTER TABLE disbursement_schedule ADD COLUMN IF NOT EXISTS principal_basis NUMERIC(18,2);

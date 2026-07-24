@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { formatINR } from '@new-wealth/shared';
-import { api } from '../api/client.js';
+import { api, ApiError } from '../api/client.js';
+import { useAuth } from '../auth/AuthContext.js';
 
 /**
  * Locker tenants, branch-wise — every tenant, not only the ones NCD backs. The
@@ -28,12 +29,29 @@ interface Tenant {
   allotted_on: string | null; lease_expires_on: string | null;
   customer_id: number | null; customer_code: string | null;
   pledged_amount: number; cheque_pending: boolean; ncd_backed: boolean; unresolved: boolean;
+  waiver_id: number | null; waiver_status: string | null; waiver_reason: string | null;
 }
 
 export function LockerTenantsPage() {
+  const { can } = useAuth();
+  const qc = useQueryClient();
   const [branchId, setBranchId] = useState('');
   const [q, setQ] = useState('');
   const [ncdOnly, setNcdOnly] = useState(false);
+  const [waivedOnly, setWaivedOnly] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const refetchTenants = () => qc.invalidateQueries({ queryKey: ['locker-tenants'] });
+  const recordWaiver = useMutation({
+    mutationFn: (input: Record<string, unknown>) => api.post('/api/lockers/waivers', input),
+    onSuccess: (r: any) => { setMsg(`Waiver sent for approval (${r.request_no}) — an Admin/CXO confirms it, then the row is tagged.`); refetchTenants(); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const cancelWaiver = useMutation({
+    mutationFn: (id: number) => api.post(`/api/lockers/waivers/${id}/cancel`, {}),
+    onSuccess: () => { setMsg('Waiver cancelled.'); refetchTenants(); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
 
   const branches = useQuery({
     queryKey: ['locker-branches'],
@@ -57,11 +75,13 @@ export function LockerTenantsPage() {
   const all = tenants.data?.rows ?? [];
   const rows = all.filter((r) => {
     if (ncdOnly && !r.ncd_backed) return false;
+    if (waivedOnly && !r.waiver_status) return false;
     if (!q.trim()) return true;
     const hay = `${r.tenant_name ?? ''} ${r.tenant_phone ?? ''} ${r.tenant_email ?? ''} ${r.customer_code ?? ''} ${r.locker_no ?? ''} ${r.application_no ?? ''}`.toLowerCase();
     return hay.includes(q.trim().toLowerCase());
   });
   const ncdCount = all.filter((r) => r.ncd_backed).length;
+  const waivedCount = all.filter((r) => r.waiver_status).length;
 
   return (
     <div className="w-full">
@@ -78,8 +98,13 @@ export function LockerTenantsPage() {
           <input type="checkbox" checked={ncdOnly} onChange={(e) => setNcdOnly(e.target.checked)} />
           NCD-backed only ({ncdCount})
         </label>
+        <label className="flex items-center gap-1.5 text-sm text-text-muted select-none">
+          <input type="checkbox" checked={waivedOnly} onChange={(e) => setWaivedOnly(e.target.checked)} />
+          Waived only ({waivedCount})
+        </label>
         {tenants.isFetching && <span className="text-xs text-text-muted">Loading…</span>}
       </div>
+      {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
 
       {/* Occupancy for the chosen branch — this comes from LockerHub and is live. */}
       {branchId && (avail.data?.sizes ?? []).length > 0 && (
@@ -142,6 +167,33 @@ export function LockerTenantsPage() {
                   <td className="py-2 pr-3">
                     <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{r.account_status ?? r.status ?? '—'}</span>
                     {r.cheque_pending && <span className="ml-1 text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">cheque pending</span>}
+                    {/* Exception/waiver cases: locker held with NO NCD backing, deliberately. */}
+                    {r.waiver_status === 'Approved' && (
+                      <span className="ml-1 text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn" title={r.waiver_reason ?? ''}>deposit waived</span>
+                    )}
+                    {r.waiver_status === 'PendingApproval' && (
+                      <span className="ml-1 text-xs rounded px-1.5 py-0.5 bg-bg text-text-muted" title={r.waiver_reason ?? ''}>waiver pending</span>
+                    )}
+                    {can('lockers:waive') && r.waiver_id && (r.waiver_status === 'Approved' || r.waiver_status === 'PendingApproval') && (
+                      <button className="ml-1 text-xs text-text-muted hover:text-danger align-middle" title="Cancel this waiver"
+                        onClick={() => { if (window.confirm(`Cancel the deposit waiver for ${r.tenant_name ?? 'this tenant'}?`)) cancelWaiver.mutate(r.waiver_id!); }}>×</button>
+                    )}
+                    {can('lockers:waive') && r.tenant_id && !r.ncd_backed && !r.waiver_status && (
+                      <button className="ml-1 text-xs text-primary hover:underline"
+                        onClick={() => {
+                          const reason = window.prompt(`Waive the NCD deposit requirement for ${r.tenant_name ?? 'this tenant'} (locker ${r.locker_no ?? '—'})?\n\nReason (required):`);
+                          if (reason && reason.trim().length >= 3) {
+                            recordWaiver.mutate({
+                              lockerhub_tenant_id: r.tenant_id, reason: reason.trim(),
+                              locker_no: r.locker_no, branch_id: r.branch_id,
+                              tenant_name: r.tenant_name, tenant_phone: r.tenant_phone,
+                              ...(r.customer_id ? { customer_id: r.customer_id } : {}),
+                            });
+                          } else if (reason !== null) {
+                            setMsg('Waiver not sent — a reason is required.');
+                          }
+                        }}>waive…</button>
+                    )}
                   </td>
                   <td className="py-2 pr-3 text-xs text-text-muted whitespace-nowrap">
                     {r.allotted_on ? <>{r.allotted_on}{r.lease_expires_on ? <> → {r.lease_expires_on}</> : null}</> : '—'}

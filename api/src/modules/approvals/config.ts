@@ -113,6 +113,13 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Payout Adjustment',
     levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
   },
+  // A locker tenancy holding with NO NCD backing, by deliberate exception.
+  // Maker: NCD Manager+ (lockers:waive). Checker: Admin/CXO (owner 2026-07-24).
+  locker_deposit_waiver: {
+    type: 'locker_deposit_waiver',
+    label: 'Locker Deposit Waiver',
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
+  },
 };
 
 export function typeDef(type: string): ApprovalTypeDef {

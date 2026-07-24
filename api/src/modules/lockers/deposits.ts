@@ -505,7 +505,39 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
     .filter((r) => !consumed.has(r.lockerhub_application_id))
     .filter((r) => (opts.branchId ? r.branch_id === opts.branchId : true));
 
-  const rows = [...rosterRows, ...leftover];
+  const rows: Array<Record<string, unknown>> = [...rosterRows, ...leftover];
+
+  // Deposit waiver overlay (owner 2026-07-24): a tenancy holding with NO NCD
+  // backing by deliberate exception gets tagged, so it stops looking like an
+  // ordinary online-paid tenant. Matched on their tenant_id; a waiver whose
+  // tenancy isn't in today's roster (their API down, or the tenancy closed)
+  // is appended from its snapshot so the record never silently disappears.
+  const { openWaivers } = await import('./waivers.js');
+  const waivers = await openWaivers(db);
+  const waiverByTenant = new Map(waivers.map((w) => [String(w.lockerhub_tenant_id), w]));
+  for (const r of rows) {
+    const w = r.tenant_id ? waiverByTenant.get(String(r.tenant_id)) : undefined;
+    r.waiver_id = w ? w.id : null;
+    r.waiver_status = w ? w.status : null;
+    r.waiver_reason = w ? w.reason : null;
+  }
+  const shown = new Set(rows.map((r) => String(r.tenant_id ?? '')));
+  for (const w of waivers) {
+    if (shown.has(String(w.lockerhub_tenant_id))) continue;
+    if (opts.branchId && w.branch_id && w.branch_id !== opts.branchId) continue;
+    rows.push({
+      tenant_id: String(w.lockerhub_tenant_id),
+      lockerhub_application_id: null, application_no: null,
+      branch_id: w.branch_id ?? null, branch_name: null,
+      locker_size: null, status: rosterRead ? 'not in roster' : null, account_status: null,
+      locker_no: w.locker_no ?? null,
+      tenant_name: w.tenant_name ?? null, tenant_phone: w.tenant_phone ?? null, tenant_email: null,
+      allotted_on: null, lease_expires_on: null,
+      customer_id: w.customer_id, customer_code: w.customer_code ?? null,
+      pledged_amount: 0, cheque_pending: false, ncd_backed: false, unresolved: !rosterRead,
+      waiver_id: w.id, waiver_status: w.status, waiver_reason: w.reason,
+    });
+  }
 
   return {
     rows,

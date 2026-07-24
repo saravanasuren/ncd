@@ -19,6 +19,7 @@ export async function listAgents(db: Db) {
             a.bank_name, a.account_number, a.ifsc,
             u.full_name AS user_name
      FROM agents a LEFT JOIN users u ON u.id = a.user_id
+     WHERE a.deleted_at IS NULL
      ORDER BY a.full_name`);
   return rows;
 }
@@ -34,19 +35,41 @@ export interface CreateAgentInput {
   ifsc?: string;
 }
 
+/**
+ * The users row every agent gets (owner 2026-07-24). No email or password is
+ * required to BE an agent, so one is synthesised from the agent code and the
+ * password is left NULL — that account cannot authenticate until someone sets
+ * a real email and password on it. Returns the existing user when the agent's
+ * email already belongs to one, so a person is never duplicated.
+ */
+export async function ensureUserForAgent(
+  tx: Db, agent: { agent_code: string; full_name: string; phone?: string | null; email?: string | null; is_active?: boolean },
+): Promise<number> {
+  const email = (agent.email ?? '').trim().toLowerCase() || `${agent.agent_code.toLowerCase()}@agents.dhanam.local`;
+  const found = (await tx.query<{ id: string }>('SELECT id FROM users WHERE lower(email) = $1', [email])).rows[0];
+  if (found) return Number(found.id);
+  const { rows } = await tx.query<{ id: string }>(
+    `INSERT INTO users (email, full_name, phone, role_id, is_active, password_hash)
+     VALUES ($1,$2,$3,(SELECT id FROM roles WHERE name = 'agent'),$4,NULL) RETURNING id`,
+    [email, agent.full_name, agent.phone ?? null, agent.is_active ?? true]);
+  return Number(rows[0]!.id);
+}
+
 export async function createAgent(db: Db, actor: AuthUser, input: CreateAgentInput) {
   return db.withTx(async (tx) => {
     const code = (input.agent_code?.trim().toUpperCase()) || `AG-${String(await nextSeq(tx, 'agent')).padStart(4, '0')}`;
     const dupe = await tx.query('SELECT 1 FROM agents WHERE upper(agent_code) = $1', [code]);
     if (dupe.rowCount) throw errors.conflict('Agent code already in use');
+    // Every agent IS a user, so deleting the user retires the agent everywhere.
+    const userId = input.user_id ?? await ensureUserForAgent(tx, { ...input, agent_code: code });
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO agents (agent_code, full_name, phone, email, source, commission_status, user_id, bank_name, account_number, ifsc, is_active)
        VALUES ($1,$2,$3,$4,'manual','None',$5,$6,$7,$8,TRUE) RETURNING id`,
-      [code, input.full_name, input.phone ?? null, input.email ?? null, input.user_id ?? null,
+      [code, input.full_name, input.phone ?? null, input.email ?? null, userId,
        input.bank_name ?? null, input.account_number ?? null, input.ifsc ?? null]);
     const id = Number(rows[0]!.id);
-    await writeAudit(tx, { actorId: actor.id, action: 'agent.create', entityType: 'agents', entityId: id, after: { code, name: input.full_name } });
-    return { id, agent_code: code };
+    await writeAudit(tx, { actorId: actor.id, action: 'agent.create', entityType: 'agents', entityId: id, after: { code, name: input.full_name, user_id: userId } });
+    return { id, agent_code: code, user_id: userId };
   });
 }
 
@@ -90,7 +113,7 @@ export async function searchPayees(db: Db, q: string) {
   const like = `%${q.trim()}%`;
   const agents = (await db.query(
     `SELECT 'agent' AS kind, id, agent_code AS code, full_name FROM agents
-     WHERE is_active = TRUE AND (full_name ILIKE $1 OR agent_code ILIKE $1) ORDER BY full_name LIMIT 10`, [like])).rows;
+     WHERE is_active = TRUE AND deleted_at IS NULL AND (full_name ILIKE $1 OR agent_code ILIKE $1) ORDER BY full_name LIMIT 10`, [like])).rows;
   const staff = (await db.query(
     `SELECT CASE WHEN u.is_staff THEN 'staff' ELSE 'agent' END AS kind, u.id, u.code, u.full_name
        FROM users u JOIN roles r ON r.id = u.role_id
@@ -107,7 +130,8 @@ export async function resolveReferrer(db: Db, text: string): Promise<{ kind: 'st
   const t = text.trim();
   if (!t) return null;
   const agent = (await db.query<{ id: string; full_name: string }>(
-    `SELECT id, full_name FROM agents WHERE upper(agent_code) = upper($1) OR lower(btrim(full_name)) = lower($1) LIMIT 1`, [t])).rows[0];
+    `SELECT id, full_name FROM agents
+      WHERE deleted_at IS NULL AND (upper(agent_code) = upper($1) OR lower(btrim(full_name)) = lower($1)) LIMIT 1`, [t])).rows[0];
   if (agent) return { kind: 'agent', id: Number(agent.id), name: agent.full_name };
   const user = (await db.query<{ id: string; full_name: string }>(
     `SELECT u.id, u.full_name FROM users u JOIN roles r ON r.id = u.role_id
@@ -145,7 +169,7 @@ export async function ensurePendingAgentForName(tx: Db, actor: AuthUser, name: s
 export async function activeAgents(db: Db, limit = 100): Promise<{ id: number; agent_code: string; full_name: string }[]> {
   const lim = Math.min(Math.max(Number.isFinite(limit) ? limit : 100, 1), 500);
   const { rows } = await db.query<{ id: string; agent_code: string; full_name: string }>(
-    'SELECT id, agent_code, full_name FROM agents WHERE is_active = TRUE ORDER BY full_name LIMIT $1', [lim]);
+    'SELECT id, agent_code, full_name FROM agents WHERE is_active = TRUE AND deleted_at IS NULL ORDER BY full_name LIMIT $1', [lim]);
   return rows.map((r) => ({ id: Number(r.id), agent_code: r.agent_code, full_name: r.full_name }));
 }
 

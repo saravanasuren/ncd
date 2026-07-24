@@ -153,24 +153,53 @@ export async function deleteUser(db: Db, actor: AuthUser, id: number): Promise<v
   if (!cur.rowCount) throw errors.notFound('User not found');
   if (id === actor.id) throw errors.badRequest('You cannot delete your own account');
 
-  // A user who owns real business records must NOT be hard-deleted — that would
-  // orphan those customers/applications and dangle their incentive accruals.
-  // Block with a clear message; the account can be disabled instead.
+  // A STAFF user who owns real business records must NOT be hard-deleted — that
+  // would orphan those customers/applications and dangle their incentive
+  // accruals. Block with a clear message; the account can be disabled instead.
+  //
+  // An AGENT is different (owner 2026-07-24): deleting the user retires the
+  // agent, and the customers they brought in fall back to Direct referrals.
+  // So `agents WHERE user_id` is deliberately NOT part of this guard.
   const n = Number((await db.query<{ n: string }>(
     `SELECT (SELECT count(*) FROM customers WHERE enrolled_by_user_id = $1)
           + (SELECT count(*) FROM applications WHERE enrolled_by_user_id = $1)
           + (SELECT count(*) FROM investor_leads WHERE created_by_user_id = $1)
-          + (SELECT count(*) FROM agents WHERE user_id = $1)
           + (SELECT count(*) FROM approval_requests WHERE maker_user_id = $1) AS n`, [id])).rows[0]!.n);
   if (n > 0) {
-    throw errors.conflict('This user is linked to customers, applications, leads, approvals or an agent record — disable the account instead of deleting it.');
+    throw errors.conflict('This user is linked to customers, applications, leads or approvals — disable the account instead of deleting it.');
   }
 
   try {
     await db.withTx(async (tx) => {
+      // Retire any agent record this user IS, and hand their customers back to
+      // Direct. The agent row survives as retired rather than deleted:
+      // incentive_accruals.payee_id is a plain BIGINT with no FK, so removing
+      // the row would orphan money already accrued/paid and lose the payee's
+      // name on it. Retired agents are filtered out of every list instead.
+      const agents = (await tx.query<{ id: string; full_name: string; agent_code: string }>(
+        'SELECT id, full_name, agent_code FROM agents WHERE user_id = $1 AND deleted_at IS NULL', [id])).rows;
+      let movedToDirect = 0;
+      for (const ag of agents) {
+        const agentId = Number(ag.id);
+        const c = await tx.query('UPDATE customers SET enrolled_by_agent_id = NULL, referred_by_text = NULL, updated_at = now() WHERE enrolled_by_agent_id = $1', [agentId]);
+        // created_by_agent_id lives on investor_leads, not customers.
+        await tx.query('UPDATE investor_leads SET created_by_agent_id = NULL WHERE created_by_agent_id = $1', [agentId]);
+        const a = await tx.query('UPDATE applications SET enrolled_by_agent_id = NULL WHERE enrolled_by_agent_id = $1', [agentId]);
+        movedToDirect += (c.rowCount ?? 0) + (a.rowCount ?? 0);
+        await tx.query(
+          "UPDATE agents SET deleted_at = now(), is_active = FALSE, commission_status = 'None', user_id = NULL WHERE id = $1",
+          [agentId]);
+        await writeAudit(tx, {
+          actorId: actor.id, action: 'agent.retire', entityType: 'agents', entityId: agentId,
+          after: { via: 'user.delete', agent_code: ag.agent_code, full_name: ag.full_name, rows_moved_to_direct: movedToDirect },
+        });
+      }
       // Per-user auxiliary rows cascade (sessions, user_branches, …); delete the user.
       await tx.query('DELETE FROM users WHERE id = $1', [id]);
-      await writeAudit(tx, { actorId: actor.id, action: 'user.delete', entityType: 'users', entityId: id, before: cur.rows[0] });
+      await writeAudit(tx, {
+        actorId: actor.id, action: 'user.delete', entityType: 'users', entityId: id,
+        before: cur.rows[0], after: { agents_retired: agents.length, rows_moved_to_direct: movedToDirect },
+      });
     });
   } catch (e) {
     // Safety net: any un-enumerated reference → a clear message, never a raw 500.

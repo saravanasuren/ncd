@@ -80,12 +80,29 @@ lockersRouter.post('/customers', asyncHandler(async (req, res) => {
   res.json(await lh.upsertCustomer(staffOf(req), profile));
 }));
 
+// A7 create. Pass `customer_id` and the full applicant profile (address,
+// nominee, KYC, bank) is assembled HERE from our own book and sent with the
+// create, so the tenancy is complete on LockerHub and nobody opens their app to
+// finish it. Built server-side on purpose: the browser never supplies profile
+// fields, so it cannot be used to write a profile the operator can't otherwise
+// see. Unknown/invisible customer → we still create the application, since the
+// applicant block is enrichment and losing it must not block an enrolment.
 lockersRouter.post('/applications', asyncHandler(async (req, res) => {
   const b = z.object({
     phone: z.string().min(10), name: z.string().optional(), email: z.string().optional(),
     branch_id: z.string().min(1), locker_size: z.string().min(1),
+    customer_id: z.number().int().positive().nullish(),
   }).parse(req.body ?? {});
-  res.status(201).json(await lh.createLockerApplication(staffOf(req), b));
+  const { customer_id, ...input } = b;
+
+  let applicant: Record<string, unknown> | undefined;
+  if (customer_id) {
+    const { assertCustomerVisible } = await import('../../lib/visibility.js');
+    await assertCustomerVisible(getDb(), req.user!, customer_id);
+    const { buildApplicantBlock } = await import('./applicant.js');
+    applicant = (await buildApplicantBlock(getDb(), customer_id)) ?? undefined;
+  }
+  res.status(201).json(await lh.createLockerApplication(staffOf(req), { ...input, ...(applicant ? { applicant } : {}) }));
 }));
 
 lockersRouter.post('/applications/:id/payment-link', asyncHandler(async (req, res) => {
@@ -98,9 +115,22 @@ lockersRouter.post('/applications/:id/payment-link', asyncHandler(async (req, re
 // proxy is gone rather than left to fail — collect via payment-link above, or
 // back the deposit leg with an NCD investment (A12 link-ncd).
 
+// A11 allocate — the APPROVAL step, and the call that creates the tenant.
+// Everything else (obligations_pending, no_vacancy, the vacancy race) is passed
+// through with LockerHub's own status and body so the operator sees the real
+// reason. The ONE case we translate is `already:true`, which they return as a
+// 400: the locker IS allotted, so re-driving a completed allocation has
+// succeeded — reporting that as an error would send staff hunting a failure
+// that never happened.
 lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) => {
   const b = z.object({ locker_id: z.string().optional(), lease_months: z.number().int().positive().optional() }).parse(req.body ?? {});
-  res.json(await lh.allocate(staffOf(req), String(req.params.id), b));
+  try {
+    res.json(await lh.allocate(staffOf(req), String(req.params.id), b));
+  } catch (e) {
+    const detail = (e as { detail?: { already?: boolean } }).detail;
+    if (detail?.already === true) { res.json({ ...detail, success: true, already: true }); return; }
+    throw e;
+  }
 }));
 
 // ── Deposit links: back a locker's deposit with an NCD investment ──────────

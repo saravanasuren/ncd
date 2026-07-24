@@ -40,8 +40,51 @@ lockersRouter.get('/availability', asyncHandler(async (req, res) =>
 // replacement for it. /availability quotes a sale and omits sold-out sizes;
 // this reports every size at every branch including the zeroes, which is what
 // a stock screen has to say. branch_id is optional: omit for the whole network.
-lockersRouter.get('/inventory', asyncHandler(async (req, res) =>
-  res.json(await lh.lockerInventory(req.query.branch_id ? String(req.query.branch_id) : undefined))));
+//
+// Branch-scoped for branch_staff (owner 2026-07-24) — same rule as /tenants
+// below. See branchScope.ts for who is restricted and why.
+lockersRouter.get('/inventory', asyncHandler(async (req, res) => {
+  const { lockerBranchScopeFor } = await import('./branchScope.js');
+  const scope = await lockerBranchScopeFor(getDb(), req.user!);
+  const requested = req.query.branch_id ? String(req.query.branch_id) : undefined;
+  if (scope.restricted && requested && !scope.branchIds.includes(requested)) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You can only view stock for your assigned branch.' } });
+  }
+  if (!scope.restricted || requested) {
+    res.json(await lh.lockerInventory(requested));
+    return;
+  }
+  if (scope.branchIds.length === 1) {
+    res.json(await lh.lockerInventory(scope.branchIds[0]));
+    return;
+  }
+  // More than one allowed branch (rare — today every branch_staff matches
+  // exactly one) and the endpoint's comma-list support is unconfirmed for A15
+  // (unlike A-tenants, which their contract explicitly documents as
+  // comma-accepting): fetch the whole network and sum down to the allowed
+  // set, rather than assume.
+  const full = await lh.lockerInventory(undefined);
+  const allowed = new Set(scope.branchIds);
+  const branches = full.branches.filter((b) => allowed.has(b.branch_id));
+  const zeroCounts = { total: 0, vacant: 0, occupied: 0, reserved: 0, other: 0 };
+  const totals = branches.reduce((t, b) => ({
+    total: t.total + b.total, vacant: t.vacant + b.vacant, occupied: t.occupied + b.occupied,
+    reserved: t.reserved + b.reserved, other: t.other + b.other,
+  }), { ...zeroCounts });
+  const bySize = new Map<string, { size: string; total: number; vacant: number; occupied: number; reserved: number; other: number }>();
+  for (const b of branches) for (const sz of b.by_size) {
+    const e = bySize.get(sz.size) ?? { size: sz.size, ...zeroCounts };
+    e.total += sz.total; e.vacant += sz.vacant; e.occupied += sz.occupied; e.reserved += sz.reserved; e.other += sz.other;
+    bySize.set(sz.size, e);
+  }
+  res.json({
+    ...full,
+    branch_id: null,
+    branches,
+    by_size: [...bySize.values()],
+    totals: { ...totals, occupancy_pct: totals.total ? Math.round((totals.occupied / totals.total) * 1000) / 10 : 0, branches: branches.length },
+  });
+}));
 lockersRouter.get('/lockers', asyncHandler(async (req, res) => {
   const branchId = String(req.query.branch_id ?? '');
   if (!branchId) return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'branch_id required' } });
@@ -150,9 +193,23 @@ lockersRouter.get('/customers/:customerId/lockers', asyncHandler(async (req, res
 
 // Locker tenants, branch-wise (sidebar page) — the full branch roster from
 // LockerHub's /locker-tenants, with NCD's own pledges/cheques layered on.
+//
+// Branch-scoped for branch_staff (owner 2026-07-24): "only those staffs who
+// are assigned to those specific branch gets to look only that particular
+// branch portfolio." See branchScope.ts for who is restricted and why.
 lockersRouter.get('/tenants', asyncHandler(async (req, res) => {
   const { lockerTenants } = await import('./deposits.js');
-  res.json(await lockerTenants(getDb(), { branchId: req.query.branch_id ? String(req.query.branch_id) : undefined }));
+  const { lockerBranchScopeFor } = await import('./branchScope.js');
+  const scope = await lockerBranchScopeFor(getDb(), req.user!);
+  const requested = req.query.branch_id ? String(req.query.branch_id) : undefined;
+  if (scope.restricted && requested && !scope.branchIds.includes(requested)) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You can only view locker tenants for your assigned branch.' } });
+  }
+  // No branch chosen + restricted → default to their own branch(es), not a
+  // network-wide sweep they aren't meant to see.
+  const branchId = requested ?? (scope.restricted ? scope.branchIds : undefined);
+  const result = await lockerTenants(getDb(), { branchId });
+  res.json({ ...result, restricted_to: scope.restricted ? scope.branches : null });
 }));
 
 // ── Deposit waivers (owner 2026-07-24): exception cases holding a locker with

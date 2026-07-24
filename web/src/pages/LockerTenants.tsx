@@ -116,11 +116,21 @@ export function LockerTenantsPage() {
     queryKey: ['locker-tenants', branchId],
     queryFn: () => api.get<{
       rows: Tenant[]; roster_complete: boolean; lockerhub_error: string | null;
+      // Non-null only for a branch_staff login confined to their own branch(es)
+      // (owner 2026-07-24) — the branch picker below is built from THIS, not
+      // the full branch list, once it arrives.
+      restricted_to: Array<{ id: string; name: string }> | null;
     }>(`/api/lockers/tenants${branchId ? `?branch_id=${encodeURIComponent(branchId)}` : ''}`),
   });
 
   const branchName = (id: string | null) =>
     (branches.data?.branches ?? []).find((b) => b.id === id)?.name ?? id ?? '—';
+
+  // Which branches the picker offers. Unrestricted: every branch, as before.
+  // Restricted: ONLY the caller's own — there is nothing else for them to pick,
+  // and offering the full list would just invite a 403 from the backend.
+  const restrictedTo = tenants.data?.restricted_to ?? null;
+  const pickerBranches = restrictedTo ?? branches.data?.branches ?? [];
 
   const all = tenants.data?.rows ?? [];
   const rows = all.filter((r) => {
@@ -140,8 +150,10 @@ export function LockerTenantsPage() {
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <select className={inp} value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-          <option value="">All branches</option>
-          {(branches.data?.branches ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          {/* Restricted: no "every branch" option exists for this login — the
+              blank value already means "my branch(es)" server-side. */}
+          <option value="">{restrictedTo ? 'My branch' : 'All branches'}</option>
+          {pickerBranches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
         <input className={`${inp} min-w-[220px]`} placeholder="Search tenant, phone, email, locker no…" value={q} onChange={(e) => setQ(e.target.value)} />
         <label className="flex items-center gap-1.5 text-sm text-text-muted select-none">
@@ -163,7 +175,7 @@ export function LockerTenantsPage() {
         <div className={card}>
           <div className="flex items-baseline justify-between gap-3 flex-wrap mb-3">
             <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide m-0">
-              {branchId ? branchName(branchId) : 'All branches'} · stock
+              {branchId ? branchName(branchId) : restrictedTo ? 'My branch' : 'All branches'} · stock
             </h2>
             <span className="text-[11px] text-text-muted">
               {stock.isFetching ? 'Refreshing…' : `Live from LockerHub · ${stock.data.totals.branches} branch${stock.data.totals.branches === 1 ? '' : 'es'}`}
@@ -237,7 +249,7 @@ export function LockerTenantsPage() {
       <div className={card}>
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide">
-            Tenants {branchId ? `· ${branchName(branchId)}` : '· all branches'} ({rows.length})
+            Tenants {branchId ? `· ${branchName(branchId)}` : restrictedTo ? '· my branch' : '· all branches'} ({rows.length})
           </h2>
         </div>
 

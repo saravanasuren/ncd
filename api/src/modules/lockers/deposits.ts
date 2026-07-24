@@ -361,15 +361,24 @@ export function namesMatch(a: unknown, b: unknown): boolean {
  *      awaiting allotment). Those can never appear in a roster of occupied
  *      lockers, but staff still need them on this screen, so they're appended.
  */
-export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
+export async function lockerTenants(db: Db, opts: { branchId?: string | string[] } = {}) {
   const last10 = (v: unknown) => String(v ?? '').replace(/\D/g, '').slice(-10);
   let lockerhub_error: string | null = null;
+
+  // Normalise once: their API takes a comma-joined string, but the membership
+  // checks below (leftover NCD-only rows, waiver rows) need a real array
+  // `.includes` — `r.branch_id === "id1,id2"` would silently drop every row
+  // for a multi-branch caller (owner 2026-07-24: branch_staff scoped to their
+  // own branch, and a rare few are assigned to more than one).
+  const branchIds = opts.branchId == null ? undefined
+    : Array.isArray(opts.branchId) ? opts.branchId
+    : opts.branchId.split(',').map((s) => s.trim()).filter(Boolean);
 
   // One call, whether that's a single branch or all of them.
   let roster: Array<Record<string, any>> = [];
   let rosterRead = false;
   try {
-    roster = ((await lh.lockerTenants(opts.branchId)).tenants ?? []) as Array<Record<string, any>>;
+    roster = ((await lh.lockerTenants(branchIds?.join(','))).tenants ?? []) as Array<Record<string, any>>;
     rosterRead = true;
   } catch (e) { lockerhub_error = (e as Error).message; }
 
@@ -541,7 +550,7 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
 
   const leftover = oursRows
     .filter((r) => !consumed.has(r.lockerhub_application_id))
-    .filter((r) => (opts.branchId ? r.branch_id === opts.branchId : true));
+    .filter((r) => (branchIds ? branchIds.includes(String(r.branch_id)) : true));
 
   const rows: Array<Record<string, unknown>> = [...rosterRows, ...leftover];
 
@@ -594,7 +603,7 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
     if (shown.has(String(w.lockerhub_tenant_id))) continue;
     // …and a removed tenancy must not reappear through the waiver overlay.
     if (overrideBy.get(String(w.lockerhub_tenant_id))?.removed_at) continue;
-    if (opts.branchId && w.branch_id && w.branch_id !== opts.branchId) continue;
+    if (branchIds && w.branch_id && !branchIds.includes(String(w.branch_id))) continue;
     rows.push({
       tenant_id: String(w.lockerhub_tenant_id),
       lockerhub_application_id: null, application_no: null,

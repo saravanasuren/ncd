@@ -30,6 +30,7 @@ interface Tenant {
   customer_id: number | null; customer_code: string | null;
   pledged_amount: number; cheque_pending: boolean; ncd_backed: boolean; unresolved: boolean;
   waiver_id: number | null; waiver_status: string | null; waiver_reason: string | null;
+  linked_manually?: boolean; override_key?: string | null;
 }
 
 export function LockerTenantsPage() {
@@ -47,6 +48,31 @@ export function LockerTenantsPage() {
     onSuccess: (r: any) => { setMsg(`Waiver sent for approval (${r.request_no}) — an Admin/CXO confirms it, then the row is tagged.`); refetchTenants(); },
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
+  // Link a tenant to an NCD customer by hand. LockerHub gives us no PAN to match
+  // on (their profile is null for these tenants; where present the PAN is
+  // masked), so an explicit human choice is the honest mechanism.
+  const [linkFor, setLinkFor] = useState<Tenant | null>(null);
+  const [custQ, setCustQ] = useState('');
+  const custSearch = useQuery({
+    queryKey: ['tenant-cust-search', custQ],
+    queryFn: () => api.get<{ customers: { id: number; full_name: string; customer_code: string }[] }>(`/api/dashboard/search?q=${encodeURIComponent(custQ)}`),
+    enabled: !!linkFor && custQ.trim().length >= 2,
+  });
+  const linkTenant = useMutation({
+    mutationFn: (v: { t: Tenant; customer_id: number | null }) => api.post(`/api/lockers/tenants/${encodeURIComponent(String(v.t.override_key || v.t.tenant_id))}/link`, {
+      customer_id: v.customer_id, tenant_name: v.t.tenant_name, locker_no: v.t.locker_no, branch_id: v.t.branch_id,
+    }),
+    onSuccess: (_r, v) => { setMsg(v.customer_id ? 'Tenant linked to the customer.' : 'Link removed.'); setLinkFor(null); setCustQ(''); refetchTenants(); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const removeTenant = useMutation({
+    mutationFn: (v: { t: Tenant; reason: string }) => api.post(`/api/lockers/tenants/${encodeURIComponent(String(v.t.override_key || v.t.tenant_id))}/remove`, {
+      reason: v.reason, tenant_name: v.t.tenant_name, locker_no: v.t.locker_no, branch_id: v.t.branch_id,
+    }),
+    onSuccess: () => { setMsg('Removed from the NCD roster. The locker is still allotted on LockerHub — close it there too if it has actually ended.'); refetchTenants(); },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
+
   const cancelWaiver = useMutation({
     mutationFn: (id: number) => api.post(`/api/lockers/waivers/${id}/cancel`, {}),
     onSuccess: () => { setMsg('Waiver cancelled.'); refetchTenants(); },
@@ -120,6 +146,38 @@ export function LockerTenantsPage() {
         </div>
       )}
 
+      {linkFor && (
+        <div className="fixed inset-0 bg-black/30 flex items-start justify-center pt-24 z-20" onClick={() => setLinkFor(null)}>
+          <div className="bg-surface border border-border rounded-lg shadow-card p-5 w-[460px]" onClick={(e) => e.stopPropagation()}>
+            <div className="text-sm font-semibold mb-1">Link “{linkFor.tenant_name}” to an NCD customer</div>
+            <p className="text-xs text-text-muted mb-3">
+              Automatic matching needs the phone AND the full name to agree, so a tenant recorded as
+              “SEENU RAJAPPA” never matches a customer saved as “SEENU”. LockerHub gives us no PAN to
+              settle it, so pick the customer yourself.
+            </p>
+            <input className={`${inp} w-full mb-2`} autoFocus placeholder="Search name, PAN or phone…"
+              value={custQ} onChange={(e) => setCustQ(e.target.value)} />
+            <div className="max-h-56 overflow-auto">
+              {(custSearch.data?.customers ?? []).map((c) => (
+                <button key={c.id} className="block w-full text-left px-2.5 py-1.5 text-sm hover:bg-bg rounded"
+                  onClick={() => linkTenant.mutate({ t: linkFor, customer_id: c.id })}>
+                  {c.full_name} <span className="text-text-muted">({c.customer_code})</span>
+                </button>
+              ))}
+              {custQ.trim().length >= 2 && (custSearch.data?.customers ?? []).length === 0 && (
+                <div className="text-xs text-text-muted px-2.5 py-2">No customer matches “{custQ}”.</div>
+              )}
+            </div>
+            <div className="flex justify-between items-center mt-3">
+              {linkFor.customer_id
+                ? <button className="text-xs text-danger hover:underline" onClick={() => linkTenant.mutate({ t: linkFor, customer_id: null })}>Remove existing link</button>
+                : <span />}
+              <button className="text-xs border border-border rounded px-3 py-1.5" onClick={() => setLinkFor(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className={card}>
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide">
@@ -159,7 +217,14 @@ export function LockerTenantsPage() {
                       ? <Link to={`/app/customers/${r.customer_id}`} className="text-primary hover:underline">{r.tenant_name ?? '—'}</Link>
                       : (r.tenant_name ?? '—')}
                     {r.ncd_backed && <span className="ml-1.5 text-[10px] rounded px-1 py-0.5 bg-primary/10 text-primary align-middle">NCD</span>}
-                    <div className="text-xs text-text-muted">{r.tenant_phone ?? ''} {r.customer_code ? `· ${r.customer_code}` : ''}</div>
+                    <div className="text-xs text-text-muted">
+                      {r.tenant_phone ?? ''} {r.customer_code ? `· ${r.customer_code}` : ''}
+                      {r.linked_manually && <span className="ml-1 text-[10px] text-text-muted" title="Linked by hand, not by automatic matching">(linked)</span>}
+                      {can('lockers:waive') && (r.override_key || r.tenant_id) && (
+                        <button className="ml-1.5 text-primary hover:underline"
+                          onClick={() => { setLinkFor(r); setCustQ(''); }}>{r.customer_id ? 'change link' : 'link customer…'}</button>
+                      )}
+                    </div>
                   </td>
                   <td className="py-2 pr-3">{r.branch_name ?? branchName(r.branch_id)}</td>
                   <td className="py-2 pr-3 font-mono text-xs">{r.locker_no ?? '—'}</td>
@@ -199,7 +264,18 @@ export function LockerTenantsPage() {
                     {r.allotted_on ? <>{r.allotted_on}{r.lease_expires_on ? <> → {r.lease_expires_on}</> : null}</> : '—'}
                   </td>
                   <td className="py-2 pr-3 text-right mono">{r.pledged_amount > 0 ? formatINR(r.pledged_amount) : '—'}</td>
-                  <td className="py-2 pr-3 font-mono text-xs text-text-muted">{r.application_no ?? r.lockerhub_application_id ?? '—'}</td>
+                  <td className="py-2 pr-3 font-mono text-xs text-text-muted">
+                    {r.application_no ?? r.lockerhub_application_id ?? '—'}
+                    {can('lockers:remove-tenant') && (r.override_key || r.tenant_id) && (
+                      <button className="ml-2 text-danger hover:underline font-sans"
+                        title="Remove from NCD's roster. The locker stays allotted on LockerHub."
+                        onClick={() => {
+                          const reason = window.prompt(`Remove ${r.tenant_name ?? 'this tenant'} (locker ${r.locker_no ?? '—'}) from the NCD roster?\n\nThis hides OUR row only — the locker remains allotted on LockerHub, which owns it. Close it there too if the tenancy has actually ended.\n\nReason (required):`);
+                          if (reason && reason.trim().length >= 3) removeTenant.mutate({ t: r, reason: reason.trim() });
+                          else if (reason !== null) setMsg('Not removed — a reason is required.');
+                        }}>remove</button>
+                    )}
+                  </td>
                 </tr>
               ))}
               {!rows.length && (

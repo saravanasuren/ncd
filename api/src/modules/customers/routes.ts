@@ -61,6 +61,14 @@ customersRouter.post('/:id/bank-accounts', requirePermission('customers:update')
     res.status(201).json(await s.addBankAccount(getDb(), req.user!, Number(req.params.id), b));
   }));
 
+// Correct a misspelt beneficiary name in place. customers:update (not the
+// super-admin delete gate) — fixing a typo must not need a destructive right.
+customersRouter.patch('/:id/bank-accounts/:bankId', requirePermission('customers:update'),
+  asyncHandler(async (req, res) => {
+    const { holder_name } = z.object({ holder_name: z.string().trim().min(2, 'Beneficiary name is required') }).parse(req.body ?? {});
+    res.json(await s.updateBankAccountName(getDb(), req.user!, Number(req.params.id), Number(req.params.bankId), holder_name));
+  }));
+
 customersRouter.post('/:id/bank-accounts/:bankId/set-active', requirePermission('customers:update'),
   asyncHandler(async (req, res) => { await s.setActiveBank(getDb(), req.user!, Number(req.params.id), Number(req.params.bankId)); res.json({ ok: true }); }));
 

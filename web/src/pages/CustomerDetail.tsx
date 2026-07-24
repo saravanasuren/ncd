@@ -645,6 +645,16 @@ function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onEr
             <span className={`text-xs rounded px-1.5 py-0.5 ${b.penny_drop_status === 'Verified' ? 'bg-[color:var(--success-bg)] text-success' : b.penny_drop_status === 'Failed' ? 'bg-[color:var(--danger-bg)] text-danger' : 'bg-bg text-text-muted'}`}>{b.penny_drop_status}</span>
             {b.is_active && <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--primary-ring)] text-primary">Active</span>}
             <span className="ml-auto flex items-center gap-3">
+              {/* A misspelt beneficiary name is what prints on the bank file —
+                  fix it in place rather than re-adding the whole account. */}
+              {canEdit && (
+                <button onClick={() => {
+                  const next = window.prompt('Beneficiary name as it should appear on the bank file:', b.holder_name ?? '');
+                  if (next === null) return;
+                  if (next.trim().length < 2) { onError('Beneficiary name is required.'); return; }
+                  wrapSet(api.patch(`/api/customers/${customerId}/bank-accounts/${b.id}`, { holder_name: next.trim() }));
+                }} className="text-xs text-primary hover:underline">Edit name</button>
+              )}
               {!b.is_active && b.penny_drop_status === 'Verified' && canEdit && (
                 <button onClick={() => wrapSet(api.post(`/api/customers/${customerId}/bank-accounts/${b.id}/set-active`))} className="text-xs text-primary hover:underline">Make active</button>
               )}

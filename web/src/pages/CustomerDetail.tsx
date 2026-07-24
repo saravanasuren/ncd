@@ -352,9 +352,16 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
 
   async function addNominee() {
     const name = window.prompt('Nominee full name'); if (!name) return;
-    const share = Number(window.prompt('Share % (e.g. 100)') ?? '0');
-    const existing = (data.nominees ?? []).map((n: any) => ({ full_name: n.full_name, relationship: n.relationship, share_pct: Number(n.share_pct) }));
-    await wrap(api.put(`/api/customers/${customerId}/nominees`, { nominees: [...existing, { full_name: name, share_pct: share }] }));
+    // Blank means "give them everything" — the server splits whatever is
+    // unallocated, so a sole nominee lands at 100%. Coercing blank to 0 here is
+    // what used to write 0% and say the opposite of what staff intended.
+    const typed = window.prompt('Share % — leave blank to give this nominee the whole holding');
+    const share = typed != null && typed.trim() !== '' ? Number(typed) : undefined;
+    if (share != null && !(share > 0)) { setMsg('Share % must be a number above 0, or blank.'); return; }
+    const existing = (data.nominees ?? []).map((n: any) => ({ full_name: n.full_name, relationship: n.relationship, share_pct: Number(n.share_pct) || undefined }));
+    await wrap(api.put(`/api/customers/${customerId}/nominees`, {
+      nominees: [...existing, { full_name: name, ...(share != null ? { share_pct: share } : {}) }],
+    }));
   }
   async function addJoint() {
     const name = window.prompt('Joint holder full name'); if (!name) return;

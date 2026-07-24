@@ -236,6 +236,9 @@ lockersRouter.post('/cheques', asyncHandler(async (req, res) => {
   const b = z.object({
     lockerhub_application_id: z.string().min(1),
     customer_id: z.number().int().positive().nullish(),
+    // Carried when there's no NCD customer_id — a LockerHub-only applicant.
+    applicant_name: z.string().nullish(),
+    applicant_phone: z.string().nullish(),
     leg: LEG,
     amount: z.number().positive(),
     cheque_no: z.string().min(1),
@@ -245,7 +248,8 @@ lockersRouter.post('/cheques', asyncHandler(async (req, res) => {
   }).parse(req.body ?? {});
   const { recordCheque } = await import('./cheques.js');
   res.status(201).json(await recordCheque(getDb(), req.user!, {
-    lockerApplicationId: b.lockerhub_application_id, customerId: b.customer_id ?? null, leg: b.leg,
+    lockerApplicationId: b.lockerhub_application_id, customerId: b.customer_id ?? null,
+    applicantName: b.applicant_name ?? null, applicantPhone: b.applicant_phone ?? null, leg: b.leg,
     amount: b.amount, chequeNo: b.cheque_no, bankName: b.bank_name ?? null,
     receivedOn: b.received_on, notes: b.notes ?? null,
   }));

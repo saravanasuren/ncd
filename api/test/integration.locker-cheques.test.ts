@@ -6,7 +6,9 @@
  * permission from taking the cheque.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { createServer, type Server } from 'node:http';
 import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { config } from '../src/config.js';
 
 let ctx: TestCtx;
 let custId: number;
@@ -94,5 +96,67 @@ describe('locker cheque register', () => {
     expect((r.json.rows as any[]).every((x) => x.status === 'Pending')).toBe(true);
     expect(r.json.rows.length).toBeGreaterThanOrEqual(1);
     expect(r.json.rows[0].customer_name).toBeTruthy(); // joined for the ops list
+  });
+
+  // A cheque can be taken for an applicant who exists only in LockerHub — no
+  // NCD customer_id to join against. Before migration 042 that row showed a
+  // blank name forever; now it carries what was on screen when the cheque was
+  // recorded.
+  it('an applicant with no NCD customer_id still shows a name — the snapshot taken at record time', async () => {
+    const staff = await as('staff@demo.local');
+    const appId = 'APP-2026-01200';
+    const r = await staff.post('/api/lockers/cheques', {
+      lockerhub_application_id: appId, leg: 'rent', amount: 6000,
+      cheque_no: 'CHQ-020', bank_name: 'Ujjivan', received_on: '2026-07-24',
+      applicant_name: 'Locker Only Applicant', applicant_phone: '9820000001',
+    });
+    expect(r.status).toBe(201);
+    expect(r.json.cheque.customer_id).toBeNull();
+
+    const list = await staff.get(`/api/lockers/cheques?application_id=${appId}`);
+    expect(list.json.rows[0].customer_name).toBe('Locker Only Applicant');
+  });
+
+  // A row from before the snapshot existed (customer_id AND applicant_name both
+  // null) resolves itself once against LockerHub and then never asks again.
+  describe('a legacy blank-name row self-heals from LockerHub, once', () => {
+    let mock: Server;
+    let hits = 0;
+    const LEGACY_APP = 'APP-2026-01300';
+
+    beforeAll(async () => {
+      mock = createServer((req, res) => {
+        const url = new URL(req.url ?? '/', 'http://x');
+        if (url.pathname === `/locker-applications/${LEGACY_APP}`) {
+          hits++;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ name: 'Resolved From LockerHub', phone: '9830000002' }));
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'not found' }));
+      });
+      await new Promise<void>((r) => mock.listen(0, '127.0.0.1', r));
+      const addr = mock.address();
+      config.LOCKERHUB_API_URL = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
+      // Insert directly — this is the pre-042 shape: no customer_id, no snapshot.
+      await ctx.db.query(
+        `INSERT INTO locker_cheques (lockerhub_application_id, leg, amount, cheque_no, received_on, status)
+         VALUES ($1, 'deposit', 5000, 'CHQ-030', '2026-07-01', 'Pending')`, [LEGACY_APP]);
+    });
+    afterAll(async () => {
+      config.LOCKERHUB_API_URL = undefined;
+      await new Promise<void>((r) => mock.close(() => r()));
+    });
+
+    it('resolves the name from LockerHub and caches it on the row', async () => {
+      const a = await admin();
+      const first = await a.get(`/api/lockers/cheques?application_id=${LEGACY_APP}`);
+      expect(first.json.rows[0].customer_name).toBe('Resolved From LockerHub');
+      expect(hits).toBe(1);
+
+      const second = await a.get(`/api/lockers/cheques?application_id=${LEGACY_APP}`);
+      expect(second.json.rows[0].customer_name).toBe('Resolved From LockerHub');
+      expect(hits).toBe(1); // cached — no second call
+    });
   });
 });

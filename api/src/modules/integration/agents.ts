@@ -73,7 +73,7 @@ agentsRouter.post('/agents/from-lockerhub', asyncHandler(async (req, res) => {
   const out = await db.withTx(async (tx) => {
     // Idempotency: the mirror keys off lockerhub_user_id.
     if (lhUid) {
-      const same = (await tx.query<{ id: string }>('SELECT id FROM agents WHERE lockerhub_user_id = $1', [lhUid])).rows[0];
+      const same = (await tx.query<{ id: string }>('SELECT id FROM agents WHERE lockerhub_user_id = $1 AND deleted_at IS NULL', [lhUid])).rows[0];
       if (same) {
         const id = Number(same.id);
         return { status: 200 as const, body: { ok: true, wealth_user_id: id, id, role: 'agent', already_existed: true, agent_id: id, status: 'exists' } };
@@ -82,7 +82,8 @@ agentsRouter.post('/agents/from-lockerhub', asyncHandler(async (req, res) => {
 
     // Phone collision with an existing agent.
     const byPhone = (await tx.query<{ id: string; lockerhub_user_id: string | null; phone: string | null }>(
-      `SELECT id, lockerhub_user_id, phone FROM agents WHERE ${phoneMatchSql('phone')} = $1 ORDER BY id ASC LIMIT 1`, [phone]
+      `SELECT id, lockerhub_user_id, phone FROM agents
+        WHERE deleted_at IS NULL AND ${phoneMatchSql('phone')} = $1 ORDER BY id ASC LIMIT 1`, [phone]
     )).rows[0];
     if (byPhone) {
       const id = Number(byPhone.id);
@@ -215,9 +216,10 @@ agentsRouter.post('/agents/authenticate', asyncHandler(async (req, res) => {
             u.id AS user_id, u.password_hash, u.is_active AS user_active
        FROM agents ag
        LEFT JOIN users u ON u.id = ag.user_id
-      WHERE lower(COALESCE(ag.email,'')) = lower($1)
-         OR lower(COALESCE(u.email,'')) = lower($1)
-         ${identPhone.length === 10 ? `OR ${phoneMatchSql('ag.phone')} = $2` : ''}
+      WHERE ag.deleted_at IS NULL
+        AND (lower(COALESCE(ag.email,'')) = lower($1)
+             OR lower(COALESCE(u.email,'')) = lower($1)
+             ${identPhone.length === 10 ? `OR ${phoneMatchSql('ag.phone')} = $2` : ''})
       ORDER BY ag.id ASC LIMIT 1`,
     identPhone.length === 10 ? [identifier, identPhone] : [identifier]
   )).rows[0];

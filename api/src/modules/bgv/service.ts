@@ -206,14 +206,18 @@ export const isDataComplete = (checks: DataCheck[]) => checks.every((k) => k.opt
 const hasAllKycDocs = (docs: Record<string, unknown>) => KYC_DOC_TYPES.every((t) => !!docs[t]);
 
 function counters(rows: Array<{ kyc_status?: unknown; docs?: Record<string, unknown>; data_checks?: DataCheck[] }>) {
-  let verified = 0, pending = 0, dataComplete = 0, needsAttention = 0;
+  let verified = 0, pending = 0, dataComplete = 0, needsAttention = 0, bankProofMissing = 0;
   for (const r of rows) {
     if (r.kyc_status === 'Verified') verified++; else pending++;
     const ok = isDataComplete(r.data_checks ?? []);
     if (ok) dataComplete++;
     if (!ok || !hasAllKycDocs(r.docs ?? {})) needsAttention++;
+    // Passbook / cancelled-cheque photo (owner 2026-07-24): captured in the
+    // wizard's bank step as 'bank_proof'; counted here so ops can SEE how many
+    // are missing it. Informational — it never gates KYC.
+    if (!(r.docs ?? {})['BankProof']) bankProofMissing++;
   }
-  return { customers: rows.length, kyc_verified: verified, kyc_pending: pending, data_complete: dataComplete, needs_attention: needsAttention };
+  return { customers: rows.length, kyc_verified: verified, kyc_pending: pending, data_complete: dataComplete, needs_attention: needsAttention, bank_proof_missing: bankProofMissing };
 }
 
 // ── Inline fixer ─────────────────────────────────────────────────────────

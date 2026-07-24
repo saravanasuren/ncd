@@ -2,8 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { useAuth } from '../auth/AuthContext.js';
 
-interface PaidItem { application_no: string; accrual_date: string; paid_at: string; amount: string }
+interface PaidItem { application_no: string; customer_name: string | null; customer_code: string | null; accrual_date: string; paid_at: string; amount: string }
 interface SeriesRow { series_code: string; series_name: string; investments: number; customers: number; amount: string }
 interface MonthRow { month: string; investments: number; customers: number; amount: string }
 interface MyEarnings {
@@ -31,13 +32,29 @@ function Tile({ label, value, sub, highlight }: { label: string; value: string; 
   );
 }
 
-const paidColumns: Column<PaidItem>[] = [
-  { key: 'application_no', header: 'Application', tdClassName: 'font-mono text-xs' },
-  { key: 'paid_at', header: 'Paid on', value: (r) => day(r.paid_at), render: (r) => <span className="mono">{day(r.paid_at)}</span> },
-  { key: 'amount', header: 'Amount', align: 'right', value: (r) => Number(r.amount), render: (r) => <span className="mono">{formatINR(r.amount)}</span> },
-];
+/**
+ * Branch staff see WHICH customers they were paid for, but not how much each
+ * one earned them (owner 2026-07-24) — the per-customer split isn't theirs to
+ * see; their total is already on the tiles above. Agents keep the breakdown,
+ * since it's how they reconcile their own commission.
+ */
+function paidColumnsFor(hideAmount: boolean): Column<PaidItem>[] {
+  const cols: Column<PaidItem>[] = [
+    { key: 'customer_name', header: 'Customer', tdClassName: 'font-medium',
+      value: (r) => r.customer_name ?? '',
+      render: (r) => <span>{r.customer_name ?? '—'}{r.customer_code && <span className="text-text-muted font-mono text-xs"> · {r.customer_code}</span>}</span> },
+    { key: 'application_no', header: 'Application', tdClassName: 'font-mono text-xs' },
+    { key: 'paid_at', header: 'Paid on', value: (r) => day(r.paid_at), render: (r) => <span className="mono">{day(r.paid_at)}</span> },
+  ];
+  if (!hideAmount) {
+    cols.push({ key: 'amount', header: 'Amount', align: 'right', value: (r) => Number(r.amount), render: (r) => <span className="mono">{formatINR(r.amount)}</span> });
+  }
+  return cols;
+}
 
 export function MyEarningsPage() {
+  const { user } = useAuth();
+  const hideAmount = user?.role === 'branch_staff';
   const { data, isLoading, error } = useQuery({ queryKey: ['my-earnings'], queryFn: () => api.get<MyEarnings>('/api/incentives/my-earnings') });
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Failed to load earnings.</div>;
@@ -83,7 +100,7 @@ export function MyEarningsPage() {
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Incentive payouts received</h2>
       <DataTable
-        columns={paidColumns}
+        columns={paidColumnsFor(hideAmount)}
         rows={d.paid_items}
         rowKey={(r) => `${r.application_no}-${r.paid_at}`}
         defaultSort={{ key: 'paid_at', dir: 'desc' }}

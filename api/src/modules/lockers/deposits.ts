@@ -512,6 +512,36 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
   // ordinary online-paid tenant. Matched on their tenant_id; a waiver whose
   // tenancy isn't in today's roster (their API down, or the tenancy closed)
   // is appended from its snapshot so the record never silently disappears.
+  // Manual link + removal overrides (owner 2026-07-24). A hand-made link BEATS
+  // the automatic phone+name match — it is an explicit human decision, and the
+  // automatic rule cannot settle cases like "SEENU RAJAPPA" vs our "SEENU"
+  // (LockerHub exposes no PAN: profile is null for these tenants, and where a
+  // profile exists the PAN is masked).
+  const { tenantOverrides } = await import('./tenantOverrides.js');
+  const overrides = await tenantOverrides(db);
+  const overrideBy = new Map(overrides.map((o) => [String(o.lockerhub_tenant_id), o]));
+  // Rows NCD contributes (a pledge or cheque on a locker not yet allotted) have
+  // no tenant_id — LockerHub only mints one at allotment. They key on our
+  // lockerhub_application_id instead, so they can be linked/removed too.
+  const overrideKey = (r: Record<string, unknown>) => String(r.tenant_id || r.lockerhub_application_id || '');
+  for (const r of rows) {
+    r.override_key = overrideKey(r);
+    const o = overrideBy.get(overrideKey(r));
+    if (!o) continue;
+    if (o.customer_id != null) {
+      r.customer_id = Number(o.customer_id);
+      r.customer_code = o.customer_code ?? null;
+      r.linked_manually = true;
+    }
+    r.removed_at = o.removed_at ?? null;
+    r.removed_reason = o.removed_reason ?? null;
+  }
+  // A removed tenancy leaves NCD's roster entirely — that is the point of the
+  // action. It stays allotted on LockerHub, which owns it.
+  const visible = rows.filter((r) => !r.removed_at);
+  rows.length = 0;
+  rows.push(...visible);
+
   const { openWaivers } = await import('./waivers.js');
   const waivers = await openWaivers(db);
   const waiverByTenant = new Map(waivers.map((w) => [String(w.lockerhub_tenant_id), w]));
@@ -524,6 +554,8 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
   const shown = new Set(rows.map((r) => String(r.tenant_id ?? '')));
   for (const w of waivers) {
     if (shown.has(String(w.lockerhub_tenant_id))) continue;
+    // …and a removed tenancy must not reappear through the waiver overlay.
+    if (overrideBy.get(String(w.lockerhub_tenant_id))?.removed_at) continue;
     if (opts.branchId && w.branch_id && w.branch_id !== opts.branchId) continue;
     rows.push({
       tenant_id: String(w.lockerhub_tenant_id),
@@ -536,6 +568,7 @@ export async function lockerTenants(db: Db, opts: { branchId?: string } = {}) {
       customer_id: w.customer_id, customer_code: w.customer_code ?? null,
       pledged_amount: 0, cheque_pending: false, ncd_backed: false, unresolved: !rosterRead,
       waiver_id: w.id, waiver_status: w.status, waiver_reason: w.reason,
+      override_key: String(w.lockerhub_tenant_id),
     });
   }
 

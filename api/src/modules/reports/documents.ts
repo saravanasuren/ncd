@@ -159,6 +159,50 @@ export async function tds26q(db: Db, quarter: string): Promise<Buffer> {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+// dd/mm/yyyy — matches wealth's _cwDate exactly (the format ops are used to
+// reading this report in).
+function ddmmyyyy(v: string | null): string {
+  if (!v) return '';
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : v;
+}
+
+/** Two-sheet workbook, ported column-for-column from wealth's customer-wise.xlsx
+ * (Customers + Investments, exact header text and order). */
+export async function customerWiseXlsx(rows: import('./book.js').CustomerWiseRow[]): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+
+  const custWs = wb.addWorksheet('Customers');
+  custWs.addRow([
+    'S.No', 'Customer Code', 'Name', 'DOB', 'Age', 'PAN', 'Phone', 'Address',
+    'TDS / Form 121', 'Total Investment', 'Redemption Amount', 'All-time Invested', 'No. of Investments',
+  ]).eachCell((c) => { c.font = { bold: true }; });
+  rows.forEach((r, i) => {
+    custWs.addRow([
+      i + 1, r.customer_code, r.full_name, ddmmyyyy(r.dob), r.age ?? '', r.pan ?? '', r.phone ?? '',
+      r.address, r.tds_status, r.total_invested, r.total_redeemed, r.total_all_time, r.applications.length,
+    ]);
+  });
+  custWs.columns = [
+    { width: 6 }, { width: 16 }, { width: 26 }, { width: 12 }, { width: 6 }, { width: 13 }, { width: 14 },
+    { width: 34 }, { width: 22 }, { width: 15 }, { width: 16 }, { width: 16 }, { width: 15 },
+  ];
+
+  const invWs = wb.addWorksheet('Investments');
+  invWs.addRow(['Customer Code', 'Name', 'PAN', 'Application No', 'Series', 'Amount', 'Status', 'Date'])
+    .eachCell((c) => { c.font = { bold: true }; });
+  rows.forEach((r) => {
+    for (const a of r.applications) {
+      invWs.addRow([r.customer_code, r.full_name, r.pan ?? '', a.application_no, a.series_code ?? '', a.amount, a.status, ddmmyyyy(a.date_money_received)]);
+    }
+  });
+  invWs.columns = [
+    { width: 16 }, { width: 26 }, { width: 13 }, { width: 18 }, { width: 14 }, { width: 15 }, { width: 20 }, { width: 12 },
+  ];
+
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
 /** Full DB dump — key tables as sheets (admin). STREAMS to the response so the
  * large Schedule sheet (~tens of thousands of rows) never buffers the whole
  * workbook in memory (that OOM-killed the 512M service → nginx 502). */

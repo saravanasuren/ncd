@@ -99,6 +99,16 @@ export function ReportsPage() {
             </div>
           </div>
         )}
+        {can('reports:download') && (
+          <div className={card}>
+            <h2 className="text-sm font-semibold mb-2">Customer-wise report</h2>
+            <p className="text-xs text-text-muted mb-2">One row per customer — DOB, PAN, address, TDS status and their individual investments.</p>
+            <div className="flex gap-2">
+              <a href="/app/reports/customer-wise" className={dl}>Open report →</a>
+              <a href="/api/reports/customer-wise.xlsx" className={`${dl} !bg-transparent !text-primary border border-border`}>↓ Excel</a>
+            </div>
+          </div>
+        )}
         {can('settings:manage') && (
           <div className={card}>
             <h2 className="text-sm font-semibold mb-2">Full database dump</h2>

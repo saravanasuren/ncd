@@ -25,6 +25,7 @@ import { BackgroundVerificationPage } from './pages/BackgroundVerification.js';
 import { PersonDetailPage } from './pages/PersonDetail.js';
 import { AllotmentsPage } from './pages/Allotments.js';
 import { PayoutsPage } from './pages/Payouts.js';
+import { EscrowPage } from './pages/Escrow.js';
 import { MyEarningsPage } from './pages/MyEarnings.js';
 import { RedemptionsPage } from './pages/Redemptions.js';
 import { IncentivesPage } from './pages/Incentives.js';
@@ -113,6 +114,7 @@ export function App() {
           <Route path="ncd-events" element={<RequirePerm perm="redemptions:initiate"><EventsPage /></RequirePerm>} />
           <Route path="masters" element={<RequirePerm perm="products:manage"><MastersPage /></RequirePerm>} />
           <Route path="payouts" element={<RequirePerm perm="payouts:generate"><PayoutsPage /></RequirePerm>} />
+          <Route path="escrow" element={<RequirePerm perm="escrow:reconcile"><EscrowPage /></RequirePerm>} />
           <Route path="incentives" element={<RequirePerm perm="incentives:manage-eligibility"><IncentivesPage /></RequirePerm>} />
           <Route path="my-earnings" element={<RequirePerm perm="earnings:read-own"><MyEarningsPage /></RequirePerm>} />
           <Route path="settings" element={<RequirePerm perm={['settings:manage', 'settings:workflow-config']}><SettingsPage /></RequirePerm>} />

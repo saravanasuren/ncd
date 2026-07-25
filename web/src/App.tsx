@@ -29,6 +29,7 @@ import { MyEarningsPage } from './pages/MyEarnings.js';
 import { RedemptionsPage } from './pages/Redemptions.js';
 import { IncentivesPage } from './pages/Incentives.js';
 import { ReportsPage } from './pages/Reports.js';
+import { CustomerWiseReportPage } from './pages/CustomerWiseReport.js';
 import { SystemPage } from './pages/System.js';
 import { MastersPage } from './pages/Masters.js';
 import { EventsPage } from './pages/Events.js';
@@ -94,6 +95,7 @@ export function App() {
           <Route path="dashboard" element={<RequirePerm perm="dashboard:view"><Suspense fallback={<div className="text-text-muted">Loading dashboard…</div>}><Dashboard /></Suspense></RequirePerm>} />
           <Route path="segments" element={<RequirePerm perm={['reports:download', 'dashboard:drilldown']}><SegmentsPage /></RequirePerm>} />
           <Route path="reports" element={<RequirePerm perm="reports:download"><ReportsPage /></RequirePerm>} />
+          <Route path="reports/customer-wise" element={<RequirePerm perm="reports:download"><CustomerWiseReportPage /></RequirePerm>} />
           <Route path="system" element={<RequirePerm perm={['audit:read', 'notifications:admin']}><SystemPage /></RequirePerm>} />
           <Route path="leads" element={<RequirePerm perm="leads:read"><LeadsPage /></RequirePerm>} />
           <Route path="customers" element={<RequirePerm perm="customers:read"><CustomersPage /></RequirePerm>} />

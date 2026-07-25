@@ -205,6 +205,123 @@ export async function customerwise(db: Db, actor: AuthUser, filters: BookFilters
   return rows;
 }
 
+export interface CustomerWiseApplication {
+  application_no: string;
+  series_code: string | null;
+  amount: number;
+  status: string;
+  date_money_received: string | null;
+}
+export interface CustomerWiseRow {
+  id: number;
+  customer_code: string;
+  full_name: string;
+  dob: string | null;
+  age: number | null;
+  pan: string | null;
+  phone: string | null;
+  address: string;
+  tds_status: string;
+  total_invested: number;
+  total_all_time: number;
+  total_redeemed: number;
+  applications: CustomerWiseApplication[];
+}
+
+/** TDS status label — wording ported verbatim from wealth's "Form 121" report
+ * (a filed 15G/15H is internally "Form 121" there). */
+function tdsStatusLabel(taxForm: string | null, tdsApplicable: boolean): string {
+  if (taxForm) return `Form 121 (${taxForm}) — no TDS`;
+  if (tdsApplicable === false) return 'No TDS';
+  return 'TDS applicable';
+}
+
+function fullAddress(r: { address: string | null; city: string | null; district: string | null; state: string | null; pincode: string | null }): string {
+  return [r.address, r.city, r.district, r.state, r.pincode]
+    .map((v) => (v == null ? '' : String(v).trim()))
+    .filter(Boolean).join(', ');
+}
+
+/**
+ * Ported from wealth's "Customer-wise report" (`_customerWiseRows`,
+ * app/src/routes/reports.js, 2026-07-18) — one row per customer with DOB, PAN,
+ * address and TDS status, and a three-way money split, each customer's
+ * individual NCDs nested underneath for the expandable UI / detail sheet.
+ *
+ *   total_invested — money still on the books RIGHT NOW. Uses ncd's own
+ *     netted book value (AMT), NOT wealth's raw a.total_amount — wealth's
+ *     figure restates the exact ₹25L partial-premature-withdrawal
+ *     overstatement bug already found and fixed everywhere else in this app
+ *     (a part-redeemed line still showed its full original amount there).
+ *   total_all_time — every rupee ever subscribed, ignoring what's since come
+ *     back out. This is deliberately the ORIGINAL total_amount even for a
+ *     still-active partially-withdrawn line, so it keeps reading what was put
+ *     in — that's the whole point of the column existing separately from
+ *     total_invested.
+ *   total_redeemed — the original total_amount of applications that have
+ *     fully exited (Redeemed/Matured/PrematureWithdrawn/RolledOver/Transferred).
+ *
+ * Scoped like every other report (appWhere) — an agent/branch manager sees
+ * only their own customers, matching the Segments customer-wise tab. Wealth's
+ * original had no such scoping because the roles that could reach it
+ * (super_admin/admin/cxo/wealth_manager) always saw the whole book anyway;
+ * scoping this one the same way the rest of ncd works avoids handing a
+ * branch-scoped role every customer's PAN/DOB/address.
+ */
+export async function customerWiseReport(db: Db, actor: AuthUser): Promise<CustomerWiseRow[]> {
+  const extra = [`a.status IN (${OUTSTANDING_SQL_LIST}, ${EXITED_STATUS_SQL_LIST})`, 'c.is_active = TRUE', 'c.archived_at IS NULL'];
+  const w = appWhere(actor, {}, extra);
+  const { rows } = await db.query<any>(
+    `SELECT c.id, c.customer_code, c.full_name, c.dob, c.pan, c.phone,
+            c.address, c.city, c.district, c.state, c.pincode,
+            c.tds_applicable, c.tax_form,
+            a.application_no, ${AMT} AS amount, a.total_amount, a.status,
+            a.date_money_received, s.code AS series_code
+     ${FROM} WHERE ${w.sql}`, w.params);
+
+  const outstandingStatus = new Set<string>(OUTSTANDING_APPLICATION_STATUSES);
+  const byId = new Map<number, CustomerWiseRow>();
+  for (const r of rows) {
+    const id = Number(r.id);
+    let row = byId.get(id);
+    if (!row) {
+      row = {
+        id, customer_code: r.customer_code, full_name: r.full_name,
+        dob: toISODate(r.dob), age: ageAt(r.dob),
+        pan: r.pan ?? null, phone: r.phone ?? null,
+        address: fullAddress(r), tds_status: tdsStatusLabel(r.tax_form, r.tds_applicable),
+        total_invested: 0, total_all_time: 0, total_redeemed: 0, applications: [],
+      };
+      byId.set(id, row);
+    }
+    const live = outstandingStatus.has(r.status);
+    const bookAmt = round2(Number(r.amount));          // AMT — netted, live outstanding
+    const subscribed = round2(Number(r.total_amount));  // raw subscribed amount
+    row.total_all_time = round2(row.total_all_time + subscribed);
+    if (live) row.total_invested = round2(row.total_invested + bookAmt);
+    else row.total_redeemed = round2(row.total_redeemed + subscribed);
+    row.applications.push({
+      application_no: r.application_no, series_code: r.series_code ?? null,
+      amount: subscribed, status: r.status, date_money_received: toISODate(r.date_money_received),
+    });
+  }
+  const out = [...byId.values()];
+  out.sort((a, b) => b.total_invested - a.total_invested || a.full_name.localeCompare(b.full_name));
+  for (const r of out) r.applications.sort((a, b) => (b.date_money_received ?? '').localeCompare(a.date_money_received ?? ''));
+  return out;
+}
+
+/** Completed years at today. Blank when the DOB is unusable. */
+function ageAt(dob: string | Date | null | undefined): number | null {
+  const iso = toISODate(dob as string | null);
+  if (!iso) return null;
+  const [y, m, d] = iso.split('-').map(Number);
+  const now = new Date();
+  let age = now.getFullYear() - y!;
+  if (now.getMonth() + 1 < m! || (now.getMonth() + 1 === m && now.getDate() < d!)) age--;
+  return age >= 0 && age < 130 ? age : null;
+}
+
 /** Lead pipeline funnel — count + Σ expected amount per lead status (scoped). */
 export async function leadFunnel(db: Db, actor: AuthUser) {
   const sc = scopeWhere(scopeFor(actor), { userCol: 'l.created_by_user_id', agentCol: 'l.created_by_agent_id', branchCol: 'l.branch_id' }, 0);

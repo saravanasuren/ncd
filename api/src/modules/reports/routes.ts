@@ -121,6 +121,30 @@ reportsRouter.get('/application-form/:applicationId.pdf', requirePermission('cus
     res.end(buf);
   }));
 
+// Customer-wise report — ported from wealth's report of the same name. One
+// row per customer (DOB/PAN/address/TDS + a 3-way money split), each
+// customer's individual NCDs nested for the expandable UI / detail sheet.
+reportsRouter.get('/customer-wise', requirePermission('reports:download'),
+  asyncHandler(async (req, res) => {
+    const rows = await book.customerWiseReport(getDb(), req.user!);
+    res.json({
+      customers: rows,
+      count: rows.length,
+      grand_total: rows.reduce((s, r) => s + r.total_invested, 0),
+      investments: rows.reduce((s, r) => s + r.applications.length, 0),
+    });
+  }));
+
+reportsRouter.get('/customer-wise.xlsx', requirePermission('reports:download'),
+  asyncHandler(async (req, res) => {
+    const rows = await book.customerWiseReport(getDb(), req.user!);
+    const { customerWiseXlsx } = await import('./documents.js');
+    const buf = await customerWiseXlsx(rows);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="customer-wise-report.xlsx"');
+    res.end(buf);
+  }));
+
 // 26Q quarterly TDS filing annexure. :quarter = 'YYYY-Qn'.
 reportsRouter.get('/tds-26q/:quarter.xlsx', requirePermission('reports:download'),
   asyncHandler(async (req, res) => {

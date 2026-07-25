@@ -22,6 +22,7 @@
  * the math without owner sign-off.
  */
 import {
+  addDays,
   addMonths,
   adjustForHoliday,
   dayOfMonth,
@@ -70,6 +71,17 @@ export interface ScheduleOpts {
   holidays?: string[];
   /** Config-driven (settings `interest.payout_day_of_month`, default 28). */
   payoutDay?: number;
+  /**
+   * True when `interestStartDate` is actually a prior WATERMARK already paid
+   * through (e.g. the legacy-migration freeze anchor — migrate-legacy/pipeline.ts
+   * passes its cutover date here to regenerate everything after it), not a
+   * fresh investment day. In that case the first generated period must NOT
+   * count that boundary day, matching previewDue's ordinary paid_through
+   * convention. Default false: the common case is a real go-live, where
+   * interestStartDate is the actual day money arrived and — owner-confirmed
+   * 2026-07-25 — that day itself accrues.
+   */
+  startIsPriorWatermark?: boolean;
 }
 
 export interface ScheduleRow {
@@ -115,7 +127,8 @@ function payoutDatesFor(
 }
 
 export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): ScheduleRow[] {
-  const { interestStartDate, seriesDeemedDate, holidays, payoutDay = 28 } = opts;
+  const { interestStartDate, seriesDeemedDate, holidays, payoutDay = 28, startIsPriorWatermark = false } = opts;
+  const firstDayCounts = !startIsPriorWatermark;
   if (!interestStartDate || !seriesDeemedDate) {
     throw new Error('generateSchedule requires interestStartDate and seriesDeemedDate');
   }
@@ -140,13 +153,22 @@ export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): Schedu
 
     for (let i = 0; i < payouts.length; i++) {
       const due = payouts[i]!;
-      const actualDays = daysBetween(prev, due);
+      // The FIRST period only: `prev` is interestStartDate itself, the day the
+      // money actually arrived — a day that has never been paid for, unlike
+      // every later `prev` (a prior payout boundary, already compensated
+      // through end of that day). daysBetween is exclusive of its start, which
+      // is correct for i>0 but silently drops the investment day itself for
+      // i=0. Owner-confirmed 2026-07-25: interest starts ON the day of
+      // investment, so the first period counts one more day than daysBetween
+      // alone gives.
+      const actualDays = daysBetween(prev, due) + (i === 0 && firstDayCounts ? 1 : 0);
       let periodDays: number;
       let isBroken: boolean;
       if (convention === 'Thirty360') {
-        // Back-compat opt-in: flat 30-day months, broken first = (30 − invest_day).
+        // Back-compat opt-in: flat 30-day months, broken first = (30 − invest_day + 1)
+        // — same inclusive-of-investment-day rule as the Actual* branch below.
         if (i === 0 && investDay > 1) {
-          periodDays = m * 30 - investDay;
+          periodDays = m * 30 - investDay + (firstDayCounts ? 1 : 0);
           isBroken = true;
         } else {
           periodDays = m * 30;
@@ -181,8 +203,12 @@ export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): Schedu
     });
 
     // Maturity broken-interest catch-up on the first payout day after maturity.
+    // Owner-confirmed 2026-07-25: interest stops the day BEFORE principal is
+    // returned — maturity day itself is never a paid day, same rule as a
+    // premature redemption. daysBetween's end is inclusive, so back the
+    // boundary up by one rather than counting maturityDate itself.
     if (lastRegularPayout) {
-      const brokenDays = daysBetween(lastRegularPayout, maturityDate);
+      const brokenDays = daysBetween(lastRegularPayout, addDays(maturityDate, -1));
       if (brokenDays > 0) {
         const denom = denominatorFor(convention, lastRegularPayout);
         const brokenAmt = round2((amount * rate) / 100 * brokenDays / denom);

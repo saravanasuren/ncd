@@ -44,12 +44,14 @@ const expectedGross = (days: number) => (AMOUNT * RATE) / 100 * days / 365;
 describe('pro-rata interest payout on any date', () => {
   it('a mid-period date accrues pro-rata (not a full month)', async () => {
     const a = await admin();
-    // 1 Jul -> 11 Jul = 10 days, well before the 28th
+    // 1 Jul -> 11 Jul = 11 days: this is the line's first-ever period, so
+    // interest starts ON 1 Jul itself (owner 2026-07-25) — not just the 10
+    // days after it.
     const p = await a.get('/api/payouts/preview?date=2026-07-11');
     const row = mine(p.json.rows)[0];
     expect(row, 'accrual row for our app').toBeTruthy();
-    expect(Number(row.days)).toBe(10);
-    expect(Number(row.gross_amount)).toBeCloseTo(expectedGross(10), 0);
+    expect(Number(row.days)).toBe(11);
+    expect(Number(row.gross_amount)).toBeCloseTo(expectedGross(11), 0);
   });
 
   it('paying a batch advances the watermark — the next sheet only bills the NEW days', async () => {
@@ -57,24 +59,27 @@ describe('pro-rata interest payout on any date', () => {
     const ncd = new Client(ctx.base);
     await ncd.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
 
-    // settle 1 -> 11 Jul
+    // settle 1 -> 11 Jul (11 days — the line's first-ever period, 1st counts)
     const b1 = await a.post('/api/payouts', { payout_date: '2026-07-11' });
     expect(b1.status).toBe(201);
     const paidGross = Number(mine(b1.json.rows)[0].gross_amount);
-    expect(paidGross).toBeCloseTo(expectedGross(10), 0);
+    expect(paidGross).toBeCloseTo(expectedGross(11), 0);
     // sheet is downloadable straight away (before any approval)
     const sheet = await a.get(`/api/payouts/${b1.json.batch_id}/download.xlsx`);
     expect(sheet.status).toBe(200);
     // creating the batch IS the "this was paid" claim → a checker approves it, which settles
     await ncd.post(`/api/approvals/${b1.json.request.id}/approve`);
 
-    // next sheet on 21 Jul must bill only 11 -> 21 (10 days), NOT 1 -> 21 (20 days)
+    // next sheet on 21 Jul must bill only 11 -> 21 (10 days), NOT 1 -> 21 (21 days).
+    // This is now a REGULAR watermark-based period (11 Jul was actually paid
+    // through), so the ordinary exclusive-start count is correct as-is — no
+    // +1 here, unlike the line's first period above.
     const p2 = await a.get('/api/payouts/preview?date=2026-07-21');
     const row2 = mine(p2.json.rows)[0];
     expect(Number(row2.days)).toBe(10);
     expect(row2.from_date).toBe('2026-07-11'); // watermark moved to the paid date
     expect(Number(row2.gross_amount)).toBeCloseTo(expectedGross(10), 0);
-    expect(Number(row2.gross_amount)).toBeLessThan(expectedGross(20)); // no double-pay
+    expect(Number(row2.gross_amount)).toBeLessThan(expectedGross(21)); // no double-pay
   });
 
   it('the sheet is stateless: pull it for many dates, many times, nothing is reserved', async () => {

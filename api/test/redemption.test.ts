@@ -18,10 +18,12 @@ describe('computeRedemption', () => {
       principal: 500000,
       couponRatePct: 10,
       lastRegularPayoutDate: '2027-03-28',
-      redemptionDate: '2027-03-30', // 2 days
+      redemptionDate: '2027-03-30', // stops the day before → 29th only = 1 day
     });
-    // 5L × 10% × 2/365 = ₹273.97
-    expect(r.brokenInterest).toBeCloseTo(273.97, 2);
+    // Owner-confirmed 2026-07-25: interest stops the day BEFORE redemption, so
+    // 28→30 Mar accrues only the 29th (1 day), not both the 29th and 30th.
+    // 5L × 10% × 1/365 = ₹136.99
+    expect(r.brokenInterest).toBeCloseTo(136.99, 2);
     // netPayment must NOT include broken interest
     expect(r.netPayment).toBe(495000);
   });

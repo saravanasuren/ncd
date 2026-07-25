@@ -430,3 +430,55 @@ describe('a customer\'s redemption row sits with their interest rows', () => {
     expect(names.lastIndexOf('Order Mid Investor')).toBeLessThan(names.indexOf('Order Zed Investor'));
   });
 });
+
+// Owner 2026-07-25: found via this very sheet — a brand-new "Addition" row was
+// a day short. Interest starts ON the day of investment, not the day after.
+describe('a new investment earns interest starting the day of investment', () => {
+  it('invested 1-Sep, previewed 5-Sep → 5 days accrue (1st through 5th), not 4', async () => {
+    const a = await admin();
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    const cust = await a.post('/api/customers', { full_name: 'Day One Investor', phone: '9600000051' });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '66660005151', ifsc: 'ICIC0001234', holder_name: 'Day One Investor' });
+    const app = await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-09-01',
+    });
+    await approveInvestment(await as('ncd@demo.local'), app);
+
+    const preview = await a.get('/api/payouts/preview?date=2026-09-05');
+    const row = (preview.json.rows as Array<{ customer_name: string; days: number; gross_amount: number }>)
+      .find((r) => r.customer_name === 'Day One Investor');
+    expect(row).toBeTruthy();
+    expect(row!.days).toBe(5); // 1,2,3,4,5 Sep — not 4 (which would drop the 1st)
+    // 500000 × 12% × 5/365 = ₹821.92
+    expect(Number(row!.gross_amount)).toBeCloseTo(821.92, 2);
+  });
+
+  it('the same day-count shows up correctly on the saved batch sheet\'s "Days" column', async () => {
+    const a = await admin();
+    const ncd = await as('ncd@demo.local');
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    const cust = await a.post('/api/customers', { full_name: 'Day One Batch Investor', phone: '9600000052' });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '66660005252', ifsc: 'ICIC0001234', holder_name: 'Day One Batch Investor' });
+    const app = await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-10-01',
+    });
+    await approveInvestment(ncd, app);
+
+    const batch = await ncd.post('/api/payouts', { payout_date: '2026-10-05' });
+    expect(batch.status).toBe(201);
+    const ws = await sheetOf((await a.raw(`/api/payouts/${batch.json.batch_id}/summary.xlsx`)).buffer);
+    let found: { from: unknown; to: unknown; days: number } | null = null;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      if (String(row.getCell(3).value) === 'Day One Batch Investor') {
+        found = { from: row.getCell(16).value, to: row.getCell(17).value, days: Number(row.getCell(18).value) };
+      }
+    }
+    expect(found).toBeTruthy();
+    expect(found!.days).toBe(5);
+    expect(String(found!.from)).toBe('01/10/2026'); // the day of investment itself
+    expect(String(found!.to)).toBe('05/10/2026');
+  });
+});

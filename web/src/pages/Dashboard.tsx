@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
@@ -51,7 +52,9 @@ function qs(r: Range): string {
 /** NCD Portfolio dashboard — quick ranges + clickable tiles → drill-down. */
 export function Dashboard() {
   const { can, user } = useAuth();
+  const nav = useNavigate();
   const canDrill = can('dashboard:drilldown');
+  const canEscrow = can('escrow:reconcile');
   // NCD book download: CXO + Admin tier only (not every reports:download holder).
   const canDownloadBook = !!user && ['super_admin', 'admin', 'cxo'].includes(user.role);
   const [range, setRange] = useState<Range>(defaultRange);
@@ -60,6 +63,14 @@ export function Dashboard() {
   const overview = useQuery({
     queryKey: ['dash-overview', range.from, range.to, (range.series ?? []).join(',')],
     queryFn: () => api.get<any>(`/api/dashboard/overview?${qs(range)}`),
+  });
+  // Escrow snapshot — its own endpoint so a fresh install with no statement
+  // uploaded just hides the row rather than erroring the whole dashboard.
+  const escrow = useQuery({
+    queryKey: ['dash-escrow'],
+    queryFn: () => api.get<any>('/api/escrow/summary'),
+    enabled: canEscrow,
+    retry: false,
   });
 
   const activeSeries = overview.data?.active_series;
@@ -129,6 +140,20 @@ export function Dashboard() {
                       onClick={() => pickWidget('rate-mix', 'Cost of funds — by coupon rate')} canDrill={canDrill} />
                   )}
                 </div>
+
+                {/* Escrow — inbound subscription money in the SBI escrow account.
+                    Balance + money received from payers not yet enrolled; click
+                    through to the reconciliation page for the full breakup. */}
+                {canEscrow && escrow.data && (
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-6">
+                    <Tile label="Escrow balance" value={escrow.data.escrow_balance != null ? formatINR(escrow.data.escrow_balance) : '—'}
+                      sub={escrow.data.escrow_account ? `A/c …${String(escrow.data.escrow_account).slice(-4)}${escrow.data.as_of ? ` · as on ${escrow.data.as_of}` : ''}` : 'No statement uploaded'}
+                      onClick={() => nav('/app/escrow')} canDrill />
+                    <Tile label="Received — not enrolled" value={formatINR(escrow.data.not_enrolled_total)}
+                      sub={`${escrow.data.not_enrolled_count} payment(s) · not in the system`}
+                      onClick={() => nav('/app/escrow')} canDrill />
+                  </div>
+                )}
 
                 {/* Snapshot panels — always the whole book "as it stands now",
                     independent of the quick-range / series picker above. */}

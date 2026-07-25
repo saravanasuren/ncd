@@ -278,6 +278,35 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     editableBy: 'super_admin',
   },
 
+  // ── Escrow (inbound subscription reconciliation) ──
+  {
+    key: 'escrow.account_number',
+    group: 'Escrow',
+    label: 'Escrow account number',
+    description: 'The SBI current account NCD subscription money lands in. Used to sanity-check an uploaded statement is for the right account.',
+    type: 'string',
+    default: '',
+    editableBy: 'admin',
+  },
+  {
+    key: 'escrow.company_accounts',
+    group: 'Escrow',
+    label: 'Company-owned accounts (comma-separated)',
+    description: "Account numbers that belong to the company itself. Credits from these are the escrow floor / internal transfers, not investments.",
+    type: 'string',
+    default: '',
+    editableBy: 'admin',
+  },
+  {
+    key: 'escrow.company_floor',
+    group: 'Escrow',
+    label: 'Company floor balance (₹)',
+    description: 'Minimum balance the company parks in escrow (not an investment). Shown separately in the escrow breakup.',
+    type: 'number',
+    default: 1000000,
+    editableBy: 'admin',
+  },
+
   // ── System ──
   {
     key: 'system.api_page_limit_max',

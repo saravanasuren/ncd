@@ -29,6 +29,7 @@ export const NAV: NavItem[] = [
   { to: '/app/redemptions', label: 'Redemptions', anyOf: ['redemptions:initiate'], group: 'Periodic' },
   { to: '/app/ncd-events', label: 'NCD Events', anyOf: ['redemptions:initiate'], group: 'Periodic' },
   { to: '/app/payouts', label: 'Payouts', anyOf: ['payouts:generate'], group: 'Periodic' },
+  { to: '/app/escrow', label: 'Escrow', anyOf: ['escrow:reconcile'], group: 'Periodic' },
   { to: '/app/incentives', label: 'Incentives', anyOf: ['incentives:manage-eligibility'], group: 'Periodic' },
   { to: '/app/agents', label: 'Agents', anyOf: ['agents:manage'], group: 'Periodic' },
   { to: '/app/my-earnings', label: 'My Earnings', anyOf: ['earnings:read-own'], group: 'Periodic' },

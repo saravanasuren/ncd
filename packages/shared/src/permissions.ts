@@ -63,6 +63,9 @@ export const PERMISSIONS = [
   // One-time addition/deduction on an investment's next interest payout —
   // NCD Manager and up MAKE them; Admin/CXO approve (approvals:check-premature).
   'payouts:adjust',
+  // escrow reconciliation — ingest the SBI escrow statement, match inbound
+  // subscription credits to enrolled investors, confirm/assign the proposals.
+  'escrow:reconcile',
   // approvals
   'approvals:check', // generic checker (never own submission)
   'approvals:check-premature', // CXO's single action power (docs/03 §4)
@@ -161,6 +164,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'redemptions:initiate',
     'payouts:generate',
     'payouts:adjust',
+    'escrow:reconcile',
     'approvals:check',
     'agents:manage',
     'incentives:manage-eligibility',

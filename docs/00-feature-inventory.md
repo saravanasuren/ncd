@@ -100,6 +100,24 @@ doc 07). Items marked 🔌 have an external contract that must not change (doc 0
 - [ ] Statement ingestion: bank statements + SBI statements, auto-match + manual
       match/ignore
 
+### 6a. Money-in: escrow reconciliation (inbound subscription money)
+
+- [x] Upload the SBI escrow-account statement (SBI "download as xls" tab-separated,
+      also .xlsx/.csv). Parser reads the account header + closing balance and every
+      credit line; idempotent on re-upload (dedupe by UTR/cheque + amount + date)
+- [x] Per-line payer extraction by pay-type: RTGS/NEFT/IMPS UTR + remitter account +
+      name from narration; cheque credits carry only a cheque number; SBI NEFT
+      clearing-pool accounts flagged as non-identifying
+- [x] Match engine PROPOSES (never auto-applies — owner: "flag for human"):
+      UTR→application, remitter-account→customer bank account, name→customer.
+      Human confirms / re-assigns / ignores on the reconciliation screen
+- [x] Business rules: a genuine NCD credit is a whole multiple of ₹1,00,000 (others
+      flagged); the ₹10L company floor (self-transfer / `escrow.company_accounts`)
+      is bucketed separately, not counted as an investment ⚙
+- [x] Dashboard tiles: **Escrow balance** + **Received — not enrolled**; drill to the
+      escrow breakup (company floor · per-enrolled-investor · not-enrolled · flagged).
+      Permission `escrow:reconcile`
+
 ## 7. Commissions & incentives (staff, agent, referrer)
 
 - [ ] Incentive matrix ⚙ (4 cells, rates in settings — see doc 02 §6):

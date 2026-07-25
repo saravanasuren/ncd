@@ -37,6 +37,7 @@ import { lockersRouter } from './modules/lockers/routes.js';
 import { webhooksRouter } from './modules/webhooks/routes.js';
 import { eventsRouter } from './modules/events/routes.js';
 import { statementsRouter } from './modules/statements/routes.js';
+import { escrowRouter } from './modules/escrow/routes.js';
 import { auditRouter, systemRouter } from './modules/admin/routes.js';
 import { importsRouter } from './modules/imports/routes.js';
 import { authLimiter, otpLimiter, writeLimiter, integrationLimiter } from './middleware/rateLimit.js';
@@ -61,7 +62,7 @@ export function createApp(): Express {
   app.use(compression());
   // Upload routes carry base64 file payloads (~37% inflation on a 5 MB cap),
   // so they get a larger parser; everything else keeps the tight default.
-  app.use(['/api/applications', '/api/customers', '/api/integration', '/api/portal'], express.json({ limit: '8mb' }));
+  app.use(['/api/applications', '/api/customers', '/api/integration', '/api/portal', '/api/escrow'], express.json({ limit: '8mb' }));
   app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
   if (config.NODE_ENV !== 'test') app.use(morgan('tiny'));
@@ -108,6 +109,7 @@ export function createApp(): Express {
   app.use('/api/allotments', allotmentsRouter);
   app.use('/api/payouts', payoutsRouter);
   app.use('/api/bank-statements', statementsRouter);
+  app.use('/api/escrow', escrowRouter);
   app.use('/api/redemptions', redemptionsRouter);
   app.use('/api/lockers', lockersRouter);
   app.use('/api/ncd-events', eventsRouter);

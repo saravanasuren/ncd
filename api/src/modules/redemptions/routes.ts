@@ -47,6 +47,15 @@ redemptionsRouter.get('/neft.xlsx', requirePermission('redemptions:initiate'),
     res.end(buf);
   }));
 
+redemptionsRouter.get('/:id/neft.xlsx', requirePermission('redemptions:initiate'),
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const buf = await s.redemptionNeft(getDb(), id);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="redemption-neft-${id}.xlsx"`);
+    res.end(buf);
+  }));
+
 redemptionsRouter.get('/report.xlsx', requirePermission('redemptions:initiate', 'reports:download'),
   asyncHandler(async (req, res) => {
     const buf = await s.redemptionReport(getDb(), req.user!);

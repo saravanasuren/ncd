@@ -356,7 +356,13 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
 });
 
 /** Federal Bank NEFT sheet for approved (unpaid) redemptions. */
-export async function redemptionNeft(db: Db): Promise<Buffer> {
+/**
+ * `redemptionId` given → the single-row sheet for that one customer (any
+ * status — a reprint, not a payment run). Omitted → the bulk sheet, which
+ * stays scoped to what's actually still payable ('Approved' with no UTR yet)
+ * so it never re-sends something already settled.
+ */
+export async function redemptionNeft(db: Db, redemptionId?: number): Promise<Buffer> {
   const debit = (await db.query<{ account_number: string }>("SELECT account_number FROM banks WHERE is_disbursement_account = TRUE AND is_active = TRUE ORDER BY id LIMIT 1")).rows[0];
   const neftSettings = await getSettingsMap(db);
   const asText = (v: unknown): string => {
@@ -372,7 +378,9 @@ export async function redemptionNeft(db: Db): Promise<Buffer> {
      FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
      LEFT JOIN customer_bank_accounts cba ON cba.customer_id = c.id AND cba.is_active = TRUE
      LEFT JOIN series s ON s.id = a.series_id
-     WHERE r.status = 'Approved' AND r.utr IS NULL ORDER BY c.full_name`)).rows;
+     WHERE ${redemptionId ? 'r.id = $1' : "r.status = 'Approved' AND r.utr IS NULL"}
+     ORDER BY c.full_name`, redemptionId ? [redemptionId] : [])).rows;
+  if (redemptionId && rows.length === 0) throw errors.notFound('Redemption not found');
   const { buildNeftSheet } = await import('../../lib/neft.js');
   return buildNeftSheet(
     { debitAccount: debitSetting || debit?.account_number || 'DISBURSEMENT-ACCT',

@@ -3,6 +3,7 @@
  * plus rollover / transfer / transformation. PGlite HTTP.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import ExcelJS from 'exceljs';
 import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 
 let ctx: TestCtx;
@@ -80,6 +81,31 @@ describe('customer redemption request (portal)', () => {
     const cust = await portalLogin('9700000002');
     expect((await cust.post('/api/portal/redemption-request', { application_no: inv.appNo, reason: 'x' })).status).toBe(201);
     expect((await cust.post('/api/portal/redemption-request', { application_no: inv.appNo, reason: 'y' })).status).toBe(409);
+  });
+});
+
+describe('per-redemption NEFT sheet download', () => {
+  it('downloads a single row for the one redemption, and 404s for an unknown id', async () => {
+    const inv = await activeInvestment('Redeem Neft Solo', '9700000009');
+    const cust = await portalLogin('9700000009');
+    const reqR = await cust.post('/api/portal/redemption-request', { application_no: inv.appNo, reason: 'Need funds' });
+    const ncd = await as('ncd@demo.local');
+    const queue = await ncd.get('/api/redemptions?filter=requests');
+    const item = queue.json.rows.find((r: any) => r.application_no === inv.appNo);
+    const submit = await ncd.post(`/api/redemptions/${item.id}/submit-for-approval`);
+    const cxo = await as('cxo@demo.local');
+    expect((await cxo.post(`/api/approvals/${submit.json.request.id}/approve`)).json.request.status).toBe('Approved');
+
+    void reqR;
+    const sheet = await ncd.raw(`/api/redemptions/${item.id}/neft.xlsx`);
+    expect(sheet.status).toBe(200);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(sheet.buffer);
+    const ws = wb.worksheets[0]!;
+    expect(ws.rowCount).toBe(2); // header + exactly this one row
+    expect(String(ws.getRow(2).getCell(5).value)).toBe('889700000009'); // beneficiary account, from activeInvestment's setup
+
+    expect((await ncd.raw('/api/redemptions/999999/neft.xlsx')).status).toBe(404);
   });
 });
 

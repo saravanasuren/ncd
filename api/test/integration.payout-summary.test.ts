@@ -482,3 +482,71 @@ describe('a new investment earns interest starting the day of investment', () =>
     expect(String(found!.to)).toBe('05/10/2026');
   });
 });
+
+/**
+ * "Invested (Rs)" on a partially-redeemed line's own interest row must show
+ * what's actually still outstanding, not the original face amount — found via
+ * a live sheet showing ₹10L for a line that had ₹5L redeemed out from under it
+ * (J Ananthaprabha, APP-2026-000231), while the gross interest right next to
+ * it was correctly computed on the reduced ₹5L. Both the preview sheet and the
+ * saved-batch sheet had the same fallback-to-`l.amount` bug.
+ */
+describe('"Invested (Rs)" reflects the outstanding balance after a partial redemption', () => {
+  const mkPartial = async (name: string, phone: string, investedOn: string) => {
+    const a = await admin();
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    const cust = await a.post('/api/customers', { full_name: name, phone });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '6666' + phone, ifsc: 'ICIC0001234', holder_name: name });
+    const app = await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000, date_money_received: investedOn,
+    });
+    await approveInvestment(await as('ncd@demo.local'), app);
+    return Number(app.json.id);
+  };
+
+  it('the preview summary shows the reduced balance, not the original ₹10L', async () => {
+    const a = await admin();
+    const cxo = await as('cxo@demo.local');
+    const appId = await mkPartial('Partial Preview Investor', '9600000061', '2027-02-01');
+    const red = await a.post('/api/redemptions/premature', {
+      application_id: appId, reason: 'part exit', redemption_date: '2027-03-10', amount: 400000,
+    });
+    expect(red.status).toBe(201);
+    await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
+
+    const ws = await sheetOf((await a.raw('/api/payouts/preview.summary.xlsx?date=2027-03-28')).buffer);
+    let invested: number | null = null;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      if (String(row.getCell(3).value) === 'Partial Preview Investor' && String(row.getCell(10).value) !== 'Redemption') {
+        invested = Number(row.getCell(11).value);
+      }
+    }
+    expect(invested).toBe(600000); // 1,000,000 − 400,000, not the original face amount
+  });
+
+  it('the saved-batch summary shows the reduced balance too', async () => {
+    const a = await admin();
+    const cxo = await as('cxo@demo.local');
+    const ncd = await as('ncd@demo.local');
+    const appId = await mkPartial('Partial Batch Investor', '9600000062', '2027-02-01');
+    const red = await a.post('/api/redemptions/premature', {
+      application_id: appId, reason: 'part exit', redemption_date: '2027-04-10', amount: 400000,
+    });
+    expect(red.status).toBe(201);
+    await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
+
+    const batch = await ncd.post('/api/payouts', { payout_date: '2027-04-28' });
+    expect(batch.status).toBe(201);
+    const ws = await sheetOf((await a.raw(`/api/payouts/${batch.json.batch_id}/summary.xlsx`)).buffer);
+    let invested: number | null = null;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      if (String(row.getCell(3).value) === 'Partial Batch Investor' && String(row.getCell(10).value) !== 'Redemption') {
+        invested = Number(row.getCell(11).value);
+      }
+    }
+    expect(invested).toBe(600000);
+  });
+});

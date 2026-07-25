@@ -22,7 +22,7 @@ const pill: Record<string, string> = {
   Requested: 'bg-[color:var(--warn-bg)] text-warn',
 };
 
-const columns: Column<Redemption>[] = [
+const makeColumns = (canDownload: boolean): Column<Redemption>[] => [
   { key: 'redemption_no', header: 'Ref', tdClassName: 'font-mono text-xs whitespace-nowrap' },
   { key: 'redemption_date', header: 'Date', tdClassName: 'whitespace-nowrap',
     value: (r) => r.redemption_date ?? '',
@@ -33,6 +33,13 @@ const columns: Column<Redemption>[] = [
     value: (r) => Number(r.net_payment), render: (r) => <span className="mono">{formatINR(r.net_payment)}</span> },
   { key: 'status', header: 'Status',
     render: (r) => <span className={`text-xs rounded px-1.5 py-0.5 ${pill[r.status] ?? 'bg-bg'}`}>{r.status}</span> },
+  ...(canDownload ? [{
+    key: 'actions', header: '', sortable: false, filterable: false, align: 'right' as const,
+    render: (r: Redemption) => (
+      <a href={`/api/redemptions/${r.id}/neft.xlsx`} title="Download this customer's NEFT sheet"
+        className="text-xs text-primary hover:underline no-underline whitespace-nowrap">↓ NEFT</a>
+    ),
+  }] : []),
 ];
 
 export function RedemptionsPage() {
@@ -100,7 +107,7 @@ export function RedemptionsPage() {
         onChange={setTab}
       />
       <DataTable
-        columns={columns}
+        columns={makeColumns(can('redemptions:initiate'))}
         rows={rest.filter((r) => redMatch(tab, r.type))}
         rowKey={(r) => r.id}
         defaultSort={{ key: 'redemption_date', dir: 'desc' }}

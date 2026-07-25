@@ -515,7 +515,10 @@ export async function runMigration(
             payout_frequency: line.payout_frequency ?? 'Monthly',
             tenure_months: tenure, day_count_convention: line.day_count_convention ?? 'Actual365',
           },
-          { interestStartDate: anchor, seriesDeemedDate: seriesDeemed, holidays: holidayISO, payoutDay: 28 }
+          // `anchor` is the freeze cutover date — everything through it is
+          // already preserved as Paid, so it's a watermark, not a fresh
+          // investment day. The regenerated schedule must not double-count it.
+          { interestStartDate: anchor, seriesDeemedDate: seriesDeemed, holidays: holidayISO, payoutDay: 28, startIsPriorWatermark: true }
         );
       } catch (e: any) {
         if (anomalies.length < 200) anomalies.push(`recompute line=${line.id}: ${e.message}`);

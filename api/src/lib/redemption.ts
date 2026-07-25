@@ -11,7 +11,7 @@
  * never pay it "next cycle". Penalty is config-driven (settings
  * `redemption.premature_penalty`, flat ₹ or % of principal).
  */
-import { round2, daysBetween, type ISODate } from './dates.js';
+import { round2, daysBetween, addDays, type ISODate } from './dates.js';
 import { resolveRate, type RateSpec } from './incentive.js';
 import type { DayCountConvention } from './interest.js';
 
@@ -55,7 +55,11 @@ export function computeRedemption(input: RedemptionInput): RedemptionResult {
     input.lastRegularPayoutDate &&
     input.redemptionDate
   ) {
-    const days = daysBetween(input.lastRegularPayoutDate, input.redemptionDate);
+    // Owner-confirmed 2026-07-25: interest stops the day BEFORE redemption —
+    // if redemption is today, the broken period is served only through
+    // yesterday. daysBetween's end is inclusive of redemptionDate, so back the
+    // boundary up by one rather than counting the redemption day itself.
+    const days = daysBetween(input.lastRegularPayoutDate, addDays(input.redemptionDate, -1));
     if (days > 0) {
       brokenInterest = round2(
         (principal * Number(input.couponRatePct)) / 100 * days / denom(input.convention)

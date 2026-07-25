@@ -76,7 +76,9 @@ describe('build an Active investment', () => {
     // schedule materialised: first row on the 28th, actual/365
     const first = detail.json.schedule[0];
     expect(first.due_date).toBe('2026-07-28');
-    expect(Number(first.gross_amount)).toBeCloseTo(500000 * 0.12 * 13 / 365, 1); // 15→28 Jul = 13 days
+    // 15→28 Jul = 14 days: interest starts ON the day of investment (owner
+    // 2026-07-25), so the 15th counts too — not just the 13 days after it.
+    expect(Number(first.gross_amount)).toBeCloseTo(500000 * 0.12 * 14 / 365, 1);
   });
 
   it('allotment later just stamps allotment_date + locks the series', async () => {

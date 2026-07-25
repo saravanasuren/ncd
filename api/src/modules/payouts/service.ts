@@ -44,7 +44,16 @@ export async function previewDue(db: Db, payoutDate: string) {
                        WHERE ds.line_id = l.id AND ds.due_type IN ${DUE_TYPES}
                          AND (ds.status = 'Paid'
                               OR (ds.status = 'Scheduled' AND ds.batch_id IS NOT NULL))),
-                     a.interest_start_date) AS paid_through
+                     a.interest_start_date) AS paid_through,
+            -- True only when this line has never had a payout watermark — i.e.
+            -- paid_through fell back to interest_start_date itself, the day the
+            -- money arrived and has never been paid for. Every later watermark
+            -- is a prior due_date already compensated through end of that day,
+            -- where the usual exclusive-start day count is correct as-is.
+            NOT EXISTS (SELECT 1 FROM disbursement_schedule ds
+                         WHERE ds.line_id = l.id AND ds.due_type IN ${DUE_TYPES}
+                           AND (ds.status = 'Paid'
+                                OR (ds.status = 'Scheduled' AND ds.batch_id IS NOT NULL))) AS is_first_period
        FROM application_lines l
        JOIN applications a ON a.id = l.application_id
        JOIN customers c ON c.id = a.customer_id
@@ -56,7 +65,13 @@ export async function previewDue(db: Db, payoutDate: string) {
   for (const l of lines) {
     const paidThrough = toISODate(l.paid_through as string | null);
     if (!paidThrough || payoutDate <= paidThrough) continue;   // nothing accrued yet
-    const days = daysBetween(paidThrough, payoutDate);
+    // Owner-confirmed 2026-07-25: interest starts ON the day of investment. For
+    // every line except its very first-ever period, paidThrough is a prior
+    // due_date already paid through end of that day, so the ordinary
+    // exclusive-start count is right. Only the first period's paidThrough is
+    // interest_start_date itself — a day that's never been paid for — so it
+    // needs the +1 to count that day too.
+    const days = daysBetween(paidThrough, payoutDate) + (l.is_first_period ? 1 : 0);
     if (days <= 0) continue;
     const principal = Number(l.outstanding_amount);
     if (!(principal > 0)) continue;
@@ -555,12 +570,21 @@ const SUMMARY_SELECT = `
          COALESCE(adj.deduction, 0) AS deduction_amount,
          ds.net_amount AS total_amount,
          -- Days accrued = this due date minus the previous PAID cut-off for the
-         -- same line (or the interest start for a brand-new investment).
+         -- same line (or the interest start for a brand-new investment). The
+         -- brand-new-investment case adds 1: interest_start_date is the day
+         -- the money arrived and has never itself been paid for, unlike a
+         -- prior due_date (already compensated through end of that day) — so
+         -- only that fallback needs the +1 (owner-confirmed 2026-07-25, same
+         -- rule as previewDue's is_first_period).
          (ds.due_date - COALESCE(
             (SELECT max(p.due_date) FROM disbursement_schedule p
               WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
                 AND p.due_type IN ('Interest','BrokenInterest') AND p.status = 'Paid'),
-            a.interest_start_date)) AS period_days,
+            a.interest_start_date)
+          + CASE WHEN NOT EXISTS (SELECT 1 FROM disbursement_schedule p
+                                    WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
+                                      AND p.due_type IN ('Interest','BrokenInterest') AND p.status = 'Paid')
+                 THEN 1 ELSE 0 END) AS period_days,
          CASE
            -- The redemption slice: a BrokenInterest row swept into this batch.
            -- (An interest batch never holds 'Redemption'/'Premature' due_types —

@@ -121,7 +121,6 @@ reportsRouter.get('/application-form/:applicationId.pdf', requirePermission('cus
     res.end(buf);
   }));
 
-// 26Q quarterly TDS filing annexure. :quarter = 'YYYY-Qn'.
 // Customer-wise report — ported from wealth's report of the same name. One
 // row per customer (DOB/PAN/address/TDS + a 3-way money split), each
 // customer's individual NCDs nested for the expandable UI / detail sheet.
@@ -146,6 +145,7 @@ reportsRouter.get('/customer-wise.xlsx', requirePermission('reports:download'),
     res.end(buf);
   }));
 
+// 26Q quarterly TDS filing annexure. :quarter = 'YYYY-Qn'.
 reportsRouter.get('/tds-26q/:quarter.xlsx', requirePermission('reports:download'),
   asyncHandler(async (req, res) => {
     const { tds26q } = await import('./documents.js');

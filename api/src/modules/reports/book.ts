@@ -779,7 +779,12 @@ export async function interestListInRange(db: Db, actor: AuthUser, filters: Book
   let dcond = '';
   if (filters.from) { params.push(filters.from); dcond += ` AND ds.due_date >= $${params.length}`; }
   if (filters.to) { params.push(filters.to); dcond += ` AND ds.due_date <= $${params.length}`; }
-  if (onlyPaid) dcond += ` AND ds.status = 'Paid'`;
+  // Paid view wants exactly what was paid; the projected view wants exactly
+  // what's still owed — not a 'Skipped' row left behind by an application that
+  // has since fully redeemed (its due_date can predate today's 28th-of-month
+  // convention, which is what makes a stale row like this stand out on the
+  // sheet — but the real bug is that it's showing at all).
+  dcond += onlyPaid ? ` AND ds.status = 'Paid'` : ` AND ds.status = 'Scheduled'`;
   const { rows } = await db.query(
     `SELECT ds.due_date, a.application_no, c.full_name AS customer, s.code AS series_code,
             ds.due_type, ds.net_amount AS amount, ds.status, ds.paid_at

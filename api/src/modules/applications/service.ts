@@ -111,8 +111,15 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
         return { id: Number(target.id), application_no: no, clubbed: true };
       }
 
-      const customer = (await tx.query<{ referred_by_text: string | null }>('SELECT referred_by_text FROM customers WHERE id = $1', [input.customer_id])).rows[0];
+      const customer = (await tx.query<{ referred_by_text: string | null; enrolled_by_agent_id: string | null }>(
+        'SELECT referred_by_text, enrolled_by_agent_id FROM customers WHERE id = $1', [input.customer_id])).rows[0];
       if (!customer) throw errors.badRequest('Unknown customer');
+      // Agent attribution of the investment: the acting agent if an agent booked
+      // it themselves, else inherit the customer's agent — so an agent's own
+      // customer's investment still lands in that agent's scoped book even when a
+      // staff member / admin records it. Without this every staff-booked
+      // application had a NULL agent and vanished from the agent's dashboard.
+      const enrolledByAgentId = actor.agentId ?? (customer.enrolled_by_agent_id ? Number(customer.enrolled_by_agent_id) : null);
       const priorCount = Number((await tx.query<{ n: string }>('SELECT count(*)::int AS n FROM applications WHERE customer_id = $1', [input.customer_id])).rows[0]!.n);
       const isNew = priorCount === 0;
       const appNo = await nextCode(tx, 'application', appFmt);
@@ -125,7 +132,7 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
       const { rows } = await tx.query<{ id: string }>(
         `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, is_locker_deposit, date_money_received, collection_method, collection_reference)
          VALUES ($1,$2,$3,'PendingApproval',$4,$5,$6,'staff',$7,$8,$9,$10,$11,$12) RETURNING id`,
-        [appNo, input.customer_id, input.series_id, input.amount, isNew, customer.referred_by_text ?? null, actor.id, actor.agentId,
+        [appNo, input.customer_id, input.series_id, input.amount, isNew, customer.referred_by_text ?? null, actor.id, enrolledByAgentId,
          input.is_locker_deposit ?? false, input.date_money_received, input.collection_method, input.collection_reference]
       );
       const appId = Number(rows[0]!.id);

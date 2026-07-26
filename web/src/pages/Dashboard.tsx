@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
+import { CustomerProfileModal } from '../components/CustomerProfileModal.js';
 
 // ── Range model ────────────────────────────────────────────────────────────
 interface Range { from: string; to: string; series: number[] | null; label: string }
@@ -311,6 +312,7 @@ function cell(v: unknown, kind?: FlatCol['kind']) {
 
 function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget: string; title: string; range: Range; seriesOverride?: number; onClose: () => void }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [profile, setProfile] = useState<{ id: number; name: string } | null>(null);
   // A tile that targets one specific series (e.g. Active series) forces that
   // series filter regardless of the current range's series selection.
   const effRange: Range = seriesOverride ? { ...range, series: [seriesOverride] } : range;
@@ -379,7 +381,8 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
                     </tr></thead>
                     <tbody>
                       {groups.map((g) => (
-                        <GroupRows key={g.key} g={g} open={open.has(g.key)} onToggle={() => toggle(g.key)} />
+                        <GroupRows key={g.key} g={g} open={open.has(g.key)} onToggle={() => toggle(g.key)}
+                          onPickCustomer={(c) => setProfile({ id: c.customer_id, name: c.customer })} />
                       ))}
                     </tbody>
                   </table>
@@ -426,11 +429,12 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
               )}
         </div>
       </div>
+      {profile && <CustomerProfileModal id={profile.id} name={profile.name} onClose={() => setProfile(null)} />}
     </div>
   );
 }
 
-function GroupRows({ g, open, onToggle }: { g: any; open: boolean; onToggle: () => void }) {
+function GroupRows({ g, open, onToggle, onPickCustomer }: { g: any; open: boolean; onToggle: () => void; onPickCustomer: (c: any) => void }) {
   return (
     <>
       <tr className="border-b border-border/60 cursor-pointer hover:bg-bg" onClick={onToggle}>
@@ -444,7 +448,12 @@ function GroupRows({ g, open, onToggle }: { g: any; open: boolean; onToggle: () 
       </tr>
       {open && g.children.map((ch: any) => (
         <tr key={ch.application_no} className="bg-bg/50 text-xs">
-          <td className="py-1 pl-8 pr-3">{ch.customer} <span className="text-text-muted font-mono">{ch.application_no}</span></td>
+          <td className="py-1 pl-8 pr-3">
+            {ch.customer_id ? (
+              <button onClick={() => onPickCustomer(ch)} className="text-primary hover:underline text-left">{ch.customer}</button>
+            ) : ch.customer}
+            {' '}<span className="text-text-muted font-mono">{ch.application_no}</span>
+          </td>
           <td className="py-1 px-3 text-right text-text-muted">{ch.series_code}</td>
           <td className="py-1 px-3 text-right text-text-muted">{ch.status}</td>
           {/* Outstanding column: 0 once redeemed (was wrongly showing the original amount). */}

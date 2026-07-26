@@ -37,13 +37,44 @@ describe('agents are users', () => {
     expect(ag.user_id).toBeTruthy();
 
     const u = (await ctx.db.query(
-      `SELECT u.email, u.password_hash, r.name AS role FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1`,
+      `SELECT u.email, u.password_hash, u.is_staff, r.name AS role FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1`,
       [ag.user_id])).rows[0]! as any;
     expect(u.role).toBe('agent');
     // Synthesised address, and NO password — the account cannot authenticate
     // until someone sets a real one.
     expect(String(u.email)).toBe(`${String(ag.agent_code).toLowerCase()}@agents.dhanam.local`);
     expect(u.password_hash).toBeNull();
+    // Being a user now does not make them staff (owner 2026-07-25) — the users
+    // table defaults is_staff to TRUE, which this must override explicitly.
+    expect(u.is_staff).toBe(false);
+  });
+
+  // Pins migration 045's own logic (the production backfill for the bug this
+  // file exists to describe): every agent-role user that migration 039
+  // created before it set is_staff explicitly inherited the column's TRUE
+  // default, silently counting as STAFF in every report/incentive split that
+  // reads is_staff. A fresh install never reproduces that state (039 now sets
+  // it correctly from the start), so this simulates it directly and re-runs
+  // 045's statement to prove it corrects exactly the rows it should — and
+  // nothing else.
+  it("045's backfill fixes an agent wrongly left is_staff=TRUE, and leaves real staff alone", async () => {
+    const a = await admin();
+    const created = await a.post('/api/agents', { full_name: 'Wrongly Flagged Agent' });
+    const userId = Number((await ctx.db.query('SELECT user_id FROM agents WHERE id = $1', [created.json.id])).rows[0]!.user_id);
+    await ctx.db.query('UPDATE users SET is_staff = TRUE WHERE id = $1', [userId]); // simulate the pre-fix bug state
+
+    const staffUser = await a.post('/api/users', {
+      email: 'real.staff.045@demo.local', full_name: 'Real Staff Member', role: 'branch_staff', password: 'Demo_1234',
+    });
+
+    await ctx.db.query(`
+      UPDATE users u SET is_staff = FALSE FROM roles r
+       WHERE r.id = u.role_id AND r.name = 'agent' AND u.is_staff = TRUE`);
+
+    const agentAfter = (await ctx.db.query('SELECT is_staff FROM users WHERE id = $1', [userId])).rows[0]! as any;
+    expect(agentAfter.is_staff).toBe(false);
+    const staffAfter = (await ctx.db.query('SELECT is_staff FROM users WHERE id = $1', [staffUser.json.id])).rows[0]! as any;
+    expect(staffAfter.is_staff).toBe(true); // untouched — real staff must stay staff
   });
 
   it('an agent whose email already belongs to a user is LINKED, not duplicated', async () => {

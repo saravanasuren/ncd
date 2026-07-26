@@ -157,8 +157,12 @@ export function Dashboard() {
                 )}
 
                 {/* Snapshot panels — always the whole book "as it stands now",
-                    independent of the quick-range / series picker above. */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-4 mb-6">
+                    independent of the quick-range / series picker above.
+                    Stacked (not side-by-side) so each panel's own tile row
+                    gets the full page width — Interest Details' 3 tiles and
+                    Incentives' 2 tiles would otherwise squeeze into half-width
+                    columns and end up visibly different sizes. */}
+                <div className="flex flex-col gap-4 mb-6">
                   {isnap && (
                     <div>
                       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Interest Details</h2>
@@ -174,7 +178,7 @@ export function Dashboard() {
                   {overview.data.incentives && (
                     <div>
                       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Incentives</h2>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <Tile label="Staff-wise incentive" value={formatINR(overview.data.incentives.staff.earned)}
                           sub={`${formatINR(overview.data.incentives.staff.paid)} paid · ${formatINR(overview.data.incentives.staff.pending)} pending`}
                           onClick={() => pickWidget('staff-incentive', 'Staff incentive — by person')} canDrill={canDrill} />

@@ -17,11 +17,16 @@ CREATE INDEX IF NOT EXISTS idx_agents_live ON agents(is_active) WHERE deleted_at
 
 -- One user per agent that lacks one. An agent whose email already belongs to a
 -- user is LINKED to it rather than duplicated (e.g. Saravana Suren S).
-INSERT INTO users (email, full_name, phone, role_id, is_active, password_hash)
+-- is_staff = FALSE explicitly: the users table defaults it to TRUE, and an
+-- agent becoming a user here does not make them staff (owner 2026-07-25) — it
+-- was left to the default the first time this ran, which silently
+-- misattributed every agent's business as STAFF-sourced everywhere is_staff is
+-- read (Agent-wise/Staff-wise reports, the incentive split). See migration 045.
+INSERT INTO users (email, full_name, phone, role_id, is_active, password_hash, is_staff)
 SELECT DISTINCT ON (email_key)
        email_key, ag.full_name, ag.phone,
        (SELECT id FROM roles WHERE name = 'agent'),
-       ag.is_active, NULL
+       ag.is_active, NULL, FALSE
   FROM agents ag
   CROSS JOIN LATERAL (
     SELECT COALESCE(NULLIF(lower(btrim(ag.email)), ''), lower(ag.agent_code) || '@agents.dhanam.local') AS email_key

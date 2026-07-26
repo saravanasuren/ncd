@@ -48,9 +48,14 @@ export async function ensureUserForAgent(
   const email = (agent.email ?? '').trim().toLowerCase() || `${agent.agent_code.toLowerCase()}@agents.dhanam.local`;
   const found = (await tx.query<{ id: string }>('SELECT id FROM users WHERE lower(email) = $1', [email])).rows[0];
   if (found) return Number(found.id);
+  // is_staff is FALSE here on purpose — the users table defaults it to TRUE,
+  // and this agent is a user now (owner 2026-07-24) but is still an agent, not
+  // staff (owner 2026-07-25). Leaving it to the default silently misattributes
+  // every agent's referred business as STAFF in the Agent-wise/Staff-wise
+  // reports and the incentive split.
   const { rows } = await tx.query<{ id: string }>(
-    `INSERT INTO users (email, full_name, phone, role_id, is_active, password_hash)
-     VALUES ($1,$2,$3,(SELECT id FROM roles WHERE name = 'agent'),$4,NULL) RETURNING id`,
+    `INSERT INTO users (email, full_name, phone, role_id, is_active, password_hash, is_staff)
+     VALUES ($1,$2,$3,(SELECT id FROM roles WHERE name = 'agent'),$4,NULL,FALSE) RETURNING id`,
     [email, agent.full_name, agent.phone ?? null, agent.is_active ?? true]);
   return Number(rows[0]!.id);
 }

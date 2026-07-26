@@ -165,11 +165,14 @@ describe('dashboard tiles + drill (range-aware)', () => {
     expect(Array.isArray(dl.json.groups)).toBe(true);
   });
 
-  it('a window with no money-in reports zero new investments (range is honoured)', async () => {
+  it('"New investments" is the last 30, whole book — the range picker does NOT hide it (owner 2026-07-26)', async () => {
+    // Unlike every other flow tile, "New investments" is a rolling recent-
+    // activity view, not a date-window sum — a range with zero money-in during
+    // it must still show the book's most recent investments.
     const a = await admin();
     const ov = await a.get('/api/dashboard/overview?from=2020-01-01&to=2020-01-31');
-    expect(Number(ov.json.flow.money_in)).toBe(0);
-    expect(ov.json.flow.new_investments).toBe(0);
+    expect(Number(ov.json.flow.money_in)).toBe(800000);
+    expect(ov.json.flow.new_investments).toBe(2);
   });
 
   it('interest snapshot (accrued + monthly) is point-in-time, independent of the range', async () => {
@@ -178,6 +181,13 @@ describe('dashboard tiles + drill (range-aware)', () => {
     const ov = await a.get('/api/dashboard/overview?from=2020-01-01&to=2020-01-31');
     expect(Number(ov.json.interest_snapshot.accrued_total)).toBeGreaterThanOrEqual(0);
     expect(Number(ov.json.interest_snapshot.monthly_projected)).toBeGreaterThanOrEqual(0);
+    // Daily = annual ÷ 365, so it must agree with the monthly figure to within
+    // rounding, whatever the whole book's actual blended coupon rate is. Both
+    // are independently round2()'d before this, so allow a few rupees of
+    // cascading rounding rather than pin an exact match.
+    const daily = Number(ov.json.interest_snapshot.daily_projected);
+    expect(daily).toBeGreaterThanOrEqual(0);
+    expect(Math.abs(daily * 365 - Number(ov.json.interest_snapshot.monthly_projected) * 12)).toBeLessThan(5);
     // The accrued drill is always "as on today", even when a past window is passed.
     const accruedDrill = await a.get('/api/dashboard/drill/interest-accrued?from=2020-01-01&to=2020-01-31');
     expect(accruedDrill.json.kind).toBe('rows');

@@ -62,11 +62,12 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
   // Point-in-time interest snapshots (independent of the selected window):
   //  - accrued_total    : total interest payable AS ON today (since the last payout)
   //  - monthly_projected : gross run-rate monthly coupon cost of the outstanding book
-  const [kpis, seriesRows, districts, moneyIn, moneyBySource, interest, accrued, redemptionRows, redemptionsOfSeriesRows, leadFunnel, almTiles, rateMix, todayBook, accruedTotal, monthlyInterest] = await Promise.all([
+  const [kpis, seriesRows, districts, moneyIn, last30, moneyBySource, interest, accrued, redemptionRows, redemptionsOfSeriesRows, leadFunnel, almTiles, rateMix, todayBook, accruedTotal, monthlyInterest] = await Promise.all([
     book.kpis(db, actor, seriesFilter),                    // snapshot, but honours a selected series
     book.seriesSummary(db, actor, {}),                     // ALL series (pie + active/last-series pick)
     book.districtwise(db, actor, seriesFilter),            // snapshot (pie), honours a selected series
-    book.moneyInByChannel(db, actor, filters),             // flow
+    book.moneyInByChannel(db, actor, filters),             // flow (locker/app channel split still honours the range)
+    book.newInvestmentsLast30(db, actor, seriesFilter),    // "New investments" tile — last 30, not the date window
     book.moneyInBySource(db, actor, filters),              // flow (staff vs agent tiles)
     book.interestInRange(db, actor, filters),              // flow (paid vs due)
     isCurrentPeriod ? book.interestAccrued(db, actor, seriesFilter, anchor, asOf) : Promise.resolve({ total: 0 }),
@@ -97,7 +98,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     last_series: lastSeries,
     kpis,                       // outstanding_book, active_investors, interest_paid, interest_scheduled
     flow: {
-      money_in: moneyIn.total,
+      money_in: last30.total,          // last 30 investments, whole book — not the date window
       money_in_locker: moneyIn.locker,
       money_in_app: moneyIn.app,
       money_in_locker_investors: moneyIn.locker_investors,
@@ -106,7 +107,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
       money_in_agent: moneyBySource.agent,
       money_in_staff_investors: moneyBySource.staff_investors,
       money_in_agent_investors: moneyBySource.agent_investors,
-      new_investments: moneyIn.count,
+      new_investments: last30.count,   // up to 30, whichever the book actually has
       interest_paid: interest.paid,        // interest actually paid in the window (0 for the current MTD)
       interest_due: interest.total,        // paid + still-scheduled, for reference
       interest_accrued: accrued.total,     // current period only; 0 for past ranges
@@ -120,6 +121,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     interest_snapshot: {
       accrued_total: accruedTotal.total,           // total interest payable as on date
       monthly_projected: monthlyInterest.gross_monthly, // gross run-rate monthly coupon cost of the outstanding book
+      daily_projected: round2(monthlyInterest.annual / 365), // approx coupon cost accruing per day, whole book
     },
     series: seriesRows,
     districts,
@@ -235,7 +237,9 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
 
     // ── flat lists ──
     case 'new-investments':
-      return { kind: 'rows', rows: await book.newInvestmentsList(db, actor, filters) };
+      // Same last-30 rows the tile totals come from — never a second query
+      // that could disagree with what the tile just showed.
+      return { kind: 'rows', rows: (await book.newInvestmentsLast30(db, actor, filters)).rows };
     case 'locker':
       return { kind: 'rows', rows: await book.newInvestmentsList(db, actor, filters, 'locker') };
     case 'app':

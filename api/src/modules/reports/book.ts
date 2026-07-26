@@ -752,6 +752,29 @@ export async function newInvestmentsList(db: Db, actor: AuthUser, filters: BookF
   return rows;
 }
 
+/**
+ * The 30 most recently-funded investments, whole book — NOT the date-range
+ * window every other flow tile uses. Owner preference: "New investments"
+ * should read as a rolling recent-activity view, not go quiet just because
+ * the range picker is on an old month. Honours a selected series like the
+ * snapshot tiles do; ignores from/to entirely.
+ *
+ * The tile total/count and its drill-down list are computed from these SAME
+ * rows (not a separate aggregate query) so the two can never disagree — the
+ * lesson from the payout summary sheet's own mid-cycle 422 bug.
+ */
+export async function newInvestmentsLast30(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+  const w = appWhere(actor, { seriesIds: filters.seriesIds, status: 'active' }, ['a.date_money_received IS NOT NULL']);
+  const { rows } = await db.query(
+    `SELECT a.application_no, c.full_name AS customer, c.customer_code, s.code AS series_code,
+            COALESCE(b.name,'—') AS branch,
+            a.total_amount AS amount, a.date_money_received, a.is_locker_deposit, a.source, a.status
+     ${FROM} LEFT JOIN branches b ON b.id = c.branch_id
+     WHERE ${w.sql} ORDER BY a.date_money_received DESC, a.id DESC LIMIT 30`, w.params);
+  const total = rows.reduce((s: number, r: any) => s + Number(r.amount), 0);
+  return { rows, total: round2(total), count: rows.length };
+}
+
 /** Interest whose payout date lands in the window (net). Total + rows. */
 function interestWhere(actor: AuthUser, filters: BookFilters): { sql: string; params: unknown[] } {
   // Scope + optional series, but the date window applies to ds.due_date (added by caller).

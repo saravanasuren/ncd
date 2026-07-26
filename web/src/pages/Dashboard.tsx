@@ -117,8 +117,8 @@ export function Dashboard() {
                     primary onClick={() => pickWidget('series', `${activeSeries?.code ?? 'Active series'} — investments`, activeSeries?.series_id)} canDrill={canDrill && !!activeSeries} />
                   <Tile label="Outstanding book" value={formatINR(k.outstanding_book)} sub={`${k.active_investors} investors`}
                     onClick={() => pickWidget('outstanding', 'Outstanding book — by series')} canDrill={canDrill} />
-                  <Tile label="New investments" value={formatINR(f.money_in)} sub={`${f.new_investments} investors`}
-                    onClick={() => pickWidget('new-investments', 'New investments in range')} canDrill={canDrill} />
+                  <Tile label="New investments" value={formatINR(f.money_in)} sub={`Last ${f.new_investments} investments`}
+                    onClick={() => pickWidget('new-investments', 'New investments — last 30')} canDrill={canDrill} />
                   <Tile label="Locker deposits" value={formatINR(f.money_in_locker)} sub={`${f.money_in_locker_investors} investors`}
                     onClick={() => pickWidget('locker', 'Locker deposits in range')} canDrill={canDrill} />
                   <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub={`${f.money_in_app_investors} investors`}
@@ -162,11 +162,12 @@ export function Dashboard() {
                   {isnap && (
                     <div>
                       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Interest Details</h2>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <Tile label="Monthly interest" value={formatINR(isnap.monthly_projected)} sub="Gross coupon cost / month · whole book"
                           onClick={() => pickWidget('interest-month', 'This month’s interest (projected) · whole book')} canDrill={canDrill} />
                         <Tile label="Interest accrued" value={formatINR(isnap.accrued_total)} sub="Total accrued as on date · whole book"
                           onClick={() => pickWidget('interest-accrued', 'Interest accrued, as on date · whole book')} canDrill={canDrill} />
+                        <Tile label="Daily interest cost" value={formatINR(isnap.daily_projected)} sub="Approx interest accruing per day · whole book" />
                       </div>
                     </div>
                   )}

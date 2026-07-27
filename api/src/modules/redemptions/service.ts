@@ -13,7 +13,7 @@ import { writeAudit } from '../../lib/audit.js';
 import { assertTransition } from '../../lib/statusMachine.js';
 import { nextCode } from '../../lib/sequences.js';
 import { computeRedemption } from '../../lib/redemption.js';
-import { computeTds } from '../../lib/tds.js';
+import { computeTds, DEFAULT_TDS_RULE } from '../../lib/tds.js';
 import { round2, toISODate } from '../../lib/dates.js';
 import type { RateSpec } from '../../lib/incentive.js';
 import { getSettingsMap } from '../settings/service.js';
@@ -109,8 +109,8 @@ async function createRequest(
   let brokenTds = 0;
   if (calc.brokenInterest > 0 && brokenLine) {
     const tdsRule = brokenLine.scheme_id
-      ? (await tx.query<{ rate_pct: number }>('SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [brokenLine.scheme_id])).rows[0] ?? null
-      : null;
+      ? (await tx.query<{ rate_pct: number }>('SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [brokenLine.scheme_id])).rows[0] ?? DEFAULT_TDS_RULE
+      : DEFAULT_TDS_RULE;
     brokenTds = round2(computeTds(
       tdsRule,
       { is_nri: brokenLine.is_nri as boolean, tds_applicable: brokenLine.cust_tds as boolean,

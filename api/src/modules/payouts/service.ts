@@ -9,7 +9,7 @@ import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { round2, toISODate, daysBetween, addDays } from '../../lib/dates.js';
 import { denominatorFor, type DayCountConvention } from '../../lib/interest.js';
-import { computeTds } from '../../lib/tds.js';
+import { computeTds, DEFAULT_TDS_RULE } from '../../lib/tds.js';
 import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
 import { nextCode } from '../../lib/sequences.js';
 import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
@@ -83,8 +83,8 @@ export async function previewDue(db: Db, payoutDate: string) {
 
     const tdsRule = l.scheme_id
       ? (await db.query<{ rate_pct: number }>(
-          'SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [l.scheme_id])).rows[0] ?? null
-      : null;
+          'SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [l.scheme_id])).rows[0] ?? DEFAULT_TDS_RULE
+      : DEFAULT_TDS_RULE;
     const tds = computeTds(
       tdsRule,
       { is_nri: l.is_nri as boolean, tds_applicable: l.cust_tds as boolean,

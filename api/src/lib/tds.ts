@@ -11,6 +11,16 @@ export interface TdsRule {
   rate_pct: number;
 }
 
+/**
+ * Used whenever a line has no scheme linked — every pre-NCD-27 legacy
+ * investment (owner 2026-07-27: "TDS applicable means 10% flat, no different
+ * schemes as of now"). Without this, a schemeless line has no rule to look
+ * up and silently pays 0% TDS regardless of the customer's flag — found on
+ * 519 of 681 active lines, ₹24.59 crore of it on customers who ARE
+ * TDS-applicable.
+ */
+export const DEFAULT_TDS_RULE: TdsRule = { rate_pct: 10 };
+
 export interface TdsCustomer {
   is_nri?: boolean;
   tds_applicable?: boolean; // defaults TRUE in DB

@@ -101,7 +101,7 @@ function _drawHeader(doc: Doc, co: ReturnType<typeof companyHeader>): number {
 function _drawTitle(doc: Doc, y: number): number {
   doc.fillColor(C.TEXT).font('Helvetica-Bold').fontSize(24).text('Debenture Certificate', 0, y, { align: 'center', width: doc.page.width });
   y = doc.y + 8;
-  const subtitle = '(Secured, Non-Convertible, Redeemable Debentures)';
+  const subtitle = '(Secured, Redeemable, Non-Convertible Debentures)';
   doc.fontSize(11).font('Helvetica-Bold');
   const pillW = doc.widthOfString(subtitle) + 36, pillX = (doc.page.width - pillW) / 2, pillH = 22;
   doc.save();

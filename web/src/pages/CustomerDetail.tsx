@@ -746,6 +746,15 @@ function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onEr
   const add = useMutation({
     mutationFn: () => api.post(`/api/customers/${customerId}/bank-accounts`, {
       ...f, ifsc: f.ifsc.trim().toUpperCase(), holder_name: f.holder_name.trim() || undefined,
+      // These are optional server-side, but the zod schema (rightly) rejects an
+      // EMPTY string on an .optional() field — only `undefined` is skipped. If
+      // the IFSC lookup hasn't resolved yet (or came back notfound), bank_name/
+      // branch_name/branch_city sit at '' in state, which used to 400 "Invalid
+      // request" on every add attempt whose bank wasn't found or looked up in
+      // time — exactly the account-number-typo-fix flow this broke.
+      bank_name: f.bank_name.trim() || undefined,
+      branch_name: f.branch_name.trim() || undefined,
+      branch_city: f.branch_city.trim() || undefined,
     }),
     onSuccess: () => { setF(empty); setIfscState('idle'); onChange(); },
     onError: fail,

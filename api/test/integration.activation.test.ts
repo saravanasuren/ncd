@@ -124,3 +124,29 @@ describe('closing a series with nothing pending (migrated-series case)', () => {
     expect(again.status).toBe(422);
   });
 });
+
+describe('the series deemed date never delays an individual investor\'s interest (owner 2026-07-27)', () => {
+  it('money received BEFORE the deemed date still earns interest from its own receipt date', async () => {
+    // NCD DEMO's deemed_date is 2026-07-01 (seed.ts) — invest well before it.
+    const a = await admin();
+    const { appId, create } = await enrol(a, 'Early Money', 500000, '9700000099');
+    // enrol() hardcodes date_money_received to 2026-07-10; override it directly
+    // so this test controls the exact receipt date being asserted.
+    await ctx.db.query("UPDATE applications SET date_money_received = '2026-06-15' WHERE id = $1", [appId]);
+
+    const ncd = await as('ncd@demo.local');
+    const ok = await approveInvestment(ncd, create);
+    expect(ok.status).toBe(200);
+
+    const app = (await ctx.db.query(
+      'SELECT interest_start_date, maturity_date FROM applications WHERE id = $1', [appId])).rows[0] as any;
+    // Interest starts on the ACTUAL receipt date, not clamped forward to the
+    // series deemed date (2026-07-01) — the deemed date is only a label for
+    // when the series itself was allotted, never an interest gate.
+    expect(String(app.interest_start_date).slice(0, 10)).toBe('2026-06-15');
+    // Maturity is untouched by this change: still deemed date + tenure
+    // (36 months), uniform for every investor in the series regardless of
+    // when their money actually arrived.
+    expect(String(app.maturity_date).slice(0, 10)).toBe('2029-07-01');
+  });
+});

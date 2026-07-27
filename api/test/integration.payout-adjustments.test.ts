@@ -93,7 +93,8 @@ describe('payout adjustments — maker/checker lifecycle', () => {
     const load = async (buf: Buffer) => { const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf); return wb.worksheets[0]!; };
     const summary = await load((await ncd.raw(`/api/payouts/preview.summary.xlsx?date=${CUTOFF}`)).buffer);
     const heads = (summary.getRow(1).values as unknown[]).filter(Boolean).map(String);
-    expect(heads.slice(heads.indexOf('Net (Rs)'))).toEqual(['Net (Rs)', 'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)']);
+    const netIdx = heads.indexOf('Net (Rs)');
+    expect(heads.slice(netIdx, netIdx + 4)).toEqual(['Net (Rs)', 'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)']);
 
     let hit = false;
     for (let i = 2; i <= summary.rowCount; i++) {

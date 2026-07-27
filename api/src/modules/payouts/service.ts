@@ -16,6 +16,7 @@ import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from 
 import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
 import { getSettingsMap } from '../settings/service.js';
 import { enqueue, drainOnce } from '../notifications/service.js';
+import { REFERRER, REFERRER_LATERAL_JOINS } from '../reports/book.js';
 
 const DUE_TYPES = "('Interest','BrokenInterest')";
 const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((x) => `'${x}'`).join(',');
@@ -547,9 +548,10 @@ export async function markRowFailed(db: Db, actor: AuthUser, scheduleId: number,
 // other, so it names the customer, the interest period and the gross/TDS/net
 // split that the bank sheet (net only) can't show.
 const SUMMARY_SELECT = `
-  SELECT a.application_no, c.full_name AS customer_name, c.dob AS date_of_birth, c.pan,
+  SELECT a.application_no, c.full_name AS customer_name, ${REFERRER} AS referred_by,
+         c.phone, c.dob AS date_of_birth, c.pan,
          c.gender, c.investor_category AS category,
-         s.name AS series_name,
+         s.name AS series_name, a.collection_method,
          -- A redemption slice was earned on its own principal basis, not on the
          -- line's face amount (wealth's principal_basis); everything else shows
          -- what's actually still outstanding on the line — the face amount for
@@ -604,7 +606,7 @@ const SUMMARY_SELECT = `
     JOIN customers c ON c.id = a.customer_id
     LEFT JOIN series s ON s.id = a.series_id
     LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
-    LEFT JOIN customer_bank_accounts cb ON cb.customer_id = c.id AND cb.is_active = TRUE
+    LEFT JOIN customer_bank_accounts cb ON cb.customer_id = c.id AND cb.is_active = TRUE${REFERRER_LATERAL_JOINS}
     -- Adjustments consumed by this row's batch, shown ONLY on the application's
     -- first (lowest line_id) row — the row their amount was applied to.
     LEFT JOIN LATERAL (
@@ -648,8 +650,9 @@ async function summaryRowsForDate(db: Db, payoutDate: string): Promise<Record<st
   if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
   const lineIds = (due.rows as Record<string, unknown>[]).map((r) => Number(r.line_id));
   const statics = (await db.query<Record<string, unknown>>(
-    `SELECT l.id AS line_id, c.dob AS date_of_birth, c.pan, c.gender, c.investor_category AS category,
-            s.name AS series_name, l.outstanding_amount AS investment_amount, l.coupon_rate_pct,
+    `SELECT l.id AS line_id, ${REFERRER} AS referred_by,
+            c.phone, c.dob AS date_of_birth, c.pan, c.gender, c.investor_category AS category,
+            s.name AS series_name, a.collection_method, l.outstanding_amount AS investment_amount, l.coupon_rate_pct,
             COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
             COALESCE(pb.account_number, cb.account_number) AS account_number,
             COALESCE(pb.ifsc, cb.ifsc) AS ifsc,
@@ -661,7 +664,7 @@ async function summaryRowsForDate(db: Db, payoutDate: string): Promise<Record<st
        JOIN customers c ON c.id = a.customer_id
        LEFT JOIN series s ON s.id = a.series_id
        LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
-       LEFT JOIN customer_bank_accounts cb ON cb.customer_id = c.id AND cb.is_active = TRUE
+       LEFT JOIN customer_bank_accounts cb ON cb.customer_id = c.id AND cb.is_active = TRUE${REFERRER_LATERAL_JOINS}
       WHERE l.id = ANY($1)`, [lineIds])).rows;
   const byLine = new Map(statics.map((r) => [Number(r.line_id), r]));
   return (due.rows as Record<string, unknown>[]).map((r) => {

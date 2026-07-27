@@ -345,9 +345,12 @@ describe('customer writes', () => {
     expect(st.json.approval_status).toBe('pending_approval');
     expect(st.json.ncd_id).toBe(first.json.ncd_id);
 
-    const flag = (await ctx.db.query('SELECT is_locker_deposit, status FROM applications WHERE lockerhub_intent_no = $1', ['LHPAY-DEP-1'])).rows[0] as any;
+    const flag = (await ctx.db.query('SELECT is_locker_deposit, status, collection_method FROM applications WHERE lockerhub_intent_no = $1', ['LHPAY-DEP-1'])).rows[0] as any;
     expect(flag.is_locker_deposit).toBe(true);
     expect(flag.status).toBe('PendingApproval'); // integration money waits in the one approval gate
+    // A locker deposit carries no payment-channel signal — unlike an Easebuzz
+    // subscription payment, it must NOT be labelled Easebuzz (owner 2026-07-27).
+    expect(flag.collection_method).toBe('Other');
 
     const missing = await integ('GET', '/api/integration/ncd/locker-deposit-status?deposit_reference=NOPE');
     expect(missing.status).toBe(404);

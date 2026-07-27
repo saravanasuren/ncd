@@ -140,13 +140,20 @@ export async function previewDue(db: Db, payoutDate: string) {
       row_type: 'Redemption',
       // Wealth's rule: a REDEMPTION slice (it carries a principal basis) accrues
       // up to the day BEFORE the redemption, so the sheet's period ends there. A
-      // maturity catch-up has no basis and ends on its own due date. Only the
-      // printed window moves — due_date stays the row's real settlement date,
-      // which the batch, the NEFT sheet and the watermark all key off.
+      // maturity catch-up has no basis and ends on its own due date. due_date
+      // itself stays the row's real settlement date, which the batch, the NEFT
+      // sheet and the watermark all key off — only the PRINTED window moves.
+      //
+      // Owner 2026-07-27: "days" must move with that same window. It used to be
+      // computed from the raw due_date while the printed end used due_date − 1,
+      // so "Interest From" (back-computed as printed-end − (days − 1)) always
+      // landed one day too early — every redemption slice showed the SAME
+      // wrong start date (the line's last-paid anchor) regardless of its own
+      // due_date, because the two off-by-ones cancelled out algebraically.
       display_to: basis != null ? addDays(due, -1) : due,
       // The principal this interest was earned on, not the line's face amount.
       investment_amount: basis,
-      from_date: from, days: from ? daysBetween(from, due) : null,
+      from_date: from, days: from ? daysBetween(from, basis != null ? addDays(due, -1) : due) : null,
       gross_amount: gross, tds_amount: Number(r.tds_amount), net_amount: Number(r.net_amount),
       addition_amount: 0, deduction_amount: 0, total_amount: Number(r.net_amount),
     });
@@ -574,14 +581,17 @@ const SUMMARY_SELECT = `
          COALESCE(adj.addition, 0)  AS addition_amount,
          COALESCE(adj.deduction, 0) AS deduction_amount,
          ds.net_amount AS total_amount,
-         -- Days accrued = this due date minus the previous PAID cut-off for the
-         -- same line (or the interest start for a brand-new investment). The
-         -- brand-new-investment case adds 1: interest_start_date is the day
-         -- the money arrived and has never itself been paid for, unlike a
-         -- prior due_date (already compensated through end of that day) — so
-         -- only that fallback needs the +1 (owner-confirmed 2026-07-25, same
-         -- rule as previewDue's is_first_period).
-         (ds.due_date - COALESCE(
+         -- Days accrued = the PRINTED period end (same due_date − 1 redemption
+         -- adjustment as period_to above — owner 2026-07-27: these two must
+         -- move together, or "Interest From" back-computes to the wrong date)
+         -- minus the previous PAID cut-off for the same line (or the interest
+         -- start for a brand-new investment). The brand-new-investment case
+         -- adds 1: interest_start_date is the day the money arrived and has
+         -- never itself been paid for, unlike a prior due_date (already
+         -- compensated through end of that day) — so only that fallback needs
+         -- the +1 (owner-confirmed 2026-07-25, same rule as previewDue's
+         -- is_first_period).
+         (CASE WHEN ds.principal_basis IS NOT NULL THEN ds.due_date - 1 ELSE ds.due_date END - COALESCE(
             (SELECT max(p.due_date) FROM disbursement_schedule p
               WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
                 AND p.due_type IN ('Interest','BrokenInterest') AND p.status = 'Paid'),

@@ -361,6 +361,65 @@ describe('redemption interest lands in that month\'s payout sheet', () => {
 });
 
 /**
+ * Found live 2026-07-27: every redemption slice's "Interest From" showed the
+ * SAME wrong date — the line's last-paid anchor itself, regardless of the
+ * slice's own due_date. "Interest To" (period_to) was correctly printed as
+ * due_date − 1, but "days" was computed from the raw due_date, so working
+ * backward from period_to by (days − 1) always landed exactly one day short
+ * of the real start — the two off-by-ones cancelled out and hid the bug
+ * behind an internally-consistent-looking (but wrong) pair of dates.
+ * This fixture has a REAL prior paid cycle before redeeming (unlike the
+ * fixture above, whose "last paid" falls back to interest_start_date) — that
+ * prior-paid-anchor path was the one actually broken.
+ */
+describe('a redemption slice\'s "Interest From" starts the day AFTER the line was last paid', () => {
+  it('with a multi-day gap between the last paid cycle and the redemption', async () => {
+    const a = await admin();
+    const cxo = await as('cxo@demo.local');
+    const ncd = await as('ncd@demo.local');
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    const cust = await a.post('/api/customers', { full_name: 'Gap Redeemer', phone: '9600000071' });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '66660007171', ifsc: 'ICIC0001234', holder_name: 'Gap Redeemer' });
+    const app = await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000, date_money_received: '2026-07-12',
+    });
+    const appId = Number(app.json.id);
+    await approveInvestment(ncd, app);
+
+    // Pay one real cycle, so the line has a genuine PAID watermark — the
+    // exact anchor the bug's "last-paid" path depends on. A fixed date (not
+    // NEXT_CUTOFF()) — this file's own month counter runs out partway through
+    // the suite, and '2026-07-28' isn't claimed by any other test here.
+    const payDate = '2026-07-28';
+    const batch = await ncd.post('/api/payouts', { payout_date: payDate });
+    expect(batch.status).toBe(201);
+    await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+
+    // Redeem 11 days after that paid cutoff — a real multi-day gap.
+    const [y, m, d] = payDate.split('-').map(Number);
+    const redDate = new Date(Date.UTC(y!, m! - 1, d! + 11)).toISOString().slice(0, 10);
+    const red = await a.post('/api/redemptions/premature', { application_id: appId, reason: 'exit', redemption_date: redDate });
+    expect(red.status).toBe(201);
+    await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
+
+    const redBatchDate = new Date(Date.UTC(y!, m! - 1, d! + 12)).toISOString().slice(0, 10); // next-day cutoff sweeps it
+    const redBatch = await ncd.post('/api/payouts', { payout_date: redBatchDate });
+    expect(redBatch.status).toBe(201);
+
+    const ws = await sheetOf((await a.raw(`/api/payouts/${redBatch.json.batch_id}/summary.xlsx`)).buffer);
+    let from: unknown = null;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      if (String(row.getCell(3).value) === 'Gap Redeemer' && String(row.getCell(11).value) === 'Redemption') from = row.getCell(17).value;
+    }
+    const expectedFrom = new Date(Date.UTC(y!, m! - 1, d! + 1)).toISOString().slice(0, 10); // day AFTER the paid cutoff
+    const [ey, em, ed] = expectedFrom.split('-');
+    expect(String(from)).toBe(`${ed}-${em}-${ey}`); // NOT the paid cutoff date itself
+  });
+});
+
+/**
  * A rejected batch must give the redemption slice BACK, not destroy it. The
  * batch never creates a BrokenInterest row — it attaches one the redemption
  * approval wrote — so the reject handler's blanket "delete this batch's

@@ -11,11 +11,10 @@
  * number is NCD's own (migration 031), assigned lazily on first generation.
  */
 import PDFDocument from 'pdfkit';
-import { existsSync } from 'node:fs';
 import type { Db } from '../../../db/types.js';
 import { errors } from '../../../lib/errors.js';
 import { nextCode } from '../../../lib/sequences.js';
-import { getCompanyProfile } from '../../products/service.js';
+import { getCompanyProfile, getBondSignature } from '../../products/service.js';
 import { companyHeader, COMPANY, LOGO_PATH, HAS_LOGO } from './shared.js';
 
 /** Only an issued investment carries a certificate — a pending application must
@@ -51,11 +50,6 @@ const DIRECTORS = [
   { name: 'Gokul Govindarajan', title: 'Director' },
   { name: 'Sankar Venkataraman', title: 'Director' },
 ];
-const BOND_SIG_PATHS = [
-  new URL('../../../../assets/bond-sig-compliance-officer.png', import.meta.url),
-  new URL('../../../../assets/bond-sig-authorised-signatory.png', import.meta.url),
-  new URL('../../../../assets/bond-sig-director.png', import.meta.url),
-].map((u) => decodeURIComponent(u.pathname));
 
 type Doc = PDFKit.PDFDocument;
 const _fmtDate = (d: unknown): string => {
@@ -130,7 +124,7 @@ function _drawDetailTable(doc: Doc, y: number, rows: Array<[string, string, numb
   return y + totalH + 18;
 }
 
-function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHeader>, totalAmount: number) {
+function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHeader>, totalAmount: number, signatures: Array<Buffer | null>) {
   const x = 50, w = doc.page.width - 100;
   doc.fillColor(C.TEXT).font('Helvetica').fontSize(9.5).text(
     `For Value Received ${co.legal_name} having its Corporate Office at ${co.corporate_office_address} promises to pay the person(s) named as holder(s) or to their order the sum of Rs. ${Number(totalAmount).toLocaleString('en-IN')} upon presentation and discharge of this NCD Certificate on the date of redemption as mentioned above including interest at the rate specified above subject to Deduction of tax at source at the rate prevailing from time to time under the provisions of Indian Income Tax Act-1961 or any statutory modifications (or reenactment thereof). The NCD is issued subject to and with the benefit of conditions mentioned in Private Placement Offer Letter which shall be binding on the Company and the NCD Holders and persons claiming by, through or under any of them.`,
@@ -141,7 +135,8 @@ function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHea
   const colW = w / 3, signLineY = y, sigImgH = 32, sigPadX = 30;
   for (let i = 0; i < 3; i++) {
     const colX = x + i * colW;
-    try { if (existsSync(BOND_SIG_PATHS[i]!)) doc.image(BOND_SIG_PATHS[i]!, colX + sigPadX, signLineY - sigImgH - 2, { fit: [colW - sigPadX * 2, sigImgH], align: 'center', valign: 'bottom' }); } catch { /* optional */ }
+    const sig = signatures[i];
+    try { if (sig) doc.image(sig, colX + sigPadX, signLineY - sigImgH - 2, { fit: [colW - sigPadX * 2, sigImgH], align: 'center', valign: 'bottom' }); } catch { /* a corrupt/unreadable image must never break the certificate */ }
     doc.lineWidth(0.6).strokeColor(C.TEXT).moveTo(colX + 20, signLineY).lineTo(colX + colW - 20, signLineY).stroke();
   }
   for (let i = 0; i < 3; i++) {
@@ -206,7 +201,8 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
     ['Redemption Value (Rs.)', _fmtINR(invested)], // equals principal, per spec
   ];
   y = _drawDetailTable(doc, y, rows);
-  _drawLegalAndSign(doc, y, co, invested);
+  const signatures = await Promise.all([0, 1, 2].map((i) => getBondSignature(db, i).then((s) => s?.buffer ?? null)));
+  _drawLegalAndSign(doc, y, co, invested, signatures);
 
   doc.end();
   return done;

@@ -5,7 +5,7 @@
  */
 import type { Db } from '../../db/types.js';
 import { generateSchedule, type PayoutFrequency, type DayCountConvention } from '../../lib/interest.js';
-import { computeTds } from '../../lib/tds.js';
+import { computeTds, DEFAULT_TDS_RULE } from '../../lib/tds.js';
 import { round2, toISODate } from '../../lib/dates.js';
 import { getSettingsMap } from '../settings/service.js';
 
@@ -78,8 +78,8 @@ export async function materializeForApplication(tx: Db, applicationId: number): 
   let count = 0;
   for (const line of lines) {
     const tdsRule = line.scheme_id
-      ? (await tx.query<{ rate_pct: number }>('SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [line.scheme_id])).rows[0] ?? null
-      : null;
+      ? (await tx.query<{ rate_pct: number }>('SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [line.scheme_id])).rows[0] ?? DEFAULT_TDS_RULE
+      : DEFAULT_TDS_RULE;
 
     const rows = generateSchedule(
       {

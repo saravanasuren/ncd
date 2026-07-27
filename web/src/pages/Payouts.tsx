@@ -63,7 +63,7 @@ export function PayoutsPage() {
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
       {preview.data && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5 text-sm">
-          <span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'} with interest accrued to this date · net <span className="mono font-semibold">{formatINR(preview.data.totals.net)}</span>
+          <span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'} with interest accrued to this date · gross <span className="mono font-semibold">{formatINR(preview.data.totals.gross)}</span> · net <span className="mono font-semibold">{formatINR(preview.data.totals.net)}</span>
           {(preview.data.totals.addition > 0 || preview.data.totals.deduction > 0) && (
             <span className="text-text-muted"> · additions <span className="mono">+{formatINR(preview.data.totals.addition)}</span> · deductions <span className="mono">−{formatINR(preview.data.totals.deduction)}</span> · payable <span className="mono font-semibold">{formatINR(preview.data.totals.total)}</span></span>
           )}

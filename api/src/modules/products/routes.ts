@@ -48,3 +48,20 @@ productsRouter.post('/holidays', manage, asyncHandler(async (req, res) => {
 // Company profile (singleton)
 productsRouter.get('/company-profile', requireAuth, asyncHandler(async (_req, res) => res.json({ profile: await s.getCompanyProfile(getDb()) })));
 productsRouter.put('/company-profile', manage, asyncHandler(async (req, res) => { await s.updateCompanyProfile(getDb(), req.user!, req.body); res.json({ ok: true }); }));
+
+// Bond certificate director signatures — 3 fixed slots (index 0,1,2), matching
+// forms/bond.ts's DIRECTORS order. Read is any-authed (same as the rest of the
+// certificate's data); upload/delete need products:manage.
+productsRouter.get('/company-profile/bond-signature/:index', requireAuth, asyncHandler(async (req, res) => {
+  const index = Number(req.params.index);
+  const sig = await s.getBondSignature(getDb(), index);
+  if (!sig) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No signature uploaded for this slot' } }); return; }
+  res.setHeader('Content-Type', sig.mime);
+  res.send(sig.buffer);
+}));
+productsRouter.post('/company-profile/bond-signature/:index', manage, asyncHandler(async (req, res) => {
+  const b = z.object({ filename: z.string().min(1), data_base64: z.string().min(1) }).parse(req.body);
+  res.status(201).json(await s.uploadBondSignature(getDb(), req.user!, Number(req.params.index), b.filename, b.data_base64));
+}));
+productsRouter.delete('/company-profile/bond-signature/:index', manage, asyncHandler(async (req, res) =>
+  res.json(await s.deleteBondSignature(getDb(), req.user!, Number(req.params.index)))));

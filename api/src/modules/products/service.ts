@@ -112,6 +112,50 @@ export async function updateCompanyProfile(db: Db, actor: AuthUser, p: Record<st
   await genericUpdate(db, actor, 'company_profile', 1, p, fields, 'company_profile.update', 'id');
 }
 
+// ── Bond certificate director signatures (one of 3 fixed slots) ──
+const BOND_SIG_COL = (i: number) => `bond_signature_${i + 1}_path`;
+
+export async function uploadBondSignature(db: Db, actor: AuthUser, index: number, filename: string, dataBase64: string) {
+  if (index < 0 || index > 2) throw errors.badRequest('Signature slot must be 1, 2 or 3');
+  const { validateUpload } = await import('../../lib/uploads.js');
+  const { buffer, mime } = validateUpload(dataBase64);
+  if (!mime.startsWith('image/')) throw errors.badRequest('Signature must be an image (JPEG, PNG or WebP)');
+  const { saveBuffer, removeStored } = await import('../../lib/storage.js');
+  const { path } = saveBuffer('bond-signatures', filename, buffer);
+  const col = BOND_SIG_COL(index);
+  const prev = (await db.query<Record<string, string | null>>(`SELECT ${col} FROM company_profile WHERE id = 1`)).rows[0];
+  await db.query(`UPDATE company_profile SET ${col} = $1, updated_at = now() WHERE id = 1`, [path]);
+  if (prev?.[col]) removeStored(prev[col]!);
+  await writeAudit(db, { actorId: actor.id, action: 'company_profile.bond-signature.upload', entityType: 'company_profile', entityId: 1, after: { index, filename } });
+  return { path };
+}
+
+export async function deleteBondSignature(db: Db, actor: AuthUser, index: number) {
+  if (index < 0 || index > 2) throw errors.badRequest('Signature slot must be 1, 2 or 3');
+  const { removeStored } = await import('../../lib/storage.js');
+  const col = BOND_SIG_COL(index);
+  const prev = (await db.query<Record<string, string | null>>(`SELECT ${col} FROM company_profile WHERE id = 1`)).rows[0];
+  if (!prev?.[col]) return { ok: true };
+  await db.query(`UPDATE company_profile SET ${col} = NULL, updated_at = now() WHERE id = 1`);
+  removeStored(prev[col]!);
+  await writeAudit(db, { actorId: actor.id, action: 'company_profile.bond-signature.delete', entityType: 'company_profile', entityId: 1, after: { index } });
+  return { ok: true };
+}
+
+export async function getBondSignature(db: Db, index: number): Promise<{ buffer: Buffer; mime: string } | null> {
+  if (index < 0 || index > 2) return null;
+  const col = BOND_SIG_COL(index);
+  const row = (await db.query<Record<string, string | null>>(`SELECT ${col} FROM company_profile WHERE id = 1`)).rows[0];
+  const path = row?.[col];
+  if (!path) return null;
+  const { readStored } = await import('../../lib/storage.js');
+  const buffer = readStored(path);
+  if (!buffer) return null;
+  const ext = path.split('.').pop()?.toLowerCase();
+  const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+  return { buffer, mime };
+}
+
 // ── helper ──
 async function genericUpdate(
   db: Db, actor: AuthUser, table: string, id: number, input: Record<string, unknown>,

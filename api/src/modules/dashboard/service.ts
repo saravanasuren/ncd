@@ -154,12 +154,20 @@ export async function search(db: Db, actor: AuthUser, q: string) {
      FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
      WHERE a.application_no ILIKE $1 AND ${scA.sql}
      ORDER BY a.application_no DESC LIMIT 10`, [like, ...scA.params])).rows;
-  let agents: unknown[] = [], staff: unknown[] = [];
+  let agents: Record<string, unknown>[] = [], staff: Record<string, unknown>[] = [];
   if (actor.permissions.includes('dashboard:drilldown')) {
     agents = (await db.query('SELECT id, agent_code, full_name FROM agents WHERE deleted_at IS NULL AND (full_name ILIKE $1 OR agent_code ILIKE $1) ORDER BY full_name LIMIT 8', [like])).rows;
     staff = (await db.query("SELECT u.id, u.full_name, r.name AS role FROM users u JOIN roles r ON r.id = u.role_id WHERE u.full_name ILIKE $1 AND r.name <> 'customer' ORDER BY u.full_name LIMIT 8", [like])).rows;
   }
-  return { customers, applications, agents, staff };
+  // BIGINT ids come back from pg as strings — cast before they leave the API,
+  // otherwise a caller that feeds one straight into a z.number() body (e.g. the
+  // locker-tenant "link to customer" picker) 400s, silently, behind whatever
+  // modal it opened from.
+  const asNum = (r: Record<string, unknown>) => ({ ...r, id: Number(r.id) });
+  return {
+    customers: customers.map(asNum), applications: applications.map(asNum),
+    agents: agents.map(asNum), staff: staff.map(asNum),
+  };
 }
 
 /**

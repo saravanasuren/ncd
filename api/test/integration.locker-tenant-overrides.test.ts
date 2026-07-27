@@ -135,3 +135,27 @@ describe('locker tenant — remove from the NCD roster', () => {
     expect(await rosterRow(a, 'tn_override_2')).toBeFalsy();
   });
 });
+
+/**
+ * Found live 2026-07-27: the "link tenant" picker calls /api/dashboard/search
+ * and feeds a result's `.id` straight into POST .../link, whose body requires
+ * `customer_id: z.number()`. Postgres BIGINT ids come back from `pg` as JS
+ * strings, and zod's z.number() does NOT coerce — so the link 400'd, silently,
+ * behind the modal (its error only rendered in a div the modal's own overlay
+ * covers). Fixed by casting ids to Number() before they leave /dashboard/search.
+ */
+describe('the customer picker\'s search result links a tenant end-to-end', () => {
+  it('a customer id from /api/dashboard/search is a real number, and links successfully as-is', async () => {
+    const a = await admin();
+    const found = await a.get('/api/dashboard/search?q=SEENU');
+    const hit = (found.json.customers as Array<{ id: unknown; customer_code: string }>).find((c) => c.customer_code === custCode);
+    expect(hit).toBeTruthy();
+    expect(typeof hit!.id).toBe('number'); // NOT a string — that's exactly what 400'd before the fix
+
+    const link = await a.post(`/api/lockers/tenants/${TENANT}/link`, { customer_id: hit!.id });
+    expect(link.status).toBe(200);
+    const stored = (await ctx.db.query(
+      'SELECT customer_id FROM locker_tenant_overrides WHERE lockerhub_tenant_id = $1', [TENANT])).rows[0] as any;
+    expect(Number(stored.customer_id)).toBe(custId);
+  });
+});

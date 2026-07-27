@@ -34,8 +34,11 @@ describe('Path B — app investment goes live instantly + Approvals notice', () 
   it('no referral code → live now, notice flagged for attribution, then admin assigns → re-accrues', async () => {
     const r = await appPayment({ customer_phone: '9400001001', customer_name: 'App Cust A', lockerhub_intent_no: 'LHB-1' });
     expect(r.status).toBe(200);
-    const app = (await ctx.db.query("SELECT id, status FROM applications WHERE lockerhub_intent_no = 'LHB-1'")).rows[0] as any;
+    const app = (await ctx.db.query("SELECT id, status, collection_method FROM applications WHERE lockerhub_intent_no = 'LHB-1'")).rows[0] as any;
     expect(app.status).toBe('Active'); // instant live — customer sees it live
+    // Owner 2026-07-27: this route is Easebuzz-verified money — the profile
+    // must say so, not the generic 'Other' every app payment used to show.
+    expect(app.collection_method).toBe('Easebuzz');
 
     // A notice sits on the Approvals page, flagged as needing attribution.
     const notice = (await ctx.db.query(

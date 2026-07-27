@@ -547,9 +547,9 @@ export async function markRowFailed(db: Db, actor: AuthUser, scheduleId: number,
 // other, so it names the customer, the interest period and the gross/TDS/net
 // split that the bank sheet (net only) can't show.
 const SUMMARY_SELECT = `
-  SELECT a.application_no, c.full_name AS customer_name, c.dob AS date_of_birth, c.pan,
+  SELECT a.application_no, c.full_name AS customer_name, c.phone, c.dob AS date_of_birth, c.pan,
          c.gender, c.investor_category AS category,
-         s.name AS series_name,
+         s.name AS series_name, a.collection_method,
          -- A redemption slice was earned on its own principal basis, not on the
          -- line's face amount (wealth's principal_basis); everything else shows
          -- what's actually still outstanding on the line — the face amount for
@@ -648,8 +648,8 @@ async function summaryRowsForDate(db: Db, payoutDate: string): Promise<Record<st
   if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
   const lineIds = (due.rows as Record<string, unknown>[]).map((r) => Number(r.line_id));
   const statics = (await db.query<Record<string, unknown>>(
-    `SELECT l.id AS line_id, c.dob AS date_of_birth, c.pan, c.gender, c.investor_category AS category,
-            s.name AS series_name, l.outstanding_amount AS investment_amount, l.coupon_rate_pct,
+    `SELECT l.id AS line_id, c.phone, c.dob AS date_of_birth, c.pan, c.gender, c.investor_category AS category,
+            s.name AS series_name, a.collection_method, l.outstanding_amount AS investment_amount, l.coupon_rate_pct,
             COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
             COALESCE(pb.account_number, cb.account_number) AS account_number,
             COALESCE(pb.ifsc, cb.ifsc) AS ifsc,

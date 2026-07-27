@@ -670,6 +670,10 @@ interface LandInput {
   amount: number;
   paidAt: string;
   collectionReference: string;
+  /** How this money actually landed — 'Easebuzz' for a verified app/gateway
+   *  payment, 'Other' when the caller has no real signal (e.g. a locker
+   *  deposit collected who-knows-how at the branch). Never guessed. */
+  collectionMethod: string;
   isLockerDeposit: boolean;
   referredBy: string | null;
   // App payments are already reconciled by the payment integration → go live
@@ -736,8 +740,8 @@ async function landFundedApplication(db: Db, b: LandInput): Promise<{ appId: num
       `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, amount_received,
                                  date_money_received, interest_start_date, collection_method, collection_reference,
                                  customer_was_new_at_creation, is_locker_deposit, lockerhub_intent_no, referred_by_text, source)
-       VALUES ($1,$2,$3,'PendingApproval',$4,$4,$5::date,$5::date,'Other',$6,$7,$8,$9,$10,'dhanamfin') RETURNING id`,
-      [appNo, customerId, series.id, b.amount, b.paidAt, b.collectionReference, priorCount === 0,
+       VALUES ($1,$2,$3,'PendingApproval',$4,$4,$5::date,$5::date,$6,$7,$8,$9,$10,$11,'dhanamfin') RETURNING id`,
+      [appNo, customerId, series.id, b.amount, b.paidAt, b.collectionMethod, b.collectionReference, priorCount === 0,
        b.isLockerDeposit, b.intentNo, b.referredBy]
     );
     const appId = Number(rows[0]!.id);
@@ -752,7 +756,7 @@ async function landFundedApplication(db: Db, b: LandInput): Promise<{ appId: num
       // and raise a NOTICE on the Approvals page (not a gate). If the customer
       // gave no referral code, the notice lets the admin assign a staff/agent.
       const { activateApplication } = await import('../applications/activate.js');
-      await activateApplication(tx, appId, { dateMoneyReceived: b.paidAt, amountReceived: b.amount, method: 'Other', reference: b.collectionReference });
+      await activateApplication(tx, appId, { dateMoneyReceived: b.paidAt, amountReceived: b.amount, method: b.collectionMethod, reference: b.collectionReference });
       await createApprovalRequest(tx, {
         type: 'app_investment', entityType: 'applications', entityId: appId, makerUserId: null,
         metadata: { application_no: appNo, source: 'dhanamfin', amount: b.amount, referred_by: b.referredBy ?? null, needs_attribution: !b.referredBy },
@@ -856,6 +860,10 @@ customerWritesRouter.post('/subscription-payments/from-lockerhub', asyncHandler(
       amount,
       paidAt: iso(b.paid_at) ?? new Date().toISOString().slice(0, 10),
       collectionReference: String(b.provider_ref || intentNo),
+      // This whole route is "Easebuzz-verified money landed" (see the comment
+      // on the route below) — owner 2026-07-27: label it Easebuzz, not the
+      // generic 'Other' every other app payment used to show in the profile.
+      collectionMethod: 'Easebuzz',
       isLockerDeposit: b.is_locker_deposit === true,
       referredBy: typeof b.referred_by === 'string' ? b.referred_by.trim() || null : null,
       instantLive: true, // app payment — reconciled, so it goes live immediately
@@ -944,6 +952,10 @@ customerWritesRouter.post('/locker-deposits', asyncHandler(async (req, res) => {
       amount,
       paidAt: iso(b.deposit_date) ?? new Date().toISOString().slice(0, 10),
       collectionReference: ref,
+      // Unlike the Easebuzz subscription-payments route, a locker deposit
+      // carries no payment-channel signal in its payload — LockerHub collects
+      // it however the branch does, cash included. Stays generic on purpose.
+      collectionMethod: 'Other',
       isLockerDeposit: true,
       referredBy: null,
       instantLive: false, // locker deposit — requires approval before going live

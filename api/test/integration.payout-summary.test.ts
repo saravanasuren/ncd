@@ -39,7 +39,7 @@ const HEADERS = [
   '#', 'Application No', 'Customer Name', 'DOB', 'Age', 'PAN', 'Gender', 'Category', 'Series', 'Type',
   'Invested (Rs)', 'Rate %', 'Beneficiary Name', 'Bank A/C', 'IFSC',
   'Interest From', 'Interest To', 'Days', 'Gross (Rs)', 'TDS (Rs)', 'Net (Rs)',
-  'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)',
+  'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)', 'Phone', 'Payment Mode',
 ];
 
 async function sheetOf(buffer: Buffer) {
@@ -119,6 +119,10 @@ describe('payout summary sheet', () => {
     expect(Number(row.getCell(24).value)).toBe(Number(row.getCell(21).value));
     expect(Number(row.getCell(22).value)).toBe(0);
     expect(Number(row.getCell(23).value)).toBe(0);
+    // Owner 2026-07-27: Phone + Payment Mode, appended (not inserted) so every
+    // existing column keeps its position for Federal Net reconciliation.
+    expect(String(row.getCell(25).value)).toMatch(/^9600000\d{3}$/);
+    expect(String(row.getCell(26).value)).toBe('NEFT/RTGS');
   });
 
   it('Interest From precedes Interest To (the off-by-one wealth hit)', async () => {

@@ -12,8 +12,13 @@ import ExcelJS from 'exceljs';
 export interface SummaryRow {
   application_no?: string | null;
   customer_name?: string | null;
+  phone?: string | null;
   date_of_birth?: string | Date | null;
   pan?: string | null;
+  /** How the investment's own money was originally collected — NEFT/RTGS/
+   *  Cheque/Easebuzz/… (applications.collection_method), not how interest is
+   *  being paid out now. */
+  collection_method?: string | null;
   /** Raw stored value — normalised to Male/Female/Other for display. */
   gender?: string | null;
   /** investor_category: Individual / HUF / Trust / Company / … */
@@ -44,6 +49,9 @@ const COLUMNS = [
   'Invested (Rs)', 'Rate %', 'Beneficiary Name', 'Bank A/C', 'IFSC',
   'Interest From', 'Interest To', 'Days', 'Gross (Rs)', 'TDS (Rs)', 'Net (Rs)',
   'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)',
+  // Appended, not inserted — ops reconcile this sheet against the Federal Net
+  // file by column position, so every existing column keeps its index.
+  'Phone', 'Payment Mode',
 ];
 
 /** Completed years at the payout date. Blank when either date is unusable. */
@@ -139,11 +147,13 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
       amt(r.addition_amount ?? 0),
       amt(r.deduction_amount ?? 0),
       amt(r.total_amount ?? r.net_amount),
+      r.phone ?? '',
+      r.collection_method ?? '',
     ]);
-    // Application No, PAN, Bank A/C and IFSC must stay TEXT — otherwise Excel
-    // drops leading zeros and renders long account numbers in scientific
+    // Application No, PAN, Bank A/C, IFSC and Phone must stay TEXT — otherwise
+    // Excel drops leading zeros and renders long numbers in scientific
     // notation. ⚠ These indexes track the column order above; re-check if it moves.
-    for (const c of [2, 6, 14, 15]) row.getCell(c).numFmt = '@';
+    for (const c of [2, 6, 14, 15, 25]) row.getCell(c).numFmt = '@';
   });
 
   ws.columns = [
@@ -152,6 +162,7 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
     { width: 22 }, { width: 14 }, { width: 8 }, { width: 26 }, { width: 20 }, { width: 13 },
     { width: 14 }, { width: 14 }, { width: 7 }, { width: 13 }, { width: 11 }, { width: 13 },
     { width: 13 }, { width: 14 }, { width: 13 },
+    { width: 14 }, { width: 14 },
   ];
   return Buffer.from(await wb.xlsx.writeBuffer());
 }

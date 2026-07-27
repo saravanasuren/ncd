@@ -69,7 +69,8 @@ describe('build an Active investment', () => {
 
     const detail = await a.get(`/api/applications/${appId}`);
     expect(detail.json.application.status).toBe('Active');
-    // interest starts from the staff-entered credit date (after deemed 2026-07-01)
+    // interest starts from the staff-entered credit date, always — the series'
+    // deemed date (2026-07-01 here) is just a label, never an interest gate.
     expect(detail.json.application.interest_start_date).toBe('2026-07-15');
     // active before allotment — allotment_date is still null
     expect(detail.json.application.allotment_date).toBeNull();

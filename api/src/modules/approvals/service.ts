@@ -297,9 +297,11 @@ export async function getById(db: Db, id: number): Promise<ApprovalRow | null> {
 /** Fields an approver may correct while approving an investment request. Only
  * these are accepted from the client — anything else in the payload is ignored. */
 // NB: interest_start_date is deliberately NOT here. Interest starts when the
-// money is received — activateApplication derives it as
-// max(date_money_received, series deemed date) at go-live, so accepting it
-// separately would be both redundant and a lie (go-live overwrites it).
+// money is received — activateApplication derives it directly from
+// date_money_received at go-live (the series deemed date only labels when the
+// series itself was allotted; it never delays an individual investor's
+// interest), so accepting it separately would be both redundant and a lie
+// (go-live overwrites it).
 export const EDITABLE_APPLICATION_FIELDS = [
   'total_amount', 'date_money_received', 'collection_method',
   'collection_reference', 'referred_by_text',

@@ -41,9 +41,14 @@ export async function activateApplication(tx: Db, appId: number, input: GoLiveIn
 
   const series = (await tx.query<{ deemed_date: string | null }>('SELECT deemed_date FROM series WHERE id = $1', [app.series_id])).rows[0];
   const deemed = toISODate(series?.deemed_date ?? null);
+  // interest_start_date = the day the money actually arrived — full stop.
+  // Owner-confirmed 2026-07-27: the series deemed date is a label ("this
+  // series was allotted on this date"), not an interest gate — money received
+  // before the deemed date still earns interest from its own receipt date.
+  // `deemed` therefore only backstops the rare case where no receipt date is
+  // known at all (never used to push a real receipt date later).
   const received = toISODate(input.dateMoneyReceived ?? app.date_money_received ?? null) ?? deemed ?? toISODate(new Date().toISOString())!;
-  // interest_start_date = max(receipt date, series deemed date)
-  const isd = deemed && deemed > received ? deemed : received;
+  const isd = received;
   const amount = input.amountReceived != null ? input.amountReceived : Number(app.total_amount);
 
   // Log the collection when we have a recorder (staff/app). Skipped for pure

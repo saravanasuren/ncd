@@ -223,6 +223,11 @@ export function LockerTenantsPage() {
               “SEENU RAJAPPA” never matches a customer saved as “SEENU”. LockerHub gives us no PAN to
               settle it, so pick the customer yourself.
             </p>
+            {linkTenant.isError && (
+              <div className="text-xs text-danger mb-2">
+                {linkTenant.error instanceof ApiError ? linkTenant.error.message : 'Failed to save the link.'}
+              </div>
+            )}
             <input className={`${inp} w-full mb-2`} autoFocus placeholder="Search name, PAN or phone…"
               value={custQ} onChange={(e) => setCustQ(e.target.value)} />
             <div className="max-h-56 overflow-auto">

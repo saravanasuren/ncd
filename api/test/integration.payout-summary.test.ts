@@ -420,6 +420,70 @@ describe('a redemption slice\'s "Interest From" starts the day AFTER the line wa
 });
 
 /**
+ * Owner 2026-07-27 (repeated instruction — do not remove this again): a
+ * redemption slice belongs to the month it fell due in even when its broken
+ * interest is genuinely ₹0 (redeemed the day right after the last regular
+ * payout, so nothing new accrued). It must still show on that month's
+ * summary sheet, paid at ₹0 — not silently disappear because a `gross > 0`
+ * filter treated "nothing owed" the same as "no such row".
+ */
+describe('a zero-interest redemption slice still shows on its month\'s sheet, not silently dropped', () => {
+  it('redeemed the day right after the last paid cycle — ₹0, but still a row', async () => {
+    const a = await admin();
+    const cxo = await as('cxo@demo.local');
+    const ncd = await as('ncd@demo.local');
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    const cust = await a.post('/api/customers', { full_name: 'Zero Gap Redeemer', phone: '9600000072' });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '66660007272', ifsc: 'ICIC0001234', holder_name: 'Zero Gap Redeemer' });
+    const app = await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 1000000, date_money_received: '2026-08-12',
+    });
+    const appId = Number(app.json.id);
+    await approveInvestment(ncd, app);
+
+    const payDate = '2026-08-28';
+    const batch = await ncd.post('/api/payouts', { payout_date: payDate });
+    expect(batch.status).toBe(201);
+    await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+
+    // Redeem the VERY NEXT DAY — last paid through 28-Aug, redemption stops
+    // the day before it (still 28-Aug), so zero new days have accrued.
+    const redDate = '2026-08-29';
+    const red = await a.post('/api/redemptions/premature', { application_id: appId, reason: 'exit', redemption_date: redDate });
+    expect(red.status).toBe(201);
+    await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
+
+    const slice = (await ctx.db.query(
+      "SELECT gross_amount, net_amount, status, batch_id FROM disbursement_schedule WHERE application_id=$1 AND due_type='BrokenInterest' AND due_date=$2::date",
+      [appId, redDate])).rows[0] as any;
+    expect(Number(slice.gross_amount)).toBe(0);
+
+    const redBatch = await ncd.post('/api/payouts', { payout_date: '2026-08-30' });
+    expect(redBatch.status).toBe(201);
+
+    // The ₹0 slice was swept INTO the batch — it belongs to this month, per
+    // owner instruction, not left orphaned as Scheduled/batch_id NULL.
+    const after = (await ctx.db.query(
+      "SELECT gross_amount, status, batch_id FROM disbursement_schedule WHERE application_id=$1 AND due_type='BrokenInterest' AND due_date=$2::date",
+      [appId, redDate])).rows[0] as any;
+    expect(Number(after.batch_id)).toBe(Number(redBatch.json.batch_id));
+
+    const ws = await sheetOf((await a.raw(`/api/payouts/${redBatch.json.batch_id}/summary.xlsx`)).buffer);
+    let found: { gross: unknown; net: unknown } | null = null;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      if (String(row.getCell(3).value) === 'Zero Gap Redeemer' && String(row.getCell(11).value) === 'Redemption') {
+        found = { gross: row.getCell(20).value, net: row.getCell(22).value };
+      }
+    }
+    expect(found).toBeTruthy(); // NOT dropped from the sheet
+    expect(Number(found!.gross)).toBe(0);
+    expect(Number(found!.net)).toBe(0);
+  });
+});
+
+/**
  * A rejected batch must give the redemption slice BACK, not destroy it. The
  * batch never creates a BrokenInterest row — it attaches one the redemption
  * approval wrote — so the reject handler's blanket "delete this batch's

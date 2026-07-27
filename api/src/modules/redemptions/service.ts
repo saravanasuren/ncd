@@ -337,7 +337,7 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
       `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status)
        VALUES ($1,$2,$3,'Premature',$4,0,$4,'Scheduled') ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,
       [Number(lineId), appId, redDate, principalNet]);
-    if (brokenGross > 0) {
+    if (brokenGross >= 0) {
       // principal_basis = the principal this interest was actually earned on,
       // which is what the summary sheet prints as "Invested". Note it is the
       // outstanding BEFORE the withdrawal, not the withdrawn slice: the accrual
@@ -346,6 +346,11 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
       // earned. For a full redemption the two are the same number.
       // It also marks this row as a REDEMPTION slice rather than a maturity
       // catch-up — the sheet reads it to end the period a day early.
+      //
+      // >= 0, not > 0 (owner 2026-07-27, repeated instruction): a redemption
+      // the day right after the last payout genuinely earns ₹0 broken
+      // interest, but it still belongs to that month's batch/sheet — the row
+      // must exist so it can show up paid at ₹0, not be silently absent.
       await tx.query(
         `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status, principal_basis)
          VALUES ($1,$2,$3,'BrokenInterest',$4,$5,$6,'Scheduled',$7) ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,

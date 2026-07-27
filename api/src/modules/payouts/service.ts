@@ -127,7 +127,12 @@ export async function previewDue(db: Db, payoutDate: string) {
       ORDER BY c.full_name`, [payoutDate]);
   for (const r of redemptionSlices) {
     const gross = Number(r.gross_amount);
-    if (!(gross > 0)) continue;
+    // Owner 2026-07-27: a redemption slice belongs to the month it fell due
+    // in even when its broken interest is genuinely ₹0 (e.g. redeemed the
+    // day right after the last regular payout, so nothing new accrued) — it
+    // must still show on that month's sheet, paid at ₹0, not vanish. The NEFT
+    // (bank transfer) sheets already guard independently against a ₹0 wire.
+    if (gross < 0) continue; // never a real case; guards a corrupt row only
     const from = toISODate(r.from_date as string | null);
     const due = toISODate(r.due_date as string | null)!;
     const basis = r.principal_basis != null ? Number(r.principal_basis) : null;

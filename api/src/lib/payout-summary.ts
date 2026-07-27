@@ -5,13 +5,19 @@
  * column ORDER and the text-typed identifier columns both matter.
  *
  * Rupee figures are whole rupees (standard rounding); Days / Rate / Invested
- * stay as they are. Dates are dd/mm/yyyy.
+ * stay as they are. Dates are dd-mm-yyyy — deliberately NOT the same as the
+ * NEFT sheet (dd/mm/yyyy, lib/neft.ts): owner 2026-07-27 wants them visually
+ * distinguishable at a glance, this sheet vs. the bank file.
  */
 import ExcelJS from 'exceljs';
 
 export interface SummaryRow {
   application_no?: string | null;
   customer_name?: string | null;
+  /** Resolved staff/agent display name — the same REFERRER attribution rule
+   *  (reports/book.ts) used everywhere else in the app: matched by code then
+   *  name, staff before agent, raw text as a last resort. */
+  referred_by?: string | null;
   phone?: string | null;
   date_of_birth?: string | Date | null;
   pan?: string | null;
@@ -45,7 +51,7 @@ export interface SummaryRow {
 }
 
 const COLUMNS = [
-  '#', 'Application No', 'Customer Name', 'DOB', 'Age', 'PAN', 'Gender', 'Category', 'Series', 'Type',
+  '#', 'Application No', 'Customer Name', 'Referred By', 'DOB', 'Age', 'PAN', 'Gender', 'Category', 'Series', 'Type',
   'Invested (Rs)', 'Rate %', 'Beneficiary Name', 'Bank A/C', 'IFSC',
   'Interest From', 'Interest To', 'Days', 'Gross (Rs)', 'TDS (Rs)', 'Net (Rs)',
   'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)',
@@ -83,16 +89,18 @@ function genderLabel(g: unknown): string {
 /** Whole rupees, standard rounding (10,616.44 → 10,616; 10,616.78 → 10,617). */
 const amt = (v: unknown): number | string => (v != null && v !== '' ? Math.round(Number(v)) : '');
 
-/** dd/mm/yyyy from an ISO string or a Date (pg returns DATE as a local-midnight Date). */
+/** dd-mm-yyyy from an ISO string or a Date (pg returns DATE as a local-midnight
+ *  Date). Hyphens, not slashes — this sheet only; the NEFT sheet (lib/neft.ts)
+ *  keeps dd/mm/yyyy on purpose (owner 2026-07-27). */
 function ddmmyyyy(v: string | Date | null | undefined): string {
   if (!v) return '';
   if (typeof v === 'string') {
     const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    return m ? `${m[3]}/${m[2]}/${m[1]}` : v;
+    return m ? `${m[3]}-${m[2]}-${m[1]}` : v;
   }
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return '';
-  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  return `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
 }
 
 /**
@@ -126,6 +134,7 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
       i + 1,
       r.application_no ?? '',
       r.customer_name ?? '',
+      r.referred_by ?? '',
       ddmmyyyy(r.date_of_birth),
       ageAt(r.date_of_birth, r.period_to),
       r.pan ?? '',
@@ -153,11 +162,11 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
     // Application No, PAN, Bank A/C, IFSC and Phone must stay TEXT — otherwise
     // Excel drops leading zeros and renders long numbers in scientific
     // notation. ⚠ These indexes track the column order above; re-check if it moves.
-    for (const c of [2, 6, 14, 15, 25]) row.getCell(c).numFmt = '@';
+    for (const c of [2, 7, 15, 16, 26]) row.getCell(c).numFmt = '@';
   });
 
   ws.columns = [
-    { width: 5 }, { width: 18 }, { width: 26 }, { width: 12 }, { width: 6 }, { width: 13 },
+    { width: 5 }, { width: 18 }, { width: 26 }, { width: 22 }, { width: 12 }, { width: 6 }, { width: 13 },
     { width: 9 }, { width: 12 }, { width: 16 },
     { width: 22 }, { width: 14 }, { width: 8 }, { width: 26 }, { width: 20 }, { width: 13 },
     { width: 14 }, { width: 14 }, { width: 7 }, { width: 13 }, { width: 11 }, { width: 13 },

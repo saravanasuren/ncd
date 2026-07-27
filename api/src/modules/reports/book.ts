@@ -97,8 +97,11 @@ const FREE_AMT = `GREATEST(${AMT} - ${LINKED}, 0)`;
  * Going forward the enrol form stores the payee CODE, so renames/spelling
  * variants never break attribution again.
  */
-const EFF_REF = "COALESCE(NULLIF(btrim(a.referred_by_text), ''), NULLIF(btrim(c.referred_by_text), ''))";
-const FROM_ATTR = `${FROM}
+// Exported so any other query needing a display referrer (e.g. the payout
+// summary sheet) can splice these onto its OWN FROM clause rather than
+// re-deriving the resolution rule — this IS the rule, single source.
+export const EFF_REF = "COALESCE(NULLIF(btrim(a.referred_by_text), ''), NULLIF(btrim(c.referred_by_text), ''))";
+export const REFERRER_LATERAL_JOINS = `
   LEFT JOIN LATERAL (
     SELECT u.full_name FROM users u JOIN roles r ON r.id = u.role_id
     WHERE r.name <> 'customer' AND u.is_staff = TRUE
@@ -114,8 +117,9 @@ const FROM_ATTR = `${FROM}
     ORDER BY (upper(btrim(ag.agent_code)) = upper(${EFF_REF})) DESC
     LIMIT 1
   ) aref ON TRUE`;
+const FROM_ATTR = `${FROM}${REFERRER_LATERAL_JOINS}`;
 // Display referrer: resolved staff name → resolved agent name → raw text.
-const REFERRER = `COALESCE(sref.full_name, aref.full_name, ${EFF_REF})`;
+export const REFERRER = `COALESCE(sref.full_name, aref.full_name, ${EFF_REF})`;
 
 export async function kpis(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const active = appWhere(actor, { ...filters, status: 'active' });

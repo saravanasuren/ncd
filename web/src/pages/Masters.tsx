@@ -272,7 +272,85 @@ function CompanyProfile() {
         )}
         {err && <span className="text-xs text-danger">{err}</span>}
       </div>
+      <BondSignatures />
     </Section>
+  );
+}
+
+/** The 3 director signatures printed on every bond/debenture certificate
+ * (forms/bond.ts DIRECTORS, same order). Certificates used to ship with blank
+ * signature lines forever — the code drew an image if one existed on disk,
+ * but no one had ever uploaded a file there. Now they live in the DB and are
+ * uploaded right here instead of needing a deploy. */
+const BOND_DIRECTORS = ['Avinash Gopalakrishnan', 'Gokul Govindarajan', 'Sankar Venkataraman'];
+
+function BondSignatures() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ['company-profile'], queryFn: () => api.get<{ profile: any }>('/api/company-profile') });
+  const [err, setErr] = useState('');
+  const p = data?.profile ?? {};
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['company-profile'] });
+
+  const upload = useMutation({
+    mutationFn: (v: { index: number; filename: string; data_base64: string }) =>
+      api.post(`/api/company-profile/bond-signature/${v.index}`, { filename: v.filename, data_base64: v.data_base64 }),
+    onSuccess: () => { setErr(''); invalidate(); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const remove = useMutation({
+    mutationFn: (index: number) => api.del(`/api/company-profile/bond-signature/${index}`),
+    onSuccess: () => { setErr(''); invalidate(); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
+
+  function pick(index: number) {
+    const picker = document.createElement('input'); picker.type = 'file'; picker.accept = 'image/png,image/jpeg,image/webp';
+    picker.onchange = () => {
+      const file = picker.files?.[0]; if (!file) return;
+      if (file.size > 2 * 1024 * 1024) { setErr('Signature image must be under 2 MB.'); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const data_base64 = String(reader.result).split(',')[1] ?? '';
+        upload.mutate({ index, filename: file.name, data_base64 });
+      };
+      reader.readAsDataURL(file);
+    };
+    picker.click();
+  }
+
+  return (
+    <div className="px-4 pb-4 pt-1 border-t border-border">
+      <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2 mt-3">Bond certificate signatures</div>
+      <p className="text-xs text-text-muted mb-3">Printed on every debenture certificate. Upload a scanned signature (PNG, JPEG or WebP, transparent background works best) for each director — leave blank and the certificate just prints a line with their name, as it does today.</p>
+      <div className="grid grid-cols-3 gap-3">
+        {BOND_DIRECTORS.map((name, i) => {
+          const path = p[`bond_signature_${i + 1}_path`];
+          return (
+            <div key={i} className="border border-border rounded-lg p-3 text-center">
+              <div className="h-14 flex items-center justify-center mb-2">
+                {path
+                  ? <img src={`/api/company-profile/bond-signature/${i}?v=${encodeURIComponent(path)}`} alt={`${name} signature`} className="max-h-14 max-w-full object-contain" />
+                  : <span className="text-xs text-text-muted italic">No signature on file</span>}
+              </div>
+              <div className="text-xs font-medium truncate">{name}</div>
+              <div className="text-[11px] text-text-muted mb-2">Director</div>
+              <div className="flex gap-2 justify-center">
+                <button className="text-xs text-primary hover:underline" disabled={upload.isPending} onClick={() => pick(i)}>
+                  {path ? 'Replace' : '+ Upload'}
+                </button>
+                {path && (
+                  <button className="text-xs text-danger hover:underline" disabled={remove.isPending}
+                    onClick={() => { if (window.confirm(`Remove ${name}'s signature from the certificate?`)) remove.mutate(i); }}>
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {err && <div className="text-xs text-danger mt-2">{err}</div>}
+    </div>
   );
 }
 

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { validTransitions } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { useConfirm } from '../components/Confirm.js';
 
 const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
 const btn = 'text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover';
@@ -77,6 +78,7 @@ function Schemes() {
 }
 
 function SeriesSection() {
+  const { confirm } = useConfirm();
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ['series'], queryFn: () => api.get<{ rows: any[] }>('/api/series') });
   const schemes = useQuery({ queryKey: ['schemes'], queryFn: () => api.get<{ rows: any[] }>('/api/schemes') });
@@ -117,7 +119,7 @@ function SeriesSection() {
     { key: 'actions', header: '', align: 'right', sortable: false, filterable: false, tdClassName: 'whitespace-nowrap',
       render: (s) => validTransitions('series', s.status).map((to) => (
         <button key={to} className="text-xs text-primary hover:underline ml-2"
-          onClick={() => { setErr(''); if (window.confirm(`Move series ${s.code} to ${to}?`)) setStatus.mutate({ id: s.id, to }); }}>→ {to}</button>
+          onClick={async () => { setErr(''); if (await confirm({ title: `Move series ${s.code} to ${to}?`, confirmLabel: `Move to ${to}` })) setStatus.mutate({ id: s.id, to }); }}>→ {to}</button>
       )) },
   ];
   return (
@@ -285,6 +287,7 @@ function CompanyProfile() {
 const BOND_DIRECTORS = ['Avinash Gopalakrishnan', 'Gokul Govindarajan', 'Sankar Venkataraman'];
 
 function BondSignatures() {
+  const { confirm } = useConfirm();
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ['company-profile'], queryFn: () => api.get<{ profile: any }>('/api/company-profile') });
   const [err, setErr] = useState('');
@@ -340,7 +343,7 @@ function BondSignatures() {
                 </button>
                 {path && (
                   <button className="text-xs text-danger hover:underline" disabled={remove.isPending}
-                    onClick={() => { if (window.confirm(`Remove ${name}'s signature from the certificate?`)) remove.mutate(i); }}>
+                    onClick={async () => { if (await confirm({ title: `Remove ${name}'s signature?`, body: 'It stops appearing on newly generated certificates.', confirmLabel: 'Remove', danger: true })) remove.mutate(i); }}>
                     Remove
                   </button>
                 )}

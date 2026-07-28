@@ -5,6 +5,7 @@ import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { Tabs, type TabDef } from '../components/Tabs.js';
+import { useConfirm } from '../components/Confirm.js';
 
 interface Payee { payee_type: string; payee_id: number; payee_name: string | null; is_staff: boolean; investment_amount: string; accrued: string; paid: string; balance: string; }
 interface Accrual { application_id: number; application_no: string; customer: string; customer_code: string; series_code: string; date_money_received: string | null; investment_amount: string; incentive_amount: string; paid: boolean; }
@@ -139,6 +140,7 @@ export function IncentivesPage() {
 
 /** Per-customer incentive breakdown for one payee, with pay-in-full per customer. */
 function PayeeAccruals({ p, canPay, canRevert, onPaid, onReverted }: { p: Payee; canPay: boolean; canRevert: boolean; onPaid: () => void; onReverted: () => void }) {
+  const { confirm } = useConfirm();
   const qc = useQueryClient();
   const key = ['inc-accruals', p.payee_type, p.payee_id];
   const { data, isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<{ rows: Accrual[] }>(`/api/incentives/payees/${p.payee_type}/${p.payee_id}/accruals`) });
@@ -166,11 +168,11 @@ function PayeeAccruals({ p, canPay, canRevert, onPaid, onReverted }: { p: Payee;
         <span className="inline-flex items-center gap-2 justify-end whitespace-nowrap">
           <span className="text-xs text-success">Paid</span>
           {canRevert && <button disabled={revertOne.isPending}
-            onClick={() => { if (window.confirm(`Revert the ${formatINR(r.incentive_amount)} payment to ${p.payee_name ?? 'this payee'} for ${r.customer} (${r.application_no})?`)) revertOne.mutate(r.application_id); }}
+            onClick={async () => { if (await confirm({ title: `Revert ${formatINR(r.incentive_amount)} to ${p.payee_name ?? 'this payee'}?`, body: `${r.customer} (${r.application_no}). It goes back to unpaid.`, confirmLabel: 'Revert', danger: true })) revertOne.mutate(r.application_id); }}
             className="text-xs border border-border text-danger rounded px-2 py-1 disabled:opacity-40 hover:bg-[color:var(--danger-bg)]">Revert</button>}
         </span>
       ) : canPay ? <button disabled={payOne.isPending}
-            onClick={() => { if (window.confirm(`Pay ${formatINR(r.incentive_amount)} to ${p.payee_name ?? 'this payee'} for ${r.customer} (${r.application_no})?`)) payOne.mutate(r.application_id); }}
+            onClick={async () => { if (await confirm({ title: `Pay ${formatINR(r.incentive_amount)} to ${p.payee_name ?? 'this payee'}?`, body: `${r.customer} (${r.application_no}).`, confirmLabel: 'Mark paid' })) payOne.mutate(r.application_id); }}
             className="text-xs bg-primary text-white rounded px-3 py-1 disabled:opacity-40 hover:bg-primary-hover">Pay</button>
         : <span className="text-xs text-text-muted">Unpaid</span> },
   ];

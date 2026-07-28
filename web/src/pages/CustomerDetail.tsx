@@ -13,6 +13,24 @@ function docLabel(t: string): string {
   return KYC_DOCUMENT_TYPES.find((d) => d.key === t)?.label ?? t;
 }
 
+/**
+ * Date of birth as `dd-mm-yyyy · NN yrs` — same date style as the payout summary
+ * sheet, and the age spelled out because it decides the senior-citizen TDS slab.
+ * Returns null (renders as '—') when there is no DOB on record: 106 of 580
+ * customers have none, mostly wealth-migrated ones.
+ */
+function dobLabel(dob: unknown): string | null {
+  const iso = String(dob ?? '').slice(0, 10);
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const now = new Date();
+  let age = now.getFullYear() - Number(m[1]);
+  const md = (now.getMonth() + 1) * 100 + now.getDate();
+  if (md < Number(m[2]) * 100 + Number(m[3])) age--;
+  const pretty = `${m[3]}-${m[2]}-${m[1]}`;
+  return age >= 0 && age < 130 ? `${pretty} · ${age} yrs` : pretty;
+}
+
 /** Field groups, in display order, derived from the shared field list. */
 const CORRECTION_GROUPS = [...new Set(CORRECTABLE_CUSTOMER_FIELDS.map((f) => f.group))];
 
@@ -160,6 +178,11 @@ export function CustomerDetailPage() {
           <Field label="Phone" value={c.phone} /><Field label="District" value={c.district} />
           <Field label="KYC" value={c.kyc_status} /><Field label="Active" value={c.is_active ? 'Yes' : 'No'} />
           <Field label="PAN" value={c.pan} /><Field label="Email" value={c.email} />
+          {/* DOB drives the senior-citizen TDS slab, so the age is worth showing
+              next to it rather than left for the reader to work out. The API
+              parses DATE as a plain 'YYYY-MM-DD' string (db/pg.ts), so there is
+              no timezone shift to guard against here. */}
+          <Field label="Date of birth" value={dobLabel(c.dob)} />
           {/* Who brought this customer in — staff or agent (owner 2026-07-24). */}
           {/* Tax position — this is what decides TDS on every payout, so it
               belongs on the profile, not buried in the enrolment wizard. */}

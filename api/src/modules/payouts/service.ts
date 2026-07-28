@@ -10,7 +10,7 @@ import { writeAudit } from '../../lib/audit.js';
 import { round2, toISODate, daysBetween, addDays } from '../../lib/dates.js';
 import { denominatorFor, type DayCountConvention } from '../../lib/interest.js';
 import { computeTds, DEFAULT_TDS_RULE } from '../../lib/tds.js';
-import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
+import { OUTSTANDING_APPLICATION_STATUSES, payoutRupees } from '@new-wealth/shared';
 import { nextCode } from '../../lib/sequences.js';
 import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
@@ -478,11 +478,14 @@ export async function neftSheetForDate(db: Db, payoutDate: string): Promise<Buff
     { debitAccount, sheetName: 'Sheet 1', valueDate: new Date(), beneficiaryEmail: fallbackEmail },
     (due.rows as Record<string, unknown>[])
       // A fully-deducted row settles at ₹0 — it can't appear in a bank file.
-      .filter((r) => Number(r.total_amount) > 0)
+      // Judged on the DERIVED rupees actually being paid, not the exact paise.
+      .filter((r) => payoutRupees(r).total > 0)
       .map((r) => {
       const b = bank.get(Number(r.line_id)) ?? {};
       return {
-        amount: Number(r.total_amount), valueDate: payoutDate,
+        // Same derived whole rupees the summary sheet prints (payoutRupees) —
+        // the bank file and the paperwork must never state different money.
+        amount: payoutRupees(r).total, valueDate: payoutDate,
         beneAccount: String(b.payee_account ?? ''),
         beneName: String(b.beneficiary_name || r.customer_name || ''),
         ifsc: String(b.payee_ifsc ?? ''),
@@ -516,7 +519,11 @@ export async function neftForBatch(db: Db, batchId: number): Promise<{ buffer: B
     // name. LATERAL … LIMIT 1 also guarantees one row per payout — a plain
     // join on customer_id could duplicate a row, and a duplicated row in a
     // bank file is a duplicated payment.
-    `SELECT ds.net_amount, ds.due_date, ds.payee_account, ds.payee_ifsc, c.full_name AS name, c.email, a.application_no,
+    // gross/tds/adjustment come along so the paid figure can be DERIVED the
+    // same way the summary sheet derives it (payoutRupees) — the bank file and
+    // the paperwork must never state different money.
+    `SELECT ds.net_amount, ds.gross_amount, ds.tds_amount, ds.adjustment_amount,
+            ds.due_date, ds.payee_account, ds.payee_ifsc, c.full_name AS name, c.email, a.application_no,
             bn.holder_name AS beneficiary_name, s.name AS series_name
      FROM disbursement_schedule ds JOIN applications a ON a.id = ds.application_id JOIN customers c ON c.id = a.customer_id
      LEFT JOIN series s ON s.id = a.series_id
@@ -537,7 +544,7 @@ export async function neftForBatch(db: Db, batchId: number): Promise<{ buffer: B
       valueDate: new Date(),     // value date = the day the sheet is generated
       beneficiaryEmail: fallbackEmail },
     rows.map((r) => ({
-      amount: Number(r.net_amount), valueDate: String(r.due_date),
+      amount: payoutRupees(r).total, valueDate: String(r.due_date),
       beneAccount: String(r.payee_account ?? ''),
       beneName: String(r.beneficiary_name || r.name || ''), ifsc: String(r.payee_ifsc ?? ''),
       seriesName: String(r.series_name ?? ''), reference: batch.batch_no,

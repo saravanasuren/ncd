@@ -65,7 +65,20 @@ export async function previewDue(db: Db, payoutDate: string) {
   const totals = { gross: 0, tds: 0, net: 0 };
   for (const l of lines) {
     const paidThrough = toISODate(l.paid_through as string | null);
-    if (!paidThrough || payoutDate <= paidThrough) continue;   // nothing accrued yet
+    if (!paidThrough || payoutDate < paidThrough) continue;    // nothing accrued yet
+    // payoutDate === paidThrough is TWO different situations, and they must not
+    // share a rule (owner-approved 2026-07-28):
+    //   • an already-paid line — that watermark is a due_date already paid
+    //     through end of that day, so counting it again DOUBLE-PAYS. Skip.
+    //   • a brand-new line — paidThrough is interest_start_date itself, the day
+    //     the money arrived, which has never been paid for. Owner rule
+    //     2026-07-25 is that interest starts ON the day of investment, so
+    //     someone who invests and is paid the SAME day is owed that one day.
+    //     Skipping them silently deferred it to the next batch.
+    // Timing only: the deferred day was never lost, so the lifetime interest is
+    // unchanged either way (verified — 1 day now + 31 next = the 32 days the
+    // single later row paid).
+    if (payoutDate === paidThrough && !l.is_first_period) continue;
     // Owner-confirmed 2026-07-25: interest starts ON the day of investment. For
     // every line except its very first-ever period, paidThrough is a prior
     // due_date already paid through end of that day, so the ordinary

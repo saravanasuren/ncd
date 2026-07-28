@@ -1,7 +1,7 @@
 /** Customers routes (docs/04 §2). */
 import { Router } from 'express';
 import { z } from 'zod';
-import { ACCOUNT_NUMBER_RE, ALPHA_SPACE_RE, DP_ID_RE, IFSC_RE, NAME_RE, PAN_RE, ddmmyyyyToISO, isoToDDMMYYYY } from '@new-wealth/shared';
+import { ACCOUNT_NUMBER_RE, ALPHA_SPACE_RE, BANK_BRANCH_RE, DP_ID_RE, IFSC_RE, NAME_RE, PAN_RE, ddmmyyyyToISO, isoToDDMMYYYY } from '@new-wealth/shared';
 import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
@@ -26,6 +26,8 @@ customersRouter.get('/', requirePermission('customers:read'),
 // sending — and must be a real calendar date.
 const personName = (label: string) => z.string().trim().min(1).regex(NAME_RE, `${label} may contain letters, spaces, dots, apostrophes and hyphens only`);
 const alphaSpace = (label: string) => z.string().trim().min(1).regex(ALPHA_SPACE_RE, `${label} may contain letters and spaces only`);
+/** Bank/branch/city off the IFSC directory — see BANK_BRANCH_RE. */
+const bankBranch = (label: string) => z.string().trim().min(1).max(120).regex(BANK_BRANCH_RE, `${label} contains characters that aren't allowed`);
 const upper = <T extends z.ZodTypeAny>(schema: T) => z.preprocess((v) => (typeof v === 'string' ? v.trim().toUpperCase() : v), schema);
 const isoDate = z.string().trim()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD')
@@ -88,7 +90,10 @@ customersRouter.post('/:id/bank-accounts', requirePermission('customers:update')
     const b = z.object({
       account_number: z.string().trim().regex(ACCOUNT_NUMBER_RE, 'Account number must be digits only (at least 4)'),
       ifsc: upper(z.string().regex(IFSC_RE, 'IFSC must be 11 characters like SBIN0001234')),
-      bank_name: personName('Bank name').optional(), branch_name: personName('Branch name').optional(), branch_city: personName('Branch city').optional(),
+      // Directory data from the IFSC lookup, not person names — branch names
+      // legitimately carry commas and digits ("SURAMANGALAM, SALEM"), which
+      // the person-name rule refused outright.
+      bank_name: bankBranch('Bank name').optional(), branch_name: bankBranch('Branch name').optional(), branch_city: bankBranch('Branch city').optional(),
       account_type: z.string().optional(), holder_name: personName('Beneficiary name').optional(), tds_applicable: z.boolean().optional(),
     }).parse(req.body);
     res.status(201).json(await s.addBankAccount(getDb(), req.user!, Number(req.params.id), b));

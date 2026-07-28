@@ -110,16 +110,22 @@ describe('POST /api/customers — identity-field validation', () => {
       { ...base, account_number: '12-34 56' },
       { ...base, ifsc: 'SBIN1001234' },   // 5th char must be 0
       { ...base, ifsc: 'SBIN000123' },    // 10 chars
-      { ...base, bank_name: 'HDFC Bank 2' },
-      { ...base, branch_name: 'Sector 17' },
-      { ...base, branch_city: 'Chennai 42' },
+      // The beneficiary name IS a person's name — digits there are junk
+      // (a pasted phone/PAN) and stay refused.
       { ...base, holder_name: 'Holder 9' },
+      // Branch fields are directory data, but still not a free-for-all.
+      { ...base, branch_name: '<script>alert(1)</script>' },
     ]) {
       const r = await a.post(`/api/customers/${cust.json.id}/bank-accounts`, bad);
       expect(r.status, JSON.stringify(bad)).toBe(400);
     }
+    // Bank/branch/city come from the IFSC directory, where digits and commas
+    // are ordinary ("SECTOR 62", "SURAMANGALAM, SALEM"). They used to be held
+    // to the person-name rule, which refused a real Canara branch outright —
+    // see integration.bank-branch-validation.test.ts.
     const ok = await a.post(`/api/customers/${cust.json.id}/bank-accounts`, {
-      ...base, bank_name: 'State Bank of India', branch_name: 'R.S. Puram', holder_name: "Mary-Anne D'Souza",
+      ...base, bank_name: 'HDFC Bank 2', branch_name: 'Sector 17', branch_city: 'Chennai 42',
+      holder_name: "Mary-Anne D'Souza",
     });
     expect(ok.status).toBe(201);
     const detail = await a.get(`/api/customers/${cust.json.id}`);

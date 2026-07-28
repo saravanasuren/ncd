@@ -51,6 +51,18 @@ export const DP_ID_RE = /^([A-Z]{2}[0-9]{6}|[0-9]{8})$/;
 /** IFSC: 4 uppercase letters, a literal 0, then 6 alphanumerics (SBIN0001234). */
 export const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 
+/**
+ * Bank / branch / branch-city, as they come from the IFSC directory — NOT a
+ * person name. These were validated with the person-name rule, which forbids
+ * commas and digits, so a real branch was refused with a bare "Invalid
+ * request": Razorpay returns "SURAMANGALAM, SALEM" for CNRB0001219, and 28 of
+ * the 322 IFSCs already in the book fail the same way ("A.P.T ROAD, ERODE",
+ * "COIMBATORE,M BRANCH", …). Real branch names legitimately carry commas,
+ * digits and slashes, so this allows them while still refusing control
+ * characters and the quote/angle-bracket set.
+ */
+export const BANK_BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9 .,'()&/-]*$/;
+
 /** Bank account number: digits only (leading zeros are meaningful), min 4. */
 export const ACCOUNT_NUMBER_RE = /^[0-9]{4,}$/;
 

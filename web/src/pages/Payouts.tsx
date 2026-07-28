@@ -42,6 +42,32 @@ export function PayoutsPage() {
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
 
+  /**
+   * Totals stated the way the PAPERWORK and the BANK state them: whole rupees
+   * per row, then added up. The sheets already work that way — the summary
+   * sheet prints rounded rupees and lib/neft.ts rounds each transaction — so
+   * summing the exact paise instead made this tile disagree with the documents
+   * it summarises: over 684 rows the sheet read ₹59,64,493 gross while the tile
+   * read ₹59,64,451.38 (owner 2026-07-28).
+   *
+   * Deliberately computed here rather than in previewDue: that function's
+   * `totals` are also written to payout_batches.total_gross/total_net when a
+   * batch is claimed, and those stored money records must not move. This is
+   * presentation only — no amount, formula or accrual changes.
+   */
+  const r2 = (v: unknown) => Math.round(Number(v) || 0);
+  const sheetTotals = ((preview.data?.rows ?? []) as any[]).reduce(
+    (a, r) => ({
+      gross: a.gross + r2(r.gross_amount),
+      tds: a.tds + r2(r.tds_amount),
+      net: a.net + r2(r.net_amount),
+      addition: a.addition + r2(r.addition_amount),
+      deduction: a.deduction + r2(r.deduction_amount),
+      total: a.total + r2(r.total_amount ?? r.net_amount),
+    }),
+    { gross: 0, tds: 0, net: 0, addition: 0, deduction: 0, total: 0 },
+  );
+
   return (
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Interest payouts (NEFT)</h1>
@@ -63,9 +89,9 @@ export function PayoutsPage() {
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
       {preview.data && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5 text-sm">
-          <span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'} with interest accrued to this date · gross <span className="mono font-semibold">{formatINR(preview.data.totals.gross)}</span> · TDS <span className="mono">−{formatINR(preview.data.totals.tds)}</span> · net <span className="mono font-semibold">{formatINR(preview.data.totals.net)}</span>
-          {(preview.data.totals.addition > 0 || preview.data.totals.deduction > 0) && (
-            <span className="text-text-muted"> · additions <span className="mono">+{formatINR(preview.data.totals.addition)}</span> · deductions <span className="mono">−{formatINR(preview.data.totals.deduction)}</span> · payable <span className="mono font-semibold">{formatINR(preview.data.totals.total)}</span></span>
+          <span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'} with interest accrued to this date · gross <span className="mono font-semibold">{formatINR(sheetTotals.gross)}</span> · TDS <span className="mono">−{formatINR(sheetTotals.tds)}</span> · net <span className="mono font-semibold">{formatINR(sheetTotals.net)}</span>
+          {(sheetTotals.addition > 0 || sheetTotals.deduction > 0) && (
+            <span className="text-text-muted"> · additions <span className="mono">+{formatINR(sheetTotals.addition)}</span> · deductions <span className="mono">−{formatINR(sheetTotals.deduction)}</span> · payable <span className="mono font-semibold">{formatINR(sheetTotals.total)}</span></span>
           )}
           {/* Say WHY the downloads are greyed out, instead of leaving dead buttons. */}
           {preview.data.count === 0 && (

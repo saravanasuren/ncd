@@ -90,7 +90,7 @@ export async function grid(db: Db, actor: AuthUser, f: BgvFilters = {}) {
     params.push(f.seriesId);
     where.push(`EXISTS (SELECT 1 FROM applications a WHERE a.customer_id = c.id AND a.series_id = $${params.length} AND a.status <> 'Cancelled' AND a.archived_at IS NULL)`);
   }
-  const sc = scopeWhere(scopeFor(actor), { userCol: 'c.enrolled_by_user_id', agentCol: 'c.enrolled_by_agent_id', branchCol: 'c.branch_id', selfIdCol: 'c.id' }, params.length);
+  const sc = scopeWhere(scopeFor(actor), { userCol: 'c.enrolled_by_user_id', agentCol: 'c.enrolled_by_agent_id', branchCol: 'c.branch_id', selfIdCol: 'c.id', refCol: 'c.referred_by_text' }, params.length);
   where.push(sc.sql);
   params.push(...sc.params);
 

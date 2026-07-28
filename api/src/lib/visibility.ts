@@ -17,11 +17,15 @@ const CUSTOMER_COLS = {
   agentCol: 'c.enrolled_by_agent_id',
   branchCol: 'c.branch_id',
   selfIdCol: 'c.id',
+  refCol: 'c.referred_by_text',
 };
 const APP_COLS = {
   userCol: 'a.enrolled_by_user_id',
   agentCol: 'a.enrolled_by_agent_id',
   branchCol: 'c.branch_id',
+  // An application inherits its customer's referrer when it carries none of
+  // its own — the same COALESCE the reports use (book.ts EFF_REF).
+  refCol: "COALESCE(NULLIF(btrim(a.referred_by_text), ''), c.referred_by_text)",
 };
 
 /** Throw 404 unless `customerId` is within the actor's scope. */

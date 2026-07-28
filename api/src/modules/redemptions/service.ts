@@ -405,7 +405,7 @@ export async function redemptionNeft(db: Db, redemptionId?: number): Promise<Buf
 
 /** Scope predicate for redemptions, by the underlying application's owner. */
 function redemptionScope(actor: AuthUser, offset = 0) {
-  return scopeWhere(scopeFor(actor), { userCol: 'a.enrolled_by_user_id', agentCol: 'a.enrolled_by_agent_id', branchCol: 'c.branch_id' }, offset);
+  return scopeWhere(scopeFor(actor), { userCol: 'a.enrolled_by_user_id', agentCol: 'a.enrolled_by_agent_id', branchCol: 'c.branch_id', refCol: "COALESCE(NULLIF(btrim(a.referred_by_text), ''), c.referred_by_text)"}, offset);
 }
 
 /** Redemption report (scoped to the caller) as xlsx. */

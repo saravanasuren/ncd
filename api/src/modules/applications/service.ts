@@ -26,6 +26,7 @@ const SCOPE_COLS = {
   userCol: 'a.enrolled_by_user_id',
   agentCol: 'a.enrolled_by_agent_id',
   branchCol: 'c.branch_id',
+  refCol: "COALESCE(NULLIF(btrim(a.referred_by_text), ''), c.referred_by_text)",
 };
 
 export interface CreateApplicationInput {

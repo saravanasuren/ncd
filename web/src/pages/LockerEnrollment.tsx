@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
+import { useConfirm } from '../components/Confirm.js';
 
 /**
  * Staff locker enrollment (NCD_INTEGRATION_CONTRACT.md Part A). Drives the
@@ -27,6 +28,7 @@ interface Size {
 }
 
 export function LockerEnrollmentPage() {
+  const { promptText } = useConfirm();
   const { can } = useAuth();
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -158,16 +160,23 @@ export function LockerEnrollmentPage() {
     }
   };
   const clearCheque = async (id: number) => {
-    const on = window.prompt('Date the funds cleared in the bank (YYYY-MM-DD):', new Date().toISOString().slice(0, 10));
+    const on = await promptText({
+      title: 'Mark this cheque cleared', label: 'Date the funds cleared in the bank',
+      inputType: 'date', defaultValue: new Date().toISOString().slice(0, 10), minLength: 10, confirmLabel: 'Next',
+    });
     if (!on) return;
-    const ref = window.prompt('Bank reference (optional):') ?? '';
+    const ref = await promptText({ title: 'Bank reference', body: 'Optional — leave blank if you do not have one.', label: 'Reference', minLength: 0, confirmLabel: 'Mark cleared' });
+    if (ref === null) return;
     const r = await run(api.post<any>(`/api/lockers/cheques/${id}/clear`, { cleared_on: on, reference: ref.trim() || undefined }));
     if (r) { await loadCheques(); await loadPendingCheques(); }
   };
   const bounceCheque = async (id: number) => {
-    const reason = window.prompt('Why did it not clear? (bounced / withdrawn)');
-    if (!reason || reason.trim().length < 2) return;
-    const r = await run(api.post<any>(`/api/lockers/cheques/${id}/bounce`, { reason: reason.trim() }));
+    const reason = await promptText({
+      title: 'Cheque did not clear', body: 'Bounced, or withdrawn by the customer?',
+      label: 'Reason', confirmLabel: 'Record', danger: true,
+    });
+    if (!reason) return;
+    const r = await run(api.post<any>(`/api/lockers/cheques/${id}/bounce`, { reason }));
     if (r) { await loadCheques(); await loadPendingCheques(); }
   };
   // The register loads on mount so staff land on "what's awaiting clearance".

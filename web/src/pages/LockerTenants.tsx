@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
+import { useConfirm } from '../components/Confirm.js';
 
 /**
  * Locker tenants, branch-wise — every tenant, not only the ones NCD backs. The
@@ -55,6 +56,7 @@ interface Tenant {
 }
 
 export function LockerTenantsPage() {
+  const { confirm, promptText } = useConfirm();
   const { can } = useAuth();
   const qc = useQueryClient();
   const [branchId, setBranchId] = useState('');
@@ -316,21 +318,23 @@ export function LockerTenantsPage() {
                     )}
                     {can('lockers:waive') && r.waiver_id && (r.waiver_status === 'Approved' || r.waiver_status === 'PendingApproval') && (
                       <button className="ml-1 text-xs text-text-muted hover:text-danger align-middle" title="Cancel this waiver"
-                        onClick={() => { if (window.confirm(`Cancel the deposit waiver for ${r.tenant_name ?? 'this tenant'}?`)) cancelWaiver.mutate(r.waiver_id!); }}>×</button>
+                        onClick={async () => { if (await confirm({ title: `Cancel the deposit waiver for ${r.tenant_name ?? 'this tenant'}?`, body: 'The locker goes back to needing NCD backing.', confirmLabel: 'Cancel waiver', danger: true })) cancelWaiver.mutate(r.waiver_id!); }}>×</button>
                     )}
                     {can('lockers:waive') && r.tenant_id && !r.ncd_backed && !r.waiver_status && (
                       <button className="ml-1 text-xs text-primary hover:underline"
-                        onClick={() => {
-                          const reason = window.prompt(`Waive the NCD deposit requirement for ${r.tenant_name ?? 'this tenant'} (locker ${r.locker_no ?? '—'})?\n\nReason (required):`);
-                          if (reason && reason.trim().length >= 3) {
+                        onClick={async () => {
+                          const reason = await promptText({
+                            title: `Waive the NCD deposit for ${r.tenant_name ?? 'this tenant'}?`,
+                            body: `Locker ${r.locker_no ?? '—'}. It is held with no NCD backing, deliberately, and goes to a checker.`,
+                            label: 'Reason', minLength: 3, confirmLabel: 'Request waiver',
+                          });
+                          if (reason) {
                             recordWaiver.mutate({
-                              lockerhub_tenant_id: r.tenant_id, reason: reason.trim(),
+                              lockerhub_tenant_id: r.tenant_id, reason,
                               locker_no: r.locker_no, branch_id: r.branch_id,
                               tenant_name: r.tenant_name, tenant_phone: r.tenant_phone,
                               ...(r.customer_id ? { customer_id: r.customer_id } : {}),
                             });
-                          } else if (reason !== null) {
-                            setMsg('Waiver not sent — a reason is required.');
                           }
                         }}>waive…</button>
                     )}
@@ -346,10 +350,13 @@ export function LockerTenantsPage() {
                     {can('lockers:remove-tenant') && (r.override_key || r.tenant_id) && (
                       <button className="ml-2 text-danger hover:underline font-sans"
                         title="Remove from NCD's roster. The locker stays allotted on LockerHub."
-                        onClick={() => {
-                          const reason = window.prompt(`Remove ${r.tenant_name ?? 'this tenant'} (locker ${r.locker_no ?? '—'}) from the NCD roster?\n\nThis hides OUR row only — the locker remains allotted on LockerHub, which owns it. Close it there too if the tenancy has actually ended.\n\nReason (required):`);
-                          if (reason && reason.trim().length >= 3) removeTenant.mutate({ t: r, reason: reason.trim() });
-                          else if (reason !== null) setMsg('Not removed — a reason is required.');
+                        onClick={async () => {
+                          const reason = await promptText({
+                            title: `Remove ${r.tenant_name ?? 'this tenant'} from the NCD roster?`,
+                            body: `Locker ${r.locker_no ?? '—'}. This hides OUR row only — the locker remains allotted on LockerHub, which owns it. Close it there too if the tenancy has actually ended.`,
+                            label: 'Reason', minLength: 3, confirmLabel: 'Remove', danger: true,
+                          });
+                          if (reason) removeTenant.mutate({ t: r, reason });
                         }}>remove</button>
                     )}
                   </td>

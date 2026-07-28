@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
+import { useConfirm } from '../components/Confirm.js';
 import { useState } from 'react';
 
 const rowPill: Record<string, string> = {
@@ -18,6 +19,7 @@ const rowPill: Record<string, string> = {
  * rather than reading like a blank.
  */
 function PayoutAccount({ appId, customerId, current, onChange }: { appId: number; customerId: number; current: number | null; onChange: () => void }) {
+  const { confirm } = useConfirm();
   const { data } = useQuery({ queryKey: ['cust-banks', customerId], queryFn: () => api.get<any>(`/api/customers/${customerId}`) });
   const set = useMutation({ mutationFn: (bankId: number | null) => api.post(`/api/applications/${appId}/payout-account`, { bank_account_id: bankId }), onSuccess: onChange });
   const accounts = data?.bankAccounts ?? [];
@@ -36,11 +38,15 @@ function PayoutAccount({ appId, customerId, current, onChange }: { appId: number
     <select
       className="text-xs border border-border-strong rounded px-2 py-1 max-w-full"
       value={current ?? ''}
-      onChange={(e) => {
+      onChange={async (e) => {
         const id = e.target.value ? Number(e.target.value) : null;
         const chosen = accounts.find((b: any) => Number(b.id) === id);
         if (chosen && chosen.penny_drop_status !== 'Verified'
-            && !window.confirm(`${chosen.account_number}${chosen.holder_name ? ` (${chosen.holder_name})` : ''}${chosen.ifsc ? ` · ${chosen.ifsc}` : ''} has not been penny-drop verified (${chosen.penny_drop_status}). Send this NCD's interest there anyway?`)) return;
+            && !await confirm({
+              title: 'This account is not penny-drop verified',
+              body: `${label(chosen)} is ${chosen.penny_drop_status}. Send this NCD's interest there anyway?`,
+              confirmLabel: 'Use it anyway', danger: true,
+            })) return;
         set.mutate(id);
       }}
     >
@@ -53,6 +59,7 @@ function PayoutAccount({ appId, customerId, current, onChange }: { appId: number
 /** Lifecycle actions for an Active investment: premature/maturity redemption,
  * rollover, holder transfer, transformation. Each posts and lands in approvals. */
 function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; locker?: { redeemable: number; linked_to_lockers: number } | null; onDone: (msg: string) => void; onError: (e: unknown) => void }) {
+  const { confirm } = useConfirm();
   const [open, setOpen] = useState<'premature' | 'transfer' | 'transformation' | null>(null);
   const [reason, setReason] = useState('');
   const [amount, setAmount] = useState('');
@@ -79,8 +86,8 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
       <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2.5">Lifecycle actions</div>
       <div className="flex gap-2 flex-wrap">
         <button className={act} onClick={() => setOpen(open === 'premature' ? null : 'premature')}>Redeem early…</button>
-        <button className={act} onClick={() => { if (window.confirm('Initiate maturity redemption for this investment?')) fire(api.post('/api/redemptions/maturity', { application_id: appId }), 'Maturity redemption initiated — awaiting approval.'); }}>Redeem at maturity</button>
-        <button className={act} onClick={() => { if (window.confirm('Roll this investment over into a fresh one?')) fire(api.post('/api/ncd-events/rollover', { application_id: appId }), 'Rollover initiated — awaiting approval.'); }}>Rollover</button>
+        <button className={act} onClick={async () => { if (await confirm({ title: 'Initiate maturity redemption?', body: 'It goes to a checker before anything is paid.', confirmLabel: 'Initiate' })) fire(api.post('/api/redemptions/maturity', { application_id: appId }), 'Maturity redemption initiated — awaiting approval.'); }}>Redeem at maturity</button>
+        <button className={act} onClick={async () => { if (await confirm({ title: 'Roll this investment over into a fresh one?', body: 'It goes to a checker before anything changes.', confirmLabel: 'Roll over' })) fire(api.post('/api/ncd-events/rollover', { application_id: appId }), 'Rollover initiated — awaiting approval.'); }}>Rollover</button>
         <button className={act} onClick={() => setOpen(open === 'transfer' ? null : 'transfer')}>Transfer holder…</button>
         <button className={act} onClick={() => setOpen(open === 'transformation' ? null : 'transformation')}>Transformation (deceased)…</button>
       </div>
@@ -154,6 +161,7 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
 }
 
 export function ApplicationDetailPage() {
+  const { promptText } = useConfirm();
   const { id } = useParams();
   const qc = useQueryClient();
   const { can } = useAuth();
@@ -278,9 +286,13 @@ export function ApplicationDetailPage() {
                   <td className="py-2 px-3 text-right">
                     {l.status === 'active' && can('lockers:enroll') && (
                       <button className="text-xs text-danger hover:underline"
-                        onClick={() => {
-                          const r = window.prompt('Release this locker link? The pledged amount becomes redeemable.\n\nReason (e.g. locker closed):');
-                          if (r && r.trim().length >= 2) run(api.post(`/api/lockers/deposit-links/${l.id}/release`, { reason: r.trim() }));
+                        onClick={async () => {
+                          const r = await promptText({
+                            title: 'Release this locker link?',
+                            body: 'The pledged amount becomes redeemable again.',
+                            label: 'Reason (e.g. locker closed)', confirmLabel: 'Release', danger: true,
+                          });
+                          if (r) run(api.post(`/api/lockers/deposit-links/${l.id}/release`, { reason: r }));
                         }}>Release</button>
                     )}
                   </td>
@@ -319,9 +331,13 @@ export function ApplicationDetailPage() {
                     {r.status}
                     {can('payouts:mark-paid-manual') && r.status === 'Scheduled' && (
                       <button className="ml-2 text-danger hover:underline" title="Mark this row failed (e.g. NEFT bounce)"
-                        onClick={() => {
-                          const reason = window.prompt('Reason for marking this payout row failed:');
-                          if (reason && reason.trim().length >= 2) run(api.post(`/api/payouts/rows/${r.id}/mark-failed`, { reason: reason.trim() }));
+                        onClick={async () => {
+                          const reason = await promptText({
+                            title: 'Mark this payout row failed?',
+                            body: 'Use this when the NEFT bounced. The row can be paid again later.',
+                            label: 'Reason', confirmLabel: 'Mark failed', danger: true,
+                          });
+                          if (reason) run(api.post(`/api/payouts/rows/${r.id}/mark-failed`, { reason }));
                         }}>mark failed</button>
                     )}
                   </td>

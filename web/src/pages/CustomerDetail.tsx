@@ -4,6 +4,7 @@ import { formatINR, KYC_DOCUMENT_TYPES, CORRECTABLE_CUSTOMER_FIELDS, type Custom
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
+import { useConfirm } from '../components/Confirm.js';
 
 /** NCDs are issued in whole ₹1,00,000 units (owner spec 2026-07-23). */
 const LAKH = 100000;
@@ -50,11 +51,17 @@ function currentValue(c: any, f: CustomerField): string | boolean {
  * Two-step confirm for an irreversible purge: type DELETE, then give an audit
  * reason. Returns the reason, or null if the operator backed out. Super-admin only.
  */
-function purgeConfirm(what: string): string | null {
-  const typed = window.prompt(`⚠️ PERMANENTLY DELETE ${what}.\n\nThis erases the record and everything linked to it (schedule, collections, incentives, redemptions). It CANNOT be undone.\n\nType DELETE to confirm:`);
+async function purgeConfirm(promptText: ReturnType<typeof useConfirm>['promptText'], what: string): Promise<string | null> {
+  const typed = await promptText({
+    title: `⚠️ Permanently delete ${what}`,
+    body: 'This erases the record and everything linked to it (schedule, collections, incentives, redemptions). It CANNOT be undone.',
+    label: 'Type DELETE to confirm', placeholder: 'DELETE', minLength: 6, confirmLabel: 'Continue', danger: true,
+  });
   if (typed !== 'DELETE') return null;
-  const reason = window.prompt('Reason for the audit log (required):') ?? '';
-  return reason.trim().length >= 2 ? reason.trim() : null;
+  return await promptText({
+    title: 'Reason for the audit log', body: `Deleting ${what}.`,
+    label: 'Reason (required)', confirmLabel: 'Delete permanently', danger: true,
+  });
 }
 
 
@@ -126,6 +133,7 @@ function LockersCard({ customerId }: { customerId: number }) {
 }
 
 export function CustomerDetailPage() {
+  const { confirm, promptText } = useConfirm();
   const { id } = useParams();
   const qc = useQueryClient();
   const nav = useNavigate();
@@ -220,9 +228,9 @@ export function CustomerDetailPage() {
             <button onClick={() => wrap(api.post(`/api/customers/${id}/kyc/verify`))} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">✓ Verify KYC</button>
           )}
           {can('kyc:reject') && c.kyc_status !== 'Rejected' && (
-            <button onClick={() => {
-              const reason = window.prompt('Reason for rejecting KYC:');
-              if (reason && reason.trim().length >= 2) wrap(api.post(`/api/customers/${id}/kyc/reject`, { reason: reason.trim() }));
+            <button onClick={async () => {
+              const reason = await promptText({ title: 'Reject this KYC?', body: 'The customer stays on the book; their KYC is marked rejected.', label: 'Reason', confirmLabel: 'Reject KYC', danger: true });
+              if (reason) wrap(api.post(`/api/customers/${id}/kyc/reject`, { reason }));
             }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">✗ Reject KYC</button>
           )}
           {/* Customer creation needs no approval (owner 2026-07-21) — the customer
@@ -231,18 +239,28 @@ export function CustomerDetailPage() {
             <button onClick={() => setPanel(panel === 'correction' ? null : 'correction')} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Request correction</button>
           )}
           {can('customers:update') && (
-            <button onClick={() => {
-              const applies = window.confirm(
-                `Deduct TDS on this customer's payouts?\n\nOK = Yes, deduct TDS.\nCancel = No (they have filed a valid 15G/15H).\n\nCurrently: ${c.tds_applicable === false ? 'NOT deducted' : 'deducted'}.`);
+            <button onClick={async () => {
+              // Both answers ACT — the two buttons are the two settings, not
+              // yes/no. Declining leads to the 15G/15H details, which can still
+              // be backed out of.
+              const applies = await confirm({
+                title: "Deduct TDS on this customer's payouts?",
+                body: `Currently: ${c.tds_applicable === false ? 'NOT deducted' : 'deducted'}.`,
+                confirmLabel: 'Yes, deduct TDS', cancelLabel: 'No — 15G/15H on file',
+              });
               if (applies) {
                 wrap(api.patch(`/api/customers/${id}/tax`, { tds_applicable: true, tax_form: null, tax_form_expires_on: null }));
                 return;
               }
-              const form = window.prompt('Which form is on file — 15G or 15H?', c.tax_form ?? '15G');
+              const form = await promptText({ title: 'Which form is on file?', label: '15G or 15H', defaultValue: c.tax_form ?? '15G', minLength: 3, confirmLabel: 'Next' });
               if (form === null) return;
               const upper = form.trim().toUpperCase();
               if (!['15G', '15H'].includes(upper)) { setMsg('Tax form must be 15G or 15H.'); return; }
-              const until = window.prompt('Valid until (YYYY-MM-DD) — 15G/15H run per financial year:', c.tax_form_expires_on ? String(c.tax_form_expires_on).slice(0, 10) : '');
+              const until = await promptText({
+                title: `${upper} — valid until`, body: '15G/15H run per financial year, so a validity date is required.',
+                label: 'Valid until', inputType: 'date', defaultValue: c.tax_form_expires_on ? String(c.tax_form_expires_on).slice(0, 10) : '',
+                minLength: 10, confirmLabel: 'Save',
+              });
               if (until === null) return;
               if (!/^\d{4}-\d{2}-\d{2}$/.test(until.trim())) { setMsg('Enter the validity date as YYYY-MM-DD — without it the form is ignored.'); return; }
               wrap(api.patch(`/api/customers/${id}/tax`, { tds_applicable: false, tax_form: upper, tax_form_expires_on: until.trim() }));
@@ -254,10 +272,17 @@ export function CustomerDetailPage() {
           {/* Super-admin-only power tools (customers:delete). */}
           {can('customers:delete') && (c.archived_at
             ? <button onClick={() => wrap(api.post(`/api/customers/${id}/unarchive`))} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg ml-auto">♻ Restore customer</button>
-            : <button onClick={() => { const r = window.prompt('Archive this customer? It (and its investments) will be hidden from the book but stay recoverable.\n\nReason (optional):'); if (r !== null) wrap(api.post(`/api/customers/${id}/archive`, { reason: r || undefined })); }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg ml-auto">🗄 Archive</button>
+            : <button onClick={async () => {
+                const r = await promptText({
+                  title: 'Archive this customer?',
+                  body: 'It (and its investments) will be hidden from the book but stay recoverable.',
+                  label: 'Reason (optional)', minLength: 0, confirmLabel: 'Archive',
+                });
+                if (r !== null) wrap(api.post(`/api/customers/${id}/archive`, { reason: r || undefined }));
+              }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg ml-auto">🗄 Archive</button>
           )}
           {can('customers:delete') && (
-            <button onClick={() => { const reason = purgeConfirm(`customer ${c.full_name} (${c.customer_code}) and ALL their investments`); if (reason) wrap(api.del(`/api/customers/${id}`, { confirm: true, reason }).then(() => nav('/app/customers'))); }}
+            <button onClick={async () => { const reason = await purgeConfirm(promptText, `customer ${c.full_name} (${c.customer_code}) and ALL their investments`); if (reason) wrap(api.del(`/api/customers/${id}`, { confirm: true, reason }).then(() => nav('/app/customers'))); }}
               className="text-xs border border-danger text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">🗑 Delete permanently</button>
           )}
         </div>
@@ -367,6 +392,7 @@ const appPill: Record<string, string> = {
 /** The customer's investments — every application, newest first, linking to the
  * application page. LIVE statuses total into the header line. */
 function InvestmentsCard({ rows, canDelete, onChange, onError }: { rows: any[]; customerId: number; canDelete: boolean; onChange: () => void; onError: (m: string) => void }) {
+  const { promptText } = useConfirm();
   const nav = useNavigate();
   const DEAD = ['Rejected', 'Cancelled', 'Redeemed', 'Matured', 'RolledOver', 'PrematureWithdrawn', 'Transferred'];
   const live = rows.filter((r) => !DEAD.includes(r.status) && !r.archived_at);
@@ -374,9 +400,16 @@ function InvestmentsCard({ rows, canDelete, onChange, onError }: { rows: any[]; 
   const th = 'py-2 px-3 text-xs font-semibold text-text-label uppercase tracking-wide text-left';
   const td = 'py-2 px-3 align-middle';
   const run = (p: Promise<unknown>) => p.then(() => { onError(''); onChange(); }).catch((e) => onError(e instanceof ApiError ? e.message : 'Failed'));
-  const archiveApp = (r: any) => { const reason = window.prompt(`Archive investment ${r.application_no}? Hidden from the book but recoverable.\n\nReason (optional):`); if (reason !== null) run(api.post(`/api/applications/${r.id}/archive`, { reason: reason || undefined })); };
+  const archiveApp = async (r: any) => {
+    const reason = await promptText({
+      title: `Archive investment ${r.application_no}?`,
+      body: 'Hidden from the book but recoverable.',
+      label: 'Reason (optional)', minLength: 0, confirmLabel: 'Archive',
+    });
+    if (reason !== null) run(api.post(`/api/applications/${r.id}/archive`, { reason: reason || undefined }));
+  };
   const restoreApp = (r: any) => run(api.post(`/api/applications/${r.id}/unarchive`));
-  const purgeApp = (r: any) => { const reason = purgeConfirm(`investment ${r.application_no}`); if (reason) run(api.del(`/api/applications/${r.id}`, { confirm: true, reason })); };
+  const purgeApp = async (r: any) => { const reason = await purgeConfirm(promptText, `investment ${r.application_no}`); if (reason) run(api.del(`/api/applications/${r.id}`, { confirm: true, reason })); };
   return (
     <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1">Investments</h2>
@@ -439,6 +472,7 @@ function InvestmentsCard({ rows, canDelete, onChange, onError }: { rows: any[]; 
 }
 
 function RelationsKyc({ customerId, data, onChange, can }: { customerId: number; data: any; onChange: () => void; can: (...p: any[]) => boolean }) {
+  const { promptText } = useConfirm();
   const [msg, setMsg] = useState('');
   const [docType, setDocType] = useState('');
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -447,11 +481,11 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
   const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
 
   async function addNominee() {
-    const name = window.prompt('Nominee full name'); if (!name) return;
+    const name = await promptText({ title: 'Add a nominee', label: 'Nominee full name', confirmLabel: 'Next' }); if (!name) return;
     // Blank means "give them everything" — the server splits whatever is
     // unallocated, so a sole nominee lands at 100%. Coercing blank to 0 here is
     // what used to write 0% and say the opposite of what staff intended.
-    const typed = window.prompt('Share % — leave blank to give this nominee the whole holding');
+    const typed = await promptText({ title: `Share for ${name}`, body: 'Leave blank to give this nominee the whole holding.', label: 'Share %', minLength: 0, confirmLabel: 'Add nominee' });
     const share = typed != null && typed.trim() !== '' ? Number(typed) : undefined;
     if (share != null && !(share > 0)) { setMsg('Share % must be a number above 0, or blank.'); return; }
     const existing = (data.nominees ?? []).map((n: any) => ({ full_name: n.full_name, relationship: n.relationship, share_pct: Number(n.share_pct) || undefined }));
@@ -460,7 +494,7 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
     }));
   }
   async function addJoint() {
-    const name = window.prompt('Joint holder full name'); if (!name) return;
+    const name = await promptText({ title: 'Add a joint holder', label: 'Joint holder full name', confirmLabel: 'Add' }); if (!name) return;
     const existing = (data.jointHolders ?? []).map((h: any) => ({ full_name: h.full_name, relationship: h.relationship, pan: h.pan, phone: h.phone }));
     await wrap(api.put(`/api/customers/${customerId}/joint-holders`, { holders: [...existing, { full_name: name }] }));
   }
@@ -524,7 +558,10 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
         </div>
         <div className="flex gap-2 mt-4">
           {can('kyc:verify') && <button onClick={() => wrap(api.post(`/api/customers/${customerId}/kyc/digilocker/start`).then(() => api.post(`/api/customers/${customerId}/kyc/digilocker/complete`)))} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">DigiLocker verify</button>}
-          {can('customers:deactivate') && !data.customer.is_deceased && <button onClick={() => { const d = window.prompt('Deceased date (YYYY-MM-DD)'); if (d) wrap(api.post(`/api/customers/${customerId}/deceased`, { deceased_date: d })); }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg text-danger">Mark deceased</button>}
+          {can('customers:deactivate') && !data.customer.is_deceased && <button onClick={async () => {
+            const d = await promptText({ title: 'Mark this customer deceased', body: 'Payouts stop until a transformation is processed.', label: 'Deceased date', inputType: 'date', minLength: 10, confirmLabel: 'Mark deceased', danger: true });
+            if (d) wrap(api.post(`/api/customers/${customerId}/deceased`, { deceased_date: d }));
+          }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg text-danger">Mark deceased</button>}
         </div>
       </div>
     </>
@@ -749,6 +786,7 @@ function Demat({ customerId, customer, canEdit, onChange, onError }: {
 function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onError }: {
   customerId: number; accounts: any[]; canEdit: boolean; canDelete: boolean; onChange: () => void; onError: (m: string) => void;
 }) {
+  const { confirm, promptText } = useConfirm();
   const empty = { holder_name: '', account_number: '', ifsc: '', bank_name: '', branch_name: '', branch_city: '' };
   const [f, setF] = useState(empty);
   const [ifscState, setIfscState] = useState<'idle' | 'looking' | 'found' | 'notfound'>('idle');
@@ -834,8 +872,8 @@ function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onEr
               {/* A misspelt beneficiary name is what prints on the bank file —
                   fix it in place rather than re-adding the whole account. */}
               {canEdit && (
-                <button onClick={() => {
-                  const next = window.prompt('Beneficiary name as it should appear on the bank file:', b.holder_name ?? '');
+                <button onClick={async () => {
+                  const next = await promptText({ title: 'Edit beneficiary name', body: 'As it should appear on the bank file.', label: 'Beneficiary name', defaultValue: b.holder_name ?? '', confirmLabel: 'Save' });
                   if (next === null) return;
                   if (next.trim().length < 2) { fail('Beneficiary name is required.'); return; }
                   wrapSet(api.patch(`/api/customers/${customerId}/bank-accounts/${b.id}`, { holder_name: next.trim() }));
@@ -848,24 +886,30 @@ function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onEr
                   className="text-xs text-primary hover:underline">Retry verification</button>
               )}
               {!b.is_active && canEdit && (
-                <button onClick={() => {
+                <button onClick={async () => {
                   if (b.penny_drop_status === 'Verified') {
                     wrapSet(api.post(`/api/customers/${customerId}/bank-accounts/${b.id}/set-active`));
                     return;
                   }
-                  const reason = window.prompt(
-                    `This account's penny-drop is ${b.penny_drop_status}, not Verified.\n\nActivate it anyway only if you have confirmed the details another way — future payouts will go here.\n\nReason (recorded):`);
-                  if (reason === null) return;
-                  if (reason.trim().length < 3) { fail('A reason is required to activate an unverified account.'); return; }
-                  wrapSet(api.post(`/api/customers/${customerId}/bank-accounts/${b.id}/set-active`, { force: true, reason: reason.trim() }));
+                  const reason = await promptText({
+                    title: `Penny-drop is ${b.penny_drop_status}, not Verified`,
+                    body: 'Activate it anyway only if you have confirmed the details another way — future payouts will go here.',
+                    label: 'Reason (recorded)', minLength: 3, confirmLabel: 'Activate anyway', danger: true,
+                  });
+                  if (!reason) return;
+                  wrapSet(api.post(`/api/customers/${customerId}/bank-accounts/${b.id}/set-active`, { force: true, reason }));
                 }} className="text-xs text-primary hover:underline">Make active</button>
               )}
               {/* Super-admin only. The server refuses while an NCD is pinned to
                   it or unpaid payouts point at it, and says which. */}
               {canDelete && (
                 <button
-                  onClick={() => {
-                    if (!window.confirm(`Delete account ${b.account_number} (${b.ifsc})? Past payments keep their record; this only removes the account from the customer's file.`)) return;
+                  onClick={async () => {
+                    if (!await confirm({
+                      title: `Delete account ${b.account_number}?`,
+                      body: `${b.ifsc}. Past payments keep their record; this only removes the account from the customer's file.`,
+                      confirmLabel: 'Delete', danger: true,
+                    })) return;
                     wrapSet(api.del(`/api/customers/${customerId}/bank-accounts/${b.id}`));
                   }}
                   className="text-xs text-danger hover:underline">Delete</button>

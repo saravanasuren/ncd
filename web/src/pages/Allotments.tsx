@@ -4,6 +4,7 @@ import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { useConfirm } from '../components/Confirm.js';
 
 interface SeriesRow {
   series_id: number; code: string; name: string; status: string;
@@ -17,6 +18,7 @@ interface SeriesRow {
 const isCloseOnly = (s: SeriesRow) => s.pending_count === 0 && s.status !== 'Allotted' && s.status !== 'Withdrawn';
 
 export function AllotmentsPage() {
+  const { confirm, promptText } = useConfirm();
   const qc = useQueryClient();
   const { can } = useAuth();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -28,7 +30,10 @@ export function AllotmentsPage() {
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
   const revert = useMutation({
-    mutationFn: (seriesId: number) => api.post(`/api/allotments/series/${seriesId}/revert`, { reason: window.prompt('Reason for revert') ?? 'Revert' }),
+    // Reason is collected by the caller: a prompt inside mutationFn cannot be
+    // awaited, so a cancelled/suppressed dialog used to revert anyway with the
+    // fallback reason.
+    mutationFn: ({ seriesId, reason }: { seriesId: number; reason: string }) => api.post(`/api/allotments/series/${seriesId}/revert`, { reason }),
     onSuccess: () => { setMsg('Allotment reverted.'); qc.invalidateQueries({ queryKey: ['allot-series'] }); },
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
@@ -56,7 +61,7 @@ export function AllotmentsPage() {
     { key: 'actions', header: 'Actions', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
       render: (s) => {
         const revertBtn = (
-          <button onClick={() => { setMsg(''); if (window.confirm(`Cancel the pending allotment request for ${s.code}?`)) cancelPending.mutate(s.series_id); }}
+          <button onClick={async () => { setMsg(''); if (await confirm({ title: `Cancel the pending allotment request for ${s.code}?`, body: 'Nothing is allotted; you can submit it again.', confirmLabel: 'Cancel request', danger: true })) cancelPending.mutate(s.series_id); }}
             className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">↺ Revert</button>
         );
         // 1) Awaiting a checker → Pending approval (disabled) + Revert (cancel it).
@@ -71,7 +76,11 @@ export function AllotmentsPage() {
         // 2) Allotted → only Revert (un-stamp; super-admin/allotments:revert).
         if (s.status === 'Allotted') {
           return can('allotments:revert')
-            ? <button onClick={() => { setMsg(''); revert.mutate(s.series_id); }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">↺ Revert</button>
+            ? <button onClick={async () => {
+                setMsg('');
+                const reason = await promptText({ title: `Revert the allotment for ${s.code}?`, body: 'The investments in it go back to un-allotted.', label: 'Reason', confirmLabel: 'Revert', danger: true });
+                if (reason) revert.mutate({ seriesId: s.series_id, reason });
+              }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">↺ Revert</button>
             : <span className="text-xs text-text-muted">—</span>;
         }
         // 3) Otherwise → Allot / Close (re-enabled once a pending request is cancelled/rejected).

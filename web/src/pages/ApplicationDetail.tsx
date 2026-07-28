@@ -23,23 +23,28 @@ function PayoutAccount({ appId, customerId, current, onChange }: { appId: number
   const accounts = data?.bankAccounts ?? [];
   if (accounts.length < 2) return null;
 
+  // The account number alone can't be told apart when a customer holds several
+  // accounts at the same bank (owner 2026-07-28) — two Canara accounts differ
+  // by one digit. Show who the money is payable to and the IFSC as well, since
+  // those are exactly what ops check against the NEFT sheet.
   const label = (b: any) =>
-    `${b.account_number}${b.bank_name ? ` · ${b.bank_name}` : ''}${b.penny_drop_status === 'Verified' ? '' : ` (${b.penny_drop_status})`}`;
+    [b.account_number, b.holder_name, b.ifsc, b.bank_name].filter(Boolean).join(' · ')
+    + (b.penny_drop_status === 'Verified' ? '' : ` (${b.penny_drop_status})`);
   const active = accounts.find((b: any) => b.is_active);
 
   return (
     <select
-      className="text-xs border border-border-strong rounded px-2 py-1 max-w-[320px]"
+      className="text-xs border border-border-strong rounded px-2 py-1 max-w-full"
       value={current ?? ''}
       onChange={(e) => {
         const id = e.target.value ? Number(e.target.value) : null;
         const chosen = accounts.find((b: any) => Number(b.id) === id);
         if (chosen && chosen.penny_drop_status !== 'Verified'
-            && !window.confirm(`${chosen.account_number} has not been penny-drop verified (${chosen.penny_drop_status}). Send this NCD's interest there anyway?`)) return;
+            && !window.confirm(`${chosen.account_number}${chosen.holder_name ? ` (${chosen.holder_name})` : ''}${chosen.ifsc ? ` · ${chosen.ifsc}` : ''} has not been penny-drop verified (${chosen.penny_drop_status}). Send this NCD's interest there anyway?`)) return;
         set.mutate(id);
       }}
     >
-      <option value="">Customer default{active ? ` (${active.account_number})` : ''}</option>
+      <option value="">Customer default{active ? ` — ${label(active)}` : ''}</option>
       {accounts.map((b: any) => <option key={b.id} value={b.id}>{label(b)}</option>)}
     </select>
   );

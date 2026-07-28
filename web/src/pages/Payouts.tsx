@@ -4,9 +4,11 @@ import { formatINR, payoutRupees } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { useConfirm } from '../components/Confirm.js';
 
 export function PayoutsPage() {
   const qc = useQueryClient();
+  const { confirm, promptText } = useConfirm();
   const { can } = useAuth();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [msg, setMsg] = useState('');
@@ -144,15 +146,19 @@ export function PayoutsPage() {
                 <a href={`/api/payouts/${b.id}/summary.xlsx`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ Summary sheet</a>
                 <a href={`/api/payouts/${b.id}/summary.pdf`} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ PDF</a>
                 {b.status !== 'Paid' && b.status !== 'Cancelled' && (
-                  <button onClick={() => {
-                    const reason = window.prompt('Cancel this batch? Its rows go back to the un-batched pool and can be re-batched.\n\nReason:');
-                    if (reason && reason.trim().length >= 2) cancel.mutate({ id: b.id, reason: reason.trim() });
+                  <button onClick={async () => {
+                    const reason = await promptText({
+                      title: `Cancel batch ${b.batch_no}?`,
+                      body: 'Its rows go back to the un-batched pool and can be re-batched. No money moves.',
+                      label: 'Reason', confirmLabel: 'Cancel batch', cancelLabel: 'Keep batch', danger: true,
+                    });
+                    if (reason) cancel.mutate({ id: b.id, reason });
                   }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">Cancel batch</button>
                 )}
                 {b.status === 'PendingChecker' && <span className="text-xs text-text-muted italic">awaiting checker</span>}
                 {b.status === 'Paid' && (
                   <button disabled={notifyWa.isPending}
-                    onClick={() => { if (window.confirm(`Send an interest-credit WhatsApp to every customer paid in ${b.batch_no}? This can be a lot of messages.`)) { setMsg(''); notifyWa.mutate(b.id); } }}
+                    onClick={async () => { if (await confirm({ title: `Send interest-credit WhatsApp for ${b.batch_no}?`, body: 'Every customer paid in this batch gets a message. This can be a lot of messages.', confirmLabel: 'Send messages' })) { setMsg(''); notifyWa.mutate(b.id); } }}
                     className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40">📲 Notify customers</button>
                 )}
               </span>
@@ -193,6 +199,7 @@ export function PayoutsPage() {
  * batch settles it, it's consumed and never applies again.
  */
 function AdjustmentsCard({ onMsg }: { onMsg: (m: string) => void }) {
+  const { confirm } = useConfirm();
   const qc = useQueryClient();
   const inp = 'px-2.5 py-1.5 text-xs border border-border-strong rounded outline-none focus:border-primary';
   const [custQ, setCustQ] = useState('');
@@ -314,7 +321,7 @@ function AdjustmentsCard({ onMsg }: { onMsg: (m: string) => void }) {
                   <td className={`py-1.5 pr-3 ${statusChip[r.status] ?? ''}`}>{r.status === 'PendingApproval' ? 'Awaiting Admin/CXO' : r.status}</td>
                   <td className="py-1.5 pr-3 text-right">
                     {(r.status === 'PendingApproval' || r.status === 'Approved') && (
-                      <button className="text-danger hover:underline" onClick={() => { if (window.confirm(`Cancel this ${r.kind.toLowerCase()} of ${formatINR(Number(r.amount))} on ${r.application_no}?`)) cancelAdj.mutate(r.id); }}>Cancel</button>
+                      <button className="text-danger hover:underline" onClick={async () => { if (await confirm({ title: `Cancel this ${r.kind.toLowerCase()}?`, body: `${formatINR(Number(r.amount))} on ${r.application_no}. It will no longer apply to the next payout.`, confirmLabel: 'Cancel it', danger: true })) cancelAdj.mutate(r.id); }}>Cancel</button>
                     )}
                   </td>
                 </tr>

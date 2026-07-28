@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useConfirm } from '../components/Confirm.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
@@ -208,6 +209,7 @@ function AppInvestmentNotice({ appId, amount, needsAttribution, referredBy, onDo
 }
 
 export function ApprovalsPage() {
+  const { promptText } = useConfirm();
   const qc = useQueryClient();
   const [msg, setMsg] = useState('');
   const [openId, setOpenId] = useState<number | null>(null);
@@ -260,9 +262,13 @@ export function ApprovalsPage() {
                     {openId === r.id ? 'Close' : (['app_investment', 'customer_creation'].includes(r.request_type) ? 'Review & acknowledge' : 'Review & approve')}
                   </button>
                   {r.request_type !== 'app_investment' && (
-                    <button onClick={() => {
-                      const reason = window.prompt('Reason for rejection:');
-                      if (reason && reason.trim().length >= 2) act.mutate({ id: r.id, action: 'reject', reason: reason.trim() });
+                    <button onClick={async () => {
+                      const reason = await promptText({
+                        title: 'Reject this request?',
+                        body: 'The maker will see your reason. Nothing is settled.',
+                        label: 'Reason for rejection', confirmLabel: 'Reject', danger: true,
+                      });
+                      if (reason) act.mutate({ id: r.id, action: 'reject', reason });
                     }} className="text-xs border border-border text-danger rounded px-3 py-1.5 hover:bg-[color:var(--danger-bg)]">Reject</button>
                   )}
                 </div>

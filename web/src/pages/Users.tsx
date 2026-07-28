@@ -4,6 +4,7 @@ import { ROLE_LABELS, STAFF_ROLES, isRole } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { useConfirm } from '../components/Confirm.js';
 
 interface UserRow {
   id: number;
@@ -40,6 +41,7 @@ interface EditState {
 
 /** Admin → Users (docs/05 §21). */
 export function UsersPage() {
+  const { confirm } = useConfirm();
   const qc = useQueryClient();
   const { can, user: me } = useAuth();
   const [form, setForm] = useState(EMPTY_FORM);
@@ -176,9 +178,9 @@ export function UsersPage() {
           )}
           {can('users:delete') && u.id !== me?.id && (
             <button
-              onClick={() => {
+              onClick={async () => {
                 setErr('');
-                if (window.confirm(`Permanently delete ${u.full_name} (${u.email})? Prefer disabling unless the account was created in error.`)) remove.mutate(u.id);
+                if (await confirm({ title: `Permanently delete ${u.full_name}?`, body: `${u.email}. Prefer disabling unless the account was created in error.`, confirmLabel: 'Delete', danger: true })) remove.mutate(u.id);
               }}
               className="text-xs text-danger hover:underline">Delete</button>
           )}

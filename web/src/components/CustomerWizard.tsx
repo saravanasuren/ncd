@@ -40,14 +40,14 @@ const EMPTY = {
   // KYC
   ckyc_number: '',
   // Bank
-  bank_holder_name: '', account_number: '', account_type: '', tds: 'yes', ifsc: '',
+  bank_holder_name: '', account_number: '', account_type: '', tds: '', ifsc: '',
   bank_name: '', branch_name: '', branch_city: '',
   // Nominee (KYC replaces the old PAN-only field: Aadhaar or PAN + a photo)
   nom_full_name: '', nom_dob: '', nom_relationship: '', nom_kyc_type: '', nom_kyc_number: '', nom_phone: '',
   nom_address: '', guardian_name: '', guardian_pan: '',
 };
 type Form = typeof EMPTY;
-type DocKey = 'pan_card' | 'aadhaar_card' | 'customer_photo' | 'customer_signature' | 'address_proof' | 'cml' | 'bank_proof' | 'nominee_kyc';
+type DocKey = 'pan_card' | 'aadhaar_card' | 'customer_photo' | 'customer_signature' | 'address_proof' | 'cml' | 'bank_proof' | 'nominee_kyc' | 'form_121';
 
 // Autosave the in-progress enrolment to the browser so an accidental close /
 // navigation never loses typed data. Files aren't serialisable, so only text
@@ -157,7 +157,7 @@ export function CustomerWizard(
   });
   const [restored, setRestored] = useState<boolean>(() => !prefill && !!loadDraft());
   const [files, setFiles] = useState<Record<DocKey, File | null>>({
-    pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null, nominee_kyc: null,
+    pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null, nominee_kyc: null, form_121: null,
   });
   const [err, setErr] = useState('');
   const [dup, setDup] = useState<{ id: number; customer_code: string; full_name: string } | null>(null);
@@ -234,11 +234,13 @@ export function CustomerWizard(
   const startFresh = () => {
     clearDraft();
     setF(EMPTY); setStep(0); setRestored(false); setErr(''); setDup(null);
-    setFiles({ pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null, nominee_kyc: null });
+    setFiles({ pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null, nominee_kyc: null, form_121: null });
   };
 
   async function persist(): Promise<number> {
-    const personal: Record<string, unknown> = { full_name: f.full_name.trim(), is_nri: f.is_nri, tds_applicable: f.tds !== 'no' };
+    // TDS is an explicit Yes/No the operator picks (no default) — finish()
+    // blocks submit until one is chosen, so f.tds is 'yes' or 'no' here.
+    const personal: Record<string, unknown> = { full_name: f.full_name.trim(), is_nri: f.is_nri, tds_applicable: f.tds === 'yes' };
     const put = (k: string, v: string) => { if (v.trim()) personal[k] = v.trim(); };
     // The form takes DOB as DD/MM/YYYY; the API stores ISO.
     put('pan', f.pan); put('dob', ddmmyyyyToISO(f.dob) ?? ''); put('gender', f.gender); put('phone', f.phone);
@@ -292,6 +294,7 @@ export function CustomerWizard(
     if (f.pan && !PAN_RE.test(f.pan)) { setErr('PAN must be in the format ABCDE1234F — 5 letters, 4 digits, then a letter.'); setStep(0); return; }
     if (f.dp_id.trim() && !DP_ID_RE.test(f.dp_id.trim())) { setErr('DP ID must be 8 characters — two letters + six digits (e.g. IN300456) or eight digits (CDSL).'); setStep(1); return; }
     if (f.account_number.trim() && f.ifsc.trim() && !IFSC_RE.test(f.ifsc.trim())) { setErr('IFSC must be 11 characters like SBIN0001234.'); setStep(3); return; }
+    if (f.tds !== 'yes' && f.tds !== 'no') { setErr('Please choose whether TDS applies on interest payouts — Yes or No.'); setStep(3); return; }
     setErr(''); setDup(null); setBusy(true);
     try {
       const id = await persist();
@@ -429,11 +432,23 @@ export function CustomerWizard(
               <Field label="Account number"><input className={inp} inputMode="numeric" value={f.account_number} onChange={(e) => set({ account_number: e.target.value.replace(/\D/g, '') })} /></Field>
               <Field label="Account type"><select className={inp} value={f.account_type} onChange={(e) => set({ account_type: e.target.value })}><option value="">—</option>{ACCOUNT_TYPES.map((t) => <option key={t}>{t}</option>)}</select></Field>
               <div className="sm:col-span-2">
-                <Field label="TDS applicable on interest payouts?">
+                <Field label="TDS applicable?">
+                  {/* No default: the operator must consciously pick Yes or No
+                      (finish() blocks submit otherwise). The consequence of the
+                      choice is spelled out below the moment one is picked. */}
                   <div className="flex gap-4 text-sm">
-                    <label className="flex items-center gap-1.5"><input type="radio" name="tds" checked={f.tds === 'yes'} onChange={() => set({ tds: 'yes' })} /> Yes — deduct 10% TDS</label>
-                    <label className="flex items-center gap-1.5"><input type="radio" name="tds" checked={f.tds === 'no'} onChange={() => set({ tds: 'no' })} /> No — exempt (15G / 15H / Form 12BB filer)</label>
+                    <label className="flex items-center gap-1.5"><input type="radio" name="tds" checked={f.tds === 'yes'} onChange={() => { setFile('form_121', null); set({ tds: 'yes' }); }} /> Yes</label>
+                    <label className="flex items-center gap-1.5"><input type="radio" name="tds" checked={f.tds === 'no'} onChange={() => { setFile('form_121', null); set({ tds: 'no' }); }} /> No</label>
                   </div>
+                  {f.tds === 'yes' && (
+                    <p className="text-xs text-text-muted mt-1.5">This customer will be charged 10% TDS on their monthly interest.</p>
+                  )}
+                  {f.tds === 'no' && (
+                    <div className="mt-1.5">
+                      <p className="text-xs text-text-muted">A Form 121 declaration should be submitted for TDS exemption. Upload it below (optional — you can add it later).</p>
+                      <div className="mt-2 max-w-xs"><FilePick label="Form 121 (optional)" file={files.form_121} onPick={(x) => setFile('form_121', x)} /></div>
+                    </div>
+                  )}
                 </Field>
               </div>
               <Field label="IFSC" hint={ifscState === 'looking' ? 'Looking up…' : ifscState === 'ok' ? '✓ Bank/branch filled' : ifscState === 'miss' ? 'Not found — enter bank/branch manually' : 'Auto-fills bank & branch'}>
@@ -539,7 +554,7 @@ function Review({ f, files }: { f: Form; files: Record<DocKey, File | null> }) {
       </Section>
       <Section title="Bank">
         <Row k="Beneficiary" v={dash(f.bank_holder_name)} /><Row k="Account" v={dash(f.account_number)} /><Row k="Type" v={dash(f.account_type)} />
-        <Row k="TDS" v={f.tds === 'no' ? 'Exempt' : 'Deduct 10%'} /><Row k="IFSC" v={dash(f.ifsc)} />
+        <Row k="TDS" v={f.tds === 'no' ? 'No — Form 121' : f.tds === 'yes' ? 'Yes — 10%' : '—'} /><Row k="IFSC" v={dash(f.ifsc)} />
         <Row k="Bank" v={dash(f.bank_name)} /><Row k="Branch" v={[f.branch_name, f.branch_city].filter(Boolean).join(', ') || '—'} />
       </Section>
       <Section title="Nominee">

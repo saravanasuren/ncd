@@ -31,6 +31,8 @@ applicationsRouter.post('/', requirePermission('applications:create'),
       date_money_received: z.string().min(1), collection_method: z.string().min(1), collection_reference: z.string().min(1),
       receipt: z.object({ filename: z.string().min(1), mime: z.string(), data_base64: z.string().min(1) }),
       club_with_application_id: z.number().optional(), is_locker_deposit: z.boolean().optional(),
+      // Per-investment TDS override — the ">₹30L for a No-TDS customer" prompt.
+      tds_applicable: z.boolean().optional(),
     }).parse(req.body);
     res.status(201).json(await s.createApplication(getDb(), req.user!, input));
   }));

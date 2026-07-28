@@ -40,6 +40,10 @@ export interface CreateApplicationInput {
   collection_method: string;
   collection_reference: string;
   club_with_application_id?: number; // append this line to an in-flight app
+  // Per-investment TDS override (migration 047). undefined → the line follows
+  // the customer's tds_applicable flag; true/false forces it for THIS line only.
+  // Set by the ">₹30L for a No-TDS customer → apply TDS?" enrolment prompt.
+  tds_applicable?: boolean;
   // Receipt / cheque photo — mandatory: an investment never exists without it.
   // Same wire shape as POST /:id/receipt (the client mime is ignored — sniffed).
   receipt: { filename: string; mime: string; data_base64: string };
@@ -68,11 +72,11 @@ async function attachReceipt(db: Db, actor: AuthUser, appId: number, filename: s
   await writeAudit(db, { actorId: actor.id, action: 'application.receipt', entityType: 'applications', entityId: appId, after: { filename } });
 }
 
-async function addLine(tx: Db, appId: number, scheme: Record<string, unknown>, amount: number) {
+async function addLine(tx: Db, appId: number, scheme: Record<string, unknown>, amount: number, tdsApplicable?: boolean) {
   await tx.query(
-    `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active')`,
-    [appId, scheme.id, scheme.coupon_rate_pct, scheme.tenure_months, scheme.payout_frequency, scheme.day_count_convention, amount]);
+    `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status, tds_applicable)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active',$8)`,
+    [appId, scheme.id, scheme.coupon_rate_pct, scheme.tenure_months, scheme.payout_frequency, scheme.day_count_convention, amount, tdsApplicable ?? null]);
 }
 
 export async function createApplication(db: Db, actor: AuthUser, input: CreateApplicationInput) {
@@ -102,7 +106,7 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
         if (!target) throw errors.notFound('Clubbing target not found');
         if (Number(target.series_id) !== input.series_id) throw errors.badRequest('Can only club within the same series');
         if (!['PendingFundVerification', 'PendingEsign', 'PendingApproval'].includes(target.status)) throw errors.conflict('Target application is no longer in-flight');
-        await addLine(tx, Number(target.id), scheme, input.amount);
+        await addLine(tx, Number(target.id), scheme, input.amount, input.tds_applicable);
         await tx.query('UPDATE applications SET total_amount = total_amount + $1, updated_at = now() WHERE id = $2', [input.amount, Number(target.id)]);
         await writeAudit(tx, { actorId: actor.id, action: 'application.club', entityType: 'applications', entityId: Number(target.id), after: { added: input.amount } });
         // The new line's receipt lands on the target app — same as the old
@@ -137,7 +141,7 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
          input.is_locker_deposit ?? false, input.date_money_received, input.collection_method, input.collection_reference]
       );
       const appId = Number(rows[0]!.id);
-      await addLine(tx, appId, scheme, input.amount);
+      await addLine(tx, appId, scheme, input.amount, input.tds_applicable);
       // Tell LockerHub a subscription intent was created (contract event). No-op unless configured.
       await emitForApplication(tx, 'subscription.created', appId);
       const subscriptionRequest = await createApprovalRequest(tx, { type: 'subscription', entityType: 'applications', entityId: appId, makerUserId: actor.id, metadata: { application_no: appNo } });

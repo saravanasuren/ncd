@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { ConfirmProvider } from './components/Confirm.js';
 import { AuthProvider, useAuth } from './auth/AuthContext.js';
 import { LoginPage } from './pages/Login.js';
 import { ForgotPasswordPage } from './pages/ForgotPassword.js';
@@ -77,6 +78,7 @@ function RequirePerm({ perm, children }: { perm: Permission | Permission[]; chil
 export function App() {
   return (
     <AuthProvider>
+      <ConfirmProvider>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
@@ -123,6 +125,7 @@ export function App() {
         {/* Unknown path → /app, which routes each user to a page they can open. */}
         <Route path="*" element={<Navigate to="/app" replace />} />
       </Routes>
+      </ConfirmProvider>
     </AuthProvider>
   );
 }

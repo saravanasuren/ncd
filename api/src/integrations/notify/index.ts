@@ -15,6 +15,17 @@ export interface SendResult {
   ok: boolean;
   messageId?: string;
   error?: string;
+  /**
+   * Worth trying again later? A rate limit or a provider outage is temporary
+   * and MUST be retried — treating it as final is how 275 interest messages
+   * were silently abandoned on 28 Jul 2026. A rejected phone number or an
+   * unapproved template will fail identically forever, so it stays final.
+   * Undefined means final (the conservative reading for an unknown error).
+   */
+  retryable?: boolean;
+  /** Provider asked us to back off (HTTP 429). Pauses the whole drain, not
+   *  just this row — the next message would hit the same closed door. */
+  rateLimited?: boolean;
 }
 
 export interface SendMeta {

@@ -15,7 +15,7 @@ import { nextCode } from '../../lib/sequences.js';
 import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 import { emitForApplication } from '../../integrations/lockerhub/customerEvents.js';
 import { getSettingsMap } from '../settings/service.js';
-import { enqueue, drainOnce } from '../notifications/service.js';
+import { enqueue, deliveryFor } from '../notifications/service.js';
 import { REFERRER, REFERRER_LATERAL_JOINS } from '../reports/book.js';
 
 const DUE_TYPES = "('Interest','BrokenInterest')";
@@ -361,14 +361,57 @@ registerOnFinalApprove('interest_batch', async (tx, req) => {
  * trigger (a settled batch can fan out hundreds of sends, so it's a deliberate
  * click, not an approval side effect). Skips customers with no phone on file.
  */
-export async function notifyInterestOnWhatsapp(db: Db, batchId: number): Promise<{ queued: number; skipped: number; sent: number }> {
+export interface InterestNotifyResult {
+  /** Newly queued this click — they go out over the next few minutes. */
+  queued: number;
+  /** Paid, but no phone number on file: nothing can be sent until ops add one. */
+  skipped: number;
+  /** Already have theirs (or are mid-retry) — deliberately left alone. */
+  already_sent: number;
+  /** Customers this batch paid. */
+  total: number;
+}
+
+export async function notifyInterestOnWhatsapp(db: Db, batchId: number): Promise<InterestNotifyResult> {
   const batch = (await db.query<{ status: string; payout_date: string }>(
     'SELECT status, payout_date FROM payout_batches WHERE id = $1', [batchId])).rows[0];
   if (!batch) throw errors.notFound('Batch not found');
   if (batch.status !== 'Paid') throw errors.conflict('Batch is not settled yet — settle it before notifying customers.');
 
-  const { rows } = await db.query<{ full_name: string; phone: string | null; interest: string; month_credit: string; credit_date: string }>(
-    `SELECT c.full_name, c.phone,
+  const rows = await paidCustomersForBatch(db, batchId, batch.payout_date);
+
+  // Anyone already messaged (or still queued/retrying) for THIS batch is left
+  // alone, so pressing the button again is a top-up for whoever missed out —
+  // never a second message to someone who already has theirs.
+  const done = new Set((await db.query<{ customer_id: string }>(
+    `SELECT DISTINCT customer_id FROM notifications_queue
+      WHERE ref_kind = 'payout_batch' AND ref_id = $1 AND customer_id IS NOT NULL
+        AND status IN ('Sent', 'Pending')`, [batchId])).rows.map((r) => String(r.customer_id)));
+
+  let queued = 0, skipped = 0, alreadyDone = 0;
+  for (const r of rows) {
+    if (done.has(String(r.customer_id))) { alreadyDone++; continue; }
+    if (!r.phone) { skipped++; continue; }   // nothing to send to
+    const amount = Number(r.interest).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    await enqueue(db, {
+      channel: 'whatsapp', template: 'interest_paid', to: r.phone,
+      customerId: Number(r.customer_id), ref: { kind: 'payout_batch', id: batchId },
+      payload: { name: r.full_name, amount, month: r.month_credit, date: r.credit_date },
+    });
+    queued++;
+  }
+
+  // Deliberately NOT drained here. Hundreds of sends at a safe pace takes
+  // minutes — far longer than an HTTP request should be held open — and
+  // bursting them is precisely what got 275 of them 429'd on 28 Jul 2026. The
+  // cron drains them; the status panel shows the progress.
+  return { queued, skipped, already_sent: alreadyDone, total: rows.length };
+}
+
+/** Customers paid in a settled batch, with their total net interest for it. */
+async function paidCustomersForBatch(db: Db, batchId: number, payoutDate: string) {
+  return (await db.query<{ customer_id: string; full_name: string; phone: string | null; interest: string; month_credit: string; credit_date: string }>(
+    `SELECT c.id AS customer_id, c.full_name, NULLIF(btrim(COALESCE(c.phone, '')), '') AS phone,
             SUM(ds.net_amount)::numeric        AS interest,
             to_char($2::date, 'FMMonth YYYY')  AS month_credit,
             to_char($2::date, 'DD-Mon-YYYY')   AS credit_date
@@ -377,23 +420,51 @@ export async function notifyInterestOnWhatsapp(db: Db, batchId: number): Promise
        JOIN customers c    ON c.id = a.customer_id
       WHERE ds.batch_id = $1 AND ds.due_type IN ${DUE_TYPES} AND ds.status = 'Paid'
       GROUP BY c.id, c.full_name, c.phone`,
-    [batchId, batch.payout_date]);
-  const ids: number[] = [];
-  let skipped = 0;
-  for (const r of rows) {
-    if (!r.phone) { skipped++; continue; } // no usable number
-    const amount = Number(r.interest).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-    ids.push(await enqueue(db, {
-      channel: 'whatsapp', template: 'interest_paid', to: r.phone,
-      payload: { name: r.full_name, amount, month: r.month_credit, date: r.credit_date },
-    }));
-  }
-  if (ids.length) await drainOnce(db, ids.length + 5); // send now rather than waiting for the cron
-  const sent = ids.length
-    ? Number((await db.query<{ n: string }>("SELECT count(*)::int n FROM notifications_queue WHERE id = ANY($1) AND status = 'Sent'", [ids])).rows[0]!.n)
-    : 0;
-  return { queued: ids.length, skipped, sent };
+    [batchId, payoutDate])).rows;
 }
+
+/**
+ * Who has actually been told about this batch. Built by walking the customers
+ * the batch PAID — not the messages sent — so someone with no phone shows up
+ * as a gap rather than vanishing from both the numerator and the denominator.
+ */
+export async function interestWhatsappStatus(db: Db, batchId: number) {
+  const batch = (await db.query<{ batch_no: string; status: string; payout_date: string }>(
+    'SELECT batch_no, status, payout_date FROM payout_batches WHERE id = $1', [batchId])).rows[0];
+  if (!batch) throw errors.notFound('Batch not found');
+
+  const paid = await paidCustomersForBatch(db, batchId, batch.payout_date);
+  const msgs = await deliveryFor(db, 'payout_batch', batchId);
+  const byCustomer = new Map<string, Record<string, unknown>>();
+  for (const m of msgs) if (m.customer_id != null) byCustomer.set(String(m.customer_id), m);
+
+  const rows = paid.map((p) => {
+    const m = byCustomer.get(String(p.customer_id));
+    const state = !m
+      ? (p.phone ? 'NotSent' : 'NoPhone')            // never queued at all
+      : String(m.status) === 'Sent' ? 'Sent'
+      : String(m.status) === 'Pending' ? 'Sending'   // queued, or waiting on a retry
+      : 'Failed';
+    return {
+      customer_id: Number(p.customer_id), full_name: p.full_name, phone: p.phone,
+      amount: Number(p.interest), state,
+      attempts: m ? Number(m.attempts ?? 0) : 0,
+      error: m?.error ?? null,
+      sent_at: m?.sent_at ?? null,
+      next_attempt_at: m?.next_attempt_at ?? null,
+    };
+  });
+
+  const count = (s: string) => rows.filter((r) => r.state === s).length;
+  return {
+    batch_no: batch.batch_no, batch_status: batch.status, payout_date: batch.payout_date,
+    total: rows.length,
+    sent: count('Sent'), sending: count('Sending'), failed: count('Failed'),
+    not_sent: count('NotSent'), no_phone: count('NoPhone'),
+    rows,
+  };
+}
+
 
 // On REJECT of an interest batch: reverse the materialisation so the interest
 // period is billable again. Without this the rows kept their batch_id, the

@@ -73,6 +73,11 @@ payoutsRouter.post('/:id/mark-paid', requirePermission('payouts:mark-paid-manual
 payoutsRouter.post('/:id/whatsapp-interest', requirePermission('notifications:admin', 'payouts:mark-paid-manual'),
   asyncHandler(async (req, res) => res.json(await s.notifyInterestOnWhatsapp(getDb(), Number(req.params.id)))));
 
+// Who has actually been told. Read-only, and the answer the platform could not
+// give on 28 Jul 2026 when 275 of 384 customers silently got nothing.
+payoutsRouter.get('/:id/whatsapp-status', requirePermission('payouts:generate'),
+  asyncHandler(async (req, res) => res.json(await s.interestWhatsappStatus(getDb(), Number(req.params.id)))));
+
 payoutsRouter.get('/:id/download.xlsx', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {
     const { buffer, batchNo } = await s.neftForBatch(getDb(), Number(req.params.id));

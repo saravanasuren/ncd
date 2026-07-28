@@ -100,11 +100,22 @@ export function wappcloudProvider(): NotifyProvider {
         let json: any = null;
         try { json = JSON.parse(text); } catch { /* keep raw text for errors */ }
         if (!r.ok || (json && json.success === false)) {
-          return { ok: false, error: `wappcloud: send failed (${r.status}): ${text.slice(0, 300)}` };
+          // 429 = "too many requests from this IP, try again after 15
+          // minutes"; 5xx = their end is unwell. Both clear on their own, so
+          // the row must come back rather than be written off.
+          const rateLimited = r.status === 429;
+          return {
+            ok: false,
+            error: `wappcloud: send failed (${r.status}): ${text.slice(0, 300)}`,
+            retryable: rateLimited || r.status >= 500 || r.status === 408,
+            rateLimited,
+          };
         }
         return { ok: true, messageId: json?.data?.message_uid ?? undefined };
       } catch (e) {
-        return { ok: false, error: `wappcloud: ${(e as Error).message}` };
+        // Timed out or the socket died — we cannot tell whether it landed, but
+        // an interest message is worth a duplicate far more than a silence.
+        return { ok: false, error: `wappcloud: ${(e as Error).message}`, retryable: true };
       } finally {
         clearTimeout(tid);
       }

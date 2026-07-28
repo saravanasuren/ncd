@@ -39,8 +39,13 @@ async function bootstrapDb(): Promise<void> {
 async function startCrons(): Promise<void> {
   const { getDb } = await import('./db/index.js');
   const { drainOnce } = await import('./modules/notifications/service.js');
+  // Paced on purpose: a 384-customer interest blast trickles out over several
+  // minutes instead of bursting and being 429'd (see notifications/service.ts).
+  const { config: cfg } = await import('./config.js');
   setInterval(() => {
-    void drainOnce(getDb(), 25).catch((e) => console.warn('[cron] notify drain:', (e as Error).message));
+    void drainOnce(getDb(), cfg.NOTIFY_DRAIN_LIMIT)
+      .then((r) => { if (r.stopped) console.warn(`[cron] notify drain: provider rate-limited — ${r.sent} sent, rest deferred`); })
+      .catch((e) => console.warn('[cron] notify drain:', (e as Error).message));
   }, 60_000).unref();
 
   // LockerHub outbound — both no-op unless explicitly enabled in SSM

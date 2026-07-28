@@ -47,6 +47,12 @@ const schema = z.object({
   WAPPCLOUD_INTEREST_TEMPLATE: z.string().optional(), // approved interest-paid template (default 'ncd_interest_final')
   WAPPCLOUD_ACK_TEMPLATE: z.string().optional(),      // approved acknowledgement template (default 'ncd_akn')
   WHATSAPP_TEST_PHONE: z.string().optional(), // redirects ALL WhatsApp sends while set
+  // Pacing + retry for the notification queue. WappCloud rate-limits by IP —
+  // ~90 back-to-back sends returns 429 "try again after 15 minutes" — so a
+  // 384-customer interest blast MUST trickle rather than burst.
+  NOTIFY_SEND_GAP_MS: z.coerce.number().int().min(0).default(400),
+  NOTIFY_RATE_LIMIT_BACKOFF_MS: z.coerce.number().int().min(1000).default(15 * 60_000),
+  NOTIFY_DRAIN_LIMIT: z.coerce.number().int().min(1).default(25),
   // Public origin WappCloud fetches WhatsApp document headers from (e.g. the ack
   // PDF). Required for the WhatsApp acknowledgement; no default — set in SSM.
   PUBLIC_BASE_URL: z.string().optional(),

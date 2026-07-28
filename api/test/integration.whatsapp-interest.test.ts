@@ -1,12 +1,17 @@
 /**
  * WhatsApp interest-credit notification. Settling an interest payout batch is
- * the "interest paid" moment (rows flip to Paid); it queues an approved
- * `ncd_interest_final` WhatsApp per paid customer, and the WappCloud provider
- * maps that queue template to the registered template + {{1..4}} variables.
+ * the "interest paid" moment (rows flip to Paid); staff then fan out an
+ * approved `ncd_interest_final` WhatsApp per paid customer, and the WappCloud
+ * provider maps that queue template to the registered template + {{1..4}}.
+ *
+ * The click QUEUES; the cron sends, paced. Bursting them is what got 275 of
+ * batch NEFT-2026-000131's messages 429'd on 28 Jul 2026, so "sent right now"
+ * is deliberately no longer part of the contract.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 import { templateFor } from '../src/integrations/notify/wappcloud.js';
+import { drainOnce } from '../src/modules/notifications/service.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -59,7 +64,6 @@ describe('WhatsApp interest-credit notification', () => {
     const notify = await a.post(`/api/payouts/${batchId}/whatsapp-interest`);
     expect(notify.status).toBe(200);
     expect(notify.json.queued).toBeGreaterThanOrEqual(1);
-    expect(notify.json.sent).toBeGreaterThanOrEqual(1);
 
     // The customer's message carries the template's four display fields.
     const q = (await ctx.db.query(
@@ -78,6 +82,80 @@ describe('WhatsApp interest-credit notification', () => {
     const batch = await ncd.post('/api/payouts', { payout_date: '2026-09-28' }); // created, not approved
     const r = await (await admin()).post(`/api/payouts/${batch.json.batch_id}/whatsapp-interest`);
     expect(r.status).toBe(409);
+  });
+
+  it('the message is tied to the batch AND the customer, so a report can name people', async () => {
+    const phone = '9765400003';
+    const { customerId } = await activeInvestment('Traceable Cust', phone);
+    const a = await admin();
+    const batch = await (await as('ncd@demo.local')).post('/api/payouts', { payout_date: '2026-09-28' });
+    await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+    await a.post(`/api/payouts/${batch.json.batch_id}/whatsapp-interest`);
+
+    const row = (await ctx.db.query(
+      `SELECT customer_id, ref_kind, ref_id FROM notifications_queue
+        WHERE template = 'interest_paid' AND to_address = $1 ORDER BY id DESC LIMIT 1`, [phone])).rows[0] as any;
+    expect(Number(row.customer_id)).toBe(Number(customerId));
+    expect(row.ref_kind).toBe('payout_batch');
+    expect(Number(row.ref_id)).toBe(Number(batch.json.batch_id));
+  });
+
+  it('pressing Notify twice does NOT message anyone a second time', async () => {
+    const phone = '9765400004';
+    await activeInvestment('No Double Message', phone);
+    const a = await admin();
+    const batch = await (await as('ncd@demo.local')).post('/api/payouts', { payout_date: '2026-09-28' });
+    await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+    const id = batch.json.batch_id;
+
+    const first = await a.post(`/api/payouts/${id}/whatsapp-interest`);
+    expect(first.json.queued).toBeGreaterThanOrEqual(1);
+
+    // Still queued → skipped. Then drained (Sent) → still skipped.
+    expect((await a.post(`/api/payouts/${id}/whatsapp-interest`)).json.queued).toBe(0);
+    await drainOnce(ctx.db as any, 500);
+    const third = await a.post(`/api/payouts/${id}/whatsapp-interest`);
+    expect(third.json.queued).toBe(0);
+    expect(third.json.already_sent).toBeGreaterThanOrEqual(1);
+
+    const n = (await ctx.db.query(
+      "SELECT count(*)::int n FROM notifications_queue WHERE template='interest_paid' AND to_address = $1", [phone])).rows[0] as any;
+    expect(Number(n.n)).toBe(1);            // exactly one message, ever
+  });
+
+  it('the delivery report says who has had theirs and who has not', async () => {
+    const withPhone = '9765400005';
+    await activeInvestment('Has A Phone', withPhone);
+    const a = await admin();
+    // A customer paid in the same batch but with no phone on file at all.
+    const cust = await a.post('/api/customers', { full_name: 'Has No Phone', phone: '9765400006' });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '889765400006', ifsc: 'ICIC0001234' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-12' });
+    await approveInvestment(await as('ncd@demo.local'), app);
+    await ctx.db.query('UPDATE customers SET phone = NULL WHERE id = $1', [cust.json.id]);
+
+    const batch = await (await as('ncd@demo.local')).post('/api/payouts', { payout_date: '2026-09-28' });
+    await a.post(`/api/approvals/${batch.json.request.id}/approve`);
+    const id = batch.json.batch_id;
+
+    const before = (await a.get(`/api/payouts/${id}/whatsapp-status`)).json;
+    expect(before.total).toBeGreaterThanOrEqual(2);
+    expect(before.sent).toBe(0);
+    expect(before.no_phone).toBeGreaterThanOrEqual(1);   // counted, not hidden
+
+    const notify = await a.post(`/api/payouts/${id}/whatsapp-interest`);
+    expect(notify.json.skipped).toBeGreaterThanOrEqual(1);   // the phoneless one
+
+    const queued = (await a.get(`/api/payouts/${id}/whatsapp-status`)).json;
+    expect(queued.sending).toBeGreaterThanOrEqual(1);
+
+    await drainOnce(ctx.db as any, 500);
+    const after = (await a.get(`/api/payouts/${id}/whatsapp-status`)).json;
+    expect(after.sent).toBeGreaterThanOrEqual(1);
+    expect(after.sending).toBe(0);
+    // The phoneless customer is still visible as a gap, never as delivered.
+    const gap = (after.rows as any[]).find((r) => r.full_name === 'Has No Phone');
+    expect(gap.state).toBe('NoPhone');
   });
 
   it('the WappCloud provider maps interest_paid → ncd_interest_final with {{1..4}}', () => {

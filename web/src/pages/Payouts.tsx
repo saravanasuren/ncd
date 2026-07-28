@@ -26,11 +26,22 @@ export function PayoutsPage() {
     onSuccess: (r: any) => { setMsg(`Batch cancelled — ${r.rows_released} row(s) released back to the un-batched pool.`); qc.invalidateQueries({ queryKey: ['payout-batches'] }); qc.invalidateQueries({ queryKey: ['payout-preview', date] }); },
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
+  // Queues; the server sends them at a paced rate over the next few minutes.
+  // Anyone who already has theirs is skipped, so this doubles as "send to the
+  // ones who missed out".
   const notifyWa = useMutation({
-    mutationFn: (batchId: number) => api.post<{ queued: number; skipped: number; sent: number }>(`/api/payouts/${batchId}/whatsapp-interest`, {}),
-    onSuccess: (r) => setMsg(`WhatsApp: ${r.sent} sent${r.queued > r.sent ? `, ${r.queued - r.sent} pending` : ''}${r.skipped ? `, ${r.skipped} skipped (no phone on file)` : ''}.`),
+    mutationFn: (batchId: number) => api.post<{ queued: number; skipped: number; already_sent: number; total: number }>(`/api/payouts/${batchId}/whatsapp-interest`, {}),
+    onSuccess: (r, batchId) => {
+      setMsg(r.queued === 0
+        ? `Nothing to send — ${r.already_sent} already done${r.skipped ? `, ${r.skipped} have no phone number on file` : ''}.`
+        : `${r.queued} message(s) queued — they go out over the next few minutes. ${r.already_sent} already had theirs${r.skipped ? `, ${r.skipped} have no phone number on file` : ''}. Open "delivery" to watch.`);
+      setWaBatch(batchId);
+      qc.invalidateQueries({ queryKey: ['wa-status', batchId] });
+    },
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
+  // Which batch's delivery report is open, if any.
+  const [waBatch, setWaBatch] = useState<number | null>(null);
 
   const [stmt, setStmt] = useState('');
   const matchStmt = useMutation({
@@ -157,15 +168,27 @@ export function PayoutsPage() {
                 )}
                 {b.status === 'PendingChecker' && <span className="text-xs text-text-muted italic">awaiting checker</span>}
                 {b.status === 'Paid' && (
-                  <button disabled={notifyWa.isPending}
-                    onClick={async () => { if (await confirm({ title: `Send interest-credit WhatsApp for ${b.batch_no}?`, body: 'Every customer paid in this batch gets a message. This can be a lot of messages.', confirmLabel: 'Send messages' })) { setMsg(''); notifyWa.mutate(b.id); } }}
-                    className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40">📲 Notify customers</button>
+                  <>
+                    <button onClick={() => { setMsg(''); setWaBatch(waBatch === b.id ? null : b.id); }}
+                      className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">✉ Delivery</button>
+                    <button disabled={notifyWa.isPending}
+                      onClick={async () => {
+                        if (await confirm({
+                          title: `Send interest-credit WhatsApp for ${b.batch_no}?`,
+                          body: 'Everyone paid in this batch who has not already had theirs gets one message. Nobody is messaged twice.',
+                          confirmLabel: 'Send messages',
+                        })) { setMsg(''); notifyWa.mutate(b.id); }
+                      }}
+                      className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40">📲 Notify customers</button>
+                  </>
                 )}
               </span>
             ) },
         ];
         return <DataTable columns={columns} rows={batches.data?.rows ?? []} rowKey={(b) => b.id} defaultSort={{ key: 'batch_no', dir: 'desc' }} empty="No batches yet." />;
       })()}
+
+      {waBatch != null && <WhatsappDelivery batchId={waBatch} onClose={() => setWaBatch(null)} />}
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mt-6 mb-2">Reconcile a bank statement</h2>
       <div className="bg-surface border border-border rounded-lg shadow-card p-4">
@@ -329,6 +352,122 @@ function AdjustmentsCard({ onMsg }: { onMsg: (m: string) => void }) {
             </tbody>
           </table>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Who has actually been told about a settled batch — the question the platform
+ * could not answer on 28 Jul 2026, when 275 of 384 customers silently got
+ * nothing and the only clue was the owner's hunch.
+ *
+ * Rows are the customers the batch PAID, not the messages sent, so somebody
+ * with no phone number shows as a gap instead of disappearing from both sides
+ * of the count.
+ */
+function WhatsappDelivery({ batchId, onClose }: { batchId: number; onClose: () => void }) {
+  const [showAll, setShowAll] = useState(false);
+  const q = useQuery({
+    queryKey: ['wa-status', batchId],
+    queryFn: () => api.get<any>(`/api/payouts/${batchId}/whatsapp-status`),
+    // Sends trickle out over minutes, so the panel keeps itself current while
+    // anything is still in flight, then stops polling.
+    refetchInterval: (query) => (((query.state.data as any)?.sending ?? 0) > 0 ? 10_000 : false),
+  });
+  const d = q.data;
+  const chip = (n: number, label: string, cls: string) => (
+    <span className={`text-xs rounded px-2 py-1 ${cls}`}><span className="font-semibold mono">{n}</span> {label}</span>
+  );
+  const stateClass: Record<string, string> = {
+    Sent: 'text-ok', Sending: 'text-primary', Failed: 'text-danger',
+    NotSent: 'text-text-muted', NoPhone: 'text-warn',
+  };
+  const stateLabel: Record<string, string> = {
+    Sent: 'delivered', Sending: 'on its way', Failed: 'failed',
+    NotSent: 'not sent', NoPhone: 'no phone number',
+  };
+  const rows: any[] = d?.rows ?? [];
+  const missed = rows.filter((r) => r.state !== 'Sent');
+  const shown = showAll ? rows : missed;
+
+  return (
+    <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-4">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-xs font-semibold text-text-label uppercase tracking-wide">
+          WhatsApp delivery{d ? ` · ${d.batch_no}` : ''}
+        </span>
+        <button onClick={onClose} className="ml-auto text-xs text-text-muted hover:text-text">close</button>
+      </div>
+
+      {q.isLoading && <div className="text-sm text-text-muted">Loading…</div>}
+      {q.error && <div className="text-sm text-danger">Could not load the delivery report.</div>}
+
+      {d && (
+        <>
+          <div className="flex flex-wrap gap-2 items-center mb-3">
+            {chip(d.sent, 'delivered', 'bg-[color:var(--ok-bg)] text-ok')}
+            {d.sending > 0 && chip(d.sending, 'on the way', 'bg-bg text-primary')}
+            {d.failed > 0 && chip(d.failed, 'failed', 'bg-[color:var(--danger-bg)] text-danger')}
+            {d.not_sent > 0 && chip(d.not_sent, 'never sent', 'bg-bg text-text-muted')}
+            {d.no_phone > 0 && chip(d.no_phone, 'no phone number', 'bg-[color:var(--warn-bg)] text-warn')}
+            <span className="text-xs text-text-muted">of {d.total} customers paid</span>
+          </div>
+
+          {d.sending > 0 && (
+            <p className="text-xs text-text-muted mb-2">
+              Still going out. Messages are paced so the provider does not start refusing them, so this takes a few minutes — this panel refreshes itself.
+            </p>
+          )}
+          {d.no_phone > 0 && (
+            <p className="text-xs text-warn mb-2">
+              {d.no_phone} customer{d.no_phone === 1 ? ' has' : 's have'} no phone number on file — they cannot be messaged until one is added.
+            </p>
+          )}
+
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-xs text-text-muted">
+              {showAll ? `All ${rows.length}` : `${missed.length} who have not had theirs`}
+            </span>
+            <button onClick={() => setShowAll(!showAll)} className="text-xs text-primary hover:underline">
+              {showAll ? 'show only the gaps' : 'show everyone'}
+            </button>
+          </div>
+
+          <div className="overflow-x-auto max-h-[420px] overflow-y-auto border border-border rounded">
+            <table className="w-full text-sm border-collapse">
+              <thead className="sticky top-0 bg-bg">
+                <tr className="text-left text-xs text-text-label">
+                  <th className="py-1.5 px-3">Customer</th>
+                  <th className="py-1.5 px-3">Phone</th>
+                  <th className="py-1.5 px-3 text-right">Interest</th>
+                  <th className="py-1.5 px-3">Status</th>
+                  <th className="py-1.5 px-3">Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((r) => (
+                  <tr key={r.customer_id} className="border-t border-border">
+                    <td className="py-1.5 px-3">{r.full_name}</td>
+                    <td className="py-1.5 px-3 mono text-xs">{r.phone ?? '—'}</td>
+                    <td className="py-1.5 px-3 text-right mono">{formatINR(r.amount)}</td>
+                    <td className={`py-1.5 px-3 text-xs ${stateClass[r.state] ?? ''}`}>{stateLabel[r.state] ?? r.state}</td>
+                    <td className="py-1.5 px-3 text-xs text-text-muted max-w-[360px] truncate" title={r.error ?? ''}>
+                      {r.state === 'Sent' ? (r.sent_at ? String(r.sent_at).slice(0, 16).replace('T', ' ') : '')
+                        : r.state === 'NoPhone' ? 'add a phone number to the customer'
+                        : (r.error ?? '')}
+                    </td>
+                  </tr>
+                ))}
+                {!shown.length && (
+                  <tr><td colSpan={5} className="py-6 text-center text-text-muted">
+                    {showAll ? 'Nobody was paid in this batch.' : 'Everyone paid in this batch has had their message.'}
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );

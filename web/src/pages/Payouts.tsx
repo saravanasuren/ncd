@@ -10,12 +10,14 @@ export function PayoutsPage() {
   const { can } = useAuth();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [msg, setMsg] = useState('');
+  // In-page confirmation for "Mark as paid" — see the panel below.
+  const [confirming, setConfirming] = useState(false);
 
   const preview = useQuery({ queryKey: ['payout-preview', date], queryFn: () => api.get<any>(`/api/payouts/preview?date=${date}`) });
   const batches = useQuery({ queryKey: ['payout-batches'], queryFn: () => api.get<{ rows: any[] }>('/api/payouts') });
   const statements = useQuery({ queryKey: ['bank-statements'], queryFn: () => api.get<{ rows: any[] }>('/api/bank-statements') });
 
-  const create = useMutation({ mutationFn: () => api.post('/api/payouts', { payout_date: date }), onSuccess: () => { setMsg('Sent to the approvals queue — a checker confirms it, which settles the period and resets interest.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); qc.invalidateQueries({ queryKey: ['payout-preview', date] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
+  const create = useMutation({ mutationFn: () => api.post('/api/payouts', { payout_date: date }), onSuccess: () => { setConfirming(false); setMsg('Sent to the approvals queue — a checker confirms it, which settles the period and resets interest.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); qc.invalidateQueries({ queryKey: ['payout-preview', date] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
   const markPaid = useMutation({ mutationFn: (batchId: number) => api.post(`/api/payouts/${batchId}/mark-paid`, {}), onSuccess: () => { setMsg('Sent to the approvals queue — a checker confirms the payment, which settles the period.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
   const cancel = useMutation({
     mutationFn: ({ id, reason }: { id: number; reason: string }) => api.post(`/api/payouts/${id}/cancel`, { reason }),
@@ -72,7 +74,7 @@ export function PayoutsPage() {
       <p className="text-sm text-text-muted mt-1 mb-4">Download the NEFT sheet for any date, as often as you like — it shows each investment's interest accrued since it was last paid, up to that date. Nothing is recorded by downloading. Only when you mark a date as paid does it go to a checker; on approval that period is settled and interest starts fresh.</p>
       <div className="flex items-center gap-2 mb-4">
         <label className="text-sm text-text-label">Up to date</label>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="px-2.5 py-1.5 text-sm border border-border-strong rounded" />
+        <input type="date" value={date} onChange={(e) => { setDate(e.target.value); setConfirming(false); }} className="px-2.5 py-1.5 text-sm border border-border-strong rounded" />
         <a href={`/api/payouts/sheet.xlsx?date=${date}`}
            className={`text-xs border border-border-strong rounded px-3 py-1.5 no-underline ${!preview.data || preview.data.count === 0 ? 'pointer-events-none opacity-40' : 'hover:bg-bg'}`}>↓ NEFT sheet</a>
         {/* The human companion to the bank file — same pair wealth produced. */}
@@ -80,10 +82,36 @@ export function PayoutsPage() {
            className={`text-xs border border-border-strong rounded px-3 py-1.5 no-underline ${!preview.data || preview.data.count === 0 ? 'pointer-events-none opacity-40' : 'hover:bg-bg'}`}>↓ Summary sheet</a>
         <a href={`/api/payouts/preview.pdf?date=${date}`}
            className={`text-xs border border-border-strong rounded px-3 py-1.5 no-underline ${!preview.data || preview.data.count === 0 ? 'pointer-events-none opacity-40' : 'hover:bg-bg'}`}>↓ PDF</a>
+        {/* Confirmed IN PAGE, not via window.confirm: browsers suppress repeated
+            native dialogs ("Don't allow this page to create more dialogs"), and
+            a suppressed confirm() returns false instantly — so the click did
+            nothing at all, with no request, no error and no message. That is
+            exactly how this button "stopped working" (owner 2026-07-28). An
+            in-page panel cannot be suppressed, and it names the amount being
+            claimed rather than just the date. */}
         <button disabled={!preview.data || preview.data.count === 0 || create.isPending}
-          onClick={() => { if (window.confirm(`Confirm the interest up to ${date} has actually been paid out?\n\nThis sends it to a checker; on approval the period is settled and interest resets.`)) { setMsg(''); create.mutate(); } }}
+          onClick={() => { setMsg(''); setConfirming(true); }}
           className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Mark as paid…</button>
       </div>
+      {confirming && preview.data && (
+        <div className="bg-surface border border-warn/40 rounded-lg shadow-card p-4 mb-4 text-sm">
+          <div className="font-semibold mb-1">Confirm this payout has actually been made</div>
+          <p className="text-text-muted text-xs mb-3 max-w-[70ch]">
+            You are claiming that <span className="mono font-semibold">{formatINR(sheetTotals.total)}</span> across{' '}
+            <span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'}, up to{' '}
+            <span className="font-semibold">{date}</span>, has left the bank. This goes to a checker; on their approval the
+            period is settled and interest starts fresh.
+          </p>
+          <div className="flex gap-2 items-center">
+            <button disabled={create.isPending}
+              onClick={() => { setMsg(''); create.mutate(); }}
+              className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
+              {create.isPending ? 'Sending…' : 'Yes, it has been paid'}
+            </button>
+            <button onClick={() => setConfirming(false)} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Cancel</button>
+          </div>
+        </div>
+      )}
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
       {preview.data && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5 text-sm">

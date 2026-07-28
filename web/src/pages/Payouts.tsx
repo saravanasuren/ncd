@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { formatINR } from '@new-wealth/shared';
+import { formatINR, payoutRupees } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
@@ -43,28 +43,26 @@ export function PayoutsPage() {
   });
 
   /**
-   * Totals stated the way the PAPERWORK and the BANK state them: whole rupees
-   * per row, then added up. The sheets already work that way — the summary
-   * sheet prints rounded rupees and lib/neft.ts rounds each transaction — so
-   * summing the exact paise instead made this tile disagree with the documents
-   * it summarises: over 684 rows the sheet read ₹59,64,493 gross while the tile
-   * read ₹59,64,451.38 (owner 2026-07-28).
+   * Totals stated exactly as the summary sheet and the NEFT file state them —
+   * the SAME payoutRupees() helper builds all three, so the screen, the
+   * paperwork and the bank can never quote different money.
    *
    * Deliberately computed here rather than in previewDue: that function's
    * `totals` are also written to payout_batches.total_gross/total_net when a
-   * batch is claimed, and those stored money records must not move. This is
-   * presentation only — no amount, formula or accrual changes.
+   * batch is claimed, and those stored money records must not move.
    */
-  const r2 = (v: unknown) => Math.round(Number(v) || 0);
   const sheetTotals = ((preview.data?.rows ?? []) as any[]).reduce(
-    (a, r) => ({
-      gross: a.gross + r2(r.gross_amount),
-      tds: a.tds + r2(r.tds_amount),
-      net: a.net + r2(r.net_amount),
-      addition: a.addition + r2(r.addition_amount),
-      deduction: a.deduction + r2(r.deduction_amount),
-      total: a.total + r2(r.total_amount ?? r.net_amount),
-    }),
+    (a, row) => {
+      const m = payoutRupees(row);
+      return {
+        gross: a.gross + m.gross,
+        tds: a.tds + m.tds,
+        net: a.net + m.net,
+        addition: a.addition + m.addition,
+        deduction: a.deduction + m.deduction,
+        total: a.total + m.total,
+      };
+    },
     { gross: 0, tds: 0, net: 0, addition: 0, deduction: 0, total: 0 },
   );
 

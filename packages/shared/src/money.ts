@@ -67,3 +67,48 @@ export function formatINR(v: string | number | null | undefined, opts: { symbol?
   const sym = opts.symbol === false ? '' : '₹';
   return `${neg ? '-' : ''}${sym}${grouped}.${p}`;
 }
+
+/**
+ * Whole-rupee presentation of one payout row (owner-approved 2026-07-28).
+ *
+ * The sheets and the bank file can only carry whole rupees. Rounding gross,
+ * TDS and net each on their own broke the identity the documents are read
+ * with: on 80 of 684 live rows the paise rounded opposite ways
+ * (gross 4931.51→4932, TDS 493.15→493, net 4438.36→4438, yet 4932−493=4439),
+ * leaving the sheet's Net column ₹68 short of gross − TDS.
+ *
+ * So round gross and TDS — the two figures that stand on their own — and
+ * DERIVE net and total from those. Every document then ties, on every row and
+ * in every total: gross − TDS = net, and net + additions − deductions = total.
+ *
+ * Presentation ONLY. The stored 2-dp values are never touched, so the
+ * chk_ds_net invariant (net_amount = gross_amount − tds_amount +
+ * adjustment_amount) continues to hold on disbursement_schedule.
+ *
+ * Shared so the summary sheet, the NEFT file and the Payouts screen cannot
+ * drift apart — they must all state the same rupees.
+ */
+export interface PayoutRupees {
+  gross: number; tds: number; net: number;
+  addition: number; deduction: number; total: number;
+}
+
+export function payoutRupees(r: {
+  gross_amount?: unknown; tds_amount?: unknown;
+  addition_amount?: unknown; deduction_amount?: unknown;
+  /** Saved-batch rows carry ONE signed column instead of the add/deduct pair. */
+  adjustment_amount?: unknown;
+}): PayoutRupees {
+  const R = (v: unknown) => Math.round(Number(v) || 0);
+  const gross = R(r.gross_amount);
+  const tds = R(r.tds_amount);
+  const net = gross - tds;
+
+  // Prefer the explicit pair; fall back to the signed adjustment column.
+  const hasPair = r.addition_amount !== undefined || r.deduction_amount !== undefined;
+  const signed = R(r.adjustment_amount);
+  const addition = hasPair ? R(r.addition_amount) : Math.max(0, signed);
+  const deduction = hasPair ? R(r.deduction_amount) : Math.max(0, -signed);
+
+  return { gross, tds, net, addition, deduction, total: net + addition - deduction };
+}

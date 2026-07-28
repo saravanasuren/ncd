@@ -89,6 +89,7 @@ describe('payout adjustments — maker/checker lifecycle', () => {
   it('the summary sheet shows Addition / Deduction / Total after Net, and the NEFT sheet pays the Total', async () => {
     const ncd = await as('ncd@demo.local');
     const { row } = await previewRow(ncd, appA);
+    const derivedNet = Math.round(row.gross_amount) - Math.round(row.tds_amount);
 
     const load = async (buf: Buffer) => { const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf); return wb.worksheets[0]!; };
     const summary = await load((await ncd.raw(`/api/payouts/preview.summary.xlsx?date=${CUTOFF}`)).buffer);
@@ -104,7 +105,12 @@ describe('payout adjustments — maker/checker lifecycle', () => {
       const col = (h: string) => heads.indexOf(h) + 1;
       expect(Number(cells.getCell(col('Addition (Rs)')).value)).toBe(100);
       expect(Number(cells.getCell(col('Deduction (Rs)')).value)).toBe(0);
-      expect(Number(cells.getCell(col('Total (Rs)')).value)).toBe(Math.round(row.net_amount) + 100);
+      // Whole-rupee net is DERIVED from the rounded gross and TDS (owner
+      // 2026-07-28), not rounded on its own — so the row's own arithmetic
+      // ties. Stated longhand here rather than via payoutRupees so this
+      // asserts the rule independently of the helper that implements it.
+      expect(Number(cells.getCell(col('Net (Rs)')).value)).toBe(derivedNet);
+      expect(Number(cells.getCell(col('Total (Rs)')).value)).toBe(derivedNet + 100);
     }
     expect(hit).toBe(true);
 
@@ -112,7 +118,7 @@ describe('payout adjustments — maker/checker lifecycle', () => {
     const neft = await load((await ncd.raw(`/api/payouts/sheet.xlsx?date=${CUTOFF}`)).buffer);
     const amounts: number[] = [];
     for (let i = 2; i <= neft.rowCount; i++) amounts.push(Number(neft.getRow(i).getCell(3).value));
-    expect(amounts).toContain(Math.round(row.net_amount + 100));
+    expect(amounts).toContain(derivedNet + 100);
   });
 
   it('settling a batch consumes it — it never applies twice — and cancelling releases it', async () => {

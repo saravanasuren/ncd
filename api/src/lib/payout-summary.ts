@@ -10,6 +10,7 @@
  * distinguishable at a glance, this sheet vs. the bank file.
  */
 import ExcelJS from 'exceljs';
+import { payoutRupees } from '@new-wealth/shared';
 
 export interface SummaryRow {
   application_no?: string | null;
@@ -130,6 +131,9 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
   head.eachCell((c) => { c.font = { bold: true }; });
 
   rows.forEach((r, i) => {
+    // Whole rupees, with net/total DERIVED from the rounded gross and TDS so
+    // the row (and therefore every column total) ties — see payoutRupees.
+    const m = payoutRupees(r);
     const row = ws.addRow([
       i + 1,
       r.application_no ?? '',
@@ -150,12 +154,12 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
       ddmmyyyy(firstAccrual(r.period_to, r.period_days) ?? r.period_from ?? null),
       ddmmyyyy(r.period_to),
       r.period_days != null ? Number(r.period_days) : '',
-      amt(r.gross_amount),
-      amt(r.tds_amount),
-      amt(r.net_amount),
-      amt(r.addition_amount ?? 0),
-      amt(r.deduction_amount ?? 0),
-      amt(r.total_amount ?? r.net_amount),
+      m.gross,
+      m.tds,
+      m.net,
+      m.addition,
+      m.deduction,
+      m.total,
       r.phone ?? '',
       r.collection_method ?? '',
     ]);

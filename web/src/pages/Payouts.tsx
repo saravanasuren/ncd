@@ -10,6 +10,8 @@ export function PayoutsPage() {
   const { can } = useAuth();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [msg, setMsg] = useState('');
+  // In-page confirmation for "Mark as paid" — see the panel below.
+  const [confirming, setConfirming] = useState(false);
 
   const preview = useQuery({ queryKey: ['payout-preview', date], queryFn: () => api.get<any>(`/api/payouts/preview?date=${date}`) });
   const batches = useQuery({ queryKey: ['payout-batches'], queryFn: () => api.get<{ rows: any[] }>('/api/payouts') });
@@ -80,10 +82,36 @@ export function PayoutsPage() {
            className={`text-xs border border-border-strong rounded px-3 py-1.5 no-underline ${!preview.data || preview.data.count === 0 ? 'pointer-events-none opacity-40' : 'hover:bg-bg'}`}>↓ Summary sheet</a>
         <a href={`/api/payouts/preview.pdf?date=${date}`}
            className={`text-xs border border-border-strong rounded px-3 py-1.5 no-underline ${!preview.data || preview.data.count === 0 ? 'pointer-events-none opacity-40' : 'hover:bg-bg'}`}>↓ PDF</a>
+        {/* Confirmed IN PAGE, not via window.confirm: browsers suppress repeated
+            native dialogs ("Don't allow this page to create more dialogs"), and
+            a suppressed confirm() returns false instantly — so the click did
+            nothing at all, with no request, no error and no message. That is
+            exactly how this button "stopped working" (owner 2026-07-28). An
+            in-page panel cannot be suppressed, and it names the amount being
+            claimed rather than just the date. */}
         <button disabled={!preview.data || preview.data.count === 0 || create.isPending}
-          onClick={() => { if (window.confirm(`Confirm the interest up to ${date} has actually been paid out?\n\nThis sends it to a checker; on approval the period is settled and interest resets.`)) { setMsg(''); create.mutate(); } }}
+          onClick={() => { setMsg(''); setConfirming(true); }}
           className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Mark as paid…</button>
       </div>
+      {confirming && preview.data && (
+        <div className="bg-surface border border-warn/40 rounded-lg shadow-card p-4 mb-4 text-sm">
+          <div className="font-semibold mb-1">Confirm this payout has actually been made</div>
+          <p className="text-text-muted text-xs mb-3 max-w-[70ch]">
+            You are claiming that <span className="mono font-semibold">{formatINR(sheetTotals.total)}</span> across{' '}
+            <span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'}, up to{' '}
+            <span className="font-semibold">{date}</span>, has left the bank. This goes to a checker; on their approval the
+            period is settled and interest starts fresh.
+          </p>
+          <div className="flex gap-2 items-center">
+            <button disabled={create.isPending}
+              onClick={() => { setMsg(''); setConfirming(false); create.mutate(); }}
+              className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
+              {create.isPending ? 'Sending…' : 'Yes, it has been paid'}
+            </button>
+            <button onClick={() => setConfirming(false)} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Cancel</button>
+          </div>
+        </div>
+      )}
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
       {preview.data && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5 text-sm">

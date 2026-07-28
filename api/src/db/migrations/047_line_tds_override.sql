@@ -1,0 +1,15 @@
+-- 047_line_tds_override — per-investment TDS override.
+--
+-- TDS is a customer-level flag (customers.tds_applicable). computeTds already
+-- honours a per-LINE override when present (lib/tds.ts: lineFlag wins over the
+-- customer flag), but application_lines had no column to carry it, so the
+-- override was unreachable. This adds it.
+--
+-- NULL  = follow the customer's flag (the default, every existing line).
+-- TRUE  = deduct TDS on this investment regardless of the customer flag.
+-- FALSE = exempt this investment regardless of the customer flag.
+--
+-- Used by the "investment over ₹30L for a No-TDS customer → ask if TDS applies"
+-- prompt: answering yes stamps TRUE on that one line, leaving the customer's own
+-- No-TDS status untouched.
+ALTER TABLE application_lines ADD COLUMN IF NOT EXISTS tds_applicable BOOLEAN;

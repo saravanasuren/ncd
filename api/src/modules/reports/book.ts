@@ -24,7 +24,9 @@ export interface BookFilters {
   status?: 'active' | 'redeemed' | 'all';
 }
 
-const APP_SCOPE = { userCol: 'a.enrolled_by_user_id', agentCol: 'a.enrolled_by_agent_id', branchCol: 'c.branch_id' };
+const APP_SCOPE = { userCol: 'a.enrolled_by_user_id', agentCol: 'a.enrolled_by_agent_id', branchCol: 'c.branch_id',
+  // Staff own what they referred too — same rule as REFERRER below.
+  refCol: "COALESCE(NULLIF(btrim(a.referred_by_text), ''), c.referred_by_text)" };
 
 /** Build the shared WHERE for application-based queries (scope + filters). */
 function appWhere(actor: AuthUser, filters: BookFilters, extra: string[] = []): { sql: string; params: unknown[] } {

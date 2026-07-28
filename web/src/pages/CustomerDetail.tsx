@@ -328,7 +328,7 @@ export function CustomerDetailPage() {
 
       <RelationsKyc customerId={Number(id)} data={data} onChange={invalidate} can={can} />
 
-      {can('applications:create') && c.creation_status === 'Approved' && <NewInvestment customerId={Number(id)} />}
+      {can('applications:create') && c.creation_status === 'Approved' && <NewInvestment customerId={Number(id)} custNoTds={c.tds_applicable === false} />}
 
       <LockersCard customerId={Number(id)} />
     </div>
@@ -508,11 +508,18 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
   );
 }
 
-function NewInvestment({ customerId }: { customerId: number }) {
+function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTds: boolean }) {
   const nav = useNavigate();
   const [seriesId, setSeriesId] = useState('');
   const [schemeId, setSchemeId] = useState('');
   const [amount, setAmount] = useState('');
+  // A No-TDS customer investing over ₹30L: the creator is asked, per investment,
+  // whether TDS should apply after all. '' until they answer; the create is
+  // blocked until they do. 'yes' stamps a per-line override (the customer's own
+  // No-TDS status is left untouched).
+  const [applyTds, setApplyTds] = useState<'' | 'yes' | 'no'>('');
+  const over30L = amount !== '' && Number(amount) > 30 * LAKH;
+  const tdsPrompt = custNoTds && over30L;
   // NCDs are issued in whole ₹1,00,000 units (the API enforces the scheme's own
   // min_ticket/multiple_of; this mirrors it so staff see it before submitting).
   const ticketOk = amount !== '' && Number(amount) >= LAKH && Math.round(Number(amount) * 100) % (LAKH * 100) === 0;
@@ -552,6 +559,9 @@ function NewInvestment({ customerId }: { customerId: number }) {
         receipt: { filename: receipt.name, mime: receipt.type || 'application/octet-stream', data_base64: await readFileB64(receipt) },
         ...(clubWith ? { club_with_application_id: Number(clubWith) } : {}),
         ...(lockerDeposit ? { is_locker_deposit: true } : {}),
+        // Only when the >₹30L prompt was shown AND answered "yes" — a per-line
+        // TDS override. Otherwise the line follows the customer's own flag.
+        ...(tdsPrompt && applyTds === 'yes' ? { tds_applicable: true } : {}),
       });
     },
     onSuccess: (r) => nav(`/app/applications/${r.id}`),
@@ -563,6 +573,7 @@ function NewInvestment({ customerId }: { customerId: number }) {
     !method && 'payment method',
     !reference.trim() && 'reference / cheque no.',
     !receipt && 'receipt photo',
+    tdsPrompt && applyTds === '' && 'TDS decision (over ₹30L)',
   ].filter((f): f is string => !!f);
   const sel = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
   const clubOptions = candidates.data?.rows ?? [];
@@ -615,6 +626,18 @@ function NewInvestment({ customerId }: { customerId: number }) {
       {amount !== '' && !ticketOk && (
         <div className="text-xs text-danger mt-2">
           Investments are issued in units of ₹1,00,000. Nearest valid amounts: ₹{(Math.max(1, Math.floor(Number(amount) / LAKH)) * LAKH).toLocaleString('en-IN')} or ₹{((Math.floor(Number(amount) / LAKH) + 1) * LAKH).toLocaleString('en-IN')}.
+        </div>
+      )}
+      {/* This customer is marked No-TDS, but the investment is over ₹30L — the
+          creator must decide whether TDS applies to THIS investment. */}
+      {tdsPrompt && (
+        <div className="text-xs mt-2 border border-warn/50 bg-surface rounded px-3 py-2">
+          <div className="font-medium text-warn">This customer is marked <b>No&nbsp;TDS</b>, but this investment is over ₹30,00,000. Should 10% TDS apply to this investment?</div>
+          <div className="flex gap-4 mt-1.5">
+            <label className="flex items-center gap-1.5"><input type="radio" name="apply-tds" checked={applyTds === 'yes'} onChange={() => setApplyTds('yes')} /> Yes — deduct TDS on this investment</label>
+            <label className="flex items-center gap-1.5"><input type="radio" name="apply-tds" checked={applyTds === 'no'} onChange={() => setApplyTds('no')} /> No — keep it exempt</label>
+          </div>
+          {applyTds === 'yes' && <div className="text-text-muted mt-1">TDS will be deducted on this investment only; the customer stays No-TDS elsewhere.</div>}
         </div>
       )}
       {clubOptions.length > 0 && (

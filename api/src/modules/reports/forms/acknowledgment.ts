@@ -9,10 +9,9 @@
  */
 import type { Db } from '../../../db/types.js';
 import { errors } from '../../../lib/errors.js';
-import { existsSync } from 'node:fs';
-import { getCompanyProfile } from '../../products/service.js';
+import { getCompanyProfile, getAckSignature } from '../../products/service.js';
 import {
-  COLORS, companyHeader, drawHeader, section, kv, fmtDate, fmtINR, amountInWords, renderToBuffer, SIGNATURE_PATH,
+  COLORS, companyHeader, drawHeader, section, kv, fmtDate, fmtINR, amountInWords, renderToBuffer,
 } from './shared.js';
 
 export async function acknowledgmentPdf(db: Db, applicationId: number): Promise<Buffer> {
@@ -25,6 +24,10 @@ export async function acknowledgmentPdf(db: Db, applicationId: number): Promise<
       WHERE a.id = $1`, [applicationId])).rows[0];
   if (!a) throw errors.notFound('Application not found');
   const co = companyHeader(await getCompanyProfile(db));
+  // Uploaded from Masters → Company profile (migration 051). Read the bytes here,
+  // before the synchronous PDF render below. Null when none is on file — the
+  // block then just prints the signatory line, as it did before.
+  const ackSig = (await getAckSignature(db))?.buffer ?? null;
 
   return renderToBuffer((doc) => {
     let y = drawHeader(doc, co);
@@ -73,8 +76,8 @@ export async function acknowledgmentPdf(db: Db, applicationId: number): Promise<
     // Signature block, anchored near the page bottom.
     y = Math.max(y, doc.page.height - 180);
     const sigX = 380;
-    if (existsSync(SIGNATURE_PATH)) {
-      try { doc.image(SIGNATURE_PATH, sigX, y, { fit: [140, 50], align: 'center', valign: 'center' }); } catch { /* optional */ }
+    if (ackSig) {
+      try { doc.image(ackSig, sigX, y, { fit: [140, 50], align: 'center', valign: 'center' }); } catch { /* a corrupt image must never break the acknowledgment */ }
       y += 54;
     } else y += 60;
     doc.moveTo(sigX, y).lineTo(sigX + 150, y).lineWidth(0.5).strokeColor(COLORS.TEXT).stroke();

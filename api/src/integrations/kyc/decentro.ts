@@ -42,13 +42,31 @@ async function call(path: string, body: Record<string, unknown>): Promise<Record
   let json: Record<string, any>;
   try { json = JSON.parse(text); } catch { json = { raw_text: text }; }
   if (!res.ok) {
-    // Never propagate Decentro's 401/403 as ours — it would log the operator
-    // out even though only the UPSTREAM rejected us. Surface the message.
-    console.error(`[decentro] ${path} upstream error ${res.status}:`, JSON.stringify(json).slice(0, 800));
-    const candidates = [json.message, json.error, json.data?.message, json.data?.error, json.errorMessage, json.error_message, json.responseMessage, json.response_message];
-    const detail = candidates.find((v) => typeof v === 'string' && v.trim().length)
-      ?? JSON.stringify(json).slice(0, 400);
-    throw new Error(`Decentro rejected the request (${res.status}). ${detail}`);
+    console.error(`[decentro] ${path} upstream ${res.status}:`, JSON.stringify(json).slice(0, 800));
+    // A non-2xx is NOT automatically a rejected request. Decentro answers an
+    // unreachable/slow bank with HTTP 422 while saying the call itself worked:
+    //   {"api_status":"SUCCESS","message":"Account validation was initiated
+    //    successfully","data":{"account_status":"inconclusive","validation_
+    //    message":"Unexpected response received from underlying provider."},
+    //    "response_key":"pending_account_validation"}
+    // That is a VERDICT, not an error — the caller below already knows how to
+    // read account_status. Throwing on it turned an ordinary "bank didn't
+    // answer" into a 500, an ops alert email, and a dead screen for the staff
+    // member adding an account (production, 29 Jul 2026).
+    //
+    // Deliberately narrow: only when Decentro states the call succeeded AND
+    // hands back a verdict field. A real rejection (bad creds, E00008, a
+    // malformed body) carries neither and still throws, unchanged.
+    const apiOk = String(json.api_status ?? '').trim().toUpperCase() === 'SUCCESS';
+    const verdict = typeof json.data?.account_status === 'string' && json.data.account_status.trim().length > 0;
+    if (!apiOk || !verdict) {
+      // Never propagate Decentro's 401/403 as ours — it would log the operator
+      // out even though only the UPSTREAM rejected us. Surface the message.
+      const candidates = [json.message, json.error, json.data?.message, json.data?.error, json.errorMessage, json.error_message, json.responseMessage, json.response_message];
+      const detail = candidates.find((v) => typeof v === 'string' && v.trim().length)
+        ?? JSON.stringify(json).slice(0, 400);
+      throw new Error(`Decentro rejected the request (${res.status}). ${detail}`);
+    }
   }
   return json;
 }
@@ -97,8 +115,15 @@ export async function pennyDrop(accountNumber: string, ifsc: string, holderName?
   if (verified) {
     return { status: 'Verified', detail: `decentro: account ${accountStatus.toLowerCase()}`, holderName: nameOnRecord };
   }
-  const reason = d.validation_message || d.validationMessage || (inconclusive ? 'Provider could not decide — retry later' : 'Account invalid');
+  // "Inconclusive" means the bank did not answer, NOT that the account is
+  // wrong — so say so plainly. Staff were reading the provider's raw
+  // "Unexpected response received from underlying provider." as a rejection
+  // and doubting a perfectly good account.
+  const providerSays = d.validation_message || d.validationMessage;
   const code = d.standardized_error_code || d.standardizedErrorCode;
+  const reason = inconclusive
+    ? `could not be checked right now — the bank did not respond. Try again in a few minutes.${providerSays ? ` (${providerSays})` : ''}`
+    : (providerSays || 'Account invalid');
   return { status: 'Failed', detail: `decentro: ${reason}${code ? ` (${code})` : ''}`, holderName: nameOnRecord };
 }
 

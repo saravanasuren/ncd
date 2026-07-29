@@ -25,8 +25,11 @@ import { errors } from '../../lib/errors.js';
 export const lockersRouter = Router();
 lockersRouter.use(requirePermission('lockers:enroll'));
 
-const staffOf = (req: { user?: { id: number; fullName: string; email: string } }): lh.ActingStaff => ({
-  id: req.user!.id, name: req.user!.fullName, email: req.user!.email,
+// staff_role goes on EVERY call, not just allocate: it costs nothing on the
+// reads and means their audit log always knows who acted. Allocation is the one
+// place they enforce it (§A11 — agents get 403 staff_only).
+const staffOf = (req: { user?: { id: number; fullName: string; email: string; role: string } }): lh.ActingStaff => ({
+  id: req.user!.id, name: req.user!.fullName, email: req.user!.email, staff_role: req.user!.role,
 });
 
 const LEG = z.enum(['rent', 'deposit']);

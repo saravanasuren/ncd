@@ -40,6 +40,7 @@ describe('branch_staff restriction — real HTTP, mock LockerHub', () => {
   let ctx: TestCtx;
   let mock: Server;
   let erodeId: number, salemId: number, hoId: number;
+  let visitPosts: any[] = [];
 
   const as = async (email: string, password = 'Demo_1234') => { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; };
   const admin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
@@ -74,6 +75,35 @@ describe('branch_staff restriction — real HTTP, mock LockerHub', () => {
             .map((x) => ({ branch_id: x.id, branch_name: x.name, address: '', ...one, occupancy_pct: 40, by_size: [{ size: 'Medium', ...one }] })),
         });
       }
+      // §A5 — the lookup our visit pre-flight uses to learn which branch a
+      // customer's locker is at. 90000ERODE banks at Erode, 90000SALEM at
+      // Salem, and 9000CLOSED has only a CLOSED tenancy at Salem (history, not
+      // a live locker, so it must not block a visit).
+      if (p.startsWith('/customers/')) {
+        const phone = p.split('/')[2] ?? '';
+        const at = (branch_id: string, branch_name: string, account_status = 'Active') =>
+          ({ found: true, phone, lockers: [{ id: 'tn_x', branch_id, branch_name, locker_number: 'L1', account_status }] });
+        if (phone === '9000000001') return send(200, at('br_erode_2', 'Erode'));
+        if (phone === '9000000002') return send(200, at('br_salem', 'Salem'));
+        if (phone === '9000000003') return send(200, at('br_salem', 'Salem', 'Closed'));
+        return send(200, { found: false });
+      }
+      if (p === '/visits' && req.method === 'POST') {
+        let raw = ''; req.on('data', (c) => (raw += c));
+        req.on('end', () => {
+          const body = raw ? JSON.parse(raw) : {};
+          visitPosts.push(body);
+          // Their §A14 enforcement: an asserted branch that disagrees with the
+          // tenancy is refused. Erode is the branch every tenancy here resolves
+          // to unless the phone says otherwise.
+          const tenantBranch = body.phone === '9000000002' ? 'br_salem' : 'br_erode_2';
+          if (body.staff?.branch_id && body.staff.branch_id !== tenantBranch) {
+            return send(403, { code: 'branch_scope', tenant_branch_id: tenantBranch, error: 'branch_scope' });
+          }
+          send(200, { success: true, id: 'v1', tenant_id: 'tn_x', tenant_name: 'T', branch_id: tenantBranch, locker_id: 'lk_1' });
+        });
+        return;
+      }
       return send(404, { error: 'not found: ' + p });
     });
     await new Promise<void>((r) => mock.listen(0, '127.0.0.1', r));
@@ -107,6 +137,58 @@ describe('branch_staff restriction — real HTTP, mock LockerHub', () => {
     const staff = await makeStaff('erode.staff3@demo.local', erodeId);
     expect((await staff.get('/api/lockers/tenants?branch_id=br_erode_2')).status).toBe(200);
     expect((await staff.get('/api/lockers/inventory?branch_id=br_erode_2')).status).toBe(200);
+  });
+
+  // ── Visit WRITES are scoped too (§A14, 2026-07-29) ──────────────────────
+  // Reads were scoped from the start; the write was not, so a branch_staff
+  // could log a visit against another branch's tenant. Both layers below.
+
+  it('refuses a visit for a customer whose locker is at another branch, and names it', async () => {
+    visitPosts = [];
+    const staff = await makeStaff('erode.visit1@demo.local', erodeId);
+    const r = await staff.post('/api/lockers/visits', { phone: '9000000002', purpose: 'Locker Access' });
+    expect(r.status).toBe(403);
+    // The message has to be usable at a counter: which branch, and which are ours.
+    expect(r.json.error.message).toContain('Salem');
+    expect(r.json.error.message).toContain('Erode');
+    // Refused BEFORE the write — nothing reached LockerHub.
+    expect(visitPosts).toHaveLength(0);
+  });
+
+  it('allows a visit for their own branch, asserting staff.branch_id so THEY re-check', async () => {
+    visitPosts = [];
+    const staff = await makeStaff('erode.visit2@demo.local', erodeId);
+    const r = await staff.post('/api/lockers/visits', { phone: '9000000001', purpose: 'Locker Access' });
+    expect(r.status).toBe(200);
+    expect(visitPosts).toHaveLength(1);
+    expect(visitPosts[0].staff.branch_id).toBe('br_erode_2');
+  });
+
+  it('a CLOSED tenancy elsewhere is history, not grounds to refuse', async () => {
+    const staff = await makeStaff('erode.visit3@demo.local', erodeId);
+    // Only locker is Closed@Salem — no ACTIVE tenancy, so our pre-flight must
+    // not block; their side owns resolving who the visit actually belongs to.
+    expect((await staff.post('/api/lockers/visits', { phone: '9000000003', purpose: 'x' })).status).toBe(200);
+  });
+
+  it('their branch_scope 403 is translated, not leaked as a raw error', async () => {
+    // tenant_id-only: our pre-flight cannot resolve a branch from it, so this
+    // is precisely the case their check exists to catch.
+    visitPosts = [];
+    const staff = await makeStaff('salem.visit@demo.local', salemId);
+    const r = await staff.post('/api/lockers/visits', { tenant_id: 'tn_erode', purpose: 'x' });
+    expect(visitPosts[0].staff.branch_id).toBe('br_salem');   // asserted…
+    expect(r.status).toBe(403);                                // …and refused by them
+    expect(r.json.error.message).toContain('Salem');
+    expect(r.json.error.message).not.toContain('branch_scope'); // no raw code
+  });
+
+  it('an unrestricted operator asserts no branch — head office records anywhere', async () => {
+    visitPosts = [];
+    const a = await admin();
+    const r = await a.post('/api/lockers/visits', { phone: '9000000002', purpose: 'Locker Access' });
+    expect(r.status).toBe(200);
+    expect(visitPosts[0].staff.branch_id).toBeUndefined();
   });
 
   it('asking for a DIFFERENT branch is refused — both endpoints', async () => {

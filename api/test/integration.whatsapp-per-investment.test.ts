@@ -7,6 +7,10 @@
  * with their investments added together — RATHIKA's eight debentures arrived
  * as one figure of ₹33,568.37, which says nothing about any of the eight.
  *
+ * The approved template is unchanged and does not name the debenture (owner
+ * decided against a new one), so the split shows up in the COUNT of messages
+ * and in our own records, not in the wording the customer reads.
+ *
  * The dangerous half of the change is the top-up. 92 customers WERE already
  * notified for that batch by the old clubbed message, whose queue row has no
  * application_id. If that NULL is read as "this investment was never told",
@@ -58,7 +62,7 @@ const msgsFor = async (phone: string) => (await ctx.db.query(
     WHERE template = 'interest_paid' AND to_address = $1 ORDER BY id`, [phone])).rows as any[];
 
 describe('a customer with several debentures', () => {
-  it('gets one message per debenture, each naming its own investment', async () => {
+  it('gets one message per debenture, each recorded against its own investment', async () => {
     const phone = '9788000001';
     const { apps } = await holder('Five Debentures', phone, 5);
     const batchId = await settledBatch();
@@ -69,8 +73,10 @@ describe('a customer with several debentures', () => {
 
     const msgs = await msgsFor(phone);
     expect(msgs).toHaveLength(5);
+    // The customer's text does not name the debenture (owner: no new template),
+    // but every row records which one it was for — that is what makes the
+    // top-up and the delivery report per-investment rather than per-customer.
     expect(msgs.map((m) => m.payload.application_no).sort()).toEqual([...apps].sort());
-    // Each message carries ONE investment's interest, never the sum.
     for (const m of msgs) expect(m.application_id).not.toBeNull();
   });
 

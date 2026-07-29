@@ -43,26 +43,23 @@ export function templateFor(meta: SendMeta | undefined): WappTemplate | null {
   if (meta?.template === 'portal_otp' && config.WAPPCLOUD_OTP_TEMPLATE) {
     return { name: config.WAPPCLOUD_OTP_TEMPLATE, variables: { '1': String(meta.payload?.otp ?? '') } };
   }
-  // Interest credited, for ONE investment (owner 2026-07-29: a holder of eight
-  // debentures gets eight messages, not one clubbed total).
+  // Interest credited, for ONE investment. ncd_interest_final:
+  //   {{1}} name  {{2}} amount  {{3}} month  {{4}} date
   //
-  // ncd_interest_final has only four slots — name, amount, month, date — and
-  // no room for the debenture, so split messages would be indistinguishable
-  // from each other: RATHIKA's eight include FIVE of exactly ₹4,808.22, which
-  // would arrive as five identical texts and read as a fault.
-  //
-  // So when an item-level template carrying {{5}} = application no is approved
-  // and named in WAPPCLOUD_INTEREST_ITEM_TEMPLATE, use it. Until then fall
-  // back to the four-slot template: still one message per investment, as
-  // asked, just without the debenture printed on it.
+  // One message per investment since 2026-07-29 (owner: a holder of eight
+  // debentures gets eight messages, not one clubbed total). The template is
+  // unchanged and deliberately does NOT name the debenture — owner decided
+  // against a new approved template for that. A consequence worth knowing
+  // rather than rediscovering: equal debentures earn equal interest, so those
+  // messages are identical apart from nothing at all. The payload still
+  // carries application_no so the queue row records which investment it was
+  // for, even though the customer's message does not say.
   if (meta?.template === 'interest_paid') {
     const p = meta.payload ?? {};
-    const base = { '1': String(p.name ?? ''), '2': String(p.amount ?? ''), '3': String(p.month ?? ''), '4': String(p.date ?? '') };
-    const itemTemplate = config.WAPPCLOUD_INTEREST_ITEM_TEMPLATE;
-    if (itemTemplate && p.application_no) {
-      return { name: itemTemplate, variables: { ...base, '5': String(p.application_no) } };
-    }
-    return { name: config.WAPPCLOUD_INTEREST_TEMPLATE || 'ncd_interest_final', variables: base };
+    return {
+      name: config.WAPPCLOUD_INTEREST_TEMPLATE || 'ncd_interest_final',
+      variables: { '1': String(p.name ?? ''), '2': String(p.amount ?? ''), '3': String(p.month ?? ''), '4': String(p.date ?? '') },
+    };
   }
   // Acknowledgement once funds are received. ncd_akn: {{1}} name, plus a
   // Document header carrying the ack PDF (WappCloud fetches payload.documentUrl).

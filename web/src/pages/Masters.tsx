@@ -275,6 +275,7 @@ function CompanyProfile() {
         {err && <span className="text-xs text-danger">{err}</span>}
       </div>
       <BondSignatures />
+      <AckSignature />
     </Section>
   );
 }
@@ -351,6 +352,66 @@ function BondSignatures() {
             </div>
           );
         })}
+      </div>
+      {err && <div className="text-xs text-danger mt-2">{err}</div>}
+    </div>
+  );
+}
+
+/** The authorised-signatory (CEO) signature printed on the receipt
+ * acknowledgment. Single slot — the ack has one signatory line. Same story as
+ * the bond signatures: the PDF drew a hardcoded image that was never supplied,
+ * so acknowledgments printed a blank line until one is uploaded here. */
+function AckSignature() {
+  const { confirm } = useConfirm();
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ['company-profile'], queryFn: () => api.get<{ profile: any }>('/api/company-profile') });
+  const [err, setErr] = useState('');
+  const path = data?.profile?.ack_signature_path;
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['company-profile'] });
+
+  const upload = useMutation({
+    mutationFn: (v: { filename: string; data_base64: string }) => api.post('/api/company-profile/ack-signature', v),
+    onSuccess: () => { setErr(''); invalidate(); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const remove = useMutation({
+    mutationFn: () => api.del('/api/company-profile/ack-signature'),
+    onSuccess: () => { setErr(''); invalidate(); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
+
+  function pick() {
+    const picker = document.createElement('input'); picker.type = 'file'; picker.accept = 'image/png,image/jpeg,image/webp';
+    picker.onchange = () => {
+      const file = picker.files?.[0]; if (!file) return;
+      if (file.size > 2 * 1024 * 1024) { setErr('Signature image must be under 2 MB.'); return; }
+      const reader = new FileReader();
+      reader.onload = () => upload.mutate({ filename: file.name, data_base64: String(reader.result).split(',')[1] ?? '' });
+      reader.readAsDataURL(file);
+    };
+    picker.click();
+  }
+
+  return (
+    <div className="px-4 pb-4 pt-1 border-t border-border">
+      <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2 mt-3">Acknowledgment signature</div>
+      <p className="text-xs text-text-muted mb-3">Printed above the signatory line on every receipt acknowledgment. Upload a scanned signature (PNG, JPEG or WebP, transparent background works best) — leave blank and the acknowledgment just prints the signatory line, as it does today.</p>
+      <div className="border border-border rounded-lg p-3 text-center max-w-[220px]">
+        <div className="h-14 flex items-center justify-center mb-2">
+          {path
+            ? <img src={`/api/company-profile/ack-signature?v=${encodeURIComponent(path)}`} alt="Acknowledgment signature" className="max-h-14 max-w-full object-contain" />
+            : <span className="text-xs text-text-muted italic">No signature on file</span>}
+        </div>
+        <div className="flex gap-2 justify-center">
+          <button className="text-xs text-primary hover:underline" disabled={upload.isPending} onClick={pick}>{path ? 'Replace' : '+ Upload'}</button>
+          {path && (
+            <button className="text-xs text-danger hover:underline" disabled={remove.isPending}
+              onClick={async () => { if (await confirm({ title: 'Remove the acknowledgment signature?', body: 'It stops appearing on newly generated acknowledgments.', confirmLabel: 'Remove', danger: true })) remove.mutate(); }}>
+              Remove
+            </button>
+          )}
+        </div>
       </div>
       {err && <div className="text-xs text-danger mt-2">{err}</div>}
     </div>

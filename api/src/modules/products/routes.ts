@@ -65,3 +65,18 @@ productsRouter.post('/company-profile/bond-signature/:index', manage, asyncHandl
 }));
 productsRouter.delete('/company-profile/bond-signature/:index', manage, asyncHandler(async (req, res) =>
   res.json(await s.deleteBondSignature(getDb(), req.user!, Number(req.params.index)))));
+
+// Acknowledgment authorised-signatory (CEO) signature — single slot, printed on
+// the receipt acknowledgment. Same auth model as the bond signatures above.
+productsRouter.get('/company-profile/ack-signature', requireAuth, asyncHandler(async (_req, res) => {
+  const sig = await s.getAckSignature(getDb());
+  if (!sig) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No acknowledgment signature uploaded' } }); return; }
+  res.setHeader('Content-Type', sig.mime);
+  res.send(sig.buffer);
+}));
+productsRouter.post('/company-profile/ack-signature', manage, asyncHandler(async (req, res) => {
+  const b = z.object({ filename: z.string().min(1), data_base64: z.string().min(1) }).parse(req.body);
+  res.status(201).json(await s.uploadAckSignature(getDb(), req.user!, b.filename, b.data_base64));
+}));
+productsRouter.delete('/company-profile/ack-signature', manage, asyncHandler(async (req, res) =>
+  res.json(await s.deleteAckSignature(getDb(), req.user!))));

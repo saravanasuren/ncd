@@ -156,6 +156,45 @@ export async function getBondSignature(db: Db, index: number): Promise<{ buffer:
   return { buffer, mime };
 }
 
+// ── Acknowledgment authorised-signatory (CEO) signature — single slot ──
+// The receipt acknowledgment PDF used to draw a hardcoded on-disk image that was
+// never supplied; now the signature lives in the DB and is uploaded from Masters
+// → Company profile, exactly like the bond director signatures above.
+export async function uploadAckSignature(db: Db, actor: AuthUser, filename: string, dataBase64: string) {
+  const { validateUpload } = await import('../../lib/uploads.js');
+  const { buffer, mime } = validateUpload(dataBase64);
+  if (!mime.startsWith('image/')) throw errors.badRequest('Signature must be an image (JPEG, PNG or WebP)');
+  const { saveBuffer, removeStored } = await import('../../lib/storage.js');
+  const { path } = saveBuffer('ack-signatures', filename, buffer);
+  const prev = (await db.query<{ ack_signature_path: string | null }>('SELECT ack_signature_path FROM company_profile WHERE id = 1')).rows[0];
+  await db.query('UPDATE company_profile SET ack_signature_path = $1, updated_at = now() WHERE id = 1', [path]);
+  if (prev?.ack_signature_path) removeStored(prev.ack_signature_path);
+  await writeAudit(db, { actorId: actor.id, action: 'company_profile.ack-signature.upload', entityType: 'company_profile', entityId: 1, after: { filename } });
+  return { path };
+}
+
+export async function deleteAckSignature(db: Db, actor: AuthUser) {
+  const { removeStored } = await import('../../lib/storage.js');
+  const prev = (await db.query<{ ack_signature_path: string | null }>('SELECT ack_signature_path FROM company_profile WHERE id = 1')).rows[0];
+  if (!prev?.ack_signature_path) return { ok: true };
+  await db.query('UPDATE company_profile SET ack_signature_path = NULL, updated_at = now() WHERE id = 1');
+  removeStored(prev.ack_signature_path);
+  await writeAudit(db, { actorId: actor.id, action: 'company_profile.ack-signature.delete', entityType: 'company_profile', entityId: 1, after: {} });
+  return { ok: true };
+}
+
+export async function getAckSignature(db: Db): Promise<{ buffer: Buffer; mime: string } | null> {
+  const row = (await db.query<{ ack_signature_path: string | null }>('SELECT ack_signature_path FROM company_profile WHERE id = 1')).rows[0];
+  const path = row?.ack_signature_path;
+  if (!path) return null;
+  const { readStored } = await import('../../lib/storage.js');
+  const buffer = readStored(path);
+  if (!buffer) return null;
+  const ext = path.split('.').pop()?.toLowerCase();
+  const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+  return { buffer, mime };
+}
+
 // ── helper ──
 async function genericUpdate(
   db: Db, actor: AuthUser, table: string, id: number, input: Record<string, unknown>,

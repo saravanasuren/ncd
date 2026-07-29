@@ -23,6 +23,9 @@ export interface EnqueueInput {
   customerId?: number;
   /** What it belongs to, e.g. ('payout_batch', 131). */
   ref?: { kind: string; id: number };
+  /** The ONE investment this message is about. Absent only for messages that
+   *  genuinely cover no single investment. */
+  applicationId?: number;
 }
 
 /** Give up after this many temporary failures — roughly 2.5h of backoff. */
@@ -37,10 +40,10 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function enqueue(db: Db, input: EnqueueInput): Promise<number> {
   const { rows } = await db.query<{ id: string }>(
-    `INSERT INTO notifications_queue (channel, template, to_address, payload, customer_id, ref_kind, ref_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    `INSERT INTO notifications_queue (channel, template, to_address, payload, customer_id, ref_kind, ref_id, application_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
     [input.channel, input.template, input.to, JSON.stringify(input.payload ?? {}),
-     input.customerId ?? null, input.ref?.kind ?? null, input.ref?.id ?? null]
+     input.customerId ?? null, input.ref?.kind ?? null, input.ref?.id ?? null, input.applicationId ?? null]
   );
   return Number(rows[0]!.id);
 }
@@ -132,7 +135,7 @@ export async function listQueue(db: Db, limit = 100) {
  */
 export async function deliveryFor(db: Db, kind: string, id: number) {
   return (await db.query<Record<string, unknown>>(
-    `SELECT nq.id, nq.customer_id, nq.to_address, nq.status, nq.attempts, nq.error,
+    `SELECT nq.id, nq.customer_id, nq.application_id, nq.to_address, nq.status, nq.attempts, nq.error,
             nq.sent_at, nq.next_attempt_at, c.full_name, c.customer_code
        FROM notifications_queue nq
        LEFT JOIN customers c ON c.id = nq.customer_id

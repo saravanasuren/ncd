@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
 import { templateFor } from '../src/integrations/notify/wappcloud.js';
+import { config } from '../src/config.js';
 import { drainOnce } from '../src/modules/notifications/service.js';
 
 let ctx: TestCtx;
@@ -164,5 +165,32 @@ describe('WhatsApp interest-credit notification', () => {
       name: 'ncd_interest_final',
       variables: { '1': 'Yasotha', '2': '6,000', '3': 'September 2026', '4': '28-Sep-2026' },
     });
+  });
+
+  // Splitting per investment is only half the job: without a slot for the
+  // debenture, RATHIKA's eight messages include five of exactly ₹4,808.22 and
+  // arrive as five identical texts. The five-slot template fixes that, but
+  // only once Meta has approved it — so it is opt-in by config, and the
+  // four-slot template must keep working untouched until then.
+  it('uses the five-slot template naming the debenture, once one is configured', () => {
+    const payload = { name: 'Rathika', amount: '4,808.22', month: 'July 2026', date: '28-Jul-2026', application_no: 'APP-2026-000663' };
+    expect(templateFor({ template: 'interest_paid', payload })).toEqual({
+      name: 'ncd_interest_final',
+      variables: { '1': 'Rathika', '2': '4,808.22', '3': 'July 2026', '4': '28-Jul-2026' },
+    });
+
+    (config as Record<string, unknown>).WAPPCLOUD_INTEREST_ITEM_TEMPLATE = 'ncd_interest_item';
+    try {
+      expect(templateFor({ template: 'interest_paid', payload })).toEqual({
+        name: 'ncd_interest_item',
+        variables: { '1': 'Rathika', '2': '4,808.22', '3': 'July 2026', '4': '28-Jul-2026', '5': 'APP-2026-000663' },
+      });
+      // A payload with no investment (an old row) must not be sent to a
+      // five-slot template with {{5}} missing — WappCloud would reject it.
+      expect(templateFor({ template: 'interest_paid', payload: { name: 'Old', amount: '1', month: 'July 2026', date: '28-Jul-2026' } })!.name)
+        .toBe('ncd_interest_final');
+    } finally {
+      delete (config as Record<string, unknown>).WAPPCLOUD_INTEREST_ITEM_TEMPLATE;
+    }
   });
 });

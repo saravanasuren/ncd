@@ -366,9 +366,9 @@ export interface InterestNotifyResult {
   queued: number;
   /** Paid, but no phone number on file: nothing can be sent until ops add one. */
   skipped: number;
-  /** Already have theirs (or are mid-retry) — deliberately left alone. */
+  /** Already told (or mid-retry) — deliberately left alone. */
   already_sent: number;
-  /** Customers this batch paid. */
+  /** Interest payments this batch made. One message each. */
   total: number;
 }
 
@@ -378,25 +378,22 @@ export async function notifyInterestOnWhatsapp(db: Db, batchId: number): Promise
   if (!batch) throw errors.notFound('Batch not found');
   if (batch.status !== 'Paid') throw errors.conflict('Batch is not settled yet — settle it before notifying customers.');
 
-  const rows = await paidCustomersForBatch(db, batchId, batch.payout_date);
-
-  // Anyone already messaged (or still queued/retrying) for THIS batch is left
-  // alone, so pressing the button again is a top-up for whoever missed out —
-  // never a second message to someone who already has theirs.
-  const done = new Set((await db.query<{ customer_id: string }>(
-    `SELECT DISTINCT customer_id FROM notifications_queue
-      WHERE ref_kind = 'payout_batch' AND ref_id = $1 AND customer_id IS NOT NULL
-        AND status IN ('Sent', 'Pending')`, [batchId])).rows.map((r) => String(r.customer_id)));
+  const items = await paidItemsForBatch(db, batchId, batch.payout_date);
+  const done = await alreadyToldFor(db, batchId);
 
   let queued = 0, skipped = 0, alreadyDone = 0;
-  for (const r of rows) {
-    if (done.has(String(r.customer_id))) { alreadyDone++; continue; }
+  for (const r of items) {
+    if (done.apps.has(String(r.application_id)) || done.clubbedCustomers.has(String(r.customer_id))) { alreadyDone++; continue; }
     if (!r.phone) { skipped++; continue; }   // nothing to send to
     const amount = Number(r.interest).toLocaleString('en-IN', { maximumFractionDigits: 2 });
     await enqueue(db, {
       channel: 'whatsapp', template: 'interest_paid', to: r.phone,
-      customerId: Number(r.customer_id), ref: { kind: 'payout_batch', id: batchId },
-      payload: { name: r.full_name, amount, month: r.month_credit, date: r.credit_date },
+      customerId: Number(r.customer_id), applicationId: Number(r.application_id),
+      ref: { kind: 'payout_batch', id: batchId },
+      payload: {
+        name: r.full_name, amount, month: r.month_credit, date: r.credit_date,
+        application_no: r.application_no,
+      },
     });
     queued++;
   }
@@ -405,13 +402,23 @@ export async function notifyInterestOnWhatsapp(db: Db, batchId: number): Promise
   // minutes — far longer than an HTTP request should be held open — and
   // bursting them is precisely what got 275 of them 429'd on 28 Jul 2026. The
   // cron drains them; the status panel shows the progress.
-  return { queued, skipped, already_sent: alreadyDone, total: rows.length };
+  return { queued, skipped, already_sent: alreadyDone, total: items.length };
 }
 
-/** Customers paid in a settled batch, with their total net interest for it. */
-async function paidCustomersForBatch(db: Db, batchId: number, payoutDate: string) {
-  return (await db.query<{ customer_id: string; full_name: string; phone: string | null; interest: string; month_credit: string; credit_date: string }>(
-    `SELECT c.id AS customer_id, c.full_name, NULLIF(btrim(COALESCE(c.phone, '')), '') AS phone,
+/**
+ * Interest payments a settled batch made, ONE ROW PER INVESTMENT.
+ *
+ * Was one row per customer with SUM(net_amount) until 2026-07-29: a holder of
+ * eight debentures got a single message with the eight amounts added up, which
+ * tells them nothing about any of the eight (owner). Rows are still summed
+ * WITHIN an investment, because one investment can contribute more than one
+ * schedule row to a batch (a regular coupon plus a broken-period slice) and
+ * that genuinely is one payment for one debenture.
+ */
+async function paidItemsForBatch(db: Db, batchId: number, payoutDate: string) {
+  return (await db.query<{ customer_id: string; application_id: string; application_no: string; full_name: string; phone: string | null; interest: string; month_credit: string; credit_date: string }>(
+    `SELECT c.id AS customer_id, a.id AS application_id, a.application_no,
+            c.full_name, NULLIF(btrim(COALESCE(c.phone, '')), '') AS phone,
             SUM(ds.net_amount)::numeric        AS interest,
             to_char($2::date, 'FMMonth YYYY')  AS month_credit,
             to_char($2::date, 'DD-Mon-YYYY')   AS credit_date
@@ -419,39 +426,69 @@ async function paidCustomersForBatch(db: Db, batchId: number, payoutDate: string
        JOIN applications a ON a.id = ds.application_id
        JOIN customers c    ON c.id = a.customer_id
       WHERE ds.batch_id = $1 AND ds.due_type IN ${DUE_TYPES} AND ds.status = 'Paid'
-      GROUP BY c.id, c.full_name, c.phone`,
+      GROUP BY c.id, a.id, a.application_no, c.full_name, c.phone
+      ORDER BY c.full_name, a.application_no`,
     [batchId, payoutDate])).rows;
 }
 
 /**
- * Who has actually been told about this batch. Built by walking the customers
- * the batch PAID — not the messages sent — so someone with no phone shows up
- * as a gap rather than vanishing from both the numerator and the denominator.
+ * What has already been said about this batch, in the two shapes it can take.
+ *
+ * A row with application_id set covers that ONE investment. A row with it NULL
+ * is one of the old clubbed messages, which covered every investment that
+ * customer had in the batch — so it still counts as told for all of them.
+ * Reading NULL any other way would re-message the 92 customers who were
+ * successfully notified for NEFT-2026-000131 before the split existed.
+ */
+async function alreadyToldFor(db: Db, batchId: number) {
+  const { rows } = await db.query<{ customer_id: string | null; application_id: string | null }>(
+    `SELECT customer_id, application_id FROM notifications_queue
+      WHERE ref_kind = 'payout_batch' AND ref_id = $1 AND status IN ('Sent', 'Pending')`, [batchId]);
+  const apps = new Set<string>(), clubbedCustomers = new Set<string>();
+  for (const r of rows) {
+    if (r.application_id != null) apps.add(String(r.application_id));
+    else if (r.customer_id != null) clubbedCustomers.add(String(r.customer_id));
+  }
+  return { apps, clubbedCustomers };
+}
+
+/**
+ * Who has actually been told about this batch. Built by walking the interest
+ * payments the batch MADE — not the messages sent — so an investment nobody
+ * could message shows up as a gap rather than vanishing from both the
+ * numerator and the denominator.
  */
 export async function interestWhatsappStatus(db: Db, batchId: number) {
   const batch = (await db.query<{ batch_no: string; status: string; payout_date: string }>(
     'SELECT batch_no, status, payout_date FROM payout_batches WHERE id = $1', [batchId])).rows[0];
   if (!batch) throw errors.notFound('Batch not found');
 
-  const paid = await paidCustomersForBatch(db, batchId, batch.payout_date);
+  const items = await paidItemsForBatch(db, batchId, batch.payout_date);
   const msgs = await deliveryFor(db, 'payout_batch', batchId);
-  const byCustomer = new Map<string, Record<string, unknown>>();
-  for (const m of msgs) if (m.customer_id != null) byCustomer.set(String(m.customer_id), m);
+  const byApp = new Map<string, Record<string, unknown>>();
+  const clubbed = new Map<string, Record<string, unknown>>();   // pre-split messages
+  for (const m of msgs) {
+    if (m.application_id != null) byApp.set(String(m.application_id), m);
+    else if (m.customer_id != null && !clubbed.has(String(m.customer_id))) clubbed.set(String(m.customer_id), m);
+  }
 
-  const rows = paid.map((p) => {
-    const m = byCustomer.get(String(p.customer_id));
+  const rows = items.map((p) => {
+    const m = byApp.get(String(p.application_id)) ?? clubbed.get(String(p.customer_id));
     const state = !m
       ? (p.phone ? 'NotSent' : 'NoPhone')            // never queued at all
       : String(m.status) === 'Sent' ? 'Sent'
       : String(m.status) === 'Pending' ? 'Sending'   // queued, or waiting on a retry
       : 'Failed';
     return {
-      customer_id: Number(p.customer_id), full_name: p.full_name, phone: p.phone,
+      customer_id: Number(p.customer_id), application_id: Number(p.application_id),
+      application_no: p.application_no, full_name: p.full_name, phone: p.phone,
       amount: Number(p.interest), state,
       attempts: m ? Number(m.attempts ?? 0) : 0,
       error: m?.error ?? null,
       sent_at: m?.sent_at ?? null,
       next_attempt_at: m?.next_attempt_at ?? null,
+      /** True when this is covered by an old clubbed message rather than its own. */
+      clubbed: !!m && m.application_id == null,
     };
   });
 
@@ -459,6 +496,7 @@ export async function interestWhatsappStatus(db: Db, batchId: number) {
   return {
     batch_no: batch.batch_no, batch_status: batch.status, payout_date: batch.payout_date,
     total: rows.length,
+    customers: new Set(rows.map((r) => r.customer_id)).size,
     sent: count('Sent'), sending: count('Sending'), failed: count('Failed'),
     not_sent: count('NotSent'), no_phone: count('NoPhone'),
     rows,

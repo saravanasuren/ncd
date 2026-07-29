@@ -45,6 +45,9 @@ const schema = z.object({
   WAPPCLOUD_ENDPOINT: z.string().optional(),
   WAPPCLOUD_OTP_TEMPLATE: z.string().optional(),
   WAPPCLOUD_INTEREST_TEMPLATE: z.string().optional(), // approved interest-paid template (default 'ncd_interest_final')
+  // Approved per-investment interest template carrying {{5}} = application no.
+  // Unset until Meta approves it; the four-slot template is used meanwhile.
+  WAPPCLOUD_INTEREST_ITEM_TEMPLATE: z.string().optional(),
   WAPPCLOUD_ACK_TEMPLATE: z.string().optional(),      // approved acknowledgement template (default 'ncd_akn')
   WHATSAPP_TEST_PHONE: z.string().optional(), // redirects ALL WhatsApp sends while set
   // Pacing + retry for the notification queue. WappCloud rate-limits by IP —

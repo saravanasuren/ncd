@@ -176,3 +176,64 @@ describe('turning the split on must not re-message anyone', () => {
     expect(await msgsFor(phone)).toHaveLength(3);
   });
 });
+
+describe('a retried message reports its best outcome, not its first', () => {
+  /**
+   * Live data from 28 Jul 2026: the first blast 429'd, the owner re-sent, and
+   * most customers ended up with BOTH a Failed row and a Sent row. Reporting
+   * whichever turned up first said 445 messages had failed when 362 had
+   * actually been delivered — a panel that cries wolf is worse than no panel.
+   */
+  it('a failed attempt followed by a delivered one reads as delivered', async () => {
+    const phone = '9788000008';
+    const { cid } = await holder('Failed Then Sent', phone, 1);
+    const batchId = await settledBatch();
+    const appId = Number((await ctx.db.query(
+      'SELECT id FROM applications WHERE customer_id = $1 LIMIT 1', [cid])).rows[0]!.id);
+
+    const ins = (status: string, error: string | null) => ctx.db.query(
+      `INSERT INTO notifications_queue (channel, template, to_address, payload, status, error, customer_id, application_id, ref_kind, ref_id)
+       VALUES ('whatsapp','interest_paid',$1,'{}'::jsonb,$2,$3,$4,$5,'payout_batch',$6)`,
+      [phone, status, error, cid, appId, batchId]);
+    await ins('Failed', 'wappcloud: send failed (429): Too many requests from this IP');
+    await ins('Sent', null);
+
+    const st = (await (await admin()).get(`/api/payouts/${batchId}/whatsapp-status`)).json;
+    const row = (st.rows as any[]).find((r) => r.full_name === 'Failed Then Sent');
+    expect(row.state).toBe('Sent');
+    expect(st.failed).toBe(0);
+  });
+
+  it('the same holds for the older combined messages', async () => {
+    const phone = '9788000009';
+    const { cid } = await holder('Clubbed Failed Then Sent', phone, 3);
+    const batchId = await settledBatch();
+    const ins = (status: string) => ctx.db.query(
+      `INSERT INTO notifications_queue (channel, template, to_address, payload, status, customer_id, ref_kind, ref_id)
+       VALUES ('whatsapp','interest_paid',$1,'{}'::jsonb,$2,$3,'payout_batch',$4)`,
+      [phone, status, cid, batchId]);
+    await ins('Failed');
+    await ins('Sent');
+
+    const st = (await (await admin()).get(`/api/payouts/${batchId}/whatsapp-status`)).json;
+    const mine = (st.rows as any[]).filter((r) => r.full_name === 'Clubbed Failed Then Sent');
+    expect(mine).toHaveLength(3);
+    for (const r of mine) expect(r.state).toBe('Sent');
+  });
+
+  it('a failure with no successful retry still reads as failed', async () => {
+    const phone = '9788000010';
+    const { cid } = await holder('Only Failed', phone, 1);
+    const batchId = await settledBatch();
+    const appId = Number((await ctx.db.query(
+      'SELECT id FROM applications WHERE customer_id = $1 LIMIT 1', [cid])).rows[0]!.id);
+    await ctx.db.query(
+      `INSERT INTO notifications_queue (channel, template, to_address, payload, status, error, customer_id, application_id, ref_kind, ref_id)
+       VALUES ('whatsapp','interest_paid',$1,'{}'::jsonb,'Failed','wappcloud: no valid phone (got "GUN")',$2,$3,'payout_batch',$4)`,
+      [phone, cid, appId, batchId]);
+
+    const st = (await (await admin()).get(`/api/payouts/${batchId}/whatsapp-status`)).json;
+    const row = (st.rows as any[]).find((r) => r.full_name === 'Only Failed');
+    expect(row.state).toBe('Failed');          // a real gap must stay visible
+  });
+});

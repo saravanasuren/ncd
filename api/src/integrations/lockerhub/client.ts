@@ -122,6 +122,43 @@ export const lockers = (branchId: string, size?: string) =>
  */
 export const lockerTenants = (branchId?: string) =>
   lhFetch<{ tenants: Array<Record<string, unknown>> }>('GET', '/locker-tenants', { query: { branch_id: branchId } });
+/**
+ * A14 — the locker Visit Log: who opened which locker, when and why.
+ *
+ * `tenant_phone` comes back MASKED to last-4 (`******3210`), the same posture
+ * as the A13 roster. Full phone would need Prem's sign-off on their side, so
+ * never build a lookup that depends on it.
+ *
+ * All filters are optional; results are newest-first, default 500 rows capped
+ * at 5000.
+ */
+export interface LockerVisit {
+  id: string;
+  branch_id?: string | null; branch_name?: string | null;
+  tenant_id?: string | null; tenant_name?: string | null; tenant_phone?: string | null;
+  locker_id?: string | null; locker_number?: string | null; locker_size?: string | null;
+  datetime?: string | null; visit_time?: string | null; exit_time?: string | null;
+  purpose?: string | null; duration?: string | null; notes?: string | null;
+  created_at?: string | null;
+}
+export const lockerVisits = (q: { branch_id?: string; phone?: string; limit?: number } = {}) =>
+  lhFetch<{ visits: LockerVisit[] }>('GET', '/visits', { query: { branch_id: q.branch_id, phone: q.phone, limit: q.limit } });
+
+/**
+ * A14 write — record a walk-in. Branch and locker are DERIVED from the tenancy
+ * on their side (a tenant has exactly one locker), so we deliberately do not
+ * send them: the phone identifies the customer and they resolve the rest from
+ * the most-recent ACTIVE tenancy. 404 if nobody active matches.
+ *
+ * Unlike allocate this is not privileged — no staff-only block — but the write
+ * is still attributed and lands in their audit log as `ncd_app_visit_recorded`.
+ */
+export const recordLockerVisit = (
+  staff: ActingStaff,
+  input: { phone?: string; tenant_id?: string; datetime?: string; purpose?: string; duration?: string; notes?: string; visit_time?: string; exit_time?: string },
+) => lhFetch<{ success: boolean; id: string; tenant_id: string; tenant_name: string; branch_id: string; locker_id: string }>(
+  'POST', '/visits', { body: { ...input, staff } });
+
 export const getCustomer = (phone: string) =>
   lhFetch<Record<string, unknown>>('GET', `/customers/${encodeURIComponent(phone)}`);
 export const getLockerApplication = (id: string) =>

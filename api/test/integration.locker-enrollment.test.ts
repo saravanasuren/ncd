@@ -63,6 +63,30 @@ beforeAll(async () => {
         const want = url.searchParams.get('size');
         return send(200, { lockers: want ? all.filter((l) => l.size === want) : all });
       }
+      // A14 Visit Log. Phone comes back MASKED to last-4, as theirs does.
+      if (p === '/visits' && req.method === 'GET') {
+        const all = [
+          { id: 'v_2', branch_id: 'br_1', branch_name: 'HO', tenant_id: 'tn_1', tenant_name: 'Asha R',
+            tenant_phone: '******1122', locker_number: 'L10-1', locker_size: 'Medium',
+            datetime: '2026-07-28T10:30', purpose: 'Locker Access', notes: '' },
+          { id: 'v_1', branch_id: 'br_2', branch_name: 'Hosur', tenant_id: 'tn_9', tenant_name: 'Bala S',
+            tenant_phone: '******3210', locker_number: 'L20-9', locker_size: 'Large',
+            datetime: '2026-07-27T16:00', purpose: 'Deposit', notes: 'with spouse' },
+        ];
+        const b = url.searchParams.get('branch_id');
+        const ph = url.searchParams.get('phone');
+        let out = all;
+        if (b) { const want = new Set(b.split(',')); out = out.filter((v) => want.has(v.branch_id)); }
+        if (ph) out = out.filter((v) => v.tenant_phone.endsWith(ph.slice(-4)));
+        return send(200, { visits: out });
+      }
+      if (p === '/visits' && req.method === 'POST') {
+        if (!body.staff?.id || !body.staff?.name) return send(400, { error: 'staff is required' });
+        if (!body.phone && !body.tenant_id) return send(400, { error: 'phone or tenant_id required' });
+        if (body.phone === '9999999999') return send(404, { error: 'No active locker tenant for that phone' });
+        return send(200, { success: true, id: 'v_new', tenant_id: 'tn_1', tenant_name: 'Asha R',
+          branch_id: 'br_1', locker_id: 'lk_1' });
+      }
       if (p === '/customers/9800011122') return send(200, { found: false });
       if (p === '/customers' && req.method === 'POST') return send(200, { success: true, phone: body.phone, created: true });
       if (p === '/locker-applications' && req.method === 'POST') return send(201, { success: true, application_id: 'la_1', application_no: 'APP-L-1', status: 'payment_pending', pricing: { locker_size: 'Medium', annual_fee: 3000, rent_incl_gst: 3540, deposit: 25000, gst_pct: 18 } });
@@ -454,5 +478,69 @@ describe('A4 vacant lockers (pick-a-locker)', () => {
   it('requires branch_id rather than silently listing the whole network', async () => {
     const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
     expect((await staff.get('/api/lockers/lockers')).status).toBe(400);
+  });
+});
+
+/**
+ * A14 Visit Log. Reads are branch-scoped like the tenant roster; writes carry
+ * the acting staff and let LockerHub derive branch + locker from the tenancy.
+ */
+describe('A14 Visit Log', () => {
+  it('lists visits and filters by branch and phone', async () => {
+    seen = [];
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+
+    const all = await staff.get('/api/lockers/visits');
+    expect(all.status).toBe(200);
+    expect(all.json.visits).toHaveLength(2);
+    // Unrestricted user → no branch forced on their behalf.
+    expect(all.json.restricted_to).toBeNull();
+
+    const one = await staff.get('/api/lockers/visits?branch_id=br_1');
+    expect(one.json.visits.map((v: any) => v.id)).toEqual(['v_2']);
+
+    const byPhone = await staff.get('/api/lockers/visits?phone=9876543210');
+    expect(byPhone.json.visits.map((v: any) => v.id)).toEqual(['v_1']);
+  });
+
+  it('passes the phone mask through instead of pretending to unmask it', async () => {
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const r = await staff.get('/api/lockers/visits');
+    for (const v of r.json.visits) expect(v.tenant_phone).toMatch(/^\*+\d{4}$/);
+  });
+
+  it('records a visit with the acting staff, and does not invent branch or locker', async () => {
+    seen = [];
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const r = await staff.post('/api/lockers/visits', { phone: '9800011122', purpose: 'Locker Access', notes: 'walk-in' });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ success: true, tenant_name: 'Asha R', branch_id: 'br_1' });
+
+    const call = seen.find((s) => s.path === '/visits' && s.method === 'POST')!;
+    expect(call.body.staff.id).toBeTruthy();
+    expect(call.body.staff.name).toBeTruthy();
+    // Branch and locker are THEIR job to derive from the tenancy — sending our
+    // own guess is how the two systems drift apart.
+    expect(call.body.branch_id).toBeUndefined();
+    expect(call.body.locker_id).toBeUndefined();
+  });
+
+  it('rejects a malformed phone before it reaches LockerHub', async () => {
+    seen = [];
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    expect((await staff.post('/api/lockers/visits', { phone: '98000' })).status).toBe(400);
+    expect((await staff.post('/api/lockers/visits', {})).status).toBe(400);
+    expect(seen.filter((s) => s.path === '/visits' && s.method === 'POST')).toHaveLength(0);
+  });
+
+  it('surfaces their 404 when no active tenancy matches the phone', async () => {
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    expect((await staff.post('/api/lockers/visits', { phone: '9999999999' })).status).toBe(404);
+  });
+
+  it('an agent (no lockers:enroll) cannot read or record visits', async () => {
+    const agent = await login('agent@demo.local');
+    expect((await agent.get('/api/lockers/visits')).status).toBe(403);
+    expect((await agent.post('/api/lockers/visits', { phone: '9800011122' })).status).toBe(403);
   });
 });

@@ -215,6 +215,47 @@ lockersRouter.get('/tenants', asyncHandler(async (req, res) => {
   res.json({ ...result, restricted_to: scope.restricted ? scope.branches : null });
 }));
 
+// ── Visit Log (contract §A14) ─────────────────────────────────────────────
+// Who opened which locker, when and why. Branch-scoped on read exactly like
+// the tenant roster above: a branch_staff sees their own branch's visits, not
+// the network's.
+//
+// `tenant_phone` arrives MASKED to last-4 from their side; we pass it through
+// as-is rather than pretending we can unmask it.
+lockersRouter.get('/visits', asyncHandler(async (req, res) => {
+  const { lockerBranchScopeFor } = await import('./branchScope.js');
+  const scope = await lockerBranchScopeFor(getDb(), req.user!);
+  const requested = req.query.branch_id ? String(req.query.branch_id) : undefined;
+  if (scope.restricted && requested && !scope.branchIds.includes(requested)) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You can only view locker visits for your assigned branch.' } });
+  }
+  // Restricted + nothing chosen → their own branches, never a network sweep.
+  // Their API takes a comma-separated list (max 50).
+  const branchId = requested ?? (scope.restricted ? scope.branchIds.join(',') : undefined);
+  const limit = req.query.limit ? Number(req.query.limit) : undefined;
+  const result = await lh.lockerVisits({ branch_id: branchId, phone: req.query.phone ? String(req.query.phone) : undefined, limit });
+  res.json({ ...result, restricted_to: scope.restricted ? scope.branches : null });
+}));
+
+// Record a walk-in. Branch and locker are derived from the tenancy on their
+// side, so there is nothing to scope-check BEFORE the call — and the roster we
+// would check against masks phones, so we cannot match one locally either.
+// Recording is explicitly not privileged on their side; the write is attributed
+// to the acting user and audited as `ncd_app_visit_recorded`.
+lockersRouter.post('/visits', asyncHandler(async (req, res) => {
+  const body = z.object({
+    phone: z.string().trim().regex(/^\d{10}$/, 'phone must be 10 digits').optional(),
+    tenant_id: z.string().trim().min(1).optional(),
+    datetime: z.string().trim().optional(),
+    purpose: z.string().trim().optional(),
+    duration: z.string().trim().optional(),
+    notes: z.string().trim().optional(),
+    visit_time: z.string().trim().optional(),
+    exit_time: z.string().trim().optional(),
+  }).refine((b) => b.phone || b.tenant_id, { message: 'phone or tenant_id is required' }).parse(req.body);
+  res.json(await lh.recordLockerVisit(staffOf(req), body));
+}));
+
 // ── Deposit waivers (owner 2026-07-24): exception cases holding a locker with
 // no NCD backing. NCD Manager+ records with a reason; Admin/CXO approves.
 // The router-level lockers:enroll still applies; these add the stricter perm.

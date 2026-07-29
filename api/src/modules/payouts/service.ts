@@ -465,11 +465,24 @@ export async function interestWhatsappStatus(db: Db, batchId: number) {
 
   const items = await paidItemsForBatch(db, batchId, batch.payout_date);
   const msgs = await deliveryFor(db, 'payout_batch', batchId);
+
+  // One investment can have SEVERAL rows — a first attempt that failed and a
+  // later one that got through. Report the BEST outcome, never whichever came
+  // first: after the 28 Jul re-send most customers carry both a 429'd row and
+  // a delivered one, and picking arbitrarily told the operator 445 messages
+  // had failed when 362 had in fact been delivered.
+  const rank = (m: Record<string, unknown>) =>
+    String(m.status) === 'Sent' ? 3 : String(m.status) === 'Pending' ? 2 : 1;
+  const keepBest = (map: Map<string, Record<string, unknown>>, key: string, m: Record<string, unknown>) => {
+    const cur = map.get(key);
+    if (!cur || rank(m) > rank(cur)) map.set(key, m);
+  };
+
   const byApp = new Map<string, Record<string, unknown>>();
   const clubbed = new Map<string, Record<string, unknown>>();   // pre-split messages
   for (const m of msgs) {
-    if (m.application_id != null) byApp.set(String(m.application_id), m);
-    else if (m.customer_id != null && !clubbed.has(String(m.customer_id))) clubbed.set(String(m.customer_id), m);
+    if (m.application_id != null) keepBest(byApp, String(m.application_id), m);
+    else if (m.customer_id != null) keepBest(clubbed, String(m.customer_id), m);
   }
 
   const rows = items.map((p) => {

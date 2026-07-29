@@ -20,7 +20,18 @@ const HTTP_TIMEOUT_MS = 12000;
 export const lockerHubConfigured = (): boolean => !!config.LOCKERHUB_API_URL;
 const apiKey = (): string => config.LOCKERHUB_API_KEY || config.LOCKERHUB_INTEGRATION_KEY;
 
-export interface ActingStaff { id: string | number; name: string; email?: string | null }
+/**
+ * Who is acting, as LockerHub records it in their audit log.
+ *
+ * `staff_role` carries OUR role name verbatim (contract §A11, 2026-07-25). They
+ * only operate a denylist — `agent` / `lead_agent` / `rm` /
+ * `relationship_manager` are refused on allocate with 403 `staff_only` — so our
+ * `agent` role is correctly blocked while every other role passes through. Send
+ * the real role rather than a flattened "branch": an honest assertion is what
+ * their audit trail is for, and it keeps the block working if they ever widen
+ * the list.
+ */
+export interface ActingStaff { id: string | number; name: string; email?: string | null; staff_role?: string }
 
 function base(): string {
   return String(config.LOCKERHUB_API_URL).replace(/\/+$/, '');

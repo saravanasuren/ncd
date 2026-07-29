@@ -74,6 +74,17 @@ beforeAll(async () => {
         return send(200, { success: true, ncd_id: body.ncd_id, leg: 'deposit', settled_as: 'ncd_backed',
           application_status: paidLegs[id]!.has('rent') ? 'approved' : 'payment_pending' });
       }
+      // A11 allocate — STAFF-ONLY since 2026-07-25. Mirrors their denylist: an
+      // asserted agent-ish role is refused, everything else allots.
+      const al = p.match(/^\/locker-applications\/(.+)\/allocate$/);
+      if (al && req.method === 'POST') {
+        const role = String(body.staff?.staff_role ?? '');
+        if (['agent', 'lead_agent', 'rm', 'relationship_manager'].includes(role)) {
+          return send(403, { error: 'Allocation is staff-only', code: 'staff_only' });
+        }
+        return send(200, { success: true, tenant_id: 'tn_1', locker_id: body.locker_id ?? 'lk_auto',
+          locker_number: 'L10-4', lease_start: '2026-08-01', lease_end: '2027-07-31' });
+      }
       // A10 is RETIRED upstream — 400 online_only for every caller.
       if (/^\/locker-applications\/(.+)\/record-payment$/.test(p) && req.method === 'POST') {
         return send(400, { error: 'Lockers and NCD are online-only.', code: 'online_only' });
@@ -370,5 +381,38 @@ describe('locker deposit links (NCD backs the deposit)', () => {
     // Missing reference → 400; unknown NCD → 404.
     expect((await integ(`/api/integration/ncd/${ncdId}/release-locker`, {})).status).toBe(400);
     expect((await integ('/api/integration/ncd/APP-2999-000999/release-locker', { deposit_reference: 'x' })).status).toBe(404);
+  });
+});
+
+/**
+ * A11 allocate. LockerHub made allocation staff-only on 2026-07-25 and stopped
+ * auto-allocating on payment settlement, so this call is now the ONLY way a
+ * paid application becomes a tenancy — and it has to assert who is acting.
+ */
+describe('A11 allocate carries the acting role', () => {
+  it('sends staff_role verbatim so their staff-only gate can judge it', async () => {
+    seen = [];
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const r = await staff.post('/api/lockers/applications/la_1/allocate', {});
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ success: true, locker_number: 'L10-4' });
+
+    const call = seen.find((s) => s.path === '/locker-applications/la_1/allocate')!;
+    expect(call).toBeTruthy();
+    // The whole point: without staff_role their denylist cannot tell an agent
+    // from a branch manager, and the 403 never fires for anyone.
+    expect(call.body.staff.staff_role).toBe('super_admin');
+    expect(call.body.staff.name).toBeTruthy();
+    expect(call.body.staff.id).toBeTruthy();
+  });
+
+  it('a chosen locker_id is passed through, not silently dropped', async () => {
+    seen = [];
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const r = await staff.post('/api/lockers/applications/la_1/allocate', { locker_id: 'lk_77', lease_months: 24 });
+    expect(r.status).toBe(200);
+    expect(r.json.locker_id).toBe('lk_77');
+    const call = seen.find((s) => s.path === '/locker-applications/la_1/allocate')!;
+    expect(call.body).toMatchObject({ locker_id: 'lk_77', lease_months: 24 });
   });
 });

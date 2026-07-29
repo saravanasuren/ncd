@@ -490,6 +490,7 @@ export interface SegmentChild {
   redeemed: number;     // amount redeemed/exited — 0 while live
   status: string;
   allotment_date: string | null;
+  date_money_received: string | null;  // when the investment money landed — the "Date" column
 }
 export interface SegmentGroup {
   key: string;
@@ -553,7 +554,7 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
     : by === 'dhanamfin' ? FREE_AMT
     : AMT;
   const { rows } = await db.query<any>(
-    `SELECT a.application_no, ${SEG_AMT} AS amount, a.status, a.allotment_date,
+    `SELECT a.application_no, ${SEG_AMT} AS amount, a.status, a.allotment_date, a.date_money_received,
             c.id AS customer_id, c.customer_code, c.full_name AS customer, COALESCE(c.district,'Unassigned') AS district,
             COALESCE(b.name,'Unassigned') AS branch,
             s.code AS series_code, s.status AS series_status,
@@ -603,9 +604,17 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
       series_code: r.series_code, amount: amt,
       outstanding: live ? amt : 0, redeemed: live ? 0 : amt,
       status: r.status, allotment_date: toISODate(r.allotment_date ?? null),
+      date_money_received: toISODate(r.date_money_received ?? null),
     });
   }
   for (const [key, g] of groups) g.investors = custSets.get(key)!.size;
+  // Default order for the expansion: latest investment first (money-received
+  // date desc), application_no as a stable tiebreak so same-day rows don't jump.
+  for (const g of groups.values()) {
+    g.children.sort((a, b) =>
+      (b.date_money_received ?? '').localeCompare(a.date_money_received ?? '')
+      || b.application_no.localeCompare(a.application_no));
+  }
 
   // Series register: window (collection dates), gross issued and redeemed —
   // including exited statuses (Redeemed/Matured/…) so the register shows what

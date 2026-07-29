@@ -52,6 +52,17 @@ beforeAll(async () => {
           branches: [{ branch_id: 'br_1', branch_name: 'HO', address: 'A', ...totals, by_size }],
         });
       }
+      // A4 vacant lockers — the pick-a-locker list. `size` narrows it; the id
+      // is what allocate wants, the locker_number is only for the operator.
+      if (p === '/lockers') {
+        const all = [
+          { id: 'lk_1', locker_number: 'L10-1', size: 'Medium', status: 'vacant' },
+          { id: 'lk_2', locker_number: 'L10-2', size: 'Medium', status: 'vacant' },
+          { id: 'lk_9', locker_number: 'L20-9', size: 'Large', status: 'vacant' },
+        ];
+        const want = url.searchParams.get('size');
+        return send(200, { lockers: want ? all.filter((l) => l.size === want) : all });
+      }
       if (p === '/customers/9800011122') return send(200, { found: false });
       if (p === '/customers' && req.method === 'POST') return send(200, { success: true, phone: body.phone, created: true });
       if (p === '/locker-applications' && req.method === 'POST') return send(201, { success: true, application_id: 'la_1', application_no: 'APP-L-1', status: 'payment_pending', pricing: { locker_size: 'Medium', annual_fee: 3000, rent_incl_gst: 3540, deposit: 25000, gst_pct: 18 } });
@@ -414,5 +425,34 @@ describe('A11 allocate carries the acting role', () => {
     expect(r.json.locker_id).toBe('lk_77');
     const call = seen.find((s) => s.path === '/locker-applications/la_1/allocate')!;
     expect(call.body).toMatchObject({ locker_id: 'lk_77', lease_months: 24 });
+  });
+});
+
+/**
+ * A4 vacant lockers — the list the branch picks from. Since LockerHub stopped
+ * auto-allocating, this is the first half of allotment; the id it returns is
+ * the only thing their allocate call accepts.
+ */
+describe('A4 vacant lockers (pick-a-locker)', () => {
+  it('proxies the list and honours the size filter', async () => {
+    seen = [];
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const all = await staff.get('/api/lockers/lockers?branch_id=br_1');
+    expect(all.status).toBe(200);
+    expect(all.json.lockers).toHaveLength(3);
+
+    const med = await staff.get('/api/lockers/lockers?branch_id=br_1&size=Medium');
+    expect(med.json.lockers.map((l: any) => l.locker_number)).toEqual(['L10-1', 'L10-2']);
+    // Every entry must carry the id — without it the operator has a number they
+    // cannot allot with.
+    for (const l of med.json.lockers) expect(l.id).toBeTruthy();
+
+    const call = seen.find((s) => s.path === '/lockers' && s.method === 'GET');
+    expect(call).toBeTruthy();
+  });
+
+  it('requires branch_id rather than silently listing the whole network', async () => {
+    const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    expect((await staff.get('/api/lockers/lockers')).status).toBe(400);
   });
 });

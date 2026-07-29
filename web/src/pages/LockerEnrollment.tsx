@@ -99,7 +99,17 @@ export function LockerEnrollmentPage() {
     if (r?.success) setCust({ found: true, phone, profile: { name, email } });
   };
   const createApp = async () => {
-    const r = await run(api.post<any>('/api/lockers/applications', { phone, name: name || undefined, email: email || undefined, branch_id: branchId, locker_size: size }));
+    // customer_id is what makes the server attach the applicant block — the
+    // address, KYC, nominee and bank it assembles from our own book. Without
+    // it LockerHub receives a bare phone + name, the tenancy sits at
+    // kyc_pending, and a staff member has to open LockerHub and key the
+    // profile in by hand: the exact thing the applicant block exists to avoid
+    // (owner, 29 Jul 2026). We already know who they are — send it.
+    const r = await run(api.post<any>('/api/lockers/applications', {
+      phone, name: name || undefined, email: email || undefined,
+      branch_id: branchId, locker_size: size,
+      ...(ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}),
+    }));
     if (r?.application_id) { setApp(r); setCheques([]); }
   };
   const refreshApp = async () => {

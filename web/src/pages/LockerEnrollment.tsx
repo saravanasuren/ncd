@@ -29,7 +29,12 @@ interface Size {
 
 export function LockerEnrollmentPage() {
   const { promptText } = useConfirm();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
+  // Allocation is STAFF-ONLY on LockerHub's side (§A11): an asserted role of
+  // agent/lead_agent/rm/relationship_manager is refused with 403 staff_only.
+  // We send our role verbatim, so our 'agent' is the one that gets blocked —
+  // don't offer them the button in the first place.
+  const canAllocate = user?.role !== 'agent';
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const run = async <T,>(p: Promise<T>): Promise<T | undefined> => {
@@ -453,14 +458,25 @@ export function LockerEnrollmentPage() {
         </div>
       )}
 
-      {/* 5 — Allotment */}
-      {app && (app.status === 'approved' || app.allotment) && (
-        <div className={`${card} border-success`}>
-          <h2 className={h2}>✓ Allotted</h2>
+      {/* 5 — Allotment.
+          `pending_allocation` is the status a fully-paid application now parks
+          in: LockerHub removed auto-allocation on settlement platform-wide
+          (contract §A11, 2026-07-25), so somebody has to press this. Gating the
+          card on 'approved' alone made the button unreachable the moment they
+          shipped that — the application never reaches 'approved' until AFTER
+          allocation. Their §A8 still documents the old lifecycle. */}
+      {app && (app.status === 'approved' || app.status === 'pending_allocation' || app.allotment) && (
+        <div className={`${card} ${app.allotment ? 'border-success' : 'border-warn'}`}>
+          <h2 className={h2}>{app.allotment ? '✓ Allotted' : 'Awaiting allotment'}</h2>
           {app.allotment ? (
             <div className="text-sm">Locker <b>{app.allotment.locker_number}</b> ({app.allotment.size}) · lease {String(app.allotment.lease_start).slice(0, 10)} → {String(app.allotment.lease_end).slice(0, 10)}</div>
-          ) : (
+          ) : canAllocate ? (
             <div className="text-sm flex items-center gap-2">Payments settled — allotment pending. <button className={btnGhost} disabled={busy} onClick={allocate}>Allocate locker</button></div>
+          ) : (
+            // Allocation is staff-only on their side; an agent pressing this
+            // would just collect a 403. Say who can, rather than showing a
+            // button that cannot work.
+            <div className="text-sm text-text-muted">Payments settled — allotment pending. A branch staff member needs to allot the locker.</div>
           )}
         </div>
       )}

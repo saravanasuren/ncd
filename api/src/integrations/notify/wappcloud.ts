@@ -43,8 +43,17 @@ export function templateFor(meta: SendMeta | undefined): WappTemplate | null {
   if (meta?.template === 'portal_otp' && config.WAPPCLOUD_OTP_TEMPLATE) {
     return { name: config.WAPPCLOUD_OTP_TEMPLATE, variables: { '1': String(meta.payload?.otp ?? '') } };
   }
-  // Interest credited for a settled payout batch. ncd_interest_final:
+  // Interest credited, for ONE investment. ncd_interest_final:
   //   {{1}} name  {{2}} amount  {{3}} month  {{4}} date
+  //
+  // One message per investment since 2026-07-29 (owner: a holder of eight
+  // debentures gets eight messages, not one clubbed total). The template is
+  // unchanged and deliberately does NOT name the debenture — owner decided
+  // against a new approved template for that. A consequence worth knowing
+  // rather than rediscovering: equal debentures earn equal interest, so those
+  // messages are identical apart from nothing at all. The payload still
+  // carries application_no so the queue row records which investment it was
+  // for, even though the customer's message does not say.
   if (meta?.template === 'interest_paid') {
     const p = meta.payload ?? {};
     return {

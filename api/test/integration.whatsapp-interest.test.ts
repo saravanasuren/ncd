@@ -165,4 +165,16 @@ describe('WhatsApp interest-credit notification', () => {
       variables: { '1': 'Yasotha', '2': '6,000', '3': 'September 2026', '4': '28-Sep-2026' },
     });
   });
+
+  // The split records which investment a message was for, but the message
+  // itself stays exactly as approved — owner decided against a new template
+  // naming the debenture. An application_no in the payload must therefore
+  // never leak into the variables and change the approved shape.
+  it('carrying the investment in the payload does not alter the approved template', () => {
+    const tpl = templateFor({ template: 'interest_paid', payload: {
+      name: 'Rathika', amount: '4,808.22', month: 'July 2026', date: '28-Jul-2026', application_no: 'APP-2026-000663' } });
+    expect(tpl!.name).toBe('ncd_interest_final');
+    expect(Object.keys(tpl!.variables)).toEqual(['1', '2', '3', '4']);
+  });
+
 });

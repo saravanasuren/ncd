@@ -33,8 +33,8 @@ export function PayoutsPage() {
     mutationFn: (batchId: number) => api.post<{ queued: number; skipped: number; already_sent: number; total: number }>(`/api/payouts/${batchId}/whatsapp-interest`, {}),
     onSuccess: (r, batchId) => {
       setMsg(r.queued === 0
-        ? `Nothing to send — ${r.already_sent} already done${r.skipped ? `, ${r.skipped} have no phone number on file` : ''}.`
-        : `${r.queued} message(s) queued — they go out over the next few minutes. ${r.already_sent} already had theirs${r.skipped ? `, ${r.skipped} have no phone number on file` : ''}. Open "delivery" to watch.`);
+        ? `Nothing to send — ${r.already_sent} investment(s) already done${r.skipped ? `, ${r.skipped} have no phone number on file` : ''}.`
+        : `${r.queued} message(s) queued, one per investment — they go out over the next few minutes. ${r.already_sent} already had theirs${r.skipped ? `, ${r.skipped} have no phone number on file` : ''}. Open "Delivery" to watch.`);
       setWaBatch(batchId);
       qc.invalidateQueries({ queryKey: ['wa-status', batchId] });
     },
@@ -175,7 +175,7 @@ export function PayoutsPage() {
                       onClick={async () => {
                         if (await confirm({
                           title: `Send interest-credit WhatsApp for ${b.batch_no}?`,
-                          body: 'Everyone paid in this batch who has not already had theirs gets one message. Nobody is messaged twice.',
+                          body: 'One message per investment, to everyone who has not already had theirs. A customer with several debentures gets one message each. Nobody is messaged twice.',
                           confirmLabel: 'Send messages',
                         })) { setMsg(''); notifyWa.mutate(b.id); }
                       }}
@@ -362,9 +362,9 @@ function AdjustmentsCard({ onMsg }: { onMsg: (m: string) => void }) {
  * could not answer on 28 Jul 2026, when 275 of 384 customers silently got
  * nothing and the only clue was the owner's hunch.
  *
- * Rows are the customers the batch PAID, not the messages sent, so somebody
- * with no phone number shows as a gap instead of disappearing from both sides
- * of the count.
+ * Rows are the interest payments the batch MADE — one per investment, since
+ * 2026-07-29 — not the messages sent, so an investment nobody could message
+ * shows as a gap instead of disappearing from both sides of the count.
  */
 function WhatsappDelivery({ batchId, onClose }: { batchId: number; onClose: () => void }) {
   const [showAll, setShowAll] = useState(false);
@@ -411,7 +411,9 @@ function WhatsappDelivery({ batchId, onClose }: { batchId: number; onClose: () =
             {d.failed > 0 && chip(d.failed, 'failed', 'bg-[color:var(--danger-bg)] text-danger')}
             {d.not_sent > 0 && chip(d.not_sent, 'never sent', 'bg-bg text-text-muted')}
             {d.no_phone > 0 && chip(d.no_phone, 'no phone number', 'bg-[color:var(--warn-bg)] text-warn')}
-            <span className="text-xs text-text-muted">of {d.total} customers paid</span>
+            <span className="text-xs text-text-muted">
+              of {d.total} interest payment{d.total === 1 ? '' : 's'} to {d.customers} customer{d.customers === 1 ? '' : 's'}
+            </span>
           </div>
 
           {d.sending > 0 && (
@@ -421,13 +423,13 @@ function WhatsappDelivery({ batchId, onClose }: { batchId: number; onClose: () =
           )}
           {d.no_phone > 0 && (
             <p className="text-xs text-warn mb-2">
-              {d.no_phone} customer{d.no_phone === 1 ? ' has' : 's have'} no phone number on file — they cannot be messaged until one is added.
+              {d.no_phone} payment{d.no_phone === 1 ? '' : 's'} cannot be messaged — no phone number on the customer's file.
             </p>
           )}
 
           <div className="flex items-center gap-2 mb-2">
             <span className="text-xs text-text-muted">
-              {showAll ? `All ${rows.length}` : `${missed.length} who have not had theirs`}
+              {showAll ? `All ${rows.length}` : `${missed.length} that have not been told`}
             </span>
             <button onClick={() => setShowAll(!showAll)} className="text-xs text-primary hover:underline">
               {showAll ? 'show only the gaps' : 'show everyone'}
@@ -439,6 +441,7 @@ function WhatsappDelivery({ batchId, onClose }: { batchId: number; onClose: () =
               <thead className="sticky top-0 bg-bg">
                 <tr className="text-left text-xs text-text-label">
                   <th className="py-1.5 px-3">Customer</th>
+                  <th className="py-1.5 px-3">Investment</th>
                   <th className="py-1.5 px-3">Phone</th>
                   <th className="py-1.5 px-3 text-right">Interest</th>
                   <th className="py-1.5 px-3">Status</th>
@@ -447,21 +450,23 @@ function WhatsappDelivery({ batchId, onClose }: { batchId: number; onClose: () =
               </thead>
               <tbody>
                 {shown.map((r) => (
-                  <tr key={r.customer_id} className="border-t border-border">
+                  <tr key={r.application_id} className="border-t border-border">
                     <td className="py-1.5 px-3">{r.full_name}</td>
+                    <td className="py-1.5 px-3 mono text-xs">{r.application_no}</td>
                     <td className="py-1.5 px-3 mono text-xs">{r.phone ?? '—'}</td>
                     <td className="py-1.5 px-3 text-right mono">{formatINR(r.amount)}</td>
                     <td className={`py-1.5 px-3 text-xs ${stateClass[r.state] ?? ''}`}>{stateLabel[r.state] ?? r.state}</td>
-                    <td className="py-1.5 px-3 text-xs text-text-muted max-w-[360px] truncate" title={r.error ?? ''}>
-                      {r.state === 'Sent' ? (r.sent_at ? String(r.sent_at).slice(0, 16).replace('T', ' ') : '')
+                    <td className="py-1.5 px-3 text-xs text-text-muted max-w-[340px] truncate" title={r.error ?? ''}>
+                      {r.state === 'Sent'
+                        ? (r.clubbed ? 'covered by the older combined message' : (r.sent_at ? String(r.sent_at).slice(0, 16).replace('T', ' ') : ''))
                         : r.state === 'NoPhone' ? 'add a phone number to the customer'
                         : (r.error ?? '')}
                     </td>
                   </tr>
                 ))}
                 {!shown.length && (
-                  <tr><td colSpan={5} className="py-6 text-center text-text-muted">
-                    {showAll ? 'Nobody was paid in this batch.' : 'Everyone paid in this batch has had their message.'}
+                  <tr><td colSpan={6} className="py-6 text-center text-text-muted">
+                    {showAll ? 'Nothing was paid in this batch.' : 'Every investment in this batch has had its message.'}
                   </td></tr>
                 )}
               </tbody>

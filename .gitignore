@@ -1,3 +1,6 @@
+# Both forms on purpose: the trailing slash matches only a DIRECTORY, so a
+# SYMLINK named node_modules slipped past it and got committed (2026-07-29).
+node_modules
 node_modules/
 dist/
 build/

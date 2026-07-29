@@ -209,9 +209,14 @@ export function LockerEnrollmentPage() {
     queryKey: ['locker-vacant', allotBranch, allotSize],
     queryFn: () => api.get<{ lockers: { id: string; locker_number: string; size: string; status?: string }[] }>(
       `/api/lockers/lockers?branch_id=${encodeURIComponent(allotBranch)}${allotSize ? `&size=${encodeURIComponent(allotSize)}` : ''}`),
-    enabled: picking && !!allotBranch,
+    // Loaded as soon as a branch and size exist, because the locker number is
+    // now chosen up front in step 1 (owner 2026-07-29) — not only when the
+    // allotment step opens the picker.
+    enabled: (!!allotBranch && !!allotSize) || (picking && !!allotBranch),
     staleTime: 0,   // vacancy is a race; never serve this from cache
   });
+  /** The locker number chosen in step 1, if it is still in the vacant list. */
+  const preferred = (vacant.data?.lockers ?? []).find((l) => l.id === lockerId) ?? null;
   /**
    * Allot. `chosen` is the locker's `id` from A4 — NOT the visible
    * locker_number, which their API does not accept. Omitting it lets LockerHub
@@ -252,7 +257,11 @@ export function LockerEnrollmentPage() {
   return (
     <div className="w-full max-w-3xl">
       <h1 className="text-xl font-bold tracking-tight m-0">Locker enrollment</h1>
-      <p className="text-sm text-text-muted mt-1 mb-4">Enroll a customer for a locker end-to-end. Pricing and allotment are handled by LockerHub; a locker is allotted automatically once rent and deposit are both settled.</p>
+      {/* Was "a locker is allotted automatically once rent and deposit are both
+          settled" — untrue since LockerHub removed auto-allocation (§A11,
+          2026-07-25). Staff reading that would wait for something that is never
+          coming. */}
+      <p className="text-sm text-text-muted mt-1 mb-4">Enroll a customer for a locker end-to-end. Pricing is handled by LockerHub. Pick the locker number below; it is allotted once rent and deposit are both settled and a staff member confirms.</p>
       {err && <div className="text-xs text-danger bg-[color:var(--danger-bg)] rounded px-3 py-2 mb-3">{err}</div>}
 
       {/* Cheques taken but not yet cleared. NCD-side bookkeeping only — the
@@ -305,11 +314,37 @@ export function LockerEnrollmentPage() {
             <option value="">Branch…</option>
             {(branches.data?.branches ?? []).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
-          <select className={inp} value={size} disabled={!branchId || avail.isLoading} onChange={(e) => { setSize(e.target.value); setApp(null); }}>
+          <select className={inp} value={size} disabled={!branchId || avail.isLoading} onChange={(e) => { setSize(e.target.value); setApp(null); setLockerId(''); }}>
             <option value="">{avail.isLoading ? 'Loading…' : 'Size…'}</option>
             {(avail.data?.sizes ?? []).map((s) => <option key={s.size} value={s.size} disabled={s.vacant_count <= 0}>{s.size} · {money(s.rent_payable ?? s.rent_incl_gst)} rent · {money(s.deposit)} deposit · {s.vacant_count} vacant</option>)}
           </select>
+          {/* Locker number, chosen here rather than at allotment (owner
+              2026-07-29): the customer is standing at the counter now, and
+              "which box do I get?" is part of choosing branch and size — not an
+              afterthought once the money has cleared. Optional: leave it blank
+              and LockerHub auto-picks at allotment, exactly as before. */}
+          {branchId && size && (
+            <select className={inp} value={lockerId} disabled={vacant.isLoading} onChange={(e) => setLockerId(e.target.value)}>
+              <option value="">{vacant.isLoading ? 'Loading lockers…' : 'Locker number… (optional)'}</option>
+              {(vacant.data?.lockers ?? []).map((l) => (
+                <option key={l.id} value={l.id}>{l.locker_number}</option>
+              ))}
+            </select>
+          )}
         </div>
+        {/* Their API has no reserve call — A7 takes branch + size only, and a
+            locker is not assigned until A11 at allotment. So this is a
+            PREFERENCE we hold and use later, and saying so here is the
+            difference between a clear handover and an argument at the counter. */}
+        {branchId && size && (
+          vacant.isError ? <div className="text-xs text-warn mt-2">Couldn’t load the locker list — you can still continue and pick at allotment.</div>
+          : preferred ? <div className="text-xs text-text-muted mt-2">Locker <b className="text-text">{preferred.locker_number}</b> will be allotted once both payments settle. It is <b>not held</b> until then — if someone else takes it first, you’ll be asked to pick again.</div>
+          // Chosen, then taken by someone else before we got here. Never let
+          // this fall through quietly: staff have told the customer a number.
+          : lockerId && !vacant.isLoading ? <div className="text-xs text-danger mt-2">The locker you picked is no longer vacant — choose another.</div>
+          : !vacant.isLoading && !(vacant.data?.lockers ?? []).length ? <div className="text-xs text-warn mt-2">No vacant {size} lockers listed at this branch.</div>
+          : <div className="text-xs text-text-muted mt-2">Leave the locker number blank to let LockerHub pick one at allotment.</div>
+        )}
         {chosen && (
           chosen.rent_payable != null ? (
             <div className="text-xs text-text-muted mt-2">
@@ -515,10 +550,28 @@ export function LockerEnrollmentPage() {
               <div className="flex items-center gap-2 flex-wrap">
                 <span>Payments settled — allotment pending.</span>
                 {!picking && (<>
-                  <button className={btnGhost} disabled={busy} onClick={() => setPicking(true)}>Pick locker number</button>
-                  <button className={btnGhost} disabled={busy} onClick={() => allocate()}>Auto-allot</button>
+                  {/* The number was already chosen in step 1, so the primary
+                      action here is to confirm it, not to ask again. It can
+                      still have been taken in the meantime — allocate() handles
+                      that 400 by reopening the picker. */}
+                  {preferred
+                    ? <button className={btn} disabled={busy} onClick={() => allocate(preferred.id)}>Allot {preferred.locker_number}</button>
+                    // No preference, or the one chosen at enrolment is gone.
+                    // In the second case auto-allotting would hand over a
+                    // DIFFERENT box than the customer was promised, so the
+                    // picker is the only offer — see the warning below.
+                    : lockerId ? null
+                    : <button className={btnGhost} disabled={busy} onClick={() => allocate()}>Auto-allot</button>}
+                  <button className={btnGhost} disabled={busy} onClick={() => setPicking(true)}>
+                    {preferred ? 'Choose a different locker' : 'Pick locker number'}
+                  </button>
                 </>)}
               </div>
+              {!picking && (preferred
+                ? <div className="text-xs text-text-muted mt-1">Chosen at enrolment.</div>
+                : lockerId && !vacant.isLoading
+                  ? <div className="text-xs text-danger mt-1">The locker chosen at enrolment is no longer vacant. Pick another — allotting automatically would give this customer a different locker than they were told.</div>
+                  : null)}
               {picking && (
                 <div className="mt-3 flex items-center gap-2 flex-wrap">
                   {vacant.isLoading ? <span className="text-text-muted">Loading vacant lockers…</span>

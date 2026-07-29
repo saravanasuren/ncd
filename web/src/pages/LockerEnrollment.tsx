@@ -196,7 +196,47 @@ export function LockerEnrollmentPage() {
     const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/payment-link`, { leg }));
     if (r?.checkout_url) setLinks((l) => ({ ...l, [leg]: { url: r.checkout_url, intent_no: r.intent_no, amount: r.amount } }));
   };
-  const allocate = async () => { await run(api.post(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/allocate`, {})); await refreshApp(); };
+  // ── Allotment: pick the actual locker number (contract §A4 + §A11) ────────
+  // LockerHub stopped auto-allocating on settlement, so the branch chooses the
+  // physical locker. Prefer the application's own branch/size over the page
+  // pickers above: staff often land here by resuming an application rather than
+  // walking the wizard, in which case those selects are empty.
+  const allotBranch = String(app?.branch_id ?? branchId ?? '');
+  const allotSize = String(app?.locker_size ?? size ?? '');
+  const [picking, setPicking] = useState(false);
+  const [lockerId, setLockerId] = useState('');
+  const vacant = useQuery({
+    queryKey: ['locker-vacant', allotBranch, allotSize],
+    queryFn: () => api.get<{ lockers: { id: string; locker_number: string; size: string; status?: string }[] }>(
+      `/api/lockers/lockers?branch_id=${encodeURIComponent(allotBranch)}${allotSize ? `&size=${encodeURIComponent(allotSize)}` : ''}`),
+    enabled: picking && !!allotBranch,
+    staleTime: 0,   // vacancy is a race; never serve this from cache
+  });
+  /**
+   * Allot. `chosen` is the locker's `id` from A4 — NOT the visible
+   * locker_number, which their API does not accept. Omitting it lets LockerHub
+   * auto-pick the lowest vacant locker of the size, which is the old behaviour
+   * and still the right default when nobody cares which box it is.
+   */
+  const allocate = async (chosen?: string) => {
+    setErr(''); setBusy(true);
+    try {
+      await api.post(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/allocate`,
+        chosen ? { locker_id: chosen } : {});
+      setPicking(false); setLockerId('');
+      await refreshApp();
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'Failed';
+      // Someone allotted this locker between us listing it and pressing allot —
+      // LockerHub resolves that race atomically and the loser gets this 400.
+      // Re-fetch so the operator picks from what is actually left instead of
+      // retrying a number that is already gone.
+      if (/no longer vacant/i.test(msg)) {
+        setErr('That locker was just taken by someone else. The list has been refreshed — pick another.');
+        setLockerId(''); setPicking(true); await vacant.refetch();
+      } else setErr(msg);
+    } finally { setBusy(false); }
+  };
 
   const legState = (leg: string) => app?.legs?.[leg];
   const allotment = app?.allotment ?? (app?.pricing ? null : undefined);
@@ -452,7 +492,7 @@ export function LockerEnrollmentPage() {
           <div className="flex items-center gap-2 mt-3">
             <button className={btnGhost} disabled={busy} onClick={refreshApp}>Check payment status</button>
             <p className="text-xs text-text-muted m-0">
-              Send the link to the customer. Settlement lands automatically and the locker auto-allots once both legs are settled — cash, cheque and transfer are not accepted for lockers.
+              Send the link to the customer. Settlement lands automatically; once both legs are settled the application waits for a staff member to allot the locker below — cash, cheque and transfer are not accepted for lockers.
             </p>
           </div>
         </div>
@@ -471,7 +511,35 @@ export function LockerEnrollmentPage() {
           {app.allotment ? (
             <div className="text-sm">Locker <b>{app.allotment.locker_number}</b> ({app.allotment.size}) · lease {String(app.allotment.lease_start).slice(0, 10)} → {String(app.allotment.lease_end).slice(0, 10)}</div>
           ) : canAllocate ? (
-            <div className="text-sm flex items-center gap-2">Payments settled — allotment pending. <button className={btnGhost} disabled={busy} onClick={allocate}>Allocate locker</button></div>
+            <div className="text-sm">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span>Payments settled — allotment pending.</span>
+                {!picking && (<>
+                  <button className={btnGhost} disabled={busy} onClick={() => setPicking(true)}>Pick locker number</button>
+                  <button className={btnGhost} disabled={busy} onClick={() => allocate()}>Auto-allot</button>
+                </>)}
+              </div>
+              {picking && (
+                <div className="mt-3 flex items-center gap-2 flex-wrap">
+                  {vacant.isLoading ? <span className="text-text-muted">Loading vacant lockers…</span>
+                    : vacant.isError ? <span className="text-danger">Couldn’t load the locker list.</span>
+                    : !(vacant.data?.lockers ?? []).length
+                      ? <span className="text-warn">No vacant {allotSize || ''} lockers at this branch — nothing to pick from.</span>
+                      : (<>
+                          {/* value is the locker's id, never locker_number:
+                              their allocate call only accepts the id (§A11). */}
+                          <select className={inp} value={lockerId} onChange={(e) => setLockerId(e.target.value)}>
+                            <option value="">Select a locker…</option>
+                            {(vacant.data?.lockers ?? []).map((l) => (
+                              <option key={l.id} value={l.id}>{l.locker_number}{l.size ? ` · ${l.size}` : ''}</option>
+                            ))}
+                          </select>
+                          <button className={btn} disabled={busy || !lockerId} onClick={() => allocate(lockerId)}>Allot this locker</button>
+                        </>)}
+                  <button className={btnGhost} disabled={busy} onClick={() => { setPicking(false); setLockerId(''); }}>Cancel</button>
+                </div>
+              )}
+            </div>
           ) : (
             // Allocation is staff-only on their side; an agent pressing this
             // would just collect a 403. Say who can, rather than showing a

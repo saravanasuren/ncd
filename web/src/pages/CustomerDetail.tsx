@@ -619,9 +619,10 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
         receipt: { filename: receipt.name, mime: receipt.type || 'application/octet-stream', data_base64: await readFileB64(receipt) },
         ...(clubWith ? { club_with_application_id: Number(clubWith) } : {}),
         ...(lockerDeposit ? { is_locker_deposit: true } : {}),
-        // Only when the >₹30L prompt was shown AND answered "yes" — a per-line
-        // TDS override. Otherwise the line follows the customer's own flag.
-        ...(tdsPrompt && applyTds === 'yes' ? { tds_applicable: true } : {}),
+        // Only when the >₹30L prompt was shown AND answered "yes" — this marks
+        // the WHOLE customer as TDS-applicable (all their investments), not just
+        // this one.
+        ...(tdsPrompt && applyTds === 'yes' ? { mark_customer_tds: true } : {}),
       });
     },
     onSuccess: (r) => nav(`/app/applications/${r.id}`),
@@ -692,12 +693,12 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
           creator must decide whether TDS applies to THIS investment. */}
       {tdsPrompt && (
         <div className="text-xs mt-2 border border-warn/50 bg-surface rounded px-3 py-2">
-          <div className="font-medium text-warn">This customer is marked <b>No&nbsp;TDS</b>, but this investment is over ₹30,00,000. Should 10% TDS apply to this investment?</div>
+          <div className="font-medium text-warn">This customer is marked <b>No&nbsp;TDS</b>, but this investment is over ₹30,00,000. Should TDS apply?</div>
           <div className="flex gap-4 mt-1.5">
-            <label className="flex items-center gap-1.5"><input type="radio" name="apply-tds" checked={applyTds === 'yes'} onChange={() => setApplyTds('yes')} /> Yes — deduct TDS on this investment</label>
-            <label className="flex items-center gap-1.5"><input type="radio" name="apply-tds" checked={applyTds === 'no'} onChange={() => setApplyTds('no')} /> No — keep it exempt</label>
+            <label className="flex items-center gap-1.5"><input type="radio" name="apply-tds" checked={applyTds === 'yes'} onChange={() => setApplyTds('yes')} /> Yes — mark this customer TDS-applicable</label>
+            <label className="flex items-center gap-1.5"><input type="radio" name="apply-tds" checked={applyTds === 'no'} onChange={() => setApplyTds('no')} /> No — keep them exempt</label>
           </div>
-          {applyTds === 'yes' && <div className="text-text-muted mt-1">TDS will be deducted on this investment only; the customer stays No-TDS elsewhere.</div>}
+          {applyTds === 'yes' && <div className="text-text-muted mt-1">The customer will be marked TDS-applicable — 10% is deducted on <b>all</b> their investments from now on, not just this one.</div>}
         </div>
       )}
       {clubOptions.length > 0 && (

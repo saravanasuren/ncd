@@ -1,4 +1,8 @@
-node_modules/
+# No trailing slash: with `node_modules/` git ignores a DIRECTORY of that
+# name but not a SYMLINK of that name, which is how a self-referential
+# node_modules -> node_modules link reached main in #186 and broke every
+# fresh checkout (nothing under it resolves).
+node_modules
 dist/
 build/
 *.log

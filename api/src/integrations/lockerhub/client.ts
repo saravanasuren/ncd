@@ -31,7 +31,18 @@ const apiKey = (): string => config.LOCKERHUB_API_KEY || config.LOCKERHUB_INTEGR
  * their audit trail is for, and it keeps the block working if they ever widen
  * the list.
  */
-export interface ActingStaff { id: string | number; name: string; email?: string | null; staff_role?: string }
+export interface ActingStaff {
+  id: string | number; name: string; email?: string | null; staff_role?: string;
+  /**
+   * The branch this write is asserted to be for (contract §A14, 2026-07-29).
+   * Optional on their side: when present they compare it against the branch
+   * resolved from the tenancy and refuse a mismatch with
+   * `403 { code: 'branch_scope' }`. Only sent for an operator who IS restricted
+   * to one branch — a head-office user legitimately records anywhere, and
+   * asserting a branch for them would invent a restriction that does not exist.
+   */
+  branch_id?: string;
+}
 
 function base(): string {
   return String(config.LOCKERHUB_API_URL).replace(/\/+$/, '');
@@ -152,6 +163,11 @@ export const lockerVisits = (q: { branch_id?: string; phone?: string; limit?: nu
  *
  * Unlike allocate this is not privileged — no staff-only block — but the write
  * is still attributed and lands in their audit log as `ncd_app_visit_recorded`.
+ *
+ * Branch scope rides on `staff.branch_id` (§A14, 2026-07-29): supply it and
+ * they refuse a tenancy belonging to a different branch with
+ * `403 { code: 'branch_scope', tenant_branch_id }`. See the caller for who gets
+ * it and who does not.
  */
 export const recordLockerVisit = (
   staff: ActingStaff,

@@ -238,10 +238,21 @@ lockersRouter.get('/visits', asyncHandler(async (req, res) => {
 }));
 
 // Record a walk-in. Branch and locker are derived from the tenancy on their
-// side, so there is nothing to scope-check BEFORE the call — and the roster we
-// would check against masks phones, so we cannot match one locally either.
-// Recording is explicitly not privileged on their side; the write is attributed
+// side. Recording is explicitly not privileged there; the write is attributed
 // to the acting user and audited as `ncd_app_visit_recorded`.
+//
+// Branch scope (2026-07-29). Reads above are scoped, so leaving the WRITE open
+// meant a branch_staff could log a visit against another branch's tenant. Two
+// layers close it, deliberately in this order:
+//
+//  1. We resolve the customer's own branch first (§A5 returns lockers[] with
+//     branch_id) and refuse before writing, naming the branch — "that locker is
+//     at Gandhipuram" is actionable at a counter in a way a bare 403 is not.
+//     §A5 takes the full phone the operator just typed, so the masking on the
+//     roster is not in the way.
+//  2. We assert `staff.branch_id` so THEY re-check against the tenancy they
+//     actually resolve (§A14). Belt and braces: our pre-flight cannot cover a
+//     tenant_id-only write, and theirs is the authority on which tenancy wins.
 lockersRouter.post('/visits', asyncHandler(async (req, res) => {
   const body = z.object({
     phone: z.string().trim().regex(/^\d{10}$/, 'phone must be 10 digits').optional(),
@@ -253,7 +264,43 @@ lockersRouter.post('/visits', asyncHandler(async (req, res) => {
     visit_time: z.string().trim().optional(),
     exit_time: z.string().trim().optional(),
   }).refine((b) => b.phone || b.tenant_id, { message: 'phone or tenant_id is required' }).parse(req.body);
-  res.json(await lh.recordLockerVisit(staffOf(req), body));
+
+  const { lockerBranchScopeFor } = await import('./branchScope.js');
+  const scope = await lockerBranchScopeFor(getDb(), req.user!);
+  const staff = staffOf(req);
+  // scope.branches is {id,name} objects — name them, don't stringify them.
+  const scopeNames = scope.branches.map((b) => b.name).join(', ');
+
+  if (scope.restricted) {
+    if (body.phone) {
+      // Only ACTIVE tenancies count: a closed locker at another branch is
+      // history, not a reason to refuse today's visit.
+      const cust = await lh.getCustomer(body.phone).catch(() => null);
+      const lockers = (cust?.lockers as Array<Record<string, unknown>> | undefined) ?? [];
+      const active = lockers.filter((l) => !['Closed', 'Cancelled'].includes(String(l.account_status ?? '')));
+      const theirs = active.filter((l) => scope.branchIds.includes(String(l.branch_id ?? '')));
+      if (active.length && !theirs.length) {
+        const at = [...new Set(active.map((l) => String(l.branch_name ?? l.branch_id ?? '')))].filter(Boolean).join(', ');
+        return res.status(403).json({ error: { code: 'FORBIDDEN', message:
+          `That customer's locker is at ${at || 'another branch'}. You can only record visits for ${scopeNames}.` } });
+      }
+    }
+    // One branch → assert it. Several (a manager covering more than one) → we
+    // cannot name a single branch honestly, so leave it to our own pre-flight.
+    if (scope.branchIds.length === 1) staff.branch_id = scope.branchIds[0]!;
+  }
+
+  try {
+    res.json(await lh.recordLockerVisit(staff, body));
+  } catch (e) {
+    // Their scope refusal, turned into something a branch operator can act on.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/branch_scope/i.test(msg)) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message:
+        `That customer's locker belongs to another branch. You can only record visits for ${scopeNames || 'your assigned branch'}.` } });
+    }
+    throw e;
+  }
 }));
 
 // ── Deposit waivers (owner 2026-07-24): exception cases holding a locker with

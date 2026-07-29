@@ -39,6 +39,9 @@ const schema = z.object({
   NOTIFICATIONS_FROM_EMAIL: z.string().default('contact@dhanam.finance'),
   NOTIFICATIONS_FROM_NAME: z.string().default('Dhanam Investment and Finance'),
   NOTIFICATIONS_REPLY_TO: z.string().default('contact@dhanam.finance'),
+  // Who hears about server errors (owner 2026-07-29). Comma-separated.
+  // Set OPS_ALERT_EMAILS='' to silence them entirely.
+  OPS_ALERT_EMAILS: z.string().default('eashwar.ram@dhanam.finance,prem.karnan@dhanam.finance'),
   // WappCloud WhatsApp (approved templates only).
   WAPPCLOUD_TOKEN: z.string().optional(),
   WAPPCLOUD_API_KEY: z.string().optional(),

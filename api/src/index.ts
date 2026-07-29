@@ -109,7 +109,13 @@ async function main(): Promise<void> {
   await bootstrapDb();
   const { createApp } = await import('./app.js');
   const app = createApp();
-  if (config.NODE_ENV === 'production') await startCrons();
+  // Crash alerts in production only: a dev typo should not mail the owner.
+  if (config.NODE_ENV === 'production') {
+    const { installCrashAlerts, alertRecipients } = await import('./lib/alerts.js');
+    installCrashAlerts();
+    console.log(`[new-wealth-api] ops alerts → ${alertRecipients().join(', ') || '(none configured)'}`);
+    await startCrons();
+  }
 
   const server = app.listen(config.PORT, () => {
     console.log(`[new-wealth-api] listening on :${config.PORT} (${config.NODE_ENV})`);

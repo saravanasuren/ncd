@@ -171,6 +171,29 @@ export function CustomerDetailPage() {
         <span className="font-mono text-xs text-text-muted">{c.customer_code}</span>
         <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{c.creation_status}</span>
         {c.archived_at && <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger font-semibold">Archived</span>}
+        {/* Dematerialisation sign, top-right. Manually set; NULL = not marked. */}
+        <div className="ml-auto flex items-center gap-1.5">
+          {(() => {
+            const dm = c.is_dematerialised;
+            const label = dm === true ? 'Dematerialised' : dm === false ? 'Physical' : 'Demat: not marked';
+            const cls = dm === true ? 'bg-[color:var(--success-bg)] text-success'
+              : dm === false ? 'bg-bg text-text-muted' : 'bg-[color:var(--warn-bg)] text-warn';
+            return <span className={`text-xs rounded px-2 py-0.5 font-semibold ${cls}`}>{label}</span>;
+          })()}
+          {can('customers:update') && (
+            <select className="text-xs border border-border-strong rounded px-1.5 py-0.5 bg-surface"
+              value={c.is_dematerialised === true ? 'yes' : c.is_dematerialised === false ? 'no' : ''}
+              onChange={(e) => {
+                const v = e.target.value === 'yes' ? true : e.target.value === 'no' ? false : null;
+                wrap(api.patch(`/api/customers/${id}/dematerialised`, { value: v }));
+              }}
+              title="Mark whether this customer's bond is dematerialised">
+              <option value="">Not marked</option>
+              <option value="yes">Dematerialised</option>
+              <option value="no">Physical</option>
+            </select>
+          )}
+        </div>
       </div>
       {c.archived_at && (
         <div className="text-xs bg-[color:var(--danger-bg)] text-danger rounded px-3 py-2 mt-2">

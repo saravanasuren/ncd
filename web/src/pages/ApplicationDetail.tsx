@@ -58,12 +58,22 @@ function PayoutAccount({ appId, customerId, current, onChange }: { appId: number
 
 /** Lifecycle actions for an Active investment: premature/maturity redemption,
  * rollover, holder transfer, transformation. Each posts and lands in approvals. */
+// Local (not UTC) YYYY-MM-DD — the redemption date defaults to today so staff
+// don't have to type it, and toISOString would roll to the next day late in an
+// IST evening.
+const todayLocalISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; locker?: { redeemable: number; linked_to_lockers: number } | null; onDone: (msg: string) => void; onError: (e: unknown) => void }) {
   const { confirm } = useConfirm();
   const [open, setOpen] = useState<'premature' | 'transfer' | 'transformation' | null>(null);
   const [reason, setReason] = useState('');
   const [amount, setAmount] = useState('');
-  const [date, setDate] = useState('');
+  // Defaults to today (editable). Blank is still accepted by the API (it also
+  // defaults to today), but showing the date makes the default explicit.
+  const [date, setDate] = useState(todayLocalISO());
   const [custQ, setCustQ] = useState('');
   const [toCustomer, setToCustomer] = useState<{ id: number; name: string } | null>(null);
   const [nominee, setNominee] = useState({ nominee_name: '', nominee_bank_name: '', nominee_account: '', nominee_ifsc: '' });
@@ -75,7 +85,7 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
   });
 
   const fire = (p: Promise<unknown>, msg: string) =>
-    p.then(() => { setOpen(null); setReason(''); setAmount(''); setDate(''); setToCustomer(null); setCustQ(''); onDone(msg); }).catch(onError);
+    p.then(() => { setOpen(null); setReason(''); setAmount(''); setDate(todayLocalISO()); setToCustomer(null); setCustQ(''); onDone(msg); }).catch(onError);
 
   const inp = 'px-2.5 py-1.5 text-xs border border-border-strong rounded outline-none focus:border-primary';
   const act = 'text-xs border border-border rounded px-3 py-1.5 hover:bg-bg';

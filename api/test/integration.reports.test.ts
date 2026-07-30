@@ -165,14 +165,14 @@ describe('dashboard tiles + drill (range-aware)', () => {
     expect(Array.isArray(dl.json.groups)).toBe(true);
   });
 
-  it('"New investments" is the last 30, whole book — the range picker does NOT hide it (owner 2026-07-26)', async () => {
-    // Unlike every other flow tile, "New investments" is a rolling recent-
-    // activity view, not a date-window sum — a range with zero money-in during
-    // it must still show the book's most recent investments.
+  it('"New investments" honours the date window (owner 2026-07-30) — an empty window shows zero', async () => {
+    // Reversed from the earlier "rolling last-30, ignore the window" reading:
+    // the tile is now a date-window sum like the other flow tiles, so a range
+    // with no money-in during it shows zero rather than the recent activity.
     const a = await admin();
     const ov = await a.get('/api/dashboard/overview?from=2020-01-01&to=2020-01-31');
-    expect(Number(ov.json.flow.money_in)).toBe(800000);
-    expect(ov.json.flow.new_investments).toBe(2);
+    expect(Number(ov.json.flow.money_in)).toBe(0);
+    expect(ov.json.flow.new_investments).toBe(0);
   });
 
   it('interest snapshot (accrued + monthly) is point-in-time, independent of the range', async () => {

@@ -40,6 +40,7 @@ export interface CreateApplicationInput {
   collection_method: string;
   collection_reference: string;
   club_with_application_id?: number; // append this line to an in-flight app
+  collection_bank_id?: number | null; // which Dhanam account received the money
   // Set by the ">₹30L for a No-TDS customer → apply TDS?" prompt: when true, mark
   // the WHOLE CUSTOMER as TDS-applicable (customers.tds_applicable), not just this
   // investment — so every one of their investments deducts TDS from now on.
@@ -148,10 +149,10 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
       // go-live (Active + schedule + incentives). Staff record the credit date
       // here so interest can start from it (owner spec 2026-07-19).
       const { rows } = await tx.query<{ id: string }>(
-        `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, is_locker_deposit, date_money_received, collection_method, collection_reference)
-         VALUES ($1,$2,$3,'PendingApproval',$4,$5,$6,'staff',$7,$8,$9,$10,$11,$12) RETURNING id`,
+        `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, is_locker_deposit, date_money_received, collection_method, collection_reference, collection_bank_id)
+         VALUES ($1,$2,$3,'PendingApproval',$4,$5,$6,'staff',$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
         [appNo, input.customer_id, input.series_id, input.amount, isNew, customer.referred_by_text ?? null, actor.id, enrolledByAgentId,
-         input.is_locker_deposit ?? false, input.date_money_received, input.collection_method, input.collection_reference]
+         input.is_locker_deposit ?? false, input.date_money_received, input.collection_method, input.collection_reference, input.collection_bank_id ?? null]
       );
       const appId = Number(rows[0]!.id);
       await addLine(tx, appId, scheme, input.amount);
@@ -324,8 +325,11 @@ export async function listApplications(db: Db, actor: AuthUser, filters: { statu
 export async function getApplicationDetail(db: Db, actor: AuthUser, appId: number) {
   const sc = scopeWhere(scopeFor(actor), SCOPE_COLS, 1);
   const app = (await db.query(
-    `SELECT a.*, c.full_name AS customer_name, c.customer_code, s.code AS series_code
+    `SELECT a.*, c.full_name AS customer_name, c.customer_code, s.code AS series_code,
+            -- Which Dhanam account received the money (label for display).
+            cb.account_label AS collection_bank_label, cb.bank_name AS collection_bank_name, cb.account_number AS collection_bank_account
      FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
+     LEFT JOIN banks cb ON cb.id = a.collection_bank_id
      WHERE a.id = $1 AND ${sc.sql}`, [appId, ...sc.params])).rows[0];
   if (!app) throw errors.notFound('Application not found');
   const lines = (await db.query('SELECT * FROM application_lines WHERE application_id = $1', [appId])).rows;
@@ -341,6 +345,28 @@ export async function getApplicationDetail(db: Db, actor: AuthUser, appId: numbe
   const { depositSummary } = await import('../lockers/deposits.js');
   const locker = await depositSummary(db, appId);
   return { application: app, lines, schedule, esign_pending: esignPending, locker };
+}
+
+/**
+ * Mark which Dhanam account an investment's money was credited to. bankId null
+ * clears it. Audited. Money-adjacent record, so it's traceable.
+ */
+export async function setCollectionBank(db: Db, actor: AuthUser, appId: number, bankId: number | null) {
+  const sc = scopeWhere(scopeFor(actor), SCOPE_COLS, 2);
+  const before = (await db.query<{ collection_bank_id: string | null }>(
+    `SELECT a.collection_bank_id FROM applications a JOIN customers c ON c.id = a.customer_id
+      WHERE a.id = $1 AND ${sc.sql}`, [appId, ...sc.params])).rows[0];
+  if (!before) throw errors.notFound('Application not found');
+  if (bankId != null) {
+    const bank = (await db.query('SELECT 1 FROM banks WHERE id = $1', [bankId])).rows[0];
+    if (!bank) throw errors.badRequest('Unknown Dhanam account');
+  }
+  await db.query('UPDATE applications SET collection_bank_id = $1, updated_at = now() WHERE id = $2', [bankId, appId]);
+  await writeAudit(db, {
+    actorId: actor.id, action: 'application.collection-bank', entityType: 'applications', entityId: appId,
+    before: { collection_bank_id: before.collection_bank_id }, after: { collection_bank_id: bankId },
+  });
+  return { ok: true, collection_bank_id: bankId };
 }
 
 /**

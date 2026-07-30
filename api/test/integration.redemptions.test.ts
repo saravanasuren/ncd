@@ -104,6 +104,13 @@ describe('per-redemption NEFT sheet download', () => {
     const ws = wb.worksheets[0]!;
     expect(ws.rowCount).toBe(2); // header + exactly this one row
     expect(String(ws.getRow(2).getCell(5).value)).toBe('889700000009'); // beneficiary account, from activeInvestment's setup
+    // Debit Remarks (col 11) says redemption, not interest.
+    expect(String(ws.getRow(2).getCell(11).value)).toBe('ncdredemption');
+    // Unique reference (col 12) carries the redemption no. with NO symbols/spaces.
+    const ref = String(ws.getRow(2).getCell(12).value);
+    expect(ref).toMatch(/^[A-Za-z0-9]+$/);   // MCR-2026-000009 → MCR2026000009
+    expect(ref).not.toContain('-');
+    expect(ref.length).toBeGreaterThan(0);
 
     expect((await ncd.raw('/api/redemptions/999999/neft.xlsx')).status).toBe(404);
   });

@@ -21,6 +21,7 @@ const TAB_KEYS = TABS.map((t) => t.key);
 interface Child {
   application_no: string; customer_id: number; customer: string; customer_code: string;
   series_code: string; amount: string; outstanding: string; redeemed: string; status: string; allotment_date: string | null;
+  date_money_received: string | null;
 }
 interface Group {
   key: string; label: string; sublabel: string | null; district: string | null; sourced_by: string | null;
@@ -158,9 +159,9 @@ function ChildTable({ tab, rows, onPickCustomer }: { tab: Seg; rows: Child[]; on
   // Per-tab detail columns (besides Redeemed + Outstanding, always last two,
   // right-aligned).
   const cols: [string, keyof Child][] =
-    tab === 'customer' ? [['Series', 'series_code'], ['App no.', 'application_no'], ['Status', 'status'], ['Allotted', 'allotment_date']]
-    : (tab === 'series' || tab === 'lockerhub' || tab === 'dhanamfin') ? [['Customer', 'customer'], ['App no.', 'application_no'], ['Status', 'status'], ['Allotted', 'allotment_date']]
-    : [['Customer', 'customer'], ['Series', 'series_code'], ['App no.', 'application_no'], ['Status', 'status']];
+    tab === 'customer' ? [['Series', 'series_code'], ['App no.', 'application_no'], ['Date', 'date_money_received'], ['Status', 'status'], ['Allotted', 'allotment_date']]
+    : (tab === 'series' || tab === 'lockerhub' || tab === 'dhanamfin') ? [['Customer', 'customer'], ['App no.', 'application_no'], ['Date', 'date_money_received'], ['Status', 'status'], ['Allotted', 'allotment_date']]
+    : [['Customer', 'customer'], ['Series', 'series_code'], ['App no.', 'application_no'], ['Date', 'date_money_received'], ['Status', 'status']];
   return (
     <div className="bg-bg/60 px-4 py-2 border-l-2 border-primary/30">
       <table className="w-full text-xs">
@@ -182,7 +183,7 @@ function ChildTable({ tab, rows, onPickCustomer }: { tab: Seg; rows: Child[]; on
                         {r.customer}
                       </button>
                     )
-                    : k === 'allotment_date' ? (r[k] ? String(r[k]).slice(0, 10) : '—')
+                    : (k === 'allotment_date' || k === 'date_money_received') ? (r[k] ? String(r[k]).slice(0, 10) : '—')
                     : (r[k] ?? '—')}
                 </td>
               ))}

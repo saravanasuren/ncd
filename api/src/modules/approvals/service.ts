@@ -261,11 +261,16 @@ export async function reject(db: Db, user: AuthUser, id: number, reason: string)
 
 /** Queue for the user: pending requests they can currently act on, plus a
  * `canAct` flag (own submissions are shown but not actionable). */
-export async function getQueue(db: Db, user: AuthUser): Promise<Array<ApprovalRow & { canAct: boolean; selfApproval: boolean; subject: string; amount: number | null }>> {
+export async function getQueue(db: Db, user: AuthUser): Promise<Array<ApprovalRow & { canAct: boolean; selfApproval: boolean; subject: string; amount: number | null; maker_name: string | null }>> {
+  // maker_name = the person who raised the request (e.g. who CREATED the
+  // customer), so the checker can see who they are acknowledging. NULL for
+  // system/app-originated requests, which have no maker user.
   const { rows } = await db.query<Record<string, unknown>>(
-    "SELECT * FROM approval_requests WHERE status = 'Pending' ORDER BY created_at DESC"
+    `SELECT ar.*, u.full_name AS maker_name
+       FROM approval_requests ar LEFT JOIN users u ON u.id = ar.maker_user_id
+      WHERE ar.status = 'Pending' ORDER BY ar.created_at DESC`
   );
-  const out: Array<ApprovalRow & { canAct: boolean; selfApproval: boolean; subject: string; amount: number | null }> = [];
+  const out: Array<ApprovalRow & { canAct: boolean; selfApproval: boolean; subject: string; amount: number | null; maker_name: string | null }> = [];
   for (const r of rows) {
     const req = rowToApproval(r);
     const hasPerm = user.permissions.includes(checkerPermFor(req));
@@ -279,7 +284,7 @@ export async function getQueue(db: Db, user: AuthUser): Promise<Array<ApprovalRo
     // Carry the subject so the queue can say WHAT each request is about
     // instead of just its type + request number.
     const desc = await describeRequest(db, req);
-    out.push({ ...req, canAct, selfApproval, subject: desc.subject, amount: desc.amount });
+    out.push({ ...req, canAct, selfApproval, subject: desc.subject, amount: desc.amount, maker_name: r.maker_name != null ? String(r.maker_name) : null });
   }
   return out;
 }

@@ -20,6 +20,7 @@ interface ApprovalReq {
   selfApproval?: boolean;
   subject?: string;
   amount?: number | null;
+  maker_name?: string | null;   // who RAISED the request (e.g. created the customer)
 }
 
 /** Human title for a request card, e.g. "NCD_27 · Activation" for a batch. */
@@ -248,7 +249,10 @@ export function ApprovalsPage() {
                   {r.max_levels > 1 && <span className="text-xs text-text-muted font-normal">level {r.level} of {r.max_levels}</span>}
                 </div>
                 {r.subject && <div className="text-sm text-text mt-0.5 truncate">{r.subject}</div>}
-                <div className="text-xs text-text-muted font-mono mt-0.5">{r.request_no}</div>
+                <div className="text-xs text-text-muted font-mono mt-0.5">
+                  {r.request_no}
+                  {r.maker_name && <span className="font-sans"> · raised by {r.maker_name}</span>}
+                </div>
               </div>
               {!r.canAct && (
                 <button onClick={() => setOpenId(openId === r.id ? null : r.id)} className="text-xs text-primary hover:underline">

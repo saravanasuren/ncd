@@ -15,7 +15,7 @@ export interface CustomerField {
   key: string;
   label: string;
   kind: CustomerFieldKind;
-  group: 'Identity' | 'Contact' | 'Address' | 'Tax & category';
+  group: 'Identity' | 'Contact' | 'Address' | 'Tax & category' | 'Referral';
   options?: string[];
   /** Force-uppercase as the user types (PAN, CKYC). */
   uppercase?: boolean;

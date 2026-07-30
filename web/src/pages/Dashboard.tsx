@@ -117,8 +117,8 @@ export function Dashboard() {
                     primary onClick={() => pickWidget('series', `${activeSeries?.code ?? 'Active series'} — investments`, activeSeries?.series_id)} canDrill={canDrill && !!activeSeries} />
                   <Tile label="Outstanding book" value={formatINR(k.outstanding_book)} sub={`${k.active_investors} investors`}
                     onClick={() => pickWidget('outstanding', 'Outstanding book — by series')} canDrill={canDrill} />
-                  <Tile label="New investments" value={formatINR(f.money_in)} sub={`Last ${f.new_investments} investments`}
-                    onClick={() => pickWidget('new-investments', 'New investments — last 30')} canDrill={canDrill} />
+                  <Tile label="New investments" value={formatINR(f.money_in)} sub={`${f.new_investments} investment${f.new_investments === 1 ? '' : 's'} in this period`}
+                    onClick={() => pickWidget('new-investments', 'New investments')} canDrill={canDrill} />
                   <Tile label="Locker deposits" value={formatINR(f.money_in_locker)} sub={`${f.money_in_locker_investors} investors`}
                     onClick={() => pickWidget('locker', 'Locker deposits in range')} canDrill={canDrill} />
                   <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub={`${f.money_in_app_investors} investors`}
@@ -401,9 +401,18 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
                     <tbody>
                       {rows.map((r, i) => (
                         <tr key={i} className="border-b border-border/60">
-                          {cols.map((c) => (
-                            <td key={c.key} className={`py-1.5 px-2 ${c.kind === 'money' || c.kind === 'num' ? 'text-right mono' : ''}`}>{cell(r[c.key], c.kind)}</td>
-                          ))}
+                          {cols.map((c) => {
+                            // A customer column becomes a link to that customer's
+                            // profile when the row carries a customer_id.
+                            const isCustomer = (c.key === 'customer' || c.key === 'customer_name') && r.customer_id != null;
+                            return (
+                              <td key={c.key} className={`py-1.5 px-2 ${c.kind === 'money' || c.kind === 'num' ? 'text-right mono' : ''}`}>
+                                {isCustomer
+                                  ? <button className="text-primary hover:underline text-left" onClick={() => setProfile({ id: Number(r.customer_id), name: String(r[c.key] ?? '') })}>{r[c.key]}</button>
+                                  : cell(r[c.key], c.kind)}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>

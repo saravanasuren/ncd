@@ -50,6 +50,7 @@ describe('customer correction — field coverage', () => {
       investor_category: 'Individual',
       is_nri: true,
       tds_applicable: false,
+      referred_by_text: 'AG-0006',   // added or fixed after enrolment, via correction
     };
     // Everything asked for here must be a field the form can offer.
     for (const k of Object.keys(changes)) expect(CORRECTABLE_CUSTOMER_KEYS).toContain(k);
@@ -71,6 +72,7 @@ describe('customer correction — field coverage', () => {
     expect(String(row.dob).slice(0, 10)).toBe('1985-03-02');
     expect(row.is_nri).toBe(true);
     expect(row.tds_applicable).toBe(false);
+    expect(row.referred_by_text).toBe('AG-0006');
   });
 
   it('lower-cases nothing but upper-cases PAN, and clears a field set to empty', async () => {

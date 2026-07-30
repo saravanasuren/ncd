@@ -61,6 +61,12 @@ export const CORRECTABLE_CUSTOMER_FIELDS: CustomerField[] = [
   { key: 'investor_category', label: 'Investor category', kind: 'text', group: 'Tax & category' },
   { key: 'is_nri', label: 'NRI', kind: 'boolean', group: 'Tax & category' },
   { key: 'tds_applicable', label: 'TDS applicable', kind: 'boolean', group: 'Tax & category' },
+
+  // Referral — lets staff add or fix the "Referred by" that was missed at
+  // enrolment; it goes through the same correction→approval flow as every other
+  // field. (Only future investments' attribution reads it; past accruals keep
+  // whatever was stamped on their application at the time.)
+  { key: 'referred_by_text', label: 'Referred by (code or name)', kind: 'text', group: 'Referral' },
 ];
 
 export const CORRECTABLE_CUSTOMER_KEYS: string[] = CORRECTABLE_CUSTOMER_FIELDS.map((f) => f.key);

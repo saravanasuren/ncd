@@ -19,6 +19,10 @@ import * as lh from '../../integrations/lockerhub/client.js';
 // silently side-effect-free until the first waiver request after a restart —
 // the exact failure the agent-registration flow hit on 2026-07-23.
 import { createWaiver, cancelWaiver } from './waivers.js';
+// Static for the same reason as the line above: it registers the
+// locker_fee_waiver approval hooks, and a lazy import would leave an approval
+// silently side-effect-free until the first waiver request after a restart.
+import './feeWaivers.js';
 import { linkTenant, removeTenant, restoreTenant } from './tenantOverrides.js';
 import { errors } from '../../lib/errors.js';
 
@@ -318,6 +322,36 @@ lockersRouter.post('/waivers', requirePermission('lockers:waive'), asyncHandler(
   }).parse(req.body);
   res.status(201).json(await createWaiver(getDb(), req.user!, b));
 }));
+
+// ── A21 fee waivers: waiving rent/deposit OWED on an application ──────────
+// Real money, unlike the informational deposit waiver above. Maker requests,
+// Admin/CXO approves, and only THEN does it reach LockerHub — they apply it
+// approved-on-arrival, so our checker is the control.
+lockersRouter.get('/applications/:id/fee-waivers', asyncHandler(async (req, res) => {
+  const { listFeeWaivers } = await import('./feeWaivers.js');
+  res.json({ rows: await listFeeWaivers(getDb(), String(req.params.id)) });
+}));
+
+lockersRouter.post('/applications/:id/fee-waivers', requirePermission('lockers:waive'),
+  asyncHandler(async (req, res) => {
+    const b = z.object({
+      leg: LEG,
+      waiver_pct: z.number().positive().max(100).nullish(),
+      waiver_amount: z.number().positive().nullish(),
+      reason: z.string().trim().min(3, 'A reason is required'),
+      customer_id: z.number().int().positive().nullish(),
+      applicant_name: z.string().trim().nullish(),
+    }).parse(req.body ?? {});
+    const { requestFeeWaiver } = await import('./feeWaivers.js');
+    res.status(201).json(await requestFeeWaiver(getDb(), req.user!, { lockerhub_application_id: String(req.params.id), ...b }));
+  }));
+
+// Re-send an approved waiver LockerHub refused. Idempotent on their side.
+lockersRouter.post('/fee-waivers/:id/retry', requirePermission('lockers:waive'),
+  asyncHandler(async (req, res) => {
+    const { retryFeeWaiver } = await import('./feeWaivers.js');
+    res.json(await retryFeeWaiver(getDb(), req.user!, Number(req.params.id)));
+  }));
 
 // ── Roster overrides (owner 2026-07-24) ──────────────────────────────────
 // Link a tenant to an NCD customer BY HAND. Automatic matching needs phone +

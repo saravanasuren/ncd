@@ -243,6 +243,27 @@ export const settleOffline = (
   'POST', `/locker-applications/${encodeURIComponent(applicationId)}/settle-offline`, { body: { ...input, staff } });
 
 /**
+ * A21 — waive rent or deposit on an application.
+ *
+ * LockerHub applies this **approved-on-arrival**: they do not re-check it, and
+ * they attribute it to `approved_by`. So this must only ever be called after
+ * OUR checker has approved — see modules/lockers/feeWaivers.ts, which is the
+ * only caller for that reason.
+ *
+ * 100% clears the leg outright (`leg_settled: true` comes back); a partial one
+ * reduces the payable and their side recomputes rent GST on the discounted
+ * base, so the reduced figure is what A9 payment-link or A18 settle-offline
+ * then collect. PRE-ALLOTMENT ONLY — once a locker is handed over there is
+ * nothing left to waive.
+ */
+export const applyWaiver = (
+  staff: ActingStaff,
+  applicationId: string,
+  input: { leg: 'rent' | 'deposit'; waiver_pct?: number; waiver_amount?: number; reason: string; approved_by: string },
+) => lhFetch<Record<string, unknown>>(
+  'POST', `/locker-applications/${encodeURIComponent(applicationId)}/waiver`, { body: { ...input, staff } });
+
+/**
  * A11 — allocate. This is the APPROVAL step: it is what creates the tenant on
  * LockerHub, so `staff` is mandatory and lands in their audit log as
  * "<name> (NCD app)". Omit `locker_id` to let them auto-pick the lowest vacant

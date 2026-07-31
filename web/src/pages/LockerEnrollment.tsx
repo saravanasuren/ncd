@@ -110,7 +110,7 @@ export function LockerEnrollmentPage() {
       branch_id: branchId, locker_size: size,
       ...(ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}),
     }));
-    if (r?.application_id) { setApp(r); setCheques([]); }
+    if (r?.application_id) { setApp(r); setCheques([]); setFeeWaivers([]); }
   };
   const refreshApp = async () => {
     if (!app?.application_id) return;
@@ -198,6 +198,44 @@ export function LockerEnrollmentPage() {
       await loadCheques(); await loadPendingCheques(); await refreshApp();
     }
   };
+  /** Waivers on this application (pending + approved). */
+  const [feeWaivers, setFeeWaivers] = useState<any[]>([]);
+  const loadFeeWaivers = async () => {
+    if (!app?.application_id) return;
+    const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/fee-waivers`));
+    if (r) setFeeWaivers(r.rows ?? []);
+  };
+  /**
+   * Ask for a waiver. This does NOT waive anything yet — LockerHub applies our
+   * call approved-on-arrival, so it only reaches them once a checker approves.
+   */
+  const requestWaiver = async (leg: 'rent' | 'deposit') => {
+    if (!app?.application_id) return;
+    const pct = await promptText({
+      title: `Waive the ${leg}?`,
+      body: 'Percentage of the amount to waive. 100 clears the leg entirely. Goes to Admin/CXO for approval — nothing is waived until they approve it.',
+      label: 'Percentage to waive', placeholder: '100', minLength: 1, confirmLabel: 'Next',
+    });
+    if (!pct) return;
+    const n = Number(pct.trim());
+    if (!(n > 0 && n <= 100)) { setErr('Enter a percentage above 0 and at most 100.'); return; }
+    const reason = await promptText({
+      title: 'Why is this being waived?', body: 'The approver sees this, and it goes to LockerHub with the waiver.',
+      label: 'Reason', minLength: 3, confirmLabel: 'Send for approval',
+    });
+    if (!reason) return;
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/fee-waivers`, {
+      leg, waiver_pct: n, reason,
+      ...(ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}),
+      applicant_name: name.trim() || undefined,
+    }));
+    if (r) { setErr(''); await loadFeeWaivers(); }
+  };
+  /** Re-send an approved waiver LockerHub refused. Safe to repeat. */
+  const retryWaiver = async (id: number) => {
+    const r = await run(api.post<any>(`/api/lockers/fee-waivers/${id}/retry`, {}));
+    if (r) { setErr(r.applied ? '' : (r.error ?? 'LockerHub still did not accept it.')); await loadFeeWaivers(); await refreshApp(); }
+  };
   /** Cash / transfer settle straight away — no instrument to clear first. */
   const settleOffline = async (leg: 'rent' | 'deposit', method: 'cash' | 'transfer') => {
     if (!app?.application_id) return;
@@ -229,6 +267,8 @@ export function LockerEnrollmentPage() {
   };
   // The register loads on mount so staff land on "what's awaiting clearance".
   useEffect(() => { void loadPendingCheques(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // Waivers belong to an application, so they follow it rather than the mount.
+  useEffect(() => { void loadFeeWaivers(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id]);
   const chequeFor = (leg: string) => cheques.find((c) => c.leg === leg && c.status === 'Pending')
     ?? cheques.find((c) => c.leg === leg && c.status === 'Cleared');
   // Lockers and NCD are ONLINE-ONLY (contract v1.2 §A10): cash/cheque/transfer
@@ -531,6 +571,30 @@ export function LockerEnrollmentPage() {
                       <span className="text-xs text-text-muted">Look the customer up by PAN to back this deposit with an NCD.</span>
                     )
                   )}
+                  {/* A waiver in flight, or approved and stuck. Money is only
+                      actually waived once LockerHub has it. */}
+                  {(() => {
+                    const w = feeWaivers.find((x) => x.leg === leg);
+                    if (!w) return null;
+                    const amount = w.waiver_pct != null ? `${w.waiver_pct}%` : money(w.waiver_amount);
+                    if (w.status === 'PendingApproval') return (
+                      <span className="text-xs rounded px-1.5 py-0.5 bg-bg text-text-muted" title={w.reason}>
+                        {amount} waiver — awaiting Admin/CXO approval
+                      </span>
+                    );
+                    return w.lockerhub_applied_at ? (
+                      <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success" title={w.reason}>
+                        {amount} waived
+                      </span>
+                    ) : (
+                      <span className="text-xs">
+                        <span className="rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger" title={w.lockerhub_error ?? ''}>
+                          {amount} waiver approved, but LockerHub has NOT applied it
+                        </span>
+                        <button className="ml-1 text-primary hover:underline" disabled={busy} onClick={() => retryWaiver(w.id)}>Retry</button>
+                      </span>
+                    );
+                  })()}
                   {/* Cheque register — OUR books only. Never settles the leg on
                       LockerHub, so the payment link / NCD-backing stays required. */}
                   {!settled && (() => {
@@ -563,6 +627,9 @@ export function LockerEnrollmentPage() {
                             straight to LockerHub (§A18). */}
                         <button className={btnGhost} disabled={busy} onClick={() => settleOffline(leg, 'cash')}>Cash…</button>
                         <button className={btnGhost} disabled={busy} onClick={() => settleOffline(leg, 'transfer')}>Transfer…</button>
+                        {can('lockers:waive') && !feeWaivers.some((w) => w.leg === leg) && (
+                          <button className={btnGhost} disabled={busy} onClick={() => requestWaiver(leg)}>Waive…</button>
+                        )}
                       </>
                     );
                   })()}

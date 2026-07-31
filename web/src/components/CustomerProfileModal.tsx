@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 
@@ -45,8 +46,9 @@ export function CustomerProfileModal({ id, name, onClose }: { id: number; name: 
             <h2 className="text-base font-bold m-0">{c?.full_name ?? name}</h2>
             <div className="text-xs text-text-muted mt-0.5 font-mono">{c?.customer_code ?? ''}</div>
           </div>
-          <a href={`/app/customers/${id}`} target="_blank" rel="noreferrer"
-             className="text-xs text-primary hover:underline ml-auto mr-3 no-underline">Open full record ↗</a>
+          {/* Same-tab navigation (closes the modal), not a new tab. */}
+          <Link to={`/app/customers/${id}`} onClick={onClose}
+             className="text-xs text-primary hover:underline ml-auto mr-3">Open full record →</Link>
           <button onClick={onClose} className="text-text-muted hover:text-text text-lg leading-none" aria-label="Close">✕</button>
         </div>
         <div className="p-4 max-h-[70vh] overflow-y-auto">

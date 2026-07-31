@@ -10,11 +10,13 @@ import { api, ApiError } from '../api/client.js';
  *
  * Two things about the data that shape the UI:
  *  · `tenant_phone` arrives MASKED to last-4 (`******3210`), the same posture as
- *    the tenant roster. It is shown as received — there is nothing to unmask,
- *    and a search box that pretended otherwise would just fail.
+ *    the tenant roster. It is shown as received — there is nothing to unmask.
+ *  · Recording is phone-keyed on LockerHub, but staff find the customer by name,
+ *    PAN or phone via the universal search; picking one fills their phone. A bare
+ *    10-digit entry still works for a tenancy that isn't in NCD's own book.
  *  · Branch and locker are DERIVED from the tenancy when recording, so the form
- *    only asks for the phone. A tenant has exactly one locker; asking staff to
- *    restate the branch would only create a way to get it wrong.
+ *    never asks for them. A tenant has exactly one locker; restating the branch
+ *    would only create a way to get it wrong.
  */
 const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
 const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
@@ -54,11 +56,27 @@ export function LockerVisitsPage() {
   const [err, setErr] = useState('');
   const [ok, setOk] = useState('');
 
-  // Record-a-visit form
+  // Record-a-visit form. `phone` is what actually gets recorded (LockerHub is
+  // phone-keyed); it's set either by picking a customer from the search or by
+  // typing a bare 10-digit number.
   const [phone, setPhone] = useState('');
+  const [pickedName, setPickedName] = useState('');
+  const [custQ, setCustQ] = useState('');
   const [purpose, setPurpose] = useState('Locker Access');
   const [datetime, setDatetime] = useState('');
   const [notes, setNotes] = useState('');
+
+  // Find the customer by name / PAN / phone (the universal search, same one the
+  // header and the tenant-link picker use). Disabled once one is picked.
+  const custSearch = useQuery({
+    queryKey: ['locker-visit-cust', custQ],
+    queryFn: () => api.get<{ customers: { id: number; full_name: string; customer_code: string; phone: string | null }[] }>(
+      `/api/dashboard/search?q=${encodeURIComponent(custQ.trim())}`),
+    enabled: !phone && custQ.trim().length >= 2,
+  });
+  const pick = (name: string, ph: string) => { setPhone(ph.replace(/\D/g, '').slice(0, 10)); setPickedName(name); setCustQ(''); setErr(''); };
+  const clearPick = () => { setPhone(''); setPickedName(''); setCustQ(''); };
+  const mask = (p?: string | null) => { const d = String(p ?? '').replace(/\D/g, ''); return d.length >= 4 ? `••••••${d.slice(-4)}` : d; };
 
   const branches = useQuery({
     queryKey: ['locker-branches'],
@@ -89,8 +107,8 @@ export function LockerVisitsPage() {
     }),
     onSuccess: (r) => {
       setErr('');
-      setOk(`Visit recorded for ${r.tenant_name || phone}. The customer has been notified.`);
-      setPhone(''); setDatetime(''); setNotes(''); setPurpose('Locker Access');
+      setOk(`Visit recorded for ${r.tenant_name || pickedName || phone}. The customer has been notified.`);
+      clearPick(); setDatetime(''); setNotes(''); setPurpose('Locker Access');
       void qc.invalidateQueries({ queryKey: ['locker-visits'] });
     },
     onError: (e) => {
@@ -117,10 +135,42 @@ export function LockerVisitsPage() {
       <div className={card}>
         <h2 className={h2}>Record a visit</h2>
         <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1">
-            <span className="text-[11px] text-text-label uppercase tracking-wide">Customer phone</span>
-            <input className={inp} value={phone} inputMode="numeric" maxLength={10} placeholder="10 digits"
-              onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))} />
+          <label className="flex flex-col gap-1 relative min-w-[260px]">
+            <span className="text-[11px] text-text-label uppercase tracking-wide">Customer</span>
+            {phone ? (
+              <div className={`${inp} flex items-center justify-between gap-2`}>
+                <span className="truncate">{pickedName || 'Selected'} <span className="text-text-muted">· {mask(phone)}</span></span>
+                <button type="button" className="text-xs text-primary hover:underline shrink-0" onClick={clearPick}>change</button>
+              </div>
+            ) : (
+              <>
+                <input className={inp} value={custQ} placeholder="Search name, PAN or phone…"
+                  onChange={(e) => setCustQ(e.target.value)} />
+                {custQ.trim().length >= 2 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 z-10 bg-surface border border-border rounded-lg shadow-card max-h-60 overflow-auto">
+                    {(custSearch.data?.customers ?? []).map((c) => (
+                      <button key={c.id} type="button" disabled={!c.phone}
+                        className="block w-full text-left px-3 py-1.5 text-sm hover:bg-bg disabled:opacity-40"
+                        onClick={() => c.phone && pick(c.full_name, c.phone)}>
+                        {c.full_name} <span className="text-text-muted">({c.customer_code}) · {c.phone ? mask(c.phone) : 'no phone'}</span>
+                      </button>
+                    ))}
+                    {/* Bare 10-digit fallback — a phone that has a LockerHub tenancy
+                        but isn't in NCD's own book can still be recorded. */}
+                    {/^\d{10}$/.test(custQ.trim()) && (
+                      <button type="button" className="block w-full text-left px-3 py-1.5 text-sm hover:bg-bg border-t border-border"
+                        onClick={() => pick('', custQ.trim())}>
+                        Use phone <span className="font-mono">{custQ.trim()}</span>
+                      </button>
+                    )}
+                    {custSearch.isFetching && <div className="px-3 py-1.5 text-xs text-text-muted">Searching…</div>}
+                    {!custSearch.isFetching && (custSearch.data?.customers ?? []).length === 0 && !/^\d{10}$/.test(custQ.trim()) && (
+                      <div className="px-3 py-1.5 text-xs text-text-muted">No customer matches “{custQ.trim()}”.</div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-[11px] text-text-label uppercase tracking-wide">Purpose</span>

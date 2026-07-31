@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext.js';
 import { api } from '../api/client.js';
 import { NAV } from '../nav.js';
 import { ErrorBoundary } from '../components/ErrorBoundary.js';
+import { useRecentSearches, RecentSearches } from '../components/RecentSearches.js';
 
 /** App shell (docs/05 §2): permission-generated sidebar + topbar. Responsive:
  * fixed sidebar on desktop (≥ lg), a slide-in drawer with hamburger on smaller
@@ -18,6 +19,8 @@ export function AppShell() {
   const [pwOpen, setPwOpen] = useState(false);
   const [results, setResults] = useState<{ customers: any[]; applications: any[]; agents: any[]; staff: any[] } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const { recent, push: pushRecent, remove: removeRecent } = useRecentSearches('global');
 
   // Close the mobile drawer whenever the route changes (e.g. a nav item is tapped).
   useEffect(() => { setDrawerOpen(false); }, [location.pathname]);
@@ -27,7 +30,9 @@ export function AppShell() {
     if (v.trim().length < 2) { setResults(null); return; }
     try { setResults(await api.get(`/api/dashboard/search?q=${encodeURIComponent(v)}`)); } catch { setResults(null); }
   }
-  function go(to: string) { setQ(''); setResults(null); nav(to); }
+  // Record the term when the user acts on a result — a deliberate "search",
+  // not every keystroke.
+  function go(to: string) { pushRecent(q); setQ(''); setResults(null); nav(to); }
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[220px_1fr]">
@@ -67,7 +72,12 @@ export function AppShell() {
             className="lg:hidden text-text-muted hover:text-text border border-border rounded px-2 py-1 text-lg leading-none">☰</button>
           <div className="relative flex-1 max-w-md">
             <input placeholder="Search customers, application no., agents, staff…" value={q} onChange={(e) => onSearch(e.target.value)}
+              onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)}
               className="w-full px-3 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary" />
+            {/* Empty + focused → recent searches; typing → live results. */}
+            {searchFocused && !q.trim() && (
+              <RecentSearches items={recent} onPick={(t) => onSearch(t)} onRemove={removeRecent} />
+            )}
             {results && (q.trim().length >= 2) && (
               <div className="absolute top-full left-0 right-0 mt-1 bg-surface border border-border rounded-lg shadow-card z-10 max-h-80 overflow-auto">
                 {results.customers.map((c) => (

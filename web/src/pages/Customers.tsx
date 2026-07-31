@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useRecentSearches, RecentSearches } from '../components/RecentSearches.js';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client.js';
@@ -45,6 +46,8 @@ const columns: Column<CustomerRow>[] = [
 export function CustomersPage() {
   const { can } = useAuth();
   const [q, setQ] = useState('');
+  const [focused, setFocused] = useState(false);
+  const { recent, push: pushRecent, remove: removeRecent } = useRecentSearches('customers');
   const [tab, setTab] = useState<CustTab>('approved');
   const [enrolling, setEnrolling] = useState(false);
   const query = q.trim();
@@ -77,11 +80,21 @@ export function CustomersPage() {
 
       {enrolling && <CustomerWizard onClose={() => setEnrolling(false)} />}
 
-      <input
-        className="w-full max-w-md px-3 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary mb-4"
-        placeholder="Search name, PAN, phone, code, email…"
-        value={q} onChange={(e) => setQ(e.target.value)}
-      />
+      <div className="relative w-full max-w-md mb-4">
+        <input
+          className="w-full px-3 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary"
+          placeholder="Search name, PAN, phone, code, email…"
+          value={q} onChange={(e) => setQ(e.target.value)}
+          onFocus={() => setFocused(true)}
+          // e.target.value (not q) avoids a stale closure; empty is ignored by push.
+          onBlur={(e) => { setFocused(false); pushRecent(e.target.value); }}
+        />
+        {/* The list only appears on an empty, focused box, so clicking a recent
+            term never double-records the previous partial. */}
+        {focused && !q.trim() && (
+          <RecentSearches items={recent} onPick={(t) => { setQ(t); pushRecent(t); }} onRemove={removeRecent} />
+        )}
+      </div>
 
       {truncated && (
         <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-3">

@@ -67,7 +67,7 @@ async function purgeConfirm(promptText: ReturnType<typeof useConfirm>['promptTex
 
 /** Lockers this customer holds — LockerHub's record plus OUR pledges/cheques.
  * Fetched separately so a LockerHub outage degrades this card alone. */
-function LockersCard({ customerId }: { customerId: number }) {
+function LockersCard({ customerId, customerName }: { customerId: number; customerName: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ['customer-lockers', customerId],
     queryFn: () => api.get<any>(`/api/lockers/customers/${customerId}/lockers`),
@@ -104,7 +104,7 @@ function LockersCard({ customerId }: { customerId: number }) {
           <div className="text-sm mb-3">
             {pledges.map((p: any) => (
               <div key={p.id} className="flex flex-wrap gap-x-3 items-center border-b border-border last:border-0 py-1.5">
-                <Link to={`/app/applications/${p.application_id}`} className="text-primary hover:underline font-mono text-xs">{p.application_no}</Link>
+                <Link to={`/app/applications/${p.application_id}`} state={{ from: { path: `/app/customers/${customerId}`, label: customerName } }} className="text-primary hover:underline font-mono text-xs">{p.application_no}</Link>
                 <span className="mono">{formatINR(p.linked_amount)}</span>
                 <span className="text-xs text-text-muted">locker {p.lockerhub_application_id}{p.locker_no ? ` · ${p.locker_no}` : ''}</span>
                 <span className={`text-xs rounded px-1.5 py-0.5 ${p.status === 'active' ? 'bg-[color:var(--warn-bg)] text-warn' : 'bg-bg text-text-muted'}`}>{p.status}</span>
@@ -358,7 +358,7 @@ export function CustomerDetailPage() {
         )}
       </div>
 
-      <InvestmentsCard rows={data.applications ?? []} customerId={Number(id)} canDelete={can('applications:delete')} onChange={invalidate} onError={setMsg} />
+      <InvestmentsCard rows={data.applications ?? []} customerId={Number(id)} customerName={c.full_name} canDelete={can('applications:delete')} onChange={invalidate} onError={setMsg} />
 
       <div className={card}>
         <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Bank accounts</h2>
@@ -378,7 +378,7 @@ export function CustomerDetailPage() {
 
       {can('applications:create') && c.creation_status === 'Approved' && <NewInvestment customerId={Number(id)} custNoTds={c.tds_applicable === false} />}
 
-      <LockersCard customerId={Number(id)} />
+      <LockersCard customerId={Number(id)} customerName={c.full_name} />
     </div>
   );
 }
@@ -391,7 +391,7 @@ const appPill: Record<string, string> = {
 
 /** The customer's investments — every application, newest first, linking to the
  * application page. LIVE statuses total into the header line. */
-function InvestmentsCard({ rows, canDelete, onChange, onError }: { rows: any[]; customerId: number; canDelete: boolean; onChange: () => void; onError: (m: string) => void }) {
+function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, onError }: { rows: any[]; customerId: number; customerName: string; canDelete: boolean; onChange: () => void; onError: (m: string) => void }) {
   const { promptText } = useConfirm();
   const nav = useNavigate();
   const DEAD = ['Rejected', 'Cancelled', 'Redeemed', 'Matured', 'RolledOver', 'PrematureWithdrawn', 'Transferred'];
@@ -433,7 +433,8 @@ function InvestmentsCard({ rows, canDelete, onChange, onError }: { rows: any[]; 
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id} className={`border-b border-border last:border-0 hover:bg-bg cursor-pointer ${r.archived_at ? 'opacity-50' : ''}`} onClick={() => nav(`/app/applications/${r.id}`)}>
+                  <tr key={r.id} className={`border-b border-border last:border-0 hover:bg-bg cursor-pointer ${r.archived_at ? 'opacity-50' : ''}`}
+                    onClick={() => nav(`/app/applications/${r.id}`, { state: { from: { path: `/app/customers/${customerId}`, label: customerName } } })}>
                     <td className={td}>{r.series_code}</td>
                     <td className={`${td} font-mono text-xs whitespace-nowrap`}>{r.application_no}</td>
                     <td className={td}>

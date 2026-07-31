@@ -1,4 +1,4 @@
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
@@ -163,6 +163,11 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
 export function ApplicationDetailPage() {
   const { promptText } = useConfirm();
   const { id } = useParams();
+  // Where the user came from, carried in router state. Opened from a customer
+  // profile → back returns THERE; opened from the Applications list (or a hard
+  // refresh, which drops the state) → back goes to the list.
+  const back = (useLocation().state as { from?: { path: string; label: string } } | null)?.from
+    ?? { path: '/app/applications', label: 'Applications' };
   const qc = useQueryClient();
   const { can } = useAuth();
   const [msg, setMsg] = useState('');
@@ -184,7 +189,7 @@ export function ApplicationDetailPage() {
 
   return (
     <div className="w-full">
-      <Link to="/app/applications" className="text-xs text-text-muted hover:text-primary">← Applications</Link>
+      <Link to={back.path} className="text-xs text-text-muted hover:text-primary">← {back.label}</Link>
       <div className="flex items-center gap-3 mt-1">
         <h1 className="text-xl font-bold tracking-tight m-0 font-mono">{a.application_no}</h1>
         <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{a.status}</span>

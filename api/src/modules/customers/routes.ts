@@ -82,6 +82,14 @@ customersRouter.patch('/:id/tax', requirePermission('customers:update'),
     res.json(await s.updateTaxStatus(getDb(), req.user!, Number(req.params.id), b));
   }));
 
+// Mark the bond as dematerialised / physical (a manual, staff-set flag shown on
+// the profile). value null = clear back to "not marked".
+customersRouter.patch('/:id/dematerialised', requirePermission('customers:update'),
+  asyncHandler(async (req, res) => {
+    const { value } = z.object({ value: z.boolean().nullable() }).parse(req.body ?? {});
+    res.json(await s.setDematerialised(getDb(), req.user!, Number(req.params.id), value));
+  }));
+
 customersRouter.post('/:id/bank-accounts', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
     // Account number is digits-only (leading zeros are meaningful — it stays a

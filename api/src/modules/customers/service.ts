@@ -327,6 +327,25 @@ export async function updateTaxStatus(
   });
 }
 
+/**
+ * Manually mark whether the customer's bond is dematerialised. Staff-set (NCD
+ * doesn't get this from the depository); shown as a sign on the profile.
+ * value: true = dematerialised, false = physical, null = clear to "not marked".
+ * Audited so a change of this record is traceable.
+ */
+export async function setDematerialised(db: Db, actor: AuthUser, customerId: number, value: boolean | null) {
+  await assertVisible(db, actor, customerId);
+  const before = (await db.query<{ is_dematerialised: boolean | null }>(
+    'SELECT is_dematerialised FROM customers WHERE id = $1', [customerId])).rows[0];
+  if (!before) throw errors.notFound('Customer not found');
+  await db.query('UPDATE customers SET is_dematerialised = $1, updated_at = now() WHERE id = $2', [value, customerId]);
+  await writeAudit(db, {
+    actorId: actor.id, action: 'customer.dematerialised', entityType: 'customers', entityId: customerId,
+    before: { is_dematerialised: before.is_dematerialised }, after: { is_dematerialised: value },
+  });
+  return { ok: true, is_dematerialised: value };
+}
+
 export async function addBankAccount(db: Db, actor: AuthUser, customerId: number, input: { account_number: string; ifsc: string; bank_name?: string; branch_name?: string; branch_city?: string; account_type?: string; holder_name?: string; tds_applicable?: boolean }) {
   await assertVisible(db, actor, customerId);
   const pd = await kycProvider().pennyDrop(input.account_number, input.ifsc);

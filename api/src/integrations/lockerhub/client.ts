@@ -243,6 +243,32 @@ export const settleOffline = (
   'POST', `/locker-applications/${encodeURIComponent(applicationId)}/settle-offline`, { body: { ...input, staff } });
 
 /**
+ * A19 — start the locker-agreement e-Sign.
+ *
+ * Builds the agreement, uploads it to Digio and returns the signing `auth_url`;
+ * Digio also emails/SMSes the customer, so handing the URL over is a
+ * convenience for someone signing at the branch, not the only route.
+ *
+ * POST-ALLOTMENT ONLY — there is no agreement until there is a locker, and
+ * they answer `409 not_allotted` before A11.
+ *
+ * NCD had no locker e-Sign at all before this: neither starting one nor
+ * fetching the result. LockerHub added it themselves on 2026-07-29.
+ */
+export const esignInitiate = (staff: ActingStaff, applicationId: string) =>
+  lhFetch<Record<string, unknown>>(
+    'POST', `/locker-applications/${encodeURIComponent(applicationId)}/esign/initiate`, { body: { staff } });
+
+/**
+ * A19 — where the signing has got to. `{ found: false, status: null }` when
+ * nothing has been started, so a missing e-Sign is a normal answer rather than
+ * a 404. Completion arrives through their own Digio webhook, so this is a poll
+ * for display, not a driver of anything.
+ */
+export const esignStatus = (applicationId: string) =>
+  lhFetch<Record<string, unknown>>('GET', `/locker-applications/${encodeURIComponent(applicationId)}/esign/status`);
+
+/**
  * A21 — waive rent or deposit on an application.
  *
  * LockerHub applies this **approved-on-arrival**: they do not re-check it, and

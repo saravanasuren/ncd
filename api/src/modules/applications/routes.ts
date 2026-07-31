@@ -33,8 +33,17 @@ applicationsRouter.post('/', requirePermission('applications:create'),
       club_with_application_id: z.number().optional(), is_locker_deposit: z.boolean().optional(),
       // ">₹30L for a No-TDS customer" prompt answered Yes → mark the whole customer TDS-applicable.
       mark_customer_tds: z.boolean().optional(),
+      // Which Dhanam account the money was credited to (optional; markable later).
+      collection_bank_id: z.number().nullable().optional(),
     }).parse(req.body);
     res.status(201).json(await s.createApplication(getDb(), req.user!, input));
+  }));
+
+// Mark which Dhanam account this investment was credited to. null clears it.
+applicationsRouter.post('/:id/collection-bank', requirePermission('applications:update'),
+  asyncHandler(async (req, res) => {
+    const { bank_id } = z.object({ bank_id: z.number().nullable() }).parse(req.body ?? {});
+    res.json(await s.setCollectionBank(getDb(), req.user!, Number(req.params.id), bank_id));
   }));
 
 applicationsRouter.post('/:id/payout-account', requirePermission('applications:update'),

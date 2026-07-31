@@ -611,8 +611,10 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
   const [lockerDeposit, setLockerDeposit] = useState(false);
   const [method, setMethod] = useState('');
   const [reference, setReference] = useState('');
+  const [creditedBank, setCreditedBank] = useState('');   // which Dhanam account received it (optional)
   const [receipt, setReceipt] = useState<File | null>(null);
   const [err, setErr] = useState('');
+  const collectionBanks = useQuery({ queryKey: ['collection-banks'], queryFn: () => api.get<{ rows: any[] }>('/api/products/banks') });
   const series = useQuery({ queryKey: ['series'], queryFn: () => api.get<{ rows: any[] }>('/api/series') });
   const schemes = useQuery({ queryKey: ['schemes'], queryFn: () => api.get<{ rows: any[] }>('/api/schemes') });
   // In-flight applications in the chosen series this new line could club into
@@ -639,6 +641,7 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
         date_money_received: dateReceived,
         collection_method: method.trim(),
         collection_reference: reference.trim(),
+        ...(creditedBank ? { collection_bank_id: Number(creditedBank) } : {}),
         receipt: { filename: receipt.name, mime: receipt.type || 'application/octet-stream', data_base64: await readFileB64(receipt) },
         ...(clubWith ? { club_with_application_id: Number(clubWith) } : {}),
         ...(lockerDeposit ? { is_locker_deposit: true } : {}),
@@ -687,6 +690,13 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
           <option value="Cheque">Cheque</option>
         </select>
         <input className={sel} placeholder="Reference / cheque no. *" value={reference} onChange={(e) => setReference(e.target.value)} />
+        {/* Which Dhanam account the money was credited to — optional, can be set later. */}
+        <select className={sel} value={creditedBank} onChange={(e) => setCreditedBank(e.target.value)} title="Which Dhanam account received the money (optional)">
+          <option value="">Credited to… (optional)</option>
+          {(collectionBanks.data?.rows ?? []).filter((b: any) => b.is_collection_account && b.is_active).map((b: any) => (
+            <option key={b.id} value={b.id}>{(b.account_label || b.bank_name)} · {b.account_number}</option>
+          ))}
+        </select>
         <label className="text-xs flex items-center gap-1.5 cursor-pointer border border-border-strong rounded px-2.5 py-1.5" title="Receipt / cheque photo (image or PDF, under 4 MB)">
           {receipt ? `📎 ${receipt.name.length > 18 ? receipt.name.slice(0, 15) + '…' : receipt.name}` : <>📎 Receipt photo<span className="text-danger">*</span></>}
           <input type="file" accept="image/*,.pdf" className="hidden" onChange={(e) => setReceipt(e.target.files?.[0] ?? null)} />

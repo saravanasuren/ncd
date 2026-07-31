@@ -200,6 +200,7 @@ export function ApplicationDetailPage() {
         <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{a.status}</span>
       </div>
       <p className="text-sm text-text-muted mt-1">{a.customer_name} · {a.series_code} · {formatINR(a.total_amount)}</p>
+      <CreditedTo app={a} appId={Number(id)} canEdit={can('applications:update')} onDone={invalidate} onErr={setMsg} />
       {msg && <div className="text-xs text-danger mt-2">{msg}</div>}
       {note && <div className="text-xs text-primary mt-2">{note}</div>}
 
@@ -357,6 +358,48 @@ export function ApplicationDetailPage() {
           </table>
         )}
       </div>
+    </div>
+  );
+}
+
+/** "Credited to" — which Dhanam account this investment's money landed in. Shown
+ * under the header; editable (a select of collection accounts) for staff who can
+ * update applications. Wealth had this; NCD never captured it until now. */
+function CreditedTo({ app, appId, canEdit, onDone, onErr }: {
+  app: any; appId: number; canEdit: boolean; onDone: () => void; onErr: (m: string) => void;
+}) {
+  const banks = useQuery({
+    queryKey: ['collection-banks'],
+    queryFn: () => api.get<{ rows: any[] }>('/api/products/banks'),
+    enabled: canEdit,
+  });
+  const set = (bankId: number | null) =>
+    api.post(`/api/applications/${appId}/collection-bank`, { bank_id: bankId })
+      .then(() => { onErr(''); onDone(); })
+      .catch((e) => onErr(e instanceof ApiError ? e.message : 'Failed'));
+  const label = app.collection_bank_id
+    ? (app.collection_bank_label || `${app.collection_bank_name ?? ''} ${app.collection_bank_account ?? ''}`.trim() || 'Set')
+    : null;
+  // Only collection accounts; keep inactive ones so a historical pick stays selectable.
+  const opts = (banks.data?.rows ?? []).filter((b: any) => b.is_collection_account);
+  return (
+    <div className="flex items-center gap-2 mt-1 text-sm">
+      <span className="text-text-muted">Credited to:</span>
+      {canEdit ? (
+        <select className="text-xs border border-border-strong rounded px-2 py-1 bg-surface"
+          value={app.collection_bank_id ?? ''}
+          onChange={(e) => set(e.target.value ? Number(e.target.value) : null)}
+          title="Which Dhanam account received this investment's money">
+          <option value="">— not set —</option>
+          {opts.map((b: any) => (
+            <option key={b.id} value={b.id}>
+              {(b.account_label || b.bank_name)} · {b.account_number}{b.is_active ? '' : ' (inactive)'}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <span className={label ? 'font-medium' : 'text-text-muted'}>{label ?? 'not set'}</span>
+      )}
     </div>
   );
 }

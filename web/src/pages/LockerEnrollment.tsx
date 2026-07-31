@@ -28,7 +28,7 @@ interface Size {
 }
 
 export function LockerEnrollmentPage() {
-  const { promptText } = useConfirm();
+  const { confirm, promptText } = useConfirm();
   const { can, user } = useAuth();
   // Allocation is STAFF-ONLY on LockerHub's side (§A11): an asserted role of
   // agent/lead_agent/rm/relationship_manager is refused with 403 staff_only.
@@ -183,7 +183,40 @@ export function LockerEnrollmentPage() {
     const ref = await promptText({ title: 'Bank reference', body: 'Optional — leave blank if you do not have one.', label: 'Reference', minLength: 0, confirmLabel: 'Mark cleared' });
     if (ref === null) return;
     const r = await run(api.post<any>(`/api/lockers/cheques/${id}/clear`, { cleared_on: on, reference: ref.trim() || undefined }));
-    if (r) { await loadCheques(); await loadPendingCheques(); }
+    if (r) {
+      // The clear always succeeds locally; the LockerHub leg may not. Say which
+      // happened rather than leaving a locker quietly unsettled.
+      setErr(r.settled ? '' : (r.note ?? 'Cleared here, but LockerHub did not accept the settlement.'));
+      await loadCheques(); await loadPendingCheques(); await refreshApp();
+    }
+  };
+  /** Push a cleared-but-unsettled cheque to LockerHub again. Safe to repeat. */
+  const retrySettlement = async (id: number) => {
+    const r = await run(api.post<any>(`/api/lockers/cheques/${id}/settle-retry`, {}));
+    if (r) {
+      setErr(r.settled ? '' : (r.note ?? 'LockerHub still did not accept it.'));
+      await loadCheques(); await loadPendingCheques(); await refreshApp();
+    }
+  };
+  /** Cash / transfer settle straight away — no instrument to clear first. */
+  const settleOffline = async (leg: 'rent' | 'deposit', method: 'cash' | 'transfer') => {
+    if (!app?.application_id) return;
+    const ok = await confirm({
+      title: `Record ${method} for the ${leg} leg?`,
+      body: `This tells LockerHub the money is in and settles the ${leg} leg. Only do it once the ${method === 'cash' ? 'cash is counted and in hand' : 'transfer has actually landed'}.`,
+      confirmLabel: `Record ${method}`,
+    });
+    if (!ok) return;
+    const reference = await promptText({
+      title: 'Reference', body: method === 'transfer' ? 'UTR or bank reference.' : 'Receipt number, if you have one.',
+      label: 'Reference (optional)', minLength: 0, confirmLabel: 'Settle',
+    });
+    if (reference === null) return;
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/settle-offline`, {
+      leg, method, ...(reference.trim() ? { reference: reference.trim() } : {}),
+      received_on: new Date().toISOString().slice(0, 10),
+    }));
+    if (r) await refreshApp();
   };
   const bounceCheque = async (id: number) => {
     const reason = await promptText({
@@ -507,10 +540,31 @@ export function LockerEnrollmentPage() {
                         <span className={`rounded px-1.5 py-0.5 ${q.status === 'Cleared' ? 'bg-[color:var(--success-bg)] text-success' : 'bg-[color:var(--warn-bg)] text-warn'}`}>
                           Cheque {q.cheque_no} · {q.status === 'Cleared' ? `cleared ${q.cleared_on}` : 'awaiting clearance'}
                         </span>
-                        <span className="text-text-muted ml-1">— settle in LockerHub → Tenants (method = cheque)</span>
+                        {/* A cheque that cleared but whose leg never settled is
+                            the one that otherwise goes unnoticed — money in, no
+                            locker. Say so, and offer the retry. */}
+                        {q.status === 'Cleared' && !q.lockerhub_settled_at ? (
+                          <>
+                            <span className="text-danger ml-1">— cleared here, but the leg is NOT settled on LockerHub</span>
+                            <button className="ml-1 text-primary hover:underline" disabled={busy}
+                              onClick={() => retrySettlement(q.id)}>Retry settlement</button>
+                          </>
+                        ) : q.status === 'Cleared' ? (
+                          <span className="text-text-muted ml-1">— leg settled on LockerHub</span>
+                        ) : (
+                          <span className="text-text-muted ml-1">— settles when you mark it cleared</span>
+                        )}
                       </span>
                     );
-                    return <button className={btnGhost} disabled={busy} onClick={() => { setChqLeg(leg); setChq((c) => ({ ...c, amount: String(st?.amount ?? '') })); }}>Record cheque…</button>;
+                    return (
+                      <>
+                        <button className={btnGhost} disabled={busy} onClick={() => { setChqLeg(leg); setChq((c) => ({ ...c, amount: String(st?.amount ?? '') })); }}>Record cheque…</button>
+                        {/* Cash and transfer have nothing to clear, so they go
+                            straight to LockerHub (§A18). */}
+                        <button className={btnGhost} disabled={busy} onClick={() => settleOffline(leg, 'cash')}>Cash…</button>
+                        <button className={btnGhost} disabled={busy} onClick={() => settleOffline(leg, 'transfer')}>Transfer…</button>
+                      </>
+                    );
                   })()}
                 </div>
               );
@@ -537,7 +591,7 @@ export function LockerEnrollmentPage() {
           <div className="flex items-center gap-2 mt-3">
             <button className={btnGhost} disabled={busy} onClick={refreshApp}>Check payment status</button>
             <p className="text-xs text-text-muted m-0">
-              Send the link to the customer. Settlement lands automatically; once both legs are settled the application waits for a staff member to allot the locker below — cash, cheque and transfer are not accepted for lockers.
+              Send the link to the customer and settlement lands automatically. Money taken at the branch is recorded here instead: cash and transfer settle straight away, a cheque settles when you mark it cleared. Once both legs are settled the application waits for a staff member to allot the locker below.
             </p>
           </div>
         </div>

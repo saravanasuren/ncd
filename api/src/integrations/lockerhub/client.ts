@@ -221,6 +221,28 @@ export const linkNcd = (staff: ActingStaff, applicationId: string, input: { ncd_
   lhFetch<Record<string, unknown>>('POST', `/locker-applications/${encodeURIComponent(applicationId)}/link-ncd`, { body: { ...input, staff } });
 
 /**
+ * A18 — settle a leg with money taken OFFLINE (cheque, cash, transfer).
+ *
+ * The successor to the retired A10 record-payment. The difference that made A10
+ * unsafe is that this writes a correctly-TYPED offline receipt rather than a
+ * synthetic online row, so their reconciliation and deposit-refund flows treat
+ * it as what it is (their #709).
+ *
+ * The amount is derived on their side from the leg — deliberately not sent, so
+ * a stale figure here can never disagree with what they are owed.
+ *
+ * Idempotent, and unlike A21 waiver it works AFTER allotment too: that is the
+ * case this exists for, a payment arriving once the locker is already handed
+ * over under an A20 override.
+ */
+export const settleOffline = (
+  staff: ActingStaff,
+  applicationId: string,
+  input: { leg: 'rent' | 'deposit'; method: 'cheque' | 'cash' | 'transfer'; reference?: string; received_on?: string; reason?: string },
+) => lhFetch<Record<string, unknown>>(
+  'POST', `/locker-applications/${encodeURIComponent(applicationId)}/settle-offline`, { body: { ...input, staff } });
+
+/**
  * A11 — allocate. This is the APPROVAL step: it is what creates the tenant on
  * LockerHub, so `staff` is mandatory and lands in their audit log as
  * "<name> (NCD app)". Omit `locker_id` to let them auto-pick the lowest vacant

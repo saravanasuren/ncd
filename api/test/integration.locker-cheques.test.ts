@@ -1,9 +1,14 @@
 /**
- * Locker cheque register (NCD side only). Lockers are online-only on LockerHub
- * (§A10 retired offline record-payment), so a cheque can never settle a leg
- * there — these tests pin that the register records and clears the instrument
- * WITHOUT ever claiming the locker is settled, and that clearing is a separate
- * permission from taking the cheque.
+ * Locker cheque register. Since §A18 settle-offline (2026-07-29) CLEARING a
+ * cheque settles the leg on LockerHub — but TAKING one still settles nothing,
+ * because paper in hand can bounce. These pin that split, that clearing is a
+ * separate permission from taking, and that the register survives LockerHub
+ * being unreachable: the cheque still clears, and the unsettled leg is recorded
+ * rather than silently lost. (Settlement itself is covered in depth by
+ * integration.locker-settle-offline.test.ts.)
+ *
+ * LOCKERHUB_API_URL is not configured here on purpose, so every clear in this
+ * file exercises the their-side-unavailable path.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
@@ -33,20 +38,22 @@ const record = (c: Client, leg: string, chequeNo: string, appId = APP) =>
   });
 
 describe('locker cheque register', () => {
-  it('branch staff can take a cheque; the response never claims the locker is settled', async () => {
+  it('branch staff can take a cheque; taking it settles nothing', async () => {
     const staff = await as('staff@demo.local');
     const r = await record(staff, 'rent', 'CHQ-001');
     expect(r.status).toBe(201);
     expect(r.json.cheque.status).toBe('Pending');
     expect(r.json.cheque.leg).toBe('rent');
     expect(Number(r.json.cheque.amount)).toBe(7080);
-    expect(r.json.note).toMatch(/NOT settled on LockerHub/i);
-    expect(r.json.note).toMatch(/will not allot/i);
-    // Safety: staff must be sent to LockerHub Tenants, never to the payment
-    // link — that is a live payment page and would collect a SECOND time for
-    // money we already hold (LockerHub confirmed 2026-07-22).
-    expect(r.json.note).toMatch(/Tenants/i);
+    // The leg settles on CLEARING, not on receipt — a cheque can still bounce.
+    expect(r.json.note).toMatch(/settles on LockerHub when you mark this cheque cleared/i);
+    expect(r.json.cheque.lockerhub_settled_at).toBeNull();
+    // No longer sends staff to LockerHub Tenants to finish by hand — §A18 does
+    // it on clear. But the payment-link warning MUST survive: it is a live
+    // payment page and would collect a SECOND time for money we already hold
+    // (LockerHub confirmed 2026-07-22).
     expect(r.json.note).toMatch(/second real payment/i);
+    expect(r.json.note).not.toMatch(/Tenants/i);
   });
 
   it('refuses a second pending cheque for the same leg', async () => {
@@ -62,7 +69,7 @@ describe('locker cheque register', () => {
     expect((await staff.post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-07-24' })).status).toBe(403);
   });
 
-  it('a collection-confirming user clears it — and it still says the locker is not settled', async () => {
+  it('a collection-confirming user clears it; LockerHub unreachable does not undo the clear', async () => {
     const a = await admin();
     const list = await a.get(`/api/lockers/cheques?application_id=${APP}`);
     const id = list.json.rows.find((x: any) => x.leg === 'rent').id;
@@ -71,7 +78,13 @@ describe('locker cheque register', () => {
     expect(r.json.cheque.status).toBe('Cleared');
     expect(r.json.cheque.cleared_on).toBe('2026-07-24');
     expect(r.json.cheque.reference).toBe('BANKREF1');
-    expect(r.json.note).toMatch(/NOT settled on LockerHub/i);
+    // LockerHub is unconfigured here, so the settle could not land. The money
+    // still cleared — that must never be rolled back — and the failure is
+    // reported instead of being swallowed.
+    expect(r.json.settled).toBe(false);
+    expect(r.json.note).toMatch(/did NOT accept the settlement/i);
+    expect(r.json.cheque.lockerhub_settled_at).toBeNull();
+    expect(r.json.cheque.lockerhub_error).toBeTruthy();
     // Clearing twice is refused.
     expect((await a.post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-07-25' })).status).toBe(409);
   });

@@ -1,22 +1,31 @@
 /**
  * Locker cheque register (NCD side only).
  *
- * Lockers are ONLINE-ONLY on LockerHub — contract v1.2 §A10 retired offline
- * record-payment and it now 400s for every caller, so NCD has no way to settle a
- * locker leg with a cheque. High-value customers still hand over cheques and
- * expect the locker opened, so this records the instrument and its clearance for
- * OUR books and audit.
+ * High-value customers hand over cheques and expect the locker opened. This
+ * records the instrument, tracks its clearance, and — since 2026-07-29 —
+ * SETTLES the leg on LockerHub when it clears.
  *
- * Read this before changing anything here: clearing a cheque releases NCD's own
- * hold and NOTHING ELSE. It does not settle the leg on LockerHub and does not
- * allot the locker — the LockerHub-side action is a STAFF action in their
- * Tenants screen (mark the row Paid, method = cheque), not an API call.
+ * That last part was impossible until now: contract v1.2 had retired A10
+ * record-payment (400 `online_only`), so clearing a cheque released NCD's own
+ * hold and nothing else, and a staff member had to open LockerHub and mark the
+ * row paid by hand. §A18 settle-offline replaced it, correctly typed as an
+ * offline receipt rather than a synthetic online row.
+ *
+ * TAKING a cheque still settles nothing — only CLEARING does. A cheque in hand
+ * is not money in the bank, and telling LockerHub otherwise would allot a
+ * locker against paper that may yet bounce.
+ *
+ * The clear and the settle are two systems, so the settle can fail on its own.
+ * The local clear is never rolled back for that — the money did clear — but the
+ * failure is recorded on the row and surfaced, because a cleared cheque whose
+ * leg never settled is exactly the thing that otherwise goes unnoticed. Their
+ * endpoint is idempotent, so a retry is always safe.
  *
  * Never route a cheque customer to the A9 payment link to "finish" it: that is
  * a live payment page, so it would take a SECOND real payment for money we
  * already hold — double collection, a refund owed, MDR on our own funds, and a
  * receipt telling the customer they paid online. LockerHub confirmed this
- * explicitly (2026-07-22). Every response repeats the correct route.
+ * explicitly (2026-07-22).
  */
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
@@ -27,11 +36,19 @@ import * as lh from '../../integrations/lockerhub/client.js';
 
 export type ChequeLeg = 'rent' | 'deposit';
 
-/** Stated on every response — a cleared cheque never opens a locker. */
+/** Taking a cheque settles nothing — clearing it does. */
 export const SETTLEMENT_NOTE =
-  'Recorded in NCD only. The locker leg is NOT settled on LockerHub and the locker will not allot. '
-  + 'Complete it in LockerHub → Tenants (mark the row Paid, method = cheque). '
-  + 'Do NOT open the payment link for a cheque customer — it is a live payment page and would take a SECOND real payment.';
+  'Recorded in NCD. The locker leg settles on LockerHub when you mark this cheque cleared — not now, because a cheque in hand can still bounce. '
+  + 'Do NOT open the payment link for a cheque customer: it is a live payment page and would take a SECOND real payment for money you already hold.';
+
+/** Said when the clear settled the leg on their side too. */
+export const SETTLED_NOTE =
+  'Cheque cleared and the locker leg is settled on LockerHub. Once both legs are settled the application is ready to allot.';
+
+/** Said when the money cleared here but their side did not take it. */
+export const SETTLE_FAILED_NOTE =
+  'Cheque cleared in NCD, but LockerHub did NOT accept the settlement — the locker leg is still outstanding and the locker will not allot. '
+  + 'Use "Retry settlement" on the cheque; it is safe to repeat.';
 
 export interface RecordChequeInput {
   lockerApplicationId: string;
@@ -63,6 +80,10 @@ const shape = (r: Record<string, unknown>) => ({
   cleared_on: toISODate(r.cleared_on as string | null),
   reference: r.reference ?? null,
   notes: r.notes ?? null,
+  /** When the leg was settled on LockerHub. NULL on a Cleared cheque means the
+   *  money is in but their leg is still open — the row someone must chase. */
+  lockerhub_settled_at: r.lockerhub_settled_at ?? null,
+  lockerhub_error: r.lockerhub_error ?? null,
 });
 
 /** Take a cheque against a locker application. */
@@ -136,7 +157,57 @@ export async function listCheques(db: Db, filters: { status?: string; lockerAppl
 
 /** Money landed in the bank — releases NCD's hold only. */
 export async function clearCheque(db: Db, actor: AuthUser, id: number, input: { clearedOn: string; reference?: string | null }) {
-  return settle(db, actor, id, 'Cleared', { clearedOn: input.clearedOn, reference: input.reference ?? null });
+  const cleared = await settle(db, actor, id, 'Cleared', { clearedOn: input.clearedOn, reference: input.reference ?? null });
+  // Settle AFTER the local commit, never inside it: an open HTTP call in a
+  // transaction holds a row lock for the length of someone else's outage, and
+  // rolling the clear back would be wrong anyway — the money did clear.
+  return settleOnLockerHub(db, actor, cleared.cheque);
+}
+
+/**
+ * Push a cleared cheque to LockerHub (§A18) and record what happened.
+ *
+ * Never throws for a their-side failure: the cheque is cleared either way, and
+ * an exception here would tell the operator the clearance failed when it did
+ * not. The outcome is written to the row and returned instead.
+ */
+async function settleOnLockerHub(db: Db, actor: AuthUser, cheque: ReturnType<typeof shape>) {
+  // Same shape routes.ts sends on every other Part A write — their audit log
+  // shows the real person, not "NCD".
+  const staff: lh.ActingStaff = { id: actor.id, name: actor.fullName, email: actor.email, staff_role: actor.role };
+  try {
+    await lh.settleOffline(staff, String(cheque.lockerhub_application_id), {
+      leg: cheque.leg as ChequeLeg,
+      method: 'cheque',
+      // Their reference, ours as the fallback — a bank ref identifies the money
+      // better than our cheque number, but the cheque number always exists.
+      reference: String(cheque.reference || cheque.cheque_no),
+      ...(cheque.cleared_on ? { received_on: cheque.cleared_on } : {}),
+    });
+    const row = (await db.query<Record<string, unknown>>(
+      'UPDATE locker_cheques SET lockerhub_settled_at = now(), lockerhub_error = NULL WHERE id = $1 RETURNING *',
+      [cheque.id])).rows[0]!;
+    return { cheque: shape(row), settled: true, note: SETTLED_NOTE };
+  } catch (e) {
+    const msg = (e as Error).message || 'LockerHub did not accept the settlement';
+    const row = (await db.query<Record<string, unknown>>(
+      'UPDATE locker_cheques SET lockerhub_error = $1 WHERE id = $2 RETURNING *',
+      [msg.slice(0, 500), cheque.id])).rows[0]!;
+    return { cheque: shape(row), settled: false, note: SETTLE_FAILED_NOTE, error: msg };
+  }
+}
+
+/**
+ * Retry a settlement that failed after the cheque cleared. Safe to repeat —
+ * §A18 is idempotent on their side — and refuses on a cheque that never
+ * cleared, so it can't be used to settle a leg against paper still in hand.
+ */
+export async function retrySettlement(db: Db, actor: AuthUser, id: number) {
+  const cur = (await db.query<Record<string, unknown>>('SELECT * FROM locker_cheques WHERE id = $1', [id])).rows[0];
+  if (!cur) throw errors.notFound('Cheque not found');
+  if (cur.status !== 'Cleared') throw errors.conflict('Only a cleared cheque can settle a locker leg.');
+  if (cur.lockerhub_settled_at) return { cheque: shape(cur), settled: true, note: SETTLED_NOTE };
+  return settleOnLockerHub(db, actor, shape(cur));
 }
 
 /** Cheque bounced / withdrawn — frees the leg so a fresh one can be recorded. */

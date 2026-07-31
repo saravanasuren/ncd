@@ -182,23 +182,47 @@ export function CustomerDetailPage() {
 
       <div className={`${card} mt-4`}>
         <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Profile</h2>
-        <dl className="grid grid-cols-2 gap-y-2 text-sm">
-          <Field label="Phone" value={c.phone} /><Field label="District" value={c.district} />
-          <Field label="KYC" value={c.kyc_status} /><Field label="Active" value={c.is_active ? 'Yes' : 'No'} />
-          <Field label="PAN" value={c.pan} /><Field label="Email" value={c.email} />
-          {/* DOB drives the senior-citizen TDS slab, so the age is worth showing
-              next to it rather than left for the reader to work out. The API
-              parses DATE as a plain 'YYYY-MM-DD' string (db/pg.ts), so there is
-              no timezone shift to guard against here. */}
+        {/* Grouped, full detail — same field set as the quick-view popup, so the
+            profile page shows everything in one place, plus the profile's richer
+            Referred-by link and Form-15G/15H validity. */}
+        <div className="text-[11px] font-semibold text-text-label uppercase tracking-wide mb-1.5">Personal</div>
+        <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
+          <Field label="Phone" value={c.phone} />
+          <Field label="Alt. phone" value={c.phone_secondary} />
+          <Field label="Email" value={c.email} />
+          <Field label="PAN" value={c.pan} />
+          {/* Aadhaar shown masked to last 4 — the same posture as the popup. */}
+          <Field label="Aadhaar" value={c.aadhaar_last4 ? `XXXX XXXX ${c.aadhaar_last4}` : null} />
+          {/* DOB carries the age (drives the senior-citizen TDS slab); parsed as a
+              plain 'YYYY-MM-DD' string, so no timezone shift to guard against. */}
           <Field label="Date of birth" value={dobLabel(c.dob)} />
-          {/* Who brought this customer in — staff or agent (owner 2026-07-24). */}
-          {/* Tax position — this is what decides TDS on every payout, so it
-              belongs on the profile, not buried in the enrolment wizard. */}
+          <Field label="Gender" value={c.gender} />
+          <Field label="Father / spouse" value={c.father_name} />
+          <Field label="Occupation" value={c.occupation} />
+          <Field label="Category" value={c.investor_category} />
+          <Field label="NRI" value={c.is_nri ? 'Yes' : 'No'} />
+        </dl>
+
+        <div className="text-[11px] font-semibold text-text-label uppercase tracking-wide mb-1.5">Address</div>
+        <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
+          <Field label="Address" value={c.address} />
+          <Field label="City" value={c.city} />
+          <Field label="District" value={c.district} />
+          <Field label="State" value={c.state} />
+          <Field label="Pincode" value={c.pincode} />
+        </dl>
+
+        <div className="text-[11px] font-semibold text-text-label uppercase tracking-wide mb-1.5">Status &amp; attribution</div>
+        <dl className="grid grid-cols-2 gap-y-2 text-sm">
+          <Field label="KYC" value={c.kyc_status} />
+          <Field label="Active" value={c.is_active ? 'Yes' : 'No'} />
+          <Field label="CKYC no." value={c.ckyc_number} />
+          {/* Tax position — decides TDS on every payout, so it belongs here. */}
           <Field label="TDS applicable" value={c.tds_applicable === false ? 'No' : 'Yes'} />
           <Field label="Form 15G/15H" value={c.tax_form
             ? `${c.tax_form}${c.tax_form_expires_on ? ` · valid to ${String(c.tax_form_expires_on).slice(0, 10)}` : ' · no validity date (ignored)'}`
             : null} />
-          <Field label="NRI" value={c.is_nri ? 'Yes' : 'No'} />
+          {/* Who brought this customer in — staff or agent (owner 2026-07-24). */}
           <Field label="Enrolled by" value={c.enrolled_by_name
             ? `${c.enrolled_by_name}${c.enrolled_by_kind === 'agent' ? ` (agent${c.enrolled_by_agent_code ? ' ' + c.enrolled_by_agent_code : ''})` : ' (staff)'}`
             : null} />

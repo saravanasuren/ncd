@@ -323,6 +323,30 @@ lockersRouter.post('/waivers', requirePermission('lockers:waive'), asyncHandler(
   res.status(201).json(await createWaiver(getDb(), req.user!, b));
 }));
 
+// ── A17.1 push KYC to an application that reached them bare ───────────────
+// Only needed for applications created before the screen started sending
+// customer_id; A7 now carries the KYC with the create.
+//
+// Built server-side from our own book, exactly like the applicant block: the
+// browser never supplies KYC fields, so it cannot be used to assert a
+// verification the operator cannot otherwise see. And we refuse outright
+// unless our record says Verified — LockerHub accepts this approved-on-
+// arrival, so a false assertion here becomes a false record there.
+lockersRouter.post('/applications/:id/kyc', asyncHandler(async (req, res) => {
+  const { customer_id } = z.object({ customer_id: z.number().int().positive() }).parse(req.body ?? {});
+  const { assertCustomerVisible } = await import('../../lib/visibility.js');
+  await assertCustomerVisible(getDb(), req.user!, customer_id);
+  const { buildKycEvidence } = await import('./applicant.js');
+  const kyc = await buildKycEvidence(getDb(), customer_id);
+  if (!kyc) throw errors.notFound('Customer not found');
+  if (!kyc.verified) {
+    throw errors.badRequest(
+      "This customer's KYC is not verified in NCD, so there is nothing to hand over. Verify it on their profile first.");
+  }
+  if (!kyc.pan) throw errors.badRequest('This customer has no PAN on file — LockerHub needs it.');
+  res.json(await lh.pushKyc(staffOf(req), String(req.params.id), kyc));
+}));
+
 // ── A19 locker-agreement e-Sign (post-allotment) ──────────────────────────
 // Read is open to anyone who can enrol — staff need to see whether the
 // customer has signed. Starting one messages the customer (Digio emails and

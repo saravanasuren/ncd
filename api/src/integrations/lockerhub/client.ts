@@ -243,6 +243,28 @@ export const settleOffline = (
   'POST', `/locker-applications/${encodeURIComponent(applicationId)}/settle-offline`, { body: { ...input, staff } });
 
 /**
+ * A17.1 — hand our KYC to an application that reached them bare.
+ *
+ * For applications created before the enrolment screen started sending
+ * `customer_id`: no applicant block went with them, so they park at
+ * `kyc_pending` with nothing to move them on. Going forward A7 carries the
+ * KYC and this is not needed.
+ *
+ * LockerHub takes this approved-on-arrival, so it must only ever be sent when
+ * OUR book says Verified — see modules/lockers/routes.ts, which refuses
+ * otherwise. Asserting a verification we have not done would put a false
+ * record in their book, and they are a regulated counterparty too.
+ *
+ * Aadhaar last four only. Never the full number.
+ */
+export const pushKyc = (
+  staff: ActingStaff,
+  applicationId: string,
+  kyc: { pan: string; aadhaar_last4: string; verified: boolean; verified_on?: string; verifier?: string },
+) => lhFetch<Record<string, unknown>>(
+  'POST', `/locker-applications/${encodeURIComponent(applicationId)}/kyc`, { body: { ...kyc, staff } });
+
+/**
  * A19 — start the locker-agreement e-Sign.
  *
  * Builds the agreement, uploads it to Digio and returns the signing `auth_url`;

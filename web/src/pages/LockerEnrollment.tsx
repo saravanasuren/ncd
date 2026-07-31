@@ -198,6 +198,18 @@ export function LockerEnrollmentPage() {
       await loadCheques(); await loadPendingCheques(); await refreshApp();
     }
   };
+  /**
+   * Hand our KYC over for an application that reached LockerHub bare (§A17.1).
+   * Only ever needed for ones created before the screen started sending the
+   * customer id — new applications carry the KYC with the create.
+   */
+  const pushKyc = async () => {
+    if (!app?.application_id || !ncdCust?.id) return;
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/kyc`, {
+      customer_id: Number(ncdCust.id),
+    }));
+    if (r) { setErr(''); await refreshApp(); }
+  };
   /** Locker-agreement e-Sign (§A19). Only exists after allotment. */
   const [esign, setEsign] = useState<any>(null);
   const loadEsign = async () => {
@@ -525,6 +537,19 @@ export function LockerEnrollmentPage() {
                 <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{app.status}</span>
                 <button className={`${btnGhost} ml-auto`} disabled={busy} onClick={refreshApp}>Refresh</button>
               </div>
+              {/* An application stuck on KYC is one created before the screen
+                  started sending the customer id, so no profile went with it.
+                  Hand it over rather than making someone open LockerHub.
+                  Needs a PAN match — the phone lookup does not identify an NCD
+                  customer, and we will not assert KYC we cannot attribute. */}
+              {(app.status === 'kyc_pending' || app.kyc?.pending) && (
+                <div className="mb-2 flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-warn">LockerHub is waiting on this customer's KYC.</span>
+                  {ncdCust?.id
+                    ? <button className={btnGhost} disabled={busy} onClick={pushKyc}>Send their KYC to LockerHub</button>
+                    : <span className="text-xs text-text-muted">Look the customer up by PAN to send it.</span>}
+                </div>
+              )}
               {app.pricing && (
                 app.pricing.rent_payable != null ? (
                   <div className="text-xs text-text-muted">

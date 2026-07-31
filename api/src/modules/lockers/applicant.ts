@@ -31,7 +31,12 @@ const clean = (v: unknown): string => {
   const s = String(v ?? '').trim();
   return s === 'null' || s === 'undefined' ? '' : s;
 };
-const iso = (v: unknown): string => (v instanceof Date ? v.toISOString().slice(0, 10) : clean(v));
+/** A DATE, never a timestamp. The driver hands back `2026-07-31T06:37:42.959Z`
+ *  for a timestamptz, and passing that through as a "verified on" date puts a
+ *  time-of-day into a field their form shows as a date. Slicing a plain
+ *  `YYYY-MM-DD` is a no-op, so this is safe for both. */
+const iso = (v: unknown): string =>
+  (v instanceof Date ? v.toISOString() : clean(v)).slice(0, 10);
 
 // A `type`, not an `interface`, on purpose: only a type alias gets an implicit
 // index signature, and the client sends this as a JSON body typed
@@ -50,6 +55,60 @@ export type ApplicantBlock = {
  * failing the enrolment, since the applicant block is enrichment, not a
  * precondition (LockerHub accepts a create without it).
  */
+/**
+ * The KYC evidence for §A17.1 — handing our verification to LockerHub for an
+ * application that reached them bare (created before the enrolment screen
+ * started sending `customer_id`, so no applicant block went with it).
+ *
+ * Returns null when the customer is unknown, and `verified: false` when OUR
+ * book does not say Verified. The caller refuses to send in that case rather
+ * than asserting a verification we have not done — LockerHub accepts this
+ * approved-on-arrival, so a false assertion here becomes a false record there.
+ *
+ * `verified_on` / `verifier` come from the audit trail, which is where we
+ * actually record who set the status and when; there is no column for either.
+ * `method` is omitted for the same reason it is omitted from the applicant
+ * block: we do not record HOW kyc was done, and guessing "digilocker" would
+ * put a false provenance claim in their book.
+ *
+ * Aadhaar is last four ONLY, through the same `last4()` as everything else
+ * here — `customers.aadhaar` is never selected.
+ */
+export interface KycEvidence {
+  pan: string;
+  aadhaar_last4: string;
+  verified: boolean;
+  verified_on?: string;
+  verifier?: string;
+}
+
+export async function buildKycEvidence(db: Db, customerId: number): Promise<KycEvidence | null> {
+  // NOTE: `customers.aadhaar` (the full 12 digits) is deliberately NOT selected.
+  const c = (await db.query<Record<string, unknown>>(
+    'SELECT pan, aadhaar_last4, kyc_status FROM customers WHERE id = $1 AND archived_at IS NULL',
+    [customerId])).rows[0];
+  if (!c) return null;
+
+  const verified = clean(c.kyc_status) === 'Verified';
+  // Who marked it, and when. Newest wins: a customer can be rejected and later
+  // re-verified, and the live status is the one we are asserting.
+  const a = verified
+    ? (await db.query<Record<string, unknown>>(
+        `SELECT al.created_at, u.full_name
+           FROM audit_log al LEFT JOIN users u ON u.id = al.actor_id
+          WHERE al.entity_type = 'customers' AND al.entity_id = $1 AND al.action = 'customer.kyc'
+          ORDER BY al.id DESC LIMIT 1`, [String(customerId)])).rows[0]
+    : undefined;
+
+  return {
+    pan: clean(c.pan),
+    aadhaar_last4: last4(c.aadhaar_last4) ?? '',
+    verified,
+    ...(a?.created_at ? { verified_on: iso(a.created_at) } : {}),
+    ...(clean(a?.full_name) ? { verifier: clean(a?.full_name) } : {}),
+  };
+}
+
 export async function buildApplicantBlock(db: Db, customerId: number): Promise<ApplicantBlock | null> {
   // NOTE: `customers.aadhaar` (the full 12 digits) is deliberately NOT selected.
   const c = (await db.query<Record<string, unknown>>(

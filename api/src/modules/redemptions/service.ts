@@ -398,7 +398,13 @@ export async function redemptionNeft(db: Db, redemptionId?: number): Promise<Buf
       // Beneficiary Name is the bank account's own holder, not the customer
       // record — joint/differently-named accounts must match the bank.
       beneName: String(r.beneficiary_name || r.name || ''), ifsc: String(r.payee_ifsc ?? ''),
-      seriesName: String(r.series_name ?? ''), reference: String(r.redemption_no),
+      seriesName: String(r.series_name ?? ''),
+      // Debit Remarks: 'ncdredemption' for a redemption sheet (the interest sheet
+      // uses 'ncdinterest') — owner-confirmed exact string, goes verbatim to the bank.
+      debitRemark: 'ncdredemption',
+      // Unique reference must carry no symbols/spaces (some bank portals reject
+      // them): MCR-2026-000157 → MCR2026000157.
+      reference: String(r.redemption_no).replace(/[^A-Za-z0-9]/g, ''),
     }))
   );
 }

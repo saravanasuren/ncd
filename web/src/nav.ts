@@ -25,6 +25,7 @@ export const NAV: NavItem[] = [
   { to: '/app/locker-tenants', label: 'Locker Tenants', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/locker-visits', label: 'Locker Visit Log', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/applications', label: 'Applications', anyOf: ['customers:read'], group: 'Daily', hideForRoles: ['cxo'] },
+  { to: '/app/outstanding', label: 'Outstanding', anyOf: ['customers:read'], group: 'Daily' },
   { to: '/app/approvals', label: 'Approvals', anyOf: ['approvals:check', 'approvals:check-premature', 'approvals:check-handover'], group: 'Daily' },
   { to: '/app/allotments', label: 'Allotments', anyOf: ['allotments:execute'], group: 'Periodic' },
   { to: '/app/redemptions', label: 'Redemptions', anyOf: ['redemptions:initiate'], group: 'Periodic' },

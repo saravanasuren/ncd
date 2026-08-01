@@ -17,7 +17,9 @@
  * dashboard needs to identify an investor, but a leaked extract must not be
  * enough to impersonate one. Nothing here can be un-masked downstream.
  *
- * Files written (one per table, plus a manifest):
+ * Files written:
+ *   ncd-extract.xlsx  ONE workbook, one tab per table — open it and read it.
+ *                     This is the primary artefact (owner 2026-08-01).
  *   customers.csv     one row per active customer
  *   investments.csv   one row per investment  ← the dashboard's fact table
  *   interest.csv      one row per scheduled/paid interest or redemption row
@@ -26,12 +28,18 @@
  *   summary.csv       single row of headline totals
  *   manifest.json     what ran, when, row counts — so a silent half-write shows
  *
+ * The CSVs are the SAME rows as the workbook tabs, written from one in-memory
+ * copy so the two can never disagree. Both are shipped because they serve
+ * different readers: the workbook is what a person opens, and some BI tools
+ * ingest a plain CSV far more reliably than a sheet inside a workbook.
+ *
  * Usage on the box (DATABASE_URL comes from SSM, mirroring deploy.sh):
  *   unset DATABASE_URL LEGACY_DATABASE_URL
  *   node dist/scripts/daily-extract.js --out /tmp/ncd-extract
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import ExcelJS from 'exceljs';
 import { loadSecretsFromSsm } from '../secrets.js';
 import { createDb } from '../db/index.js';
 import type { AuthUser } from '../lib/authUser.js';
@@ -88,9 +96,12 @@ async function main() {
   const db = createDb();
   const a = SYSTEM_ACTOR;
   const counts: Record<string, number> = {};
-  const write = (name: string, headers: string[], rows: Array<Array<string | number>>) => {
+  // Each table is captured once and used for BOTH outputs — never queried twice.
+  const tables: Array<{ tab: string; headers: string[]; rows: Array<Array<string | number>> }> = [];
+  const write = (name: string, tab: string, headers: string[], rows: Array<Array<string | number>>) => {
     writeFileSync(join(outDir, name), csv(headers, rows), 'utf8');
     counts[name] = rows.length;
+    tables.push({ tab, headers, rows });
     console.log(`  ${name.padEnd(18)} ${rows.length} rows`);
   };
 
@@ -101,7 +112,7 @@ async function main() {
   // own Customer-wise report does, so the dashboard's "total invested per
   // customer" is the same number the office sees on screen.
   const customers = await book.customerWiseReport(db, a);
-  write('customers.csv',
+  write('customers.csv', 'Customers',
     ['customer_code', 'full_name', 'dob', 'age', 'pan_masked', 'phone', 'address',
      'tds_status', 'total_invested', 'total_all_time', 'total_redeemed', 'investment_count'],
     customers.map((c) => [
@@ -113,7 +124,7 @@ async function main() {
 
   // ── investments (the fact table) ───────────────────────────────────────
   const apps = await book.applicationsFlat(db, a) as Array<Record<string, unknown>>;
-  write('investments.csv',
+  write('investments.csv', 'Investments',
     ['application_no', 'customer_code', 'customer', 'series_code', 'status',
      'amount', 'date_money_received', 'allotment_date', 'maturity_date', 'redemption_date',
      'coupon_rate_pct', 'tenure_months', 'payout_frequency'],
@@ -127,7 +138,7 @@ async function main() {
 
   // ── interest / disbursement ledger ─────────────────────────────────────
   const ledger = await book.interestLedger(db, a) as Array<Record<string, unknown>>;
-  write('interest.csv',
+  write('interest.csv', 'Interest',
     ['due_date', 'application_no', 'customer_code', 'customer', 'series_code',
      'due_type', 'gross_amount', 'tds_amount', 'net_amount', 'status', 'paid_at', 'utr'],
     ledger.map((r) => [
@@ -145,7 +156,7 @@ async function main() {
   // per-row money detail is already in interest.csv as the BrokenInterest and
   // Redemption ledger rows, computed by the same code that pays them.
   const reds = await book.redemptions(db, a) as Array<Record<string, unknown>>;
-  write('redemptions.csv',
+  write('redemptions.csv', 'Redemptions',
     ['redemption_date', 'customer', 'series_code', 'type', 'net_payment'],
     reds.map((r) => [
       d(r.redemption_date), r.customer_name as string ?? '',
@@ -154,7 +165,7 @@ async function main() {
 
   // ── series ─────────────────────────────────────────────────────────────
   const series = await book.seriesSummary(db, a) as Array<Record<string, unknown>>;
-  write('series.csv',
+  write('series.csv', 'Series',
     ['series_code', 'status', 'investors', 'issued', 'redeemed', 'outstanding'],
     series.map((s) => [
       s.code as string ?? '', s.status as string ?? '', num(s.investors),
@@ -166,18 +177,44 @@ async function main() {
   // re-add the fact table (and reach a different answer).
   const k = await book.kpis(db, a) as Record<string, unknown>;
   const asOf = new Date().toISOString();
-  write('summary.csv',
+  write('summary.csv', 'Summary',
     ['as_of', 'outstanding_book', 'active_investors', 'interest_paid', 'interest_scheduled',
      'customers', 'investments', 'series'],
     [[asOf, num(k.outstanding_book), num(k.active_investors), num(k.interest_paid),
       num(k.interest_scheduled), customers.length, apps.length, series.length]]);
+
+  // ── one workbook, one tab per table ────────────────────────────────────
+  // Streaming writer: Interest alone is ~43k rows, and holding a whole styled
+  // workbook in memory to serialise at the end is how a nightly job quietly
+  // starts OOM-ing a year from now.
+  const xlsxPath = join(outDir, 'ncd-extract.xlsx');
+  const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ filename: xlsxPath, useStyles: true, useSharedStrings: false });
+  wb.creator = 'Dhanam NCD';
+  // Summary first: it's the tab a person wants when they open the file.
+  const ordered = [...tables].sort((x, y) => (x.tab === 'Summary' ? -1 : y.tab === 'Summary' ? 1 : 0));
+  for (const t of ordered) {
+    const ws = wb.addWorksheet(t.tab);
+    ws.columns = t.headers.map((h) => ({ header: h, width: Math.min(Math.max(h.length + 4, 12), 30) }));
+    ws.getRow(1).font = { bold: true };
+    // Numeric-looking cells go in as NUMBERS, not text — otherwise every chart
+    // and SUM in the dashboard silently reads zero. Codes that merely look
+    // numeric (application_no, customer_code, phone) are excluded by name.
+    const asText = new Set(['application_no', 'customer_code', 'phone', 'utr', 'pan_masked']);
+    const numeric = t.headers.map((h) => !asText.has(h) && /amount|_pct|months|total|issued|redeemed|outstanding|investors|count|gross|tds|net|payment|principal|penalty|interest|age/i.test(h));
+    for (const r of t.rows) {
+      ws.addRow(r.map((v, i) => (numeric[i] && v !== '' && Number.isFinite(Number(v)) ? Number(v) : v))).commit();
+    }
+    ws.commit();
+  }
+  await wb.commit();
+  console.log(`  ncd-extract.xlsx   ${tables.length} tabs`);
 
   // ── manifest ───────────────────────────────────────────────────────────
   // Row counts are here so a partial or empty extract is OBVIOUS to whoever
   // loads it. A dashboard fed a silently-empty CSV just shows zero, which reads
   // like a bad month rather than a broken pipeline.
   writeFileSync(join(outDir, 'manifest.json'), JSON.stringify({
-    source: 'dhanam-ncd', generated_at: asOf, files: counts,
+    source: 'dhanam-ncd', generated_at: asOf, files: { 'ncd-extract.xlsx': `${tables.length} tabs`, ...counts },
     masked_fields: ['customers.pan_masked'],
     note: 'Figures come from the NCD app\'s own report functions; PAN masked to last 4.',
   }, null, 2) + '\n', 'utf8');

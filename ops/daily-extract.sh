@@ -7,6 +7,10 @@
 # database first. This writes the same book as flat CSV that Power BI / Excel /
 # Sheets open directly.
 #
+# ncd-extract.xlsx is the primary artefact: one workbook, one tab per table.
+# The CSVs go too — same rows, different reader (some BI tools ingest a plain
+# CSV far more reliably than a sheet inside a workbook).
+#
 # Files are uploaded under FIXED names into one folder, overwriting yesterday's,
 # so the dashboard can point at a stable path instead of hunting for the newest
 # dated folder. History is not kept here — the nightly pg_dump already is the
@@ -40,6 +44,7 @@ export SHAREPOINT_CLIENT_SECRET=$(aws ssm get-parameter --name /dhanam/newwealth
 export SHAREPOINT_BACKUP_DRIVE_ID=$(aws ssm get-parameter --name /dhanam/newwealth/SHAREPOINT_BACKUP_DRIVE_ID $R 2>/dev/null || true)
 
 node /home/ubuntu/ncd/ops/upload-sharepoint.mjs \
+  "$OUT"/ncd-extract.xlsx \
   "$OUT"/customers.csv \
   "$OUT"/investments.csv \
   "$OUT"/interest.csv \

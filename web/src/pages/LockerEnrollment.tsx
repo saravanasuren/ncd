@@ -95,7 +95,14 @@ export function LockerEnrollmentPage() {
     setCust(r.locker ?? { found: false });
   };
   const saveCustomer = async () => {
-    const r = await run(api.post<any>('/api/lockers/customers', { phone, name, email: email || undefined }));
+    // customer_id makes the server attach the full profile from our own book —
+    // address, DOB, the lot. LockerHub does not backfill customers whose
+    // applications predate their fix, so without this their record stays a
+    // bare name and phone (2026-07-31).
+    const r = await run(api.post<any>('/api/lockers/customers', {
+      phone, name, email: email || undefined,
+      ...(ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}),
+    }));
     if (r?.success) setCust({ found: true, phone, profile: { name, email } });
   };
   const createApp = async () => {
@@ -548,8 +555,22 @@ export function LockerEnrollmentPage() {
               <input className={inp} placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} />
               <input className={inp} placeholder="Email (optional)" value={email} onChange={(e) => setEmail(e.target.value)} />
               <div className="col-span-2 flex items-center gap-2">
-                <span className={`text-xs rounded px-1.5 py-0.5 ${cust.found ? 'bg-[color:var(--success-bg)] text-success' : 'bg-bg text-text-muted'}`}>{cust.found ? 'Existing customer' : 'New — will be created'}</span>
-                {!cust.found && <button className={btnGhost} disabled={!name.trim() || busy} onClick={saveCustomer}>Save customer</button>}
+                {/* "Existing" / "New" is about LOCKERHUB, not NCD — a customer
+                    can be in our book and unknown to them. */}
+                <span className={`text-xs rounded px-1.5 py-0.5 ${cust.found ? 'bg-[color:var(--success-bg)] text-success' : 'bg-bg text-text-muted'}`}>{cust.found ? 'Known to LockerHub' : 'New to LockerHub — will be created'}</span>
+                {!cust.found
+                  ? <button className={btnGhost} disabled={!name.trim() || busy} onClick={saveCustomer}>Save customer</button>
+                  // Known to them, but their profile is EMPTY: they only write
+                  // it on create and never backfill, so anyone enrolled before
+                  // that fix sits there as a bare name and phone. This is the
+                  // only way to fill it, and it was unreachable while the
+                  // button was hidden for known customers.
+                  : !String(cust.profile?.address_line1 ?? cust.profile?.city ?? '').trim() && (
+                      <>
+                        <button className={btnGhost} disabled={!name.trim() || busy} onClick={saveCustomer}>Send their details to LockerHub</button>
+                        <span className="text-xs text-text-muted">LockerHub holds no address for them.</span>
+                      </>
+                    )}
               </div>
             </div>
           )}
@@ -775,13 +796,18 @@ export function LockerEnrollmentPage() {
                 {(() => {
                   const st = String(esign?.status ?? '').toLowerCase();
                   const url = esign?.auth_url || esign?.signing_url || esign?.url;
-                  const doc = esign?.document_url || esign?.pdf_url || esign?.signed_url;
+                  // A16 is keyed on the AGREEMENT id, which is the esign_id
+                  // from the status — not the application id. Deliberately NOT
+                  // esign.signed_file_url: that is an internal SharePoint link
+                  // and 404s for staff (LockerHub, 2026-07-31).
+                  const esignId = esign?.esign_id || esign?.id;
+                  const doc = esignId ? `/api/lockers/agreements/${encodeURIComponent(String(esignId))}/pdf` : null;
                   if (st === 'signed' || st === 'completed') return (
                     <div className="mt-1 flex items-center gap-2 flex-wrap">
                       <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">✓ signed</span>
                       {doc
                         ? <a className={btnGhost} href={doc} target="_blank" rel="noopener noreferrer">↓ Signed agreement</a>
-                        : <span className="text-xs text-text-muted">Ask LockerHub for the signed copy — we have no download route yet.</span>}
+                        : <span className="text-xs text-text-muted">Signed, but LockerHub did not return an agreement id — ask them for the copy.</span>}
                     </div>
                   );
                   if (esign?.found) return (

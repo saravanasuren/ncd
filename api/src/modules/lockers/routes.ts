@@ -122,12 +122,32 @@ lockersRouter.get('/applications/:id', asyncHandler(async (req, res) =>
   res.json(await lh.getLockerApplication(String(req.params.id)))));
 
 // ── Writes (staff injected from the session) ──────────────────────────────
+// Pass `customer_id` and the full profile is assembled HERE from our own book
+// — address, DOB, the lot. LockerHub writes the profile on locker-application
+// create going forward but does NOT backfill customers whose applications
+// predate that (2026-07-31), which is why theirs come back blank; this is how
+// we fill them. Server-side on purpose: the browser never supplies profile
+// fields, so it cannot write a profile the operator could not otherwise see.
+// Typed fields still win when passed, so the plain create-a-customer path is
+// unchanged.
 lockersRouter.post('/customers', asyncHandler(async (req, res) => {
-  const profile = z.object({
+  const b = z.object({
     phone: z.string().min(10), name: z.string().optional(), email: z.string().optional(),
     dob: z.string().optional(), address_line1: z.string().optional(), city: z.string().optional(),
     state: z.string().optional(), pincode: z.string().optional(),
+    customer_id: z.number().int().positive().nullish(),
   }).parse(req.body ?? {});
+  const { customer_id, ...typed } = b;
+
+  let profile: Record<string, unknown> = typed;
+  if (customer_id) {
+    const { assertCustomerVisible } = await import('../../lib/visibility.js');
+    await assertCustomerVisible(getDb(), req.user!, customer_id);
+    const { buildCustomerProfile } = await import('./applicant.js');
+    const built = await buildCustomerProfile(getDb(), customer_id);
+    // What the operator typed on screen wins — they may be correcting us.
+    if (built) profile = { ...built, ...typed };
+  }
   res.json(await lh.upsertCustomer(staffOf(req), profile));
 }));
 
@@ -371,6 +391,17 @@ lockersRouter.post('/applications/:id/kyc', asyncHandler(async (req, res) => {
   }
   if (!kyc.pan) throw errors.badRequest('This customer has no PAN on file — LockerHub needs it.');
   res.json(await lh.pushKyc(staffOf(req), String(req.params.id), kyc));
+}));
+
+// ── A16 the signed agreement, as a PDF ────────────────────────────────────
+// Keyed on the AGREEMENT id (`esign_id` from A19.2 /esign/status), not the
+// application id. Streamed through us rather than linked directly: their
+// endpoint needs the integration key, which must never reach a browser.
+lockersRouter.get('/agreements/:esignId/pdf', asyncHandler(async (req, res) => {
+  const { body, contentType } = await lh.agreementPdf(String(req.params.esignId));
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Disposition', `inline; filename="locker-agreement-${String(req.params.esignId)}.pdf"`);
+  res.end(body);
 }));
 
 // ── A19 locker-agreement e-Sign (post-allotment) ──────────────────────────

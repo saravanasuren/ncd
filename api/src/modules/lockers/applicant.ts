@@ -56,6 +56,53 @@ export type ApplicantBlock = {
  * precondition (LockerHub accepts a create without it).
  */
 /**
+ * The flat customer profile LockerHub stores against a phone (`POST /customers`,
+ * an upsert on `customer_profiles`).
+ *
+ * They write this on locker-application create going forward, but there is NO
+ * BACKFILL for customers whose applications predate that (LockerHub,
+ * 2026-07-31) — so for those we push it ourselves. Field names mirror what
+ * their `GET /customers/{phone}` returns, which is the shape they store.
+ *
+ * Built server-side for the same reason as the applicant block: the browser
+ * never supplies profile fields, so it cannot write a profile the operator
+ * could not otherwise see.
+ *
+ * No KYC here — `/kyc` owns that and this must not imply a verification.
+ */
+export interface CustomerProfileBlock {
+  phone: string;
+  name?: string;
+  email?: string;
+  dob?: string;
+  address_line1?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+}
+
+export async function buildCustomerProfile(db: Db, customerId: number): Promise<CustomerProfileBlock | null> {
+  const c = (await db.query<Record<string, unknown>>(
+    `SELECT full_name, email, phone, dob, address, city, state, pincode
+       FROM customers WHERE id = $1 AND archived_at IS NULL`, [customerId])).rows[0];
+  if (!c) return null;
+  const phone = clean(c.phone).replace(/\D/g, '').slice(-10);
+  if (phone.length !== 10) return null;   // LockerHub is keyed on a 10-digit phone
+  return {
+    phone,
+    ...(clean(c.full_name) ? { name: clean(c.full_name) } : {}),
+    ...(clean(c.email) ? { email: clean(c.email) } : {}),
+    ...(iso(c.dob) ? { dob: iso(c.dob) } : {}),
+    // One free-text line on our side; theirs splits into two and we only ever
+    // fill the first rather than chopping on commas and inventing structure.
+    ...(clean(c.address) ? { address_line1: clean(c.address) } : {}),
+    ...(clean(c.city) ? { city: clean(c.city) } : {}),
+    ...(clean(c.state) ? { state: clean(c.state) } : {}),
+    ...(clean(c.pincode) ? { pincode: clean(c.pincode) } : {}),
+  };
+}
+
+/**
  * The KYC evidence for §A17.1 — handing our verification to LockerHub for an
  * application that reached them bare (created before the enrolment screen
  * started sending `customer_id`, so no applicant block went with it).

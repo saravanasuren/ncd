@@ -76,6 +76,12 @@ export class Client {
   private cookies: Record<string, string> = {};
   constructor(private base: string) {}
 
+  /** The session cookies as a header — for responses `req` cannot parse,
+   *  e.g. a PDF body, where the caller has to fetch() directly. */
+  cookieHeader(): string {
+    return Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+  }
+
   async req(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
     const headers: Record<string, string> = { 'X-Requested-With': 'dhanam' };
     if (body !== undefined) headers['Content-Type'] = 'application/json';

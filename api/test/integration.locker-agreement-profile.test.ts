@@ -21,7 +21,7 @@ import { config } from '../src/config.js';
 
 let ctx: TestCtx;
 let mock: Server;
-let seen: Array<{ path: string; body: any }> = [];
+let seen: Array<{ path: string; body: any; query?: URLSearchParams }> = [];
 const PDF = Buffer.from('%PDF-1.4 signed locker agreement');
 
 beforeAll(async () => {
@@ -30,8 +30,14 @@ beforeAll(async () => {
     let raw = ''; req.on('data', (c) => (raw += c));
     req.on('end', () => {
       const url = new URL(req.url ?? '/', 'http://x');
-      seen.push({ path: url.pathname, body: raw ? JSON.parse(raw) : {} });
+      seen.push({ path: url.pathname, body: raw ? JSON.parse(raw) : {}, query: url.searchParams });
       if (/^\/agreements\/.+\/pdf$/.test(url.pathname)) {
+        // Mirror the live endpoint: no staff_id, no document. Found by probing
+        // production — it is not in the note LockerHub sent.
+        if (!url.searchParams.get('staff_id')) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'staff_id attribution required.' }));
+        }
         if (url.pathname.includes('missing')) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           return res.end(JSON.stringify({ error: 'agreement not found' }));
@@ -69,6 +75,17 @@ describe('A16 — the signed agreement', () => {
       headers: { Cookie: (await admin()).cookieHeader() },
     });
     expect(seen.some((s) => s.path === '/agreements/esign_xyz/pdf')).toBe(true);
+  });
+
+  it('carries staff attribution as a QUERY param — a GET has no body for it', async () => {
+    seen = [];
+    const r = await fetch(`${ctx.base}/api/lockers/agreements/esign_abc/pdf`, {
+      headers: { Cookie: (await admin()).cookieHeader() },
+    });
+    expect(r.status).toBe(200);                  // 400 here means we sent none
+    const call = seen.find((s) => /\/pdf$/.test(s.path))!;
+    expect(call.query?.get('staff_id')).toBeTruthy();
+    expect(call.query?.get('staff_name')).toBe('System Administrator');
   });
 
   it('a missing agreement surfaces their 404 rather than an empty file', async () => {

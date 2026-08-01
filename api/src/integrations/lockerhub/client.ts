@@ -84,13 +84,15 @@ async function lhFetch<T>(method: string, path: string, opts: { body?: unknown; 
  * parses, which would destroy a PDF. Errors are still read as JSON, since a
  * failure comes back as their usual error envelope.
  */
-async function lhFetchBinary(path: string): Promise<{ body: Buffer; contentType: string }> {
+async function lhFetchBinary(path: string, query: Record<string, string | undefined> = {}): Promise<{ body: Buffer; contentType: string }> {
+  const q = Object.entries(query).filter(([, v]) => v !== undefined && v !== '');
+  const qs = q.length ? '?' + q.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join('&') : '';
   if (!lockerHubConfigured()) throw errors.unavailable('LockerHub locker API is not configured (LOCKERHUB_API_URL)');
   const ctl = new AbortController();
   const tid = setTimeout(() => ctl.abort(), HTTP_TIMEOUT_MS);
   let resp: Response;
   try {
-    resp = await fetch(`${base()}${path}`, { headers: { 'X-Integration-Key': apiKey() }, signal: ctl.signal });
+    resp = await fetch(`${base()}${path}${qs}`, { headers: { 'X-Integration-Key': apiKey() }, signal: ctl.signal });
   } catch (e) {
     throw errors.unavailable(`LockerHub unreachable: ${(e as Error).message}`);
   } finally {
@@ -119,9 +121,18 @@ async function lhFetchBinary(path: string): Promise<{ body: Buffer; contentType:
  * that is an internal SharePoint link and is not openly fetchable, so
  * rendering it as a download would hand staff a link that 404s for them
  * (LockerHub, 2026-07-31).
+ *
+ * ATTRIBUTION IS MANDATORY, and as a QUERY PARAMETER — this is a GET, so there
+ * is no body to put a `staff` block in. Without `staff_id` they answer
+ * `400 staff_id attribution required` and nothing downloads. Found by probing
+ * their live endpoint after deploying; it is not in the note they sent, so do
+ * not "simplify" it away.
  */
-export const agreementPdf = (esignId: string) =>
-  lhFetchBinary(`/agreements/${encodeURIComponent(esignId)}/pdf`);
+export const agreementPdf = (staff: ActingStaff, esignId: string) =>
+  lhFetchBinary(`/agreements/${encodeURIComponent(esignId)}/pdf`, {
+    staff_id: String(staff.id),
+    staff_name: staff.name || undefined,
+  });
 
 // ── Reads ────────────────────────────────────────────────────────────────
 export const ping = () => lhFetch<{ ok: boolean; service: string; time: string }>('GET', '/ping');

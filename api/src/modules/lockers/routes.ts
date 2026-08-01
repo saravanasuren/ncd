@@ -323,6 +323,16 @@ lockersRouter.post('/waivers', requirePermission('lockers:waive'), asyncHandler(
   res.status(201).json(await createWaiver(getDb(), req.user!, b));
 }));
 
+// ── A19 locker-agreement e-Sign (post-allotment) ──────────────────────────
+// Read is open to anyone who can enrol — staff need to see whether the
+// customer has signed. Starting one messages the customer (Digio emails and
+// SMSes them), so it is a deliberate click, never a page load.
+lockersRouter.get('/applications/:id/esign', asyncHandler(async (req, res) =>
+  res.json(await lh.esignStatus(String(req.params.id)))));
+
+lockersRouter.post('/applications/:id/esign/initiate', asyncHandler(async (req, res) =>
+  res.json(await lh.esignInitiate(staffOf(req), String(req.params.id)))));
+
 // ── A21 fee waivers: waiving rent/deposit OWED on an application ──────────
 // Real money, unlike the informational deposit waiver above. Maker requests,
 // Admin/CXO approves, and only THEN does it reach LockerHub — they apply it

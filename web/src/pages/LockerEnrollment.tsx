@@ -198,6 +198,28 @@ export function LockerEnrollmentPage() {
       await loadCheques(); await loadPendingCheques(); await refreshApp();
     }
   };
+  /** Locker-agreement e-Sign (§A19). Only exists after allotment. */
+  const [esign, setEsign] = useState<any>(null);
+  const loadEsign = async () => {
+    if (!app?.application_id || !app?.allotment) return;
+    const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/esign`));
+    if (r) setEsign(r);
+  };
+  /**
+   * Start the signing. Digio emails and SMSes the customer, so this genuinely
+   * contacts them — a deliberate click, never automatic.
+   */
+  const startEsign = async () => {
+    if (!app?.application_id) return;
+    const ok = await confirm({
+      title: 'Send the locker agreement for signing?',
+      body: 'The customer is emailed and texted a signing link by Digio. You can also hand them the link on screen if they are at the branch.',
+      confirmLabel: 'Send for signing',
+    });
+    if (!ok) return;
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/esign/initiate`, {}));
+    if (r) { setEsign(r); await loadEsign(); }
+  };
   /** Waivers on this application (pending + approved). */
   const [feeWaivers, setFeeWaivers] = useState<any[]>([]);
   const loadFeeWaivers = async () => {
@@ -269,6 +291,8 @@ export function LockerEnrollmentPage() {
   useEffect(() => { void loadPendingCheques(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   // Waivers belong to an application, so they follow it rather than the mount.
   useEffect(() => { void loadFeeWaivers(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id]);
+  // There is no agreement until there is a locker — §A19 is post-allotment.
+  useEffect(() => { void loadEsign(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id, app?.allotment?.locker_number]);
   const chequeFor = (leg: string) => cheques.find((c) => c.leg === leg && c.status === 'Pending')
     ?? cheques.find((c) => c.leg === leg && c.status === 'Cleared');
   // Lockers and NCD are ONLINE-ONLY (contract v1.2 §A10): cash/cheque/transfer
@@ -675,7 +699,40 @@ export function LockerEnrollmentPage() {
         <div className={`${card} ${app.allotment ? 'border-success' : 'border-warn'}`}>
           <h2 className={h2}>{app.allotment ? '✓ Allotted' : 'Awaiting allotment'}</h2>
           {app.allotment ? (
-            <div className="text-sm">Locker <b>{app.allotment.locker_number}</b> ({app.allotment.size}) · lease {String(app.allotment.lease_start).slice(0, 10)} → {String(app.allotment.lease_end).slice(0, 10)}</div>
+            <>
+              <div className="text-sm">Locker <b>{app.allotment.locker_number}</b> ({app.allotment.size}) · lease {String(app.allotment.lease_start).slice(0, 10)} → {String(app.allotment.lease_end).slice(0, 10)}</div>
+              {/* Agreement e-Sign. `found: false` is a normal answer meaning
+                  nobody has started one — not an error. */}
+              <div className="mt-3 pt-3 border-t border-border text-sm">
+                <span className="text-xs font-semibold text-text-label uppercase tracking-wide">Locker agreement</span>
+                {(() => {
+                  const st = String(esign?.status ?? '').toLowerCase();
+                  const url = esign?.auth_url || esign?.signing_url || esign?.url;
+                  const doc = esign?.document_url || esign?.pdf_url || esign?.signed_url;
+                  if (st === 'signed' || st === 'completed') return (
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
+                      <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">✓ signed</span>
+                      {doc
+                        ? <a className={btnGhost} href={doc} target="_blank" rel="noopener noreferrer">↓ Signed agreement</a>
+                        : <span className="text-xs text-text-muted">Ask LockerHub for the signed copy — we have no download route yet.</span>}
+                    </div>
+                  );
+                  if (esign?.found) return (
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
+                      <span className="text-xs rounded px-1.5 py-0.5 bg-bg text-text-muted">awaiting signature{st ? ` · ${st}` : ''}</span>
+                      {url && <a className={btnGhost} href={url} target="_blank" rel="noopener noreferrer">Open signing link</a>}
+                      <button className={btnGhost} disabled={busy} onClick={loadEsign}>Check again</button>
+                    </div>
+                  );
+                  return (
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
+                      <button className={btn} disabled={busy} onClick={startEsign}>Send agreement for signing</button>
+                      <span className="text-xs text-text-muted">Digio emails and texts the customer a signing link.</span>
+                    </div>
+                  );
+                })()}
+              </div>
+            </>
           ) : canAllocate ? (
             <div className="text-sm">
               <div className="flex items-center gap-2 flex-wrap">

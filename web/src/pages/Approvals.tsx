@@ -329,10 +329,21 @@ function groupsOf(rows: ApprovalReq[]): Array<[string, ApprovalReq[]]> {
   return [...by.entries()];
 }
 
+interface Credit {
+  id: number;
+  amount: number;
+  date_money_received: string | null;
+  collection_method: string | null;
+  collection_reference: string | null;
+  has_receipt: boolean;
+}
+
 interface Editable {
   application_id: number;
   customer_id: number;
   has_receipt: boolean;
+  /** Every credit making up the investment. More than one = clubbed. */
+  credits?: Credit[];
   readonly: Record<string, string>;
   fields: {
     total_amount: number; date_money_received: string; collection_method: string;
@@ -388,10 +399,68 @@ function EditableInvestment({ ed, id, canAct, selfApproval, actionLabel, onDone 
           </span>
         ))}
       </dl>
+      {/* How the money actually arrived. An investment can be paid in parts and
+          clubbed — ₹50,000 + ₹25,000 + ₹25,000 = one ₹1,00,000 NCD — and the
+          fields below carry only the FIRST credit's date, method and reference.
+          Without this the approver signs off ₹1,00,000 having seen evidence for
+          ₹50,000, with no sign the other payments exist.
+          One credit shows nothing: the fields already say it all. */}
+      {(ed.credits?.length ?? 0) > 1 && (
+        <div className="mb-3 border border-warn/40 rounded overflow-hidden">
+          <div className="px-3 py-2 bg-[color:var(--warn-bg)] text-warn text-xs font-semibold">
+            Paid in {ed.credits!.length} parts — check each one, not just the total
+          </div>
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-border text-text-label">
+                <th className="py-1.5 px-3 text-left font-semibold">#</th>
+                <th className="py-1.5 px-3 text-left font-semibold">Received</th>
+                <th className="py-1.5 px-3 text-left font-semibold">Method</th>
+                <th className="py-1.5 px-3 text-left font-semibold">Reference</th>
+                <th className="py-1.5 px-3 text-right font-semibold">Amount</th>
+                <th className="py-1.5 px-3 text-right font-semibold" />
+              </tr>
+            </thead>
+            <tbody>
+              {ed.credits!.map((cr, i) => (
+                <tr key={cr.id} className="border-b border-border last:border-0">
+                  <td className="py-1.5 px-3 text-text-muted">{i + 1}</td>
+                  <td className="py-1.5 px-3 whitespace-nowrap">{cr.date_money_received ?? '—'}</td>
+                  <td className="py-1.5 px-3">{cr.collection_method ?? '—'}</td>
+                  <td className="py-1.5 px-3 font-mono">{cr.collection_reference ?? '—'}</td>
+                  <td className="py-1.5 px-3 text-right mono font-medium">{formatINR(cr.amount)}</td>
+                  <td className="py-1.5 px-3 text-right">
+                    {cr.has_receipt
+                      ? <a href={`/api/applications/${ed.application_id}/lines/${cr.id}/receipt`} target="_blank" rel="noreferrer" className="text-primary hover:underline">receipt</a>
+                      : <span className="text-text-muted">no receipt</span>}
+                  </td>
+                </tr>
+              ))}
+              {/* The parts must add up to what is being approved. Shown rather
+                  than assumed — a mismatch is exactly what a checker is for. */}
+              {(() => {
+                const sum = ed.credits!.reduce((s, cr) => s + Number(cr.amount), 0);
+                const total = Number(f.total_amount ?? 0);
+                return (
+                  <tr className="border-t border-border-strong">
+                    <td className="py-1.5 px-3 text-text-muted" colSpan={4}>Total of the parts</td>
+                    <td className={`py-1.5 px-3 text-right mono font-semibold ${Math.round(sum) === Math.round(total) ? '' : 'text-danger'}`}>{formatINR(sum)}</td>
+                    <td className="py-1.5 px-3 text-right text-text-muted">
+                      {Math.round(sum) === Math.round(total) ? '✓ matches' : `≠ ${formatINR(total)}`}
+                    </td>
+                  </tr>
+                );
+              })()}
+            </tbody>
+          </table>
+        </div>
+      )}
       <div className="mb-2 text-xs flex flex-wrap items-center gap-x-4 gap-y-1">
         <a href={`/app/customers/${ed.customer_id}`} target="_blank" rel="noreferrer" className="text-primary hover:underline">👤 View customer profile</a>
         {ed.has_receipt
-          ? <a href={`/api/applications/${ed.application_id}/receipt`} target="_blank" rel="noreferrer" className="text-primary hover:underline">📎 View receipt / cheque photo</a>
+          ? <a href={`/api/applications/${ed.application_id}/receipt`} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+              📎 View receipt / cheque photo{(ed.credits?.length ?? 0) > 1 ? ' (first part only)' : ''}
+            </a>
           : <span className="text-text-muted">No receipt attached.</span>}
       </div>
       <div className="text-xs text-text-muted mb-2">

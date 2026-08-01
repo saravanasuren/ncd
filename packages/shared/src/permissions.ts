@@ -46,6 +46,10 @@ export const PERMISSIONS = [
   // Record a deposit waiver/exception on a locker tenancy — NCD Manager+ makes,
   // Admin/CXO approves (approvals:check-premature).
   'lockers:waive',
+  // Allot a locker with rent/deposit still outstanding (§A20). LockerHub asked
+  // us to gate their override to a senior role — the tenancy is created against
+  // money not received, so this sits with the same people who approve a waiver.
+  'lockers:allot-override',
   // Remove a locker tenancy from NCD's roster view. super_admin ONLY — it hides
   // OUR row; the locker itself stays allotted on LockerHub, which owns it.
   'lockers:remove-tenant',
@@ -139,6 +143,12 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'reports:download',
     'approvals:check-premature', // the one CXO action (docs/03 §4)
     'approvals:check-handover', // repeat-customer handover (any one of Admin/CXO/BM)
+    // Allotting against unpaid money has no second approver, so it sits with
+    // the people who APPROVE a waiver, not the ones who request one. An NCD
+    // Manager can ask for a fee to be written off but cannot grant it; letting
+    // them hand over a locker for the same money unilaterally would be the
+    // weaker control for the identical outcome.
+    'lockers:allot-override',
   ],
 
   ncd_manager: [

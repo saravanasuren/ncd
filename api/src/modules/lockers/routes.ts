@@ -25,6 +25,7 @@ import { createWaiver, cancelWaiver } from './waivers.js';
 import './feeWaivers.js';
 import { linkTenant, removeTenant, restoreTenant } from './tenantOverrides.js';
 import { errors } from '../../lib/errors.js';
+import { writeAudit } from '../../lib/audit.js';
 
 export const lockersRouter = Router();
 lockersRouter.use(requirePermission('lockers:enroll'));
@@ -172,8 +173,33 @@ lockersRouter.post('/applications/:id/payment-link', asyncHandler(async (req, re
 // 400: the locker IS allotted, so re-driving a completed allocation has
 // succeeded — reporting that as an error would send staff hunting a failure
 // that never happened.
+//
+// §A20 override (2026-07-29): allot with money still outstanding. LockerHub
+// asked us to gate it to a senior role, so it needs `lockers:allot-override` —
+// super_admin / admin / CXO, the people who APPROVE a waiver. There is no
+// second approver on this action, so it cannot sit with the role that merely
+// REQUESTS one. Both fields are mandatory and it is audited on our side too:
+// their log records it, but "who at NCD decided this" belongs in our book.
 lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) => {
-  const b = z.object({ locker_id: z.string().optional(), lease_months: z.number().int().positive().optional() }).parse(req.body ?? {});
+  const b = z.object({
+    locker_id: z.string().optional(),
+    lease_months: z.number().int().positive().optional(),
+    override: z.object({
+      reason: z.string().trim().min(5, 'Say why the locker is being handed over unpaid'),
+      approved_by: z.string().trim().min(2, 'Name who authorised it'),
+    }).optional(),
+  }).parse(req.body ?? {});
+
+  if (b.override && !req.user!.permissions.includes('lockers:allot-override')) {
+    throw errors.forbidden('Allotting with money outstanding needs an Admin or CXO.');
+  }
+  if (b.override) {
+    await writeAudit(getDb(), {
+      actorId: req.user!.id, action: 'locker.allot.override', entityType: 'locker_applications',
+      entityId: String(req.params.id),
+      after: { reason: b.override.reason, approved_by: b.override.approved_by, locker_id: b.locker_id ?? null },
+    });
+  }
   try {
     res.json(await lh.allocate(staffOf(req), String(req.params.id), b));
   } catch (e) {

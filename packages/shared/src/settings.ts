@@ -307,6 +307,26 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     editableBy: 'admin',
   },
 
+  // ── Reports (recipient lists, super-admin managed — owner 2026-08-01) ──
+  {
+    key: 'reports.book_summary_recipients',
+    group: 'Reports',
+    label: 'Daily book summary recipients',
+    description: 'Email addresses that receive the 6:30 PM daily book summary. Leave empty to fall back to the management roles (super-admin, admin, CXO, NCD manager).',
+    type: 'list',
+    default: [],
+    editableBy: 'super_admin',
+  },
+  {
+    key: 'reports.error_alert_recipients',
+    group: 'Reports',
+    label: 'Error / 500 alert recipients',
+    description: 'Email addresses that receive server error (5xx) and crash alerts. Leave empty to fall back to the OPS_ALERT_EMAILS server setting.',
+    type: 'list',
+    default: [],
+    editableBy: 'super_admin',
+  },
+
   // ── System ──
   {
     key: 'system.api_page_limit_max',

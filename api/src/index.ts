@@ -118,8 +118,17 @@ async function main(): Promise<void> {
   const app = createApp();
   // Crash alerts in production only: a dev typo should not mail the owner.
   if (config.NODE_ENV === 'production') {
-    const { installCrashAlerts, alertRecipients } = await import('./lib/alerts.js');
+    const { installCrashAlerts, alertRecipients, setOpsAlertRecipients } = await import('./lib/alerts.js');
     installCrashAlerts();
+    // Hydrate the settings-managed ops-alert recipients (falls back to env).
+    try {
+      const { getDb } = await import('./db/index.js');
+      const { getSettingsMap } = await import('./modules/settings/service.js');
+      const map = await getSettingsMap(getDb());
+      setOpsAlertRecipients(map['reports.error_alert_recipients'] as string[] | undefined);
+    } catch (e) {
+      console.warn('[boot] ops-alert recipients from settings:', (e as Error).message);
+    }
     console.log(`[new-wealth-api] ops alerts → ${alertRecipients().join(', ') || '(none configured)'}`);
     await startCrons();
   }

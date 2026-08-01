@@ -33,15 +33,28 @@ const seen = new Map<string, Seen>();
 let windowStartedAt = 0;
 let sentThisWindow = 0;
 
+// Super-admin-managed override (Settings → reports.error_alert_recipients),
+// held in-process so the crash/5xx path stays synchronous with no DB round-trip.
+// Hydrated on boot and refreshed whenever the setting is saved; falls back to
+// the OPS_ALERT_EMAILS env when unset/empty so alerts never silently go nowhere.
+let opsAlertOverride: string[] | null = null;
+
+/** Set (or clear, with null/empty) the settings-managed ops-alert recipients. */
+export function setOpsAlertRecipients(emails: string[] | null | undefined): void {
+  const clean = Array.isArray(emails) ? emails.map((e) => String(e).trim()).filter(Boolean) : [];
+  opsAlertOverride = clean.length ? clean : null;
+}
+
 /** Recipients, or [] when the owner has deliberately silenced alerts. */
 export function alertRecipients(): string[] {
+  if (opsAlertOverride && opsAlertOverride.length) return opsAlertOverride;
   return String(config.OPS_ALERT_EMAILS ?? '')
     .split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 /** Test seam — the throttle is process-global state. */
 export function _resetAlertThrottle(): void {
-  seen.clear(); windowStartedAt = 0; sentThisWindow = 0;
+  seen.clear(); windowStartedAt = 0; sentThisWindow = 0; opsAlertOverride = null;
 }
 
 /**
@@ -96,7 +109,7 @@ export async function alertOps(subject: string, detail: string): Promise<void> {
     if (sentThisWindow >= MAX_PER_HOUR) {
       lines.push(`NOTE:        the ${MAX_PER_HOUR}-alerts-per-hour ceiling has been reached. Further errors this hour are being counted, not mailed. Check the server logs.`);
     }
-    lines.push('', 'You are receiving this because you are on OPS_ALERT_EMAILS.');
+    lines.push('', 'You are receiving this because you are on the error-alert recipients (Settings → Reports) or OPS_ALERT_EMAILS.');
 
     const provider = emailProvider();
     const body = lines.join('\n');

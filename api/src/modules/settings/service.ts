@@ -83,7 +83,7 @@ export async function updateSetting(
   if (!canEdit(def, actor.role)) throw errors.forbidden('Not allowed to edit this setting');
   validateValue(def, value);
 
-  return db.withTx(async (tx) => {
+  const result = await db.withTx(async (tx) => {
     const prev = await tx.query<{ value: unknown }>('SELECT value FROM app_settings WHERE key = $1', [key]);
     const before = prev.rows[0]?.value ?? def.default;
     await tx.query(
@@ -102,4 +102,13 @@ export async function updateSetting(
     });
     return { ...def, value };
   });
+
+  // Keep the in-process ops-alert recipient cache in step with the setting, so
+  // a save takes effect immediately without a restart (the alert path is sync).
+  if (key === 'reports.error_alert_recipients') {
+    const { setOpsAlertRecipients } = await import('../../lib/alerts.js');
+    setOpsAlertRecipients(Array.isArray(value) ? (value as string[]) : null);
+  }
+
+  return result;
 }

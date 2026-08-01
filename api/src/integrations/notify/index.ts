@@ -31,6 +31,9 @@ export interface SendResult {
 export interface SendMeta {
   template: string;
   payload: Record<string, unknown>;
+  /** Rich HTML body for email. When present, the email provider sends it as the
+   *  HTML part with `body` as the plain-text fallback. Ignored by SMS/WhatsApp. */
+  html?: string;
 }
 
 export interface NotifyProvider {

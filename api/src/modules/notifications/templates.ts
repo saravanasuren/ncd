@@ -1,8 +1,11 @@
 /** Notification template registry (docs/08 §5). Each renders subject+body
- * from a payload. Real HTML templates can replace these later; the contract
- * is render(template, payload) → { subject, body }. */
+ * from a payload. A renderer may also return `html` for a rich email body; the
+ * email provider sends it as the HTML part with `body` as the text fallback.
+ * The contract is render(template, payload) → { subject, body, html? }. */
+import { renderBookSummaryEmail } from '../../integrations/book-summary-email.js';
+import type { BookSummaryReport } from '../../integrations/book-summary.js';
 
-type Renderer = (p: Record<string, unknown>) => { subject: string; body: string };
+type Renderer = (p: Record<string, unknown>) => { subject: string; body: string; html?: string };
 
 const TEMPLATES: Record<string, Renderer> = {
   portal_otp: (p) => ({
@@ -37,20 +40,10 @@ const TEMPLATES: Record<string, Renderer> = {
     subject: 'Your DhanamFin agent account is approved',
     body: `Welcome ${p.agentName}. Your agent code is ${p.agentCode}.`,
   }),
-  book_summary: (p) => ({
-    subject: `Dhanam NCD daily book — ${p.report_date}`,
-    body: [
-      `Book summary for ${p.report_date}`,
-      ``,
-      `Total outstanding: ₹${p.total_outstanding} across ${p.active_apps} live investments`,
-      `New today (physical): ${p.physical}`,
-      `New today (app/LockerHub): ${p.funded}`,
-      `Redemptions today: ${p.redemptions}`,
-      ``,
-      `By series:`,
-      `${p.by_series}`,
-    ].join('\n'),
-  }),
+  book_summary: (p) => {
+    const m = renderBookSummaryEmail(p as unknown as BookSummaryReport);
+    return { subject: m.subject, body: m.text, html: m.html };
+  },
   crash_alert: (p) => ({
     subject: `⚠ Dhanam NCD ${p.kind}`,
     body: `An unhandled ${p.kind} occurred at ${p.at}:\n\n${p.detail}\n\nCheck: journalctl -u dhanam-newwealth -n 200`,
@@ -80,7 +73,7 @@ const TEMPLATES: Record<string, Renderer> = {
   }),
 };
 
-export function renderTemplate(template: string, payload: Record<string, unknown>): { subject: string; body: string } {
+export function renderTemplate(template: string, payload: Record<string, unknown>): { subject: string; body: string; html?: string } {
   const fn = TEMPLATES[template];
   if (!fn) return { subject: `[${template}]`, body: JSON.stringify(payload) };
   return fn(payload);

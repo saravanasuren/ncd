@@ -8,7 +8,7 @@ import type { NotifyProvider } from './index.js';
 
 export function sesProvider(): NotifyProvider {
   return {
-    async send(to, subject, body) {
+    async send(to, subject, body, meta) {
       if (!to) return { ok: false, error: 'no destination' };
       try {
         // Lazy import so dev/test without the SDK/creds never loads it.
@@ -20,7 +20,11 @@ export function sesProvider(): NotifyProvider {
           Destination: { ToAddresses: [to] },
           Message: {
             Subject: { Data: subject, Charset: 'UTF-8' },
-            Body: { Text: { Data: body, Charset: 'UTF-8' } },
+            // Send HTML when the renderer provided it, with `body` as the text
+            // fallback; plain text alone otherwise.
+            Body: meta?.html
+              ? { Html: { Data: meta.html, Charset: 'UTF-8' }, Text: { Data: body, Charset: 'UTF-8' } }
+              : { Text: { Data: body, Charset: 'UTF-8' } },
           },
         }));
         return { ok: true, messageId: out.MessageId };

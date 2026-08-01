@@ -330,6 +330,22 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
        LEFT JOIN schemes sc ON sc.id = l.scheme_id
       WHERE a.id = $1 LIMIT 1`, [Number(req.entity_id)])).rows[0];
   if (!r) return null;
+
+  /**
+   * Every credit that makes up this investment.
+   *
+   * An investment can be paid in parts and clubbed — ₹50,000 + ₹25,000 +
+   * ₹25,000 = one ₹1,00,000 NCD (APP-2026-001055, live). `applications.*`
+   * carries only the FIRST credit's date, method, reference and receipt, so
+   * without this the approver sees one reference and one receipt and approves
+   * ₹1,00,000 against evidence for ₹50,000, with no sign the other two
+   * payments exist. That is the whole point of a checker.
+   */
+  const credits = (await db.query<Record<string, unknown>>(
+    `SELECT id, amount, date_money_received, collection_method, collection_reference,
+            (receipt_file_path IS NOT NULL) AS has_receipt
+       FROM application_lines WHERE application_id = $1 ORDER BY id`, [Number(r.id)])).rows;
+
   // DB dates arrive as JS Date objects (node-postgres) or strings (PGlite);
   // a bare String(Date) yields "Sat Jul 11 2026 …", not YYYY-MM-DD — which the
   // <input type="date"> field silently rejects. toISODate normalises both.
@@ -338,6 +354,17 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
     application_id: Number(r.id),
     customer_id: Number(r.customer_id), // so the approver can open the full profile
     has_receipt: r.has_receipt === true,
+    credits: credits.map((l) => ({
+      id: Number(l.id),
+      amount: Number(l.amount),
+      // '—' on screen where a value was never recorded: parts clubbed before
+      // 054 stored per-line detail have none, and inventing one would fake a
+      // paper trail.
+      date_money_received: toISODate(l.date_money_received as string | Date | null) ?? null,
+      collection_method: (l.collection_method as string) ?? null,
+      collection_reference: (l.collection_reference as string) ?? null,
+      has_receipt: l.has_receipt === true,
+    })),
     readonly: {
       customer: `${r.customer} (${r.customer_code})`,
       pan: r.pan ?? '—',

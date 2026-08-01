@@ -120,6 +120,14 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Locker Deposit Waiver',
     levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
   },
+  // Waiving rent/deposit OWED on an application — real money, unlike the
+  // informational deposit waiver above. LockerHub applies it approved-on-
+  // arrival, so this checker IS the control.
+  locker_fee_waiver: {
+    type: 'locker_fee_waiver',
+    label: 'Locker Fee Waiver',
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
+  },
 };
 
 export function typeDef(type: string): ApprovalTypeDef {

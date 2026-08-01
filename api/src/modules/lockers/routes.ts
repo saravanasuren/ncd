@@ -410,6 +410,33 @@ lockersRouter.post('/cheques/:id/clear', requirePermission('applications:confirm
     res.json(await clearCheque(getDb(), req.user!, Number(req.params.id), { clearedOn: b.cleared_on, reference: b.reference ?? null }));
   }));
 
+// Retry a settlement that failed after the cheque cleared (§A18 is idempotent).
+// Same permission as the clear itself — it is the same money decision, just the
+// half that didn't land the first time.
+lockersRouter.post('/cheques/:id/settle-retry', requirePermission('applications:confirm-collection'),
+  asyncHandler(async (req, res) => {
+    const { retrySettlement } = await import('./cheques.js');
+    res.json(await retrySettlement(getDb(), req.user!, Number(req.params.id)));
+  }));
+
+// ── A18 settle-offline: money taken OUTSIDE the payment link ──────────────
+// Cash and transfer settle immediately — unlike a cheque there is nothing to
+// clear, so there is no NCD-side instrument to track and this goes straight to
+// LockerHub. Cheques deliberately do NOT come through here: they settle when
+// the register clears them (see cheques.ts), because a cheque in hand can still
+// bounce and settling early would allot a locker against paper.
+lockersRouter.post('/applications/:id/settle-offline', requirePermission('applications:confirm-collection'),
+  asyncHandler(async (req, res) => {
+    const b = z.object({
+      leg: LEG,
+      method: z.enum(['cash', 'transfer']),
+      reference: z.string().trim().max(120).optional(),
+      received_on: z.string().trim().min(4).optional(),
+      reason: z.string().trim().max(500).optional(),
+    }).parse(req.body ?? {});
+    res.json(await lh.settleOffline(staffOf(req), String(req.params.id), b));
+  }));
+
 lockersRouter.post('/cheques/:id/bounce', requirePermission('applications:confirm-collection'),
   asyncHandler(async (req, res) => {
     const { reason } = z.object({ reason: z.string().min(2) }).parse(req.body ?? {});

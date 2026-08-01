@@ -25,6 +25,7 @@
  *   interest.csv      one row per scheduled/paid interest or redemption row
  *   redemptions.csv   one row per redemption
  *   series.csv        one row per series, with issued/redeemed/outstanding
+ *   escrow.csv        the SBI escrow position — balance, and how it splits
  *   summary.csv       single row of headline totals
  *   manifest.json     what ran, when, row counts — so a silent half-write shows
  *
@@ -44,6 +45,7 @@ import { loadSecretsFromSsm } from '../secrets.js';
 import { createDb } from '../db/index.js';
 import type { AuthUser } from '../lib/authUser.js';
 import * as book from '../modules/reports/book.js';
+import { escrowSummary } from '../modules/escrow/service.js';
 
 /**
  * The extract is the WHOLE book, so it runs with unrestricted scope — same as a
@@ -172,6 +174,29 @@ async function main() {
       num(s.issued), num(s.redeemed), num(s.outstanding),
     ]));
 
+  // ── escrow ─────────────────────────────────────────────────────────────
+  // Money sitting in the SBI subscription account, and how it splits: already
+  // enrolled, company's own, or from someone with no investment yet. That last
+  // figure is the one the group dashboard actually wants — cash received that
+  // has not become a customer.
+  //
+  // Emitted as label/amount/count rows rather than one wide row: the shape is a
+  // breakdown, and a long format survives someone adding a new match status
+  // without the dashboard needing a new column.
+  //
+  // Reports zeroes (not an empty file) until the first SBI statement is
+  // uploaded — nothing has been ingested yet as of 2026-08-01. An absent file
+  // would look like a broken feed; zeroes correctly say "nothing banked here".
+  const esc = await escrowSummary(db);
+  const escRows: Array<Array<string | number>> = [
+    ['escrow_balance', num(esc.escrow_balance), ''],
+    ['enrolled', num(esc.breakup?.enrolled_total), esc.breakup?.enrolled_investors?.length ?? 0],
+    ['not_enrolled', num(esc.not_enrolled_total), esc.not_enrolled_count ?? 0],
+    ['company', num(esc.breakup?.company), ''],
+    ['flagged', num(esc.breakup?.flagged_total), ''],
+  ];
+  write('escrow.csv', 'Escrow', ['item', 'amount', 'count'], escRows);
+
   // ── headline totals ────────────────────────────────────────────────────
   // One row, so the dashboard can show company-level figures without having to
   // re-add the fact table (and reach a different answer).
@@ -179,9 +204,11 @@ async function main() {
   const asOf = new Date().toISOString();
   write('summary.csv', 'Summary',
     ['as_of', 'outstanding_book', 'active_investors', 'interest_paid', 'interest_scheduled',
-     'customers', 'investments', 'series'],
+     'customers', 'investments', 'series',
+     'escrow_balance', 'escrow_not_enrolled', 'escrow_as_of'],
     [[asOf, num(k.outstanding_book), num(k.active_investors), num(k.interest_paid),
-      num(k.interest_scheduled), customers.length, apps.length, series.length]]);
+      num(k.interest_scheduled), customers.length, apps.length, series.length,
+      num(esc.escrow_balance), num(esc.not_enrolled_total), d(esc.as_of)]]);
 
   // ── one workbook, one tab per table ────────────────────────────────────
   // Streaming writer: Interest alone is ~43k rows, and holding a whole styled

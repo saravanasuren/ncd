@@ -398,7 +398,7 @@ lockersRouter.post('/applications/:id/kyc', asyncHandler(async (req, res) => {
 // application id. Streamed through us rather than linked directly: their
 // endpoint needs the integration key, which must never reach a browser.
 lockersRouter.get('/agreements/:esignId/pdf', asyncHandler(async (req, res) => {
-  const { body, contentType } = await lh.agreementPdf(String(req.params.esignId));
+  const { body, contentType } = await lh.agreementPdf(staffOf(req), String(req.params.esignId));
   res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Disposition', `inline; filename="locker-agreement-${String(req.params.esignId)}.pdf"`);
   res.end(body);

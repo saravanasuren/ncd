@@ -34,6 +34,13 @@ async function bootstrapDb(): Promise<void> {
     const ran = await migrate(db);
     if (ran.length) console.log(`[new-wealth-api] applied migrations: ${ran.join(', ')}`);
   }
+  // Hand out any permission a role should have but doesn't. Production never
+  // runs the seed (deploy.sh migrates only), so without this a PR that adds a
+  // permission ships its feature UNREACHABLE — see db/syncPermissions.ts.
+  // Additive: it never revokes, so nothing hand-granted is undone.
+  const { syncRolePermissions } = await import('./db/syncPermissions.js');
+  const granted = await syncRolePermissions(db);
+  if (granted.length) console.log(`[new-wealth-api] granted missing permissions: ${granted.join(', ')}`);
 }
 
 async function startCrons(): Promise<void> {

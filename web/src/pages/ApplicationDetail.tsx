@@ -325,6 +325,52 @@ export function ApplicationDetailPage() {
           onError={(e) => { setNote(''); setMsg(e instanceof ApiError ? e.message : 'Failed'); }} />
       )}
 
+      {/* How the money actually arrived. Shown whenever there is more than one
+          credit: the investment is ONE ₹1,00,000 NCD, but it may have been paid
+          ₹50,000 + ₹50,000 on different days against different references, and
+          a year from now nobody will remember that from the total alone.
+          A single-credit investment shows nothing here — the header already
+          says everything there is to say. */}
+      {data.lines?.length > 1 && (
+        <div className="bg-surface border border-border rounded-lg shadow-card mt-4 overflow-hidden">
+          <div className="px-4 py-3 border-b border-border text-xs font-semibold text-text-label uppercase tracking-wide">
+            Payment breakup — {data.lines.length} credits
+          </div>
+          <table className="w-full text-sm border-collapse">
+            <thead><tr className="border-b border-border">
+              {['#', 'Received', 'Method', 'Reference', 'Amount', ''].map((h, i) => (
+                <th key={h + i} className={`py-2 px-3 text-xs font-semibold text-text-label uppercase tracking-wide ${h === 'Amount' ? 'text-right' : 'text-left'}`}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {data.lines.map((l: any, i: number) => (
+                <tr key={l.id} className="border-b border-border last:border-0">
+                  <td className="py-2 px-3 text-text-muted">{i + 1}</td>
+                  {/* '—' where a value was never recorded. The parts clubbed
+                      before this was stored have no detail of their own, and
+                      inventing one would be worse than admitting the gap. */}
+                  <td className="py-2 px-3 whitespace-nowrap">{l.date_money_received ? String(l.date_money_received).slice(0, 10) : '—'}</td>
+                  <td className="py-2 px-3">{l.collection_method ?? '—'}</td>
+                  <td className="py-2 px-3 font-mono text-xs">{l.collection_reference ?? '—'}</td>
+                  <td className="py-2 px-3 text-right mono font-medium">{formatINR(l.amount)}</td>
+                  <td className="py-2 px-3 text-right">
+                    {l.receipt_file_path && (
+                      <a href={`/api/applications/${id}/lines/${l.id}/receipt`} target="_blank" rel="noreferrer"
+                         className="text-xs text-primary hover:underline">receipt</a>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              <tr className="border-t-2 border-border-strong font-semibold">
+                <td className="py-2 px-3" colSpan={4}>Total invested</td>
+                <td className="py-2 px-3 text-right mono">{formatINR(a.total_amount)}</td>
+                <td />
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+
       <div className="bg-surface border border-border rounded-lg shadow-card mt-4 overflow-hidden">
         <div className="px-4 py-3 border-b border-border text-xs font-semibold text-text-label uppercase tracking-wide">Interest & redemption schedule</div>
         {data.schedule.length === 0 ? (

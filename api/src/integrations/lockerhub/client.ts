@@ -322,13 +322,30 @@ export const applyWaiver = (
  * identity.
  *
  * Failure modes worth knowing (surfaced with their status + body by lhFetch):
- *   409 obligations_pending + missing:["rent"|"deposit"] — money unsettled. This
- *       gate is deliberate on their side; a tenancy is never created against
- *       unpaid rent, and there is no override over this channel.
+ *   409 obligations_pending + missing:["rent"|"deposit"] — money unsettled. The
+ *       gate stays the right default; `override` is the deliberate, attributed
+ *       way past it (§A20) and nothing else opens it.
  *   400 no_vacancy — nothing left in that size.
  *   400 "Locker is no longer vacant" — a race; retry (re-picks if no locker_id).
  *   200 already:true — already allocated. Treated as SUCCESS by callers, since a
  *       re-drive of a completed allocation is the queue doing its job.
  */
-export const allocate = (staff: ActingStaff, applicationId: string, input: { locker_id?: string; lease_months?: number }) =>
+export const allocate = (
+  staff: ActingStaff,
+  applicationId: string,
+  input: {
+    locker_id?: string;
+    lease_months?: number;
+    /**
+     * A20 (2026-07-29) — allot with rent or deposit still outstanding. Both
+     * fields are required on their side and the call is loudly audited. They
+     * asked US to restrict it to a senior role, which routes.ts does via
+     * `lockers:allot-override`.
+     *
+     * A spurious override is ignored: if §A18/§A21 already cleared the legs
+     * there is nothing to override, and allocate passes on its own merits.
+     */
+    override?: { reason: string; approved_by: string };
+  },
+) =>
   lhFetch<Record<string, unknown>>('POST', `/locker-applications/${encodeURIComponent(applicationId)}/allocate`, { body: { ...input, staff } });

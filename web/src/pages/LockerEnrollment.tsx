@@ -199,6 +199,45 @@ export function LockerEnrollmentPage() {
     }
   };
   /**
+   * Allot with rent or deposit still outstanding (§A20). Senior-only, and it
+   * hands over an asset against money not received — so it asks twice and
+   * records who authorised it, not just who clicked.
+   */
+  const allotOverride = async (chosen?: string) => {
+    const missing = [
+      app?.legs?.rent?.settled === false ? 'rent' : null,
+      app?.legs?.deposit?.settled === false ? 'deposit' : null,
+    ].filter(Boolean).join(' and ');
+    const ok = await confirm({
+      title: 'Hand over the locker with money outstanding?',
+      body: `The ${missing || 'outstanding'} leg is unpaid. The tenancy is created anyway and the customer gets the locker. LockerHub records this as an override, and so do we.`,
+      confirmLabel: 'Continue', danger: true,
+    });
+    if (!ok) return;
+    const reason = await promptText({
+      title: 'Why is it being handed over unpaid?',
+      label: 'Reason', minLength: 5, confirmLabel: 'Next', danger: true,
+    });
+    if (!reason) return;
+    const approvedBy = await promptText({
+      title: 'Who authorised this?',
+      body: 'The person taking responsibility for the decision — recorded in both systems.',
+      label: 'Authorised by', defaultValue: user?.fullName ?? '', minLength: 2,
+      confirmLabel: 'Allot anyway', danger: true,
+    });
+    if (!approvedBy) return;
+    setErr(''); setBusy(true);
+    try {
+      await api.post(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/allocate`, {
+        ...(chosen ? { locker_id: chosen } : {}), override: { reason, approved_by: approvedBy },
+      });
+      setPicking(false); setLockerId('');
+      await refreshApp();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Failed');
+    } finally { setBusy(false); }
+  };
+  /**
    * Hand our KYC over for an application that reached LockerHub bare (§A17.1).
    * Only ever needed for ones created before the screen started sending the
    * customer id — new applications carry the KYC with the create.
@@ -720,7 +759,10 @@ export function LockerEnrollmentPage() {
           card on 'approved' alone made the button unreachable the moment they
           shipped that — the application never reaches 'approved' until AFTER
           allocation. Their §A8 still documents the old lifecycle. */}
-      {app && (app.status === 'approved' || app.status === 'pending_allocation' || app.allotment) && (
+      {app && (app.status === 'approved' || app.status === 'pending_allocation' || app.allotment
+               // Unpaid, but a senior may override (§A20) — the one case the
+               // panel has to appear BEFORE the obligations clear.
+               || (!app.allotment && app.obligations_settled === false && can('lockers:allot-override'))) && (
         <div className={`${card} ${app.allotment ? 'border-success' : 'border-warn'}`}>
           <h2 className={h2}>{app.allotment ? '✓ Allotted' : 'Awaiting allotment'}</h2>
           {app.allotment ? (
@@ -758,6 +800,34 @@ export function LockerEnrollmentPage() {
                 })()}
               </div>
             </>
+          ) : app.obligations_settled === false ? (
+            /* Money still outstanding. The normal answer is to collect or waive
+               it — the override is the exception, so it reads as one. */
+            <div className="text-sm">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-warn">
+                  Not paid yet{[
+                    app.legs?.rent?.settled === false ? 'rent' : null,
+                    app.legs?.deposit?.settled === false ? 'deposit' : null,
+                  ].filter(Boolean).length ? ` — ${[
+                    app.legs?.rent?.settled === false ? 'rent' : null,
+                    app.legs?.deposit?.settled === false ? 'deposit' : null,
+                  ].filter(Boolean).join(' and ')} outstanding` : ''}.
+                </span>
+                <span className="text-xs text-text-muted">Collect it above, or waive it — that is the normal route.</span>
+              </div>
+              {can('lockers:allot-override') && (
+                <div className="mt-2 flex items-center gap-2 flex-wrap">
+                  <button className={btnGhost} disabled={busy}
+                    onClick={() => allotOverride(preferred?.id)}>
+                    Allot anyway{preferred ? ` (${preferred.locker_number})` : ''}…
+                  </button>
+                  <span className="text-xs text-text-muted">
+                    Hands the locker over with money outstanding. Recorded against whoever authorises it, here and on LockerHub.
+                  </span>
+                </div>
+              )}
+            </div>
           ) : canAllocate ? (
             <div className="text-sm">
               <div className="flex items-center gap-2 flex-wrap">

@@ -22,14 +22,20 @@
 set -euo pipefail
 
 APP=/home/ubuntu/ncd/api
-OUT=/tmp/ncd-extract
 FOLDER=${SHAREPOINT_EXTRACT_FOLDER:-NcdDashboardExtract}
+
+# A PRIVATE temp dir per run, not a fixed path. cron runs this as root, so a
+# fixed /tmp/ncd-extract ends up root-owned — and the next person who runs the
+# script by hand (to re-send after a SharePoint blip, say) cannot clear it and
+# the run dies on `rm`. mktemp sidesteps ownership entirely, and the trap means
+# a few MB of CSV never accumulate in /tmp after a failure.
+OUT=$(mktemp -d -t ncd-extract-XXXXXX)
+trap 'rm -rf "$OUT"' EXIT
 
 echo "[extract] $(date -Is) starting"
 
-# 1) Build the CSVs. Reads SSM for DATABASE_URL exactly as the app does; the
+# 1) Build the files. Reads SSM for DATABASE_URL exactly as the app does; the
 #    script is read-only (SELECT only), so a failure here cannot corrupt data.
-rm -rf "$OUT"
 cd "$APP"
 set -a; . ./.env; set +a
 node dist/scripts/daily-extract.js --out "$OUT"

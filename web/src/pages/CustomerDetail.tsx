@@ -628,9 +628,13 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
   const [applyTds, setApplyTds] = useState<'' | 'yes' | 'no'>('');
   const over30L = amount !== '' && Number(amount) > 30 * LAKH;
   const tdsPrompt = custNoTds && over30L;
-  // NCDs are issued in whole ₹1,00,000 units (the API enforces the scheme's own
-  // min_ticket/multiple_of; this mirrors it so staff see it before submitting).
-  const ticketOk = amount !== '' && Number(amount) >= LAKH && Math.round(Number(amount) * 100) % (LAKH * 100) === 0;
+  // NCDs are ISSUED in whole ₹1,00,000 units, but a single credit need not be
+  // one (owner 2026-08-01): money arrives in parts and is clubbed. So this is a
+  // WARNING, not a block — the server accepts any positive amount, and approval
+  // is what refuses a total that isn't a whole unit. Blocking here would force
+  // staff to record a figure the bank statement doesn't show.
+  const isWholeUnit = amount !== '' && Number(amount) >= LAKH && Math.round(Number(amount) * 100) % (LAKH * 100) === 0;
+  const isPartPayment = amount !== '' && Number(amount) > 0 && !isWholeUnit;
   const [dateReceived, setDateReceived] = useState('');
   const [clubWith, setClubWith] = useState('');
   const [lockerDeposit, setLockerDeposit] = useState(false);
@@ -729,7 +733,7 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
         <label className="text-xs flex items-center gap-1.5" title="Money came from a locker (LockerHub-originated deposits flag themselves automatically)">
           <input type="checkbox" checked={lockerDeposit} onChange={(e) => setLockerDeposit(e.target.checked)} /> Locker deposit
         </label>
-        <button disabled={!seriesId || !schemeId || !amount || !ticketOk || create.isPending} onClick={() => {
+        <button disabled={!seriesId || !schemeId || !amount || !(Number(amount) > 0) || create.isPending} onClick={() => {
           const missing = missingRequired();
           if (missing.length) {
             const list = missing.join(', ');
@@ -742,9 +746,15 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
           {clubWith ? 'Add to application' : 'Create investment'}
         </button>
       </div>
-      {amount !== '' && !ticketOk && (
-        <div className="text-xs text-danger mt-2">
-          Investments are issued in units of ₹1,00,000. Nearest valid amounts: ₹{(Math.max(1, Math.floor(Number(amount) / LAKH)) * LAKH).toLocaleString('en-IN')} or ₹{((Math.floor(Number(amount) / LAKH) + 1) * LAKH).toLocaleString('en-IN')}.
+      {/* Amber, not red, and it no longer blocks: a part-payment is a normal
+          thing to record. It says what happens NEXT, because the risk here is
+          not a wrong number — it is a part-payment nobody ever clubs. */}
+      {isPartPayment && (
+        <div className="text-xs text-warn mt-2">
+          Part payment — ₹{Number(amount).toLocaleString('en-IN')} is not a whole ₹1,00,000 unit.
+          It will be recorded and held, earning nothing, until it is clubbed up to
+          ₹{((Math.floor(Number(amount) / LAKH) + 1) * LAKH).toLocaleString('en-IN')} (or a higher multiple).
+          It cannot be approved or go live before then.
         </div>
       )}
       {/* This customer is marked No-TDS, but the investment is over ₹30L — the

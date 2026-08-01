@@ -20,7 +20,6 @@ import { enqueue, drainOnce } from '../notifications/service.js';
 import { signFileToken } from '../auth/tokens.js';
 import { formatPhone } from '../../integrations/notify/wappcloud.js';
 import { config } from '../../config.js';
-import { assertTicket } from '../../lib/ticket.js';
 
 const SCOPE_COLS = {
   userCol: 'a.enrolled_by_user_id',
@@ -92,13 +91,19 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
     return await db.withTx(async (tx) => {
       const scheme = (await tx.query<Record<string, unknown>>('SELECT * FROM schemes WHERE id = $1', [input.scheme_id])).rows[0];
       if (!scheme) throw errors.badRequest('Unknown scheme');
-      // NCDs are issued in whole ₹1,00,000 units (scheme min_ticket/multiple_of).
-      // Checked here so it also covers the clubbing branch below: every line is a
-      // whole number of units, so any total built from them is one too.
-      assertTicket(input.amount, {
-        min: Number(scheme.min_ticket) || 100000,
-        multiple: Number(scheme.multiple_of) || 100000,
-      });
+      // NCDs are still ISSUED in whole ₹1,00,000 units — but a single credit
+      // need not be one (owner 2026-08-01). Money arrives in parts: ₹50,000
+      // today, ₹50,000 next week, clubbed into one ₹1,00,000 investment.
+      // Refusing the first half at the door forced staff to either sit on the
+      // receipt or record a figure the bank statement does not show.
+      //
+      // The denomination rule is NOT relaxed, only MOVED: approval still
+      // refuses a total that is not a whole unit (approvals/service.ts), and
+      // approval is what takes an investment live and starts interest. So a
+      // part-payment is recorded and visible, earns nothing, and cannot go live
+      // until it has been clubbed up to a whole unit. Nothing about the
+      // interest calculation changes.
+      if (!(input.amount > 0)) throw errors.badRequest('Investment amount must be greater than zero');
 
       // The ">₹30L for a No-TDS customer → apply TDS?" prompt was answered Yes:
       // mark the WHOLE customer TDS-applicable (not just this investment). Only

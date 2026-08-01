@@ -21,6 +21,17 @@ const APP_REDEEMED = new Set(['Redeemed', 'Matured', 'PrematureWithdrawn', 'Roll
 const appMatch = (tab: AppTab, s: string) =>
   tab === 'all' ? true : tab === 'active' ? s === 'Active' : tab === 'pending' ? APP_PENDING.has(s) : APP_REDEEMED.has(s);
 
+/** NCDs are ISSUED in whole ₹1,00,000 units. A pending investment whose total
+ *  is not yet a whole unit is a PART PAYMENT waiting to be clubbed — it cannot
+ *  be approved and earns nothing until it is. Flagged on the list because the
+ *  real risk is not a wrong figure, it is a part-payment nobody ever completes:
+ *  it sits in Pending looking like every other row and quietly ages. */
+const LAKH = 100000;
+const isPartPayment = (a: AppRow) => {
+  const n = Number(a.total_amount);
+  return APP_PENDING.has(a.status) && n > 0 && Math.round(n * 100) % (LAKH * 100) !== 0;
+};
+
 const pill: Record<string, string> = {
   Active: 'bg-[color:var(--success-bg)] text-success',
   Redeemed: 'bg-bg text-text-muted',
@@ -36,7 +47,18 @@ const columns: Column<AppRow>[] = [
   { key: 'customer_name', header: 'Customer' },
   { key: 'series_code', header: 'Series' },
   { key: 'total_amount', header: 'Amount', align: 'right',
-    value: (a) => Number(a.total_amount), render: (a) => <span className="mono">{formatINR(a.total_amount)}</span> },
+    value: (a) => Number(a.total_amount),
+    render: (a) => (
+      <span className="mono">
+        {formatINR(a.total_amount)}
+        {isPartPayment(a) && (
+          <span className="ml-1.5 text-[11px] rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn font-sans"
+                title={`Not a whole ₹1,00,000 unit — needs ₹${(((Math.floor(Number(a.total_amount) / LAKH) + 1) * LAKH) - Number(a.total_amount)).toLocaleString('en-IN')} more before it can be approved`}>
+            part
+          </span>
+        )}
+      </span>
+    ) },
   { key: 'status', header: 'Status', value: (a) => statusLabel(a.status),
     render: (a) => <span className={`text-xs rounded px-1.5 py-0.5 ${pill[a.status] ?? 'bg-bg'}`}>{statusLabel(a.status)}</span> },
 ];

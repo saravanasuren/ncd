@@ -1,7 +1,14 @@
 /**
- * Ticket rule end-to-end: NCDs are issued in whole ₹1,00,000 units, enforced at
- * the two points that matter — staff create, and the approval that takes an
- * investment live (so an inbound LockerHub write can't sneak past either).
+ * Ticket rule end-to-end: NCDs are ISSUED in whole ₹1,00,000 units.
+ *
+ * The gate used to sit at BOTH create and approval. It now sits at approval
+ * only (owner 2026-08-01): money arrives in parts and staff must be able to
+ * record what the bank statement shows, so a part payment is accepted, held,
+ * and clubbed. See integration.part-payment.test.ts for that flow.
+ *
+ * Approval is the one that matters and is unchanged — it is what takes an
+ * investment live and starts interest, so an odd total must never get past it,
+ * whatever created it (an inbound LockerHub write included).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, type TestCtx, requiredInvestmentFields, uniqueName } from './helpers/server.js';
@@ -20,30 +27,37 @@ async function customer(staff: Client, phone: string) {
 }
 
 describe('investment ticket rule (whole ₹1,00,000 units)', () => {
-  it('refuses a non-multiple at create, and accepts the neighbouring whole unit', async () => {
+  it('create ACCEPTS an odd amount now — the gate moved to approval', async () => {
+    // Previously 400 at the door. A part payment is a real thing that lands in
+    // the bank, and refusing it forced staff to record a figure the statement
+    // does not show. It is recorded and held instead; approval still refuses it.
     const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const cid = await customer(staff, '9895000001');
     const base = { customer_id: cid, series_id: await seriesId(), scheme_id: await schemeId(), date_money_received: '2026-07-01' };
 
-    const bad = await staff.post('/api/applications', { ...requiredInvestmentFields(), ...base, amount: 2580369 });
-    expect(bad.status).toBe(400);
-    expect(bad.json.error.message).toMatch(/units of ₹1,00,000/);
-
-    const below = await staff.post('/api/applications', { ...requiredInvestmentFields(), ...base, amount: 50000 });
-    expect(below.status).toBe(400);
-    expect(below.json.error.message).toMatch(/Minimum investment/);
-
-    const good = await staff.post('/api/applications', { ...requiredInvestmentFields(), ...base, amount: 2600000 });
-    expect(good.status).toBe(201);
+    for (const amount of [2580369, 50000, 250000, 2600000]) {
+      const r = await staff.post('/api/applications', { ...requiredInvestmentFields(), ...base, amount });
+      expect({ amount, status: r.status }).toEqual({ amount, status: 201 });
+      // …and none of them is live. Nothing earns interest on a create.
+      expect((await ctx.db.query('SELECT status FROM applications WHERE id = $1', [Number(r.json.id)])).rows[0].status)
+        .toBe('PendingApproval');
+    }
   });
 
-  it('refuses half-lakh amounts — 2.5L is not a whole unit', async () => {
+  it('an odd amount is still refused where it counts — at approval', async () => {
     const staff = await login('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const ncd = await login('ncd@demo.local');
     const cid = await customer(staff, '9895000002');
-    const r = await staff.post('/api/applications', { ...requiredInvestmentFields(),
+    const app = await staff.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cid, series_id: await seriesId(), scheme_id: await schemeId(), amount: 250000,
     });
-    expect(r.status).toBe(400);
+    expect(app.status).toBe(201);
+
+    const blocked = await ncd.post(`/api/approvals/${app.json.subscription_request.id}/approve`);
+    expect(blocked.status).toBe(400);
+    expect(blocked.json.error.message).toMatch(/₹1,00,000/);
+    expect((await ctx.db.query('SELECT status FROM applications WHERE id = $1', [Number(app.json.id)])).rows[0].status)
+      .toBe('PendingApproval');
   });
 
   it('blocks approval of an off-denomination amount, and lets the checker fix it inline', async () => {

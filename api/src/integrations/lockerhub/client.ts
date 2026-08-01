@@ -79,6 +79,50 @@ async function lhFetch<T>(method: string, path: string, opts: { body?: unknown; 
   return json as T;
 }
 
+/**
+ * Same call, but for a response that is BYTES rather than JSON — lhFetch always
+ * parses, which would destroy a PDF. Errors are still read as JSON, since a
+ * failure comes back as their usual error envelope.
+ */
+async function lhFetchBinary(path: string): Promise<{ body: Buffer; contentType: string }> {
+  if (!lockerHubConfigured()) throw errors.unavailable('LockerHub locker API is not configured (LOCKERHUB_API_URL)');
+  const ctl = new AbortController();
+  const tid = setTimeout(() => ctl.abort(), HTTP_TIMEOUT_MS);
+  let resp: Response;
+  try {
+    resp = await fetch(`${base()}${path}`, { headers: { 'X-Integration-Key': apiKey() }, signal: ctl.signal });
+  } catch (e) {
+    throw errors.unavailable(`LockerHub unreachable: ${(e as Error).message}`);
+  } finally {
+    clearTimeout(tid);
+  }
+  if (!resp.ok) {
+    let json: unknown = null;
+    try { json = JSON.parse(await resp.text()); } catch { /* non-JSON error */ }
+    const msg = (json as { error?: string; message?: string })?.error
+      ?? (json as { message?: string })?.message ?? `LockerHub ${resp.status}`;
+    throw errors.upstream(resp.status, msg, json);
+  }
+  return {
+    body: Buffer.from(await resp.arrayBuffer()),
+    contentType: resp.headers.get('content-type') || 'application/pdf',
+  };
+}
+
+/**
+ * A16 — the signed locker agreement, as a PDF.
+ *
+ * Keyed on the AGREEMENT id, which is the `esign_id` that A19.2 /esign/status
+ * returns — not the application id. Chain: status → esign_id → here.
+ *
+ * Use this rather than the `signed_file_url` that comes back on the status:
+ * that is an internal SharePoint link and is not openly fetchable, so
+ * rendering it as a download would hand staff a link that 404s for them
+ * (LockerHub, 2026-07-31).
+ */
+export const agreementPdf = (esignId: string) =>
+  lhFetchBinary(`/agreements/${encodeURIComponent(esignId)}/pdf`);
+
 // ── Reads ────────────────────────────────────────────────────────────────
 export const ping = () => lhFetch<{ ok: boolean; service: string; time: string }>('GET', '/ping');
 export const branches = () => lhFetch<{ branches: Array<{ id: string; name: string; address?: string }> }>('GET', '/branches');

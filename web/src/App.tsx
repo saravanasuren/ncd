@@ -21,6 +21,7 @@ import { LockerTenantsPage } from './pages/LockerTenants.js';
 import { LockerVisitsPage } from './pages/LockerVisits.js';
 import { ApprovalsPage } from './pages/Approvals.js';
 import { ApplicationsPage } from './pages/Applications.js';
+import { OutstandingPage } from './pages/Outstanding.js';
 import { ApplicationDetailPage } from './pages/ApplicationDetail.js';
 import { AgentsPage } from './pages/Agents.js';
 import { BackgroundVerificationPage } from './pages/BackgroundVerification.js';
@@ -111,6 +112,7 @@ export function App() {
           <Route path="locker-visits" element={<RequirePerm perm="lockers:enroll"><LockerVisitsPage /></RequirePerm>} />
           <Route path="applications" element={<RequirePerm perm="customers:read"><ApplicationsPage /></RequirePerm>} />
           <Route path="applications/:id" element={<RequirePerm perm="customers:read"><ApplicationDetailPage /></RequirePerm>} />
+          <Route path="outstanding" element={<RequirePerm perm="customers:read"><OutstandingPage /></RequirePerm>} />
           <Route path="approvals" element={<RequirePerm perm={['approvals:check', 'approvals:check-premature', 'approvals:check-handover']}><ApprovalsPage /></RequirePerm>} />
           <Route path="agents" element={<RequirePerm perm="agents:manage"><AgentsPage /></RequirePerm>} />
           <Route path="allotments" element={<RequirePerm perm="allotments:execute"><AllotmentsPage /></RequirePerm>} />

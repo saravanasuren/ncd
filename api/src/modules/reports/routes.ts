@@ -25,6 +25,17 @@ const SEGMENT_BYS = new Set<book.SegmentBy>(['series', 'customer', 'district', '
 // Grouped explorer: one summary row per dimension value, each expandable to its
 // individual investments (see book.segmentGrouped). The flat book.* functions
 // stay in use by the Excel export.
+// Everything started but not finished, in one place. Read-only, NCD-owned data
+// only — it must answer even when LockerHub is down (see reports/outstanding.ts).
+// customers:read rather than reports:download: this is an operational worklist
+// staff act on, not a report they export.
+reportsRouter.get('/outstanding', requirePermission('customers:read'),
+  asyncHandler(async (req, res) => {
+    const { outstandingItems } = await import('./outstanding.js');
+    const customerId = req.query.customer_id ? Number(req.query.customer_id) : undefined;
+    res.json({ rows: await outstandingItems(getDb(), req.user!, customerId) });
+  }));
+
 reportsRouter.get('/segments/:by', requirePermission('reports:download', 'dashboard:drilldown'),
   asyncHandler(async (req, res) => {
     const by = req.params.by as book.SegmentBy;

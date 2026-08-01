@@ -72,8 +72,8 @@ export async function drainOnce(db: Db, limit = 25): Promise<{ sent: number; fai
     const attempts = Number(r.attempts ?? 0) + 1;
     try {
       const payload = (r.payload as Record<string, unknown>) ?? {};
-      const { subject, body } = renderTemplate(String(r.template), payload);
-      const res = await providerFor(String(r.channel)).send(String(r.to_address), subject, body, { template: String(r.template), payload });
+      const { subject, body, html } = renderTemplate(String(r.template), payload);
+      const res = await providerFor(String(r.channel)).send(String(r.to_address), subject, body, { template: String(r.template), payload, html });
 
       if (res.ok) {
         await db.query(

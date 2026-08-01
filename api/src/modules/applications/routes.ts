@@ -98,6 +98,20 @@ applicationsRouter.post('/:id/mark-esigned', requirePermission('applications:mar
 
 // Send the acknowledgement PDF to the customer over WhatsApp (approved ncd_akn
 // template). Management-tier — same actors who confirm funds / update the app.
+// The receipt for ONE credit of a clubbed investment (the app-level one shows
+// only the first part).
+applicationsRouter.get('/:id/lines/:lineId/receipt', requirePermission('customers:read', 'approvals:check'),
+  asyncHandler(async (req, res) => {
+    const { assertApplicationVisible } = await import('../../lib/visibility.js');
+    await assertApplicationVisible(getDb(), req.user!, Number(req.params.id));
+    const r = await s.getLineReceipt(getDb(), Number(req.params.id), Number(req.params.lineId));
+    if (!r) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No receipt for this credit' } }); return; }
+    const h = serveHeaders(r.mime, r.filename, 'receipt');
+    res.setHeader('Content-Type', h.type);
+    res.setHeader('Content-Disposition', h.disposition);
+    res.end(r.buffer);
+  }));
+
 applicationsRouter.post('/:id/whatsapp-ack', requirePermission('notifications:admin', 'applications:update'),
   asyncHandler(async (req, res) => { res.json(await s.sendWhatsappAck(getDb(), Number(req.params.id))); }));
 

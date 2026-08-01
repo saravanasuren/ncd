@@ -72,11 +72,21 @@ async function attachReceipt(db: Db, actor: AuthUser, appId: number, filename: s
   await writeAudit(db, { actorId: actor.id, action: 'application.receipt', entityType: 'applications', entityId: appId, after: { filename } });
 }
 
-async function addLine(tx: Db, appId: number, scheme: Record<string, unknown>, amount: number) {
+/** One credit. `pay` is THIS part's own payment detail — a clubbed investment
+ *  has several, paid on different days against different references, and the
+ *  application-level columns only ever describe the first. */
+async function addLine(
+  tx: Db, appId: number, scheme: Record<string, unknown>, amount: number,
+  pay?: { date_money_received?: string; collection_method?: string; collection_reference?: string;
+          receipt?: { file_path: string; mime: string; filename: string } },
+) {
   await tx.query(
-    `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active')`,
-    [appId, scheme.id, scheme.coupon_rate_pct, scheme.tenure_months, scheme.payout_frequency, scheme.day_count_convention, amount]);
+    `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status,
+                                    date_money_received, collection_method, collection_reference, receipt_file_path, receipt_original_filename, receipt_mime)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active',$8,$9,$10,$11,$12,$13)`,
+    [appId, scheme.id, scheme.coupon_rate_pct, scheme.tenure_months, scheme.payout_frequency, scheme.day_count_convention, amount,
+     pay?.date_money_received ?? null, pay?.collection_method ?? null, pay?.collection_reference ?? null,
+     pay?.receipt?.file_path ?? null, pay?.receipt?.filename ?? null, pay?.receipt?.mime ?? null]);
 }
 
 export async function createApplication(db: Db, actor: AuthUser, input: CreateApplicationInput) {
@@ -125,12 +135,18 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
         if (!target) throw errors.notFound('Clubbing target not found');
         if (Number(target.series_id) !== input.series_id) throw errors.badRequest('Can only club within the same series');
         if (!['PendingFundVerification', 'PendingEsign', 'PendingApproval'].includes(target.status)) throw errors.conflict('Target application is no longer in-flight');
-        await addLine(tx, Number(target.id), scheme, input.amount);
+        await addLine(tx, Number(target.id), scheme, input.amount, {
+          date_money_received: input.date_money_received,
+          collection_method: input.collection_method,
+          collection_reference: input.collection_reference,
+          receipt: { ...storedReceipt, filename: input.receipt.filename },
+        });
         await tx.query('UPDATE applications SET total_amount = total_amount + $1, updated_at = now() WHERE id = $2', [input.amount, Number(target.id)]);
-        await writeAudit(tx, { actorId: actor.id, action: 'application.club', entityType: 'applications', entityId: Number(target.id), after: { added: input.amount } });
-        // The new line's receipt lands on the target app — same as the old
-        // client-side follow-up upload did.
-        await attachReceipt(tx, actor, Number(target.id), input.receipt.filename, storedReceipt);
+        await writeAudit(tx, { actorId: actor.id, action: 'application.club', entityType: 'applications', entityId: Number(target.id),
+          after: { added: input.amount, reference: input.collection_reference, received: input.date_money_received } });
+        // The receipt stays on the LINE. It used to overwrite the application's,
+        // which meant clubbing a second credit made the FIRST credit's receipt
+        // unreachable — the paper trail for money already banked, gone.
         const no = (await tx.query<{ application_no: string }>('SELECT application_no FROM applications WHERE id = $1', [Number(target.id)])).rows[0]!.application_no;
         return { id: Number(target.id), application_no: no, clubbed: true };
       }
@@ -160,7 +176,12 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
          input.is_locker_deposit ?? false, input.date_money_received, input.collection_method, input.collection_reference, input.collection_bank_id ?? null]
       );
       const appId = Number(rows[0]!.id);
-      await addLine(tx, appId, scheme, input.amount);
+      await addLine(tx, appId, scheme, input.amount, {
+        date_money_received: input.date_money_received,
+        collection_method: input.collection_method,
+        collection_reference: input.collection_reference,
+        receipt: { ...storedReceipt, filename: input.receipt.filename },
+      });
       // Tell LockerHub a subscription intent was created (contract event). No-op unless configured.
       await emitForApplication(tx, 'subscription.created', appId);
       const subscriptionRequest = await createApprovalRequest(tx, { type: 'subscription', entityType: 'applications', entityId: appId, makerUserId: actor.id, metadata: { application_no: appNo } });
@@ -281,6 +302,23 @@ export async function getReceipt(db: Db, appId: number): Promise<{ buffer: Buffe
   const buffer = readStored(app.receipt_file_path);
   if (!buffer) return null;
   return { buffer, mime: app.receipt_mime ?? 'application/octet-stream', filename: app.receipt_original_filename ?? 'receipt' };
+}
+
+/**
+ * The receipt for ONE credit of a clubbed investment. The application-level
+ * receipt only ever shows one part; this reaches the rest, so every part of the
+ * money has its own paper trail. Scoped by application_id as well as line id so
+ * a line from another application cannot be fetched by guessing an id.
+ */
+export async function getLineReceipt(db: Db, appId: number, lineId: number): Promise<{ buffer: Buffer; mime: string; filename: string } | null> {
+  const l = (await db.query<{ receipt_file_path: string | null; receipt_mime: string | null; receipt_original_filename: string | null }>(
+    'SELECT receipt_file_path, receipt_mime, receipt_original_filename FROM application_lines WHERE id = $1 AND application_id = $2',
+    [lineId, appId])).rows[0];
+  if (!l?.receipt_file_path) return null;
+  const { readStored } = await import('../../lib/storage.js');
+  const buffer = readStored(l.receipt_file_path);
+  if (!buffer) return null;
+  return { buffer, mime: l.receipt_mime ?? 'application/octet-stream', filename: l.receipt_original_filename ?? 'receipt' };
 }
 
 /** Correct the locker-deposit flag on an application (staff-keyed entries;

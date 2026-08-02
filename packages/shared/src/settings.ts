@@ -309,6 +309,15 @@ export const SETTINGS_CATALOG: SettingDef[] = [
 
   // ── Reports (recipient lists, super-admin managed — owner 2026-08-01) ──
   {
+    key: 'reports.book_summary_send_time',
+    group: 'Reports',
+    label: 'Daily summary send time (IST, HH:MM)',
+    description: '24-hour IST time the daily book summary is emailed, e.g. 18:30. It fires within ~15 minutes of this time. Invalid values fall back to 18:00.',
+    type: 'string',
+    default: '18:30',
+    editableBy: 'super_admin',
+  },
+  {
     key: 'reports.book_summary_recipients',
     group: 'Reports',
     label: 'Daily book summary recipients',

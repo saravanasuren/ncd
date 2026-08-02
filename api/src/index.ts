@@ -69,12 +69,28 @@ async function startCrons(): Promise<void> {
     void dispatchPendingCustomerEvents(getDb()).catch((e) => console.warn('[cron] customer-event dispatch:', (e as Error).message));
   }, 30_000).unref();
 
-  // Daily book-summary email (docs/00 §12) — once per IST day after 18:00 IST.
+  // Daily book-summary email (docs/00 §12) — once per IST day at/after the
+  // super-admin-configured send time (reports.book_summary_send_time, HH:MM IST;
+  // default 18:30). Ticks every 15 min, so it fires within ~15 min of that time;
+  // runBookSummary is per-day idempotent. Falls back to 18:00 if unparseable.
   const { runBookSummary } = await import('./integrations/book-summary.js');
+  const { getSettingsMap } = await import('./modules/settings/service.js');
+  const sendMinutes = (raw: unknown): number => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(raw ?? '').trim());
+    if (m) {
+      const h = Number(m[1]), mi = Number(m[2]);
+      if (h >= 0 && h < 24 && mi >= 0 && mi < 60) return h * 60 + mi;
+    }
+    return 18 * 60;
+  };
   setInterval(() => {
-    const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
-    if (istNow.getUTCHours() < 18) return;
-    void runBookSummary(getDb()).catch((e) => console.warn('[cron] book summary:', (e as Error).message));
+    void (async () => {
+      const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+      const nowMin = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();
+      const map = await getSettingsMap(getDb());
+      if (nowMin < sendMinutes(map['reports.book_summary_send_time'])) return;
+      await runBookSummary(getDb());
+    })().catch((e) => console.warn('[cron] book summary:', (e as Error).message));
   }, 15 * 60_000).unref();
 
   // Daily backup-check email (docs/08 §2) — once per IST day after 08:00 IST;

@@ -104,6 +104,7 @@ const schema = z.object({
   SHAREPOINT_CLIENT_SECRET: z.string().optional(),
   SHAREPOINT_BACKUP_DRIVE_ID: z.string().optional(),
   SHAREPOINT_BACKUP_FOLDER: z.string().default('NewWealthBackups'),
+  SHAREPOINT_EXTRACT_FOLDER: z.string().default('NcdDashboardExtract'),
   BACKUP_DIR: z.string().default('/var/backups/dhanam-newwealth'),
 });
 

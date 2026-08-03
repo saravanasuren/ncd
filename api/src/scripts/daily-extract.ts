@@ -40,9 +40,11 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import ExcelJS from 'exceljs';
 import { loadSecretsFromSsm } from '../secrets.js';
 import { createDb } from '../db/index.js';
+import type { Db } from '../db/types.js';
 import type { AuthUser } from '../lib/authUser.js';
 import * as book from '../modules/reports/book.js';
 import { escrowSummary } from '../modules/escrow/service.js';
@@ -89,13 +91,11 @@ function csv(headers: string[], rows: Array<Array<string | number>>): string {
   return [headers.map(cell).join(','), ...rows.map((r) => r.map(cell).join(','))].join('\r\n') + '\r\n';
 }
 
-async function main() {
-  await loadSecretsFromSsm();
-  const outIdx = process.argv.indexOf('--out');
-  const outDir = outIdx > -1 ? process.argv[outIdx + 1]! : '/tmp/ncd-extract';
+/** Build the extract (CSVs + workbook + manifest) into `outDir`. Importable so
+ *  both the nightly CLI and the on-change publisher run the exact same code. */
+export async function buildExtract(db: Db, outDir: string): Promise<{ generatedAt: string; files: string[] }> {
   mkdirSync(outDir, { recursive: true });
 
-  const db = createDb();
   const a = SYSTEM_ACTOR;
   const counts: Record<string, number> = {};
   // Each table is captured once and used for BOTH outputs — never queried twice.
@@ -246,8 +246,23 @@ async function main() {
     note: 'Figures come from the NCD app\'s own report functions; PAN masked to last 4.',
   }, null, 2) + '\n', 'utf8');
 
+  return { generatedAt: asOf, files: [...Object.keys(counts), 'ncd-extract.xlsx', 'manifest.json'] };
+}
+
+async function main() {
+  await loadSecretsFromSsm();
+  const outIdx = process.argv.indexOf('--out');
+  const outDir = outIdx > -1 ? process.argv[outIdx + 1]! : '/tmp/ncd-extract';
+  const db = createDb();
+  await buildExtract(db, outDir);
   console.log(`[extract] done → ${outDir}`);
   process.exit(0);
 }
 
-main().catch((e) => { console.error('[extract] FAILED:', e); process.exit(1); });
+// Run only when invoked directly as a CLI — NOT when imported for buildExtract
+// (importing must have no side effects; otherwise the app/tests trigger a run).
+const entry = process.argv[1];
+const isCli = !!entry && (import.meta.url === pathToFileURL(entry).href || entry.endsWith('daily-extract.js'));
+if (isCli) {
+  main().catch((e) => { console.error('[extract] FAILED:', e); process.exit(1); });
+}

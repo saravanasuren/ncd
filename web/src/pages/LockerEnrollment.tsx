@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { useConfirm } from '../components/Confirm.js';
@@ -94,6 +95,30 @@ export function LockerEnrollmentPage() {
     // r.locker is their LockerHub record (null if unknown there yet).
     setCust(r.locker ?? { found: false });
   };
+
+  // Arriving from a customer's page with ?pan=… — they have already picked the
+  // person, so run the lookup for them rather than making them key the PAN of
+  // someone they were just looking at. Once only: a ref, not a state flag, so a
+  // staff member who then searches for somebody else is not yanked back.
+  const [params] = useSearchParams();
+  const prefilled = useRef(false);
+  useEffect(() => {
+    const p = (params.get('pan') ?? '').trim().toUpperCase();
+    if (!p || prefilled.current) return;
+    prefilled.current = true;
+    setPan(p);
+    void run(api.get<any>(`/api/lockers/customers/by-pan/${encodeURIComponent(p)}`)).then((r) => {
+      if (!r) return;
+      if (!r.found_in_ncd) { setNotFound(true); return; }
+      const c = r.customer;
+      setNcdCust(c);
+      setPhone(String(c.phone ?? '').replace(/\D/g, '').slice(-10));
+      setName(c.full_name ?? '');
+      setEmail(c.email ?? '');
+      setCust(r.locker ?? { found: false });
+    });
+  }, [params]);
+
   const saveCustomer = async () => {
     // customer_id makes the server attach the full profile from our own book —
     // address, DOB, the lot. LockerHub does not backfill customers whose
@@ -428,6 +453,22 @@ export function LockerEnrollmentPage() {
           coming. */}
       <p className="text-sm text-text-muted mt-1 mb-4">Enroll a customer for a locker end-to-end. Pricing is handled by LockerHub. Pick the locker number below; it is allotted once rent and deposit are both settled and a staff member confirms.</p>
       {err && <div className="text-xs text-danger bg-[color:var(--danger-bg)] rounded px-3 py-2 mb-3">{err}</div>}
+
+      {/* Arrived from a customer's page. The flow is branch-first, so the
+          customer step is still collapsed and a staff member would otherwise
+          see no sign that the person came across with them — say so, and name
+          them, because enrolling the wrong customer is not a cheap mistake. */}
+      {prefilled.current && ncdCust && !branchId && (
+        <div className="text-xs bg-[color:var(--success-bg)] text-success rounded px-3 py-2 mb-3">
+          Enrolling <span className="font-semibold">{ncdCust.full_name}</span>
+          {ncdCust.customer_code ? <span className="font-mono"> · {ncdCust.customer_code}</span> : null} — pick the branch and size to continue.
+        </div>
+      )}
+      {prefilled.current && notFound && (
+        <div className="text-xs bg-[color:var(--warn-bg)] text-warn rounded px-3 py-2 mb-3">
+          Couldn’t find that customer by PAN — search for them in step 2.
+        </div>
+      )}
 
       {/* Cheques taken but not yet cleared. NCD-side bookkeeping only — the
           locker stays unsettled until the leg is actually paid. */}

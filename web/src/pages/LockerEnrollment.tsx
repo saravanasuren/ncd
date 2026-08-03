@@ -119,6 +119,40 @@ export function LockerEnrollmentPage() {
     });
   }, [params]);
 
+  /**
+   * Re-open an EXISTING locker application: /app/locker-enrollment?application_id=…
+   *
+   * Without this the page could only ever hold an application it had just
+   * created, so everything downstream of creation — record a payment, allot,
+   * send the agreement for e-Signing, download the signed copy — survived only
+   * until the staff member navigated away. A locker allotted yesterday, or by
+   * a colleague, could never be e-Signed at all: the button was rendered, but
+   * nothing could put an application on the page for it to act on (owner
+   * 2026-08-03: "im not finding the esign").
+   *
+   * Loads through the same GET the refresh button uses, so a resumed
+   * application is the identical shape as a freshly created one — legs,
+   * allotment, KYC and all — and the rest of the page needs no special case.
+   */
+  const resumed = useRef(false);
+  useEffect(() => {
+    const id = (params.get('application_id') ?? '').trim();
+    if (!id || resumed.current) return;
+    resumed.current = true;
+    void run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(id)}`)).then((r) => {
+      if (!r?.application_id) return;
+      setApp(r);
+      // Carry the identity across too, so step 2 shows who this is rather than
+      // an empty form sitting above a live application.
+      if (r.phone) setPhone(String(r.phone).replace(/\D/g, '').slice(-10));
+      if (r.name) setName(String(r.name));
+      if (r.email) setEmail(String(r.email));
+      if (r.branch_id) setBranchId(String(r.branch_id));
+      if (r.locker_size) setSize(String(r.locker_size));
+      setCust({ found: true, phone: r.phone, profile: { name: r.name, email: r.email } });
+    });
+  }, [params]);
+
   const saveCustomer = async () => {
     // customer_id makes the server attach the full profile from our own book —
     // address, DOB, the lot. LockerHub does not backfill customers whose

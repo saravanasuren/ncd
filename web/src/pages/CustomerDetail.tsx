@@ -194,8 +194,12 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
   const pledges = data.pledges ?? [];
   const cheques = data.cheques ?? [];
   const lh = data.lockerhub;
-  const lockers = lh?.lockers ?? lh?.applications ?? [];
-  if (!pledges.length && !cheques.length && !lockers.length && !data.lockerhub_error) return null;
+  const lockers = lh?.lockers ?? [];
+  // A5 calls these `open_locker_applications`. The card used to look for
+  // `applications`, a key their API does not return — so an enrolment still in
+  // progress showed nowhere on the customer, and there was no way back into it.
+  const openApps = lh?.open_locker_applications ?? lh?.applications ?? [];
+  if (!pledges.length && !cheques.length && !lockers.length && !openApps.length && !data.lockerhub_error) return null;
   const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
   return (
     <div className={card}>
@@ -247,6 +251,30 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
             );
           })}
         </div>
+      )}
+      {openApps.length > 0 && (
+        <>
+          {/* An enrolment part-way through. This is the route back into it —
+              to take a payment, allot, or send the agreement for e-Signing. */}
+          <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1">Locker applications in progress</div>
+          <div className="text-sm mb-3">
+            {openApps.map((a: any, i: number) => (
+              <div key={a.id ?? i} className="flex flex-wrap gap-x-3 gap-y-1 items-center border-b border-border last:border-0 py-1.5">
+                {a.id
+                  ? <Link to={`/app/locker-enrollment?application_id=${encodeURIComponent(String(a.id))}`}
+                      className="text-primary hover:underline font-mono text-xs"
+                      title="Open this locker application — payments, allotment and the e-Sign agreement">
+                      {a.application_no ?? a.id}
+                    </Link>
+                  : <span className="font-mono text-xs">{a.application_no ?? '—'}</span>}
+                {a.status && <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">{a.status}</span>}
+                {a.locker_size && <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{a.locker_size}</span>}
+                {a.annual_fee != null && <span className="text-xs text-text-muted">Rent <span className="mono text-text">{formatINR(a.annual_fee)}</span></span>}
+                {a.deposit != null && <span className="text-xs text-text-muted">Deposit <span className="mono text-text">{formatINR(a.deposit)}</span></span>}
+              </div>
+            ))}
+          </div>
+        </>
       )}
       {pledges.length > 0 && (
         <>

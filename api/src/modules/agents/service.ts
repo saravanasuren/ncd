@@ -119,6 +119,137 @@ export async function updateAgent(db: Db, actor: AuthUser, id: number, input: Up
   });
 }
 
+/** Staff users a merge can target — the people an agent record can turn out to be. */
+export async function staffCandidates(db: Db, q: string) {
+  const like = `%${q.trim()}%`;
+  const { rows } = await db.query(
+    `SELECT u.id, u.code, u.full_name, u.email, r.name AS role
+       FROM users u JOIN roles r ON r.id = u.role_id
+      WHERE u.is_active = TRUE AND u.is_staff = TRUE AND r.name NOT IN ('customer','agent')
+        AND (u.full_name ILIKE $1 OR u.code ILIKE $1 OR u.email ILIKE $1)
+      ORDER BY u.full_name LIMIT 15`, [like]);
+  return rows;
+}
+
+export interface MergeIntoStaffResult {
+  agent_code: string; agent_name: string; user_name: string;
+  accruals_moved: number; amount_moved: number; payouts_moved: number;
+  applications_repointed: number; customers_repointed: number;
+  shadow_user_deactivated: number | null;
+}
+
+/**
+ * This agent record is really an employee — fold it into their staff user
+ * (owner 2026-08-03, "move everything").
+ *
+ * Marking a user `is_staff` does nothing to their `agents` row: two tables, no
+ * link. So the person stays on the Agents list AND their incentive stays on the
+ * agent side, which is what actually matters — Agent-wise reporting keeps
+ * counting them. Sometimes it is worse: `resolveReferrer` checks agents BEFORE
+ * users, so a referred-by that names an employee can land on a stale agent
+ * record of the same name instead of on them.
+ *
+ * Everything moves — accruals paid and unpaid, and the payout ledger rows that
+ * settled them. Leaving paid history behind would keep the agent's name in the
+ * reports and make the merge look half-done.
+ *
+ * The agent row is soft-deleted, never removed: `incentive_accruals.payee_id`
+ * is a plain BIGINT with no FK, so a hard delete would orphan money records.
+ * Retired agents vanish from every list and stop shadowing the staff user in
+ * `resolveReferrer`, so referred-by then resolves to the employee by name.
+ */
+export async function mergeAgentIntoStaff(
+  db: Db, actor: AuthUser, agentId: number, targetUserId: number,
+): Promise<MergeIntoStaffResult> {
+  return db.withTx(async (tx) => {
+    const agent = (await tx.query<{ id: string; agent_code: string; full_name: string; user_id: string | null }>(
+      'SELECT id, agent_code, full_name, user_id FROM agents WHERE id = $1 AND deleted_at IS NULL', [agentId])).rows[0];
+    if (!agent) throw errors.notFound('Agent not found');
+
+    const user = (await tx.query<{ id: string; full_name: string; is_staff: boolean; role: string }>(
+      `SELECT u.id, u.full_name, u.is_staff, r.name AS role
+         FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1`, [targetUserId])).rows[0];
+    if (!user) throw errors.notFound('Staff member not found');
+    // The same rule the shortlist applies — the endpoint must not accept a
+    // target the picker would never offer. Role matters as well as the flag:
+    // an `agent` account carries is_staff=TRUE in some seeded/legacy rows, and
+    // merging an agent into an agent moves the money nowhere useful.
+    if (user.role === 'customer' || user.role === 'agent' || !user.is_staff) {
+      throw errors.badRequest(
+        `${user.full_name} is not a staff account (role: ${user.role}) — tick "staff" on their user, or pick a different person.`);
+    }
+
+    // Both sides earning on the SAME application would break the
+    // (application, payee_type, payee_id) key. Impossible under today's matrix
+    // — with a referrer the staff cell pays 0, so only one row is ever written
+    // — but the rates are editable, so refuse loudly rather than lose money.
+    const clash = (await tx.query<{ application_no: string }>(
+      `SELECT a.application_no
+         FROM incentive_accruals mine
+         JOIN applications a ON a.id = mine.application_id
+        WHERE mine.payee_type = 'agent' AND mine.payee_id = $1
+          AND EXISTS (SELECT 1 FROM incentive_accruals theirs
+                       WHERE theirs.application_id = mine.application_id
+                         AND theirs.payee_type = 'staff' AND theirs.payee_id = $2)`,
+      [agentId, targetUserId])).rows;
+    if (clash.length) {
+      throw errors.conflict(
+        `${user.full_name} already earns on ${clash.map((c) => c.application_no).join(', ')} as staff. `
+        + 'Merging would put two incentives on one investment — sort those out first.');
+    }
+
+    const moved = await tx.query(
+      "UPDATE incentive_accruals SET payee_type = 'staff', payee_id = $2 WHERE payee_type = 'agent' AND payee_id = $1",
+      [agentId, targetUserId]);
+    const amount = (await tx.query<{ total: string }>(
+      "SELECT coalesce(sum(amount),0)::text AS total FROM incentive_accruals WHERE payee_type = 'staff' AND payee_id = $1", [targetUserId])).rows[0]!.total;
+    // The payout ledger keys on the payee too — leave it and the money already
+    // handed over still reads as paid to an agent.
+    const payouts = await tx.query(
+      "UPDATE incentive_payouts SET payee_type = 'staff', payee_id = $2 WHERE payee_type = 'agent' AND payee_id = $1",
+      [agentId, targetUserId]);
+
+    // Their enrolments follow them. enrolled_by_user_id is only filled where it
+    // is blank — never overwrite a staff member who really did book it.
+    const apps = await tx.query(
+      'UPDATE applications SET enrolled_by_agent_id = NULL, enrolled_by_user_id = coalesce(enrolled_by_user_id, $2) WHERE enrolled_by_agent_id = $1',
+      [agentId, targetUserId]);
+    const custs = await tx.query(
+      'UPDATE customers SET enrolled_by_agent_id = NULL, enrolled_by_user_id = coalesce(enrolled_by_user_id, $2) WHERE enrolled_by_agent_id = $1',
+      [agentId, targetUserId]);
+
+    await tx.query('UPDATE agents SET deleted_at = now(), is_active = FALSE WHERE id = $1', [agentId]);
+
+    // The placeholder login the agent row carried (ag-xxxx@agents.dhanam.local).
+    // Deactivated, not deleted — it may own audit history. Skipped when the
+    // agent was already linked to this very person.
+    let shadow: number | null = null;
+    if (agent.user_id && Number(agent.user_id) !== targetUserId) {
+      shadow = Number(agent.user_id);
+      await tx.query('UPDATE users SET is_active = FALSE WHERE id = $1', [shadow]);
+    }
+
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'agent.merge-into-staff', entityType: 'agents', entityId: agentId,
+      before: { agent_code: agent.agent_code, agent_name: agent.full_name },
+      after: {
+        into_user_id: targetUserId, into_user_name: user.full_name,
+        accruals_moved: moved.rowCount ?? 0, payouts_moved: payouts.rowCount ?? 0,
+        applications_repointed: apps.rowCount ?? 0, customers_repointed: custs.rowCount ?? 0,
+        shadow_user_deactivated: shadow,
+      },
+    });
+
+    return {
+      agent_code: agent.agent_code, agent_name: agent.full_name, user_name: user.full_name,
+      accruals_moved: moved.rowCount ?? 0, amount_moved: Number(amount),
+      payouts_moved: payouts.rowCount ?? 0,
+      applications_repointed: apps.rowCount ?? 0, customers_repointed: custs.rowCount ?? 0,
+      shadow_user_deactivated: shadow,
+    };
+  });
+}
+
 /**
  * Payee search for the "referred by" dropdown: agents + staff users, by code or
  * name. Each row carries the code to store in referred_by and the display name.

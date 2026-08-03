@@ -77,6 +77,91 @@ function useIfscLookup(
   return state;
 }
 
+interface StaffCandidate { id: number; code: string | null; full_name: string; email: string; role: string }
+
+/**
+ * "This agent is actually one of our people." Ticking `staff` on their user does
+ * nothing to the agent record — two tables, no link — so they stay on this list
+ * and, more to the point, their incentive stays on the agent side of every
+ * report. This folds the record into the staff member and moves the money with
+ * it, paid history included (owner 2026-08-03).
+ */
+function MergePanel({ agent, onClose, onDone }: {
+  agent: AgentRow; onClose: () => void; onDone: (msg: string) => void;
+}) {
+  const [q, setQ] = useState(agent.full_name);
+  const [debounced, setDebounced] = useState(agent.full_name);
+  const [picked, setPicked] = useState<StaffCandidate | null>(null);
+  const [err, setErr] = useState('');
+
+  useEffect(() => { const t = setTimeout(() => setDebounced(q), 300); return () => clearTimeout(t); }, [q]);
+  const { data, isFetching } = useQuery({
+    queryKey: ['staff-candidates', debounced],
+    queryFn: () => api.get<{ rows: StaffCandidate[] }>(`/api/agents/staff-candidates?q=${encodeURIComponent(debounced)}`),
+    enabled: debounced.trim().length >= 2,
+  });
+
+  const merge = useMutation({
+    mutationFn: () => api.post<{ accruals_moved: number; payouts_moved: number; user_name: string }>(
+      `/api/agents/${agent.id}/merge-into-staff`, { user_id: picked!.id }),
+    onSuccess: (r) => onDone(
+      `${agent.full_name} merged into ${r.user_name} — ${r.accruals_moved} incentive row(s) and ${r.payouts_moved} payout row(s) moved across.`),
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Merge failed'),
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-6 overflow-auto" onClick={onClose}>
+      <div className="bg-surface border border-border rounded-lg shadow-card p-5 w-full max-w-lg mt-16" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-base font-semibold m-0">Merge <span className="font-mono text-sm">{agent.agent_code}</span> {agent.full_name} into a staff member</h2>
+        <p className="text-sm text-text-muted mt-1 mb-4">
+          Everything moves — incentive already paid as well as pending, plus anything they enrolled.
+          This agent record then leaves the list, and a "referred by" naming them resolves to the staff
+          member from here on.
+        </p>
+
+        {!picked ? (
+          <>
+            <input autoFocus className={`${inp} w-full`} placeholder="Search staff by name, code or email"
+              value={q} onChange={(e) => setQ(e.target.value)} />
+            <div className="mt-2 max-h-64 overflow-auto border border-border rounded">
+              {isFetching && <div className="p-3 text-sm text-text-muted">Searching…</div>}
+              {!isFetching && (data?.rows.length ?? 0) === 0 &&
+                <div className="p-3 text-sm text-text-muted">
+                  No staff match. Only people marked <strong>staff</strong> on their user can be merged into —
+                  tick that first if it is missing.
+                </div>}
+              {data?.rows.map((u) => (
+                <button key={u.id} onClick={() => { setErr(''); setPicked(u); }}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-bg border-b border-border last:border-0">
+                  <span className="font-medium">{u.full_name}</span>
+                  <span className="text-text-muted"> · {u.role}{u.code ? ` · ${u.code}` : ''}</span>
+                  <div className="text-xs text-text-muted">{u.email}</div>
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="border border-border rounded p-3 text-sm">
+            <div>Merging <strong>{agent.full_name}</strong> into <strong>{picked.full_name}</strong> ({picked.role}).</div>
+            <div className="text-text-muted mt-1">This cannot be undone from the screen.</div>
+          </div>
+        )}
+
+        {err && <div className="text-xs text-danger mt-3">{err}</div>}
+
+        <div className="flex gap-2 justify-end mt-4">
+          {picked && <button onClick={() => setPicked(null)} className="text-sm text-text-muted hover:underline px-2">Back</button>}
+          <button onClick={onClose} className="text-sm text-text-muted hover:underline px-2">Cancel</button>
+          <button disabled={!picked || merge.isPending} onClick={() => { setErr(''); merge.mutate(); }}
+            className="bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-4 py-1.5 text-sm font-semibold">
+            {merge.isPending ? 'Merging…' : 'Merge'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const HINT = {
   idle: 'IFSC fills the bank & branch',
   looking: 'Looking up…',
@@ -126,6 +211,8 @@ export function AgentsPage() {
   const qc = useQueryClient();
   const [form, setForm] = useState(EMPTY);
   const [edit, setEdit] = useState<EditState | null>(null);
+  const [merging, setMerging] = useState<AgentRow | null>(null);
+  const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const { data, isLoading, error } = useQuery({ queryKey: ['agents'], queryFn: () => api.get<{ rows: AgentRow[] }>('/api/agents') });
 
@@ -217,6 +304,8 @@ export function AgentsPage() {
               account_holder_name: a.account_holder_name ?? '',
             }); }}
             className="text-xs text-primary hover:underline">Edit</button>
+          <button onClick={() => { setErr(''); setMsg(''); setMerging(a); }} className="text-xs text-primary hover:underline"
+            title="This agent is really one of our staff — fold the record and its incentive into their user">Merge into staff</button>
           <button onClick={() => { setErr(''); toggle.mutate(a); }} className="text-xs text-primary hover:underline">
             {a.is_active ? 'Disable' : 'Enable'}
           </button>
@@ -242,7 +331,14 @@ export function AgentsPage() {
         {err && <div className="text-xs text-danger mt-2">{err}</div>}
       </div>
 
+      {msg && <div className="text-sm text-success bg-[color:var(--success-bg)] border border-border rounded px-3 py-2 mb-3">{msg}</div>}
+
       <DataTable columns={columns} rows={data!.rows} rowKey={(a) => a.id} defaultSort={{ key: 'full_name', dir: 'asc' }} empty="No agents yet." />
+
+      {merging && (
+        <MergePanel agent={merging} onClose={() => setMerging(null)}
+          onDone={(m) => { setMerging(null); setMsg(m); qc.invalidateQueries({ queryKey: ['agents'] }); }} />
+      )}
     </div>
   );
 }

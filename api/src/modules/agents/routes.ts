@@ -47,6 +47,22 @@ agentsRouter.put('/:id', requirePermission('agents:manage'),
     res.json({ ok: true });
   }));
 
+// This agent record is really an employee — fold it into their staff user.
+// Everything moves: accruals paid and unpaid, the payout ledger, and their
+// enrolments. See mergeAgentIntoStaff for why paid history moves too.
+agentsRouter.get('/staff-candidates', requirePermission('agents:manage'),
+  asyncHandler(async (req, res) => {
+    const q = String(req.query.q ?? '');
+    if (q.trim().length < 2) return res.json({ rows: [] });
+    res.json({ rows: await s.staffCandidates(getDb(), q) });
+  }));
+
+agentsRouter.post('/:id/merge-into-staff', requirePermission('agents:manage'),
+  asyncHandler(async (req, res) => {
+    const { user_id } = z.object({ user_id: z.number().int().positive() }).parse(req.body);
+    res.json(await s.mergeAgentIntoStaff(getDb(), req.user!, Number(req.params.id), user_id));
+  }));
+
 // Referred-by dropdown: staff enrolling a customer search payees by code/name.
 agentsRouter.get('/payee-search', requirePermission('customers:create', 'leads:create'),
   asyncHandler(async (req, res) => {

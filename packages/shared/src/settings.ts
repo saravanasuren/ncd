@@ -335,6 +335,15 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     default: [],
     editableBy: 'super_admin',
   },
+  {
+    key: 'reports.backup_check_recipients',
+    group: 'Reports',
+    label: 'Nightly backup-check recipients',
+    description: 'Email addresses that receive the nightly backup-status email. Leave empty to fall back to the super-admin and admin roles.',
+    type: 'list',
+    default: [],
+    editableBy: 'super_admin',
+  },
 
   // ── System ──
   {

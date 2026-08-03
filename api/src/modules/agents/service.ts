@@ -16,7 +16,7 @@ export async function listAgents(db: Db) {
   const { rows } = await db.query(
     `SELECT a.id, a.agent_code, a.full_name, a.phone, a.email, a.source,
             a.commission_status, a.commission_rate_pct, a.is_active, a.user_id,
-            a.bank_name, a.account_number, a.ifsc,
+            a.bank_name, a.branch_name, a.account_number, a.ifsc, a.account_holder_name,
             u.full_name AS user_name
      FROM agents a LEFT JOIN users u ON u.id = a.user_id
      WHERE a.deleted_at IS NULL
@@ -31,8 +31,12 @@ export interface CreateAgentInput {
   email?: string;
   user_id?: number | null;  // set when this agent is also a user (staff who sources)
   bank_name?: string;
+  branch_name?: string;
   account_number?: string;
   ifsc?: string;
+  /** Who the account is in the name of — a transfer goes out against this, and
+   *  it is not always the agent (a family member's or a firm's account). */
+  account_holder_name?: string;
 }
 
 /**
@@ -68,10 +72,12 @@ export async function createAgent(db: Db, actor: AuthUser, input: CreateAgentInp
     // Every agent IS a user, so deleting the user retires the agent everywhere.
     const userId = input.user_id ?? await ensureUserForAgent(tx, { ...input, agent_code: code });
     const { rows } = await tx.query<{ id: string }>(
-      `INSERT INTO agents (agent_code, full_name, phone, email, source, commission_status, user_id, bank_name, account_number, ifsc, is_active)
-       VALUES ($1,$2,$3,$4,'manual','None',$5,$6,$7,$8,TRUE) RETURNING id`,
+      `INSERT INTO agents (agent_code, full_name, phone, email, source, commission_status, user_id,
+                           bank_name, branch_name, account_number, ifsc, account_holder_name, is_active)
+       VALUES ($1,$2,$3,$4,'manual','None',$5,$6,$7,$8,$9,$10,TRUE) RETURNING id`,
       [code, input.full_name, input.phone ?? null, input.email ?? null, userId,
-       input.bank_name ?? null, input.account_number ?? null, input.ifsc ?? null]);
+       input.bank_name ?? null, input.branch_name ?? null, input.account_number ?? null,
+       input.ifsc ?? null, input.account_holder_name ?? null]);
     const id = Number(rows[0]!.id);
     await writeAudit(tx, { actorId: actor.id, action: 'agent.create', entityType: 'agents', entityId: id, after: { code, name: input.full_name, user_id: userId } });
     return { id, agent_code: code, user_id: userId };
@@ -85,8 +91,10 @@ export interface UpdateAgentInput {
   email?: string | null;
   user_id?: number | null;
   bank_name?: string | null;
+  branch_name?: string | null;
   account_number?: string | null;
   ifsc?: string | null;
+  account_holder_name?: string | null;
   is_active?: boolean;
 }
 
@@ -97,8 +105,9 @@ export async function updateAgent(db: Db, actor: AuthUser, id: number, input: Up
     const sets: string[] = []; const params: unknown[] = []; let p = 0;
     const fields: Array<[string, unknown]> = [
       ['full_name', input.full_name], ['phone', input.phone], ['email', input.email],
-      ['user_id', input.user_id], ['bank_name', input.bank_name],
-      ['account_number', input.account_number], ['ifsc', input.ifsc], ['is_active', input.is_active],
+      ['user_id', input.user_id], ['bank_name', input.bank_name], ['branch_name', input.branch_name],
+      ['account_number', input.account_number], ['ifsc', input.ifsc],
+      ['account_holder_name', input.account_holder_name], ['is_active', input.is_active],
     ];
     for (const [col, val] of fields) {
       if (val !== undefined) { sets.push(`${col} = $${++p}`); params.push(val); }

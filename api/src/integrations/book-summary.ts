@@ -21,7 +21,6 @@ import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
 
 const FALLBACK_ROLES = ['super_admin', 'admin', 'cxo', 'ncd_manager'];
 const BOOK = [...OUTSTANDING_APPLICATION_STATUSES]; // funded/approved live money; excludes PendingApproval + Draft
-const NOT_KILLED = ['Cancelled', 'Rejected'];
 
 const ist = (d: Date) => new Date(d.getTime() + 5.5 * 3600 * 1000);
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
@@ -63,14 +62,18 @@ export async function computeBookSummary(db: Db, reportDate?: string): Promise<B
       WHERE a.status = ANY($1::text[]) AND a.date_money_received IS NOT NULL AND COALESCE(al.outstanding_amount,0) > 0`,
     [BOOK])).rows[0]!;
 
+  // "Invested today" counts only investments actually ON THE BOOK (same rule as
+  // the outstanding figure) — a PendingApproval subscription is not a new
+  // investment until it is approved, so it must not appear here or in "brought
+  // in today". Otherwise the email disagrees with the book and the dashboard.
   const physical = (await db.query<{ n: number; amt: string }>(
     `SELECT COUNT(*)::int AS n, COALESCE(SUM(total_amount),0) AS amt FROM applications
-      WHERE date_money_received = $1::date AND lockerhub_intent_no IS NULL AND status <> ALL($2::text[])`,
-    [date, NOT_KILLED])).rows[0]!;
+      WHERE date_money_received = $1::date AND lockerhub_intent_no IS NULL AND status = ANY($2::text[])`,
+    [date, BOOK])).rows[0]!;
   const funded = (await db.query<{ n: number; amt: string }>(
     `SELECT COUNT(*)::int AS n, COALESCE(SUM(total_amount),0) AS amt FROM applications
-      WHERE date_money_received = $1::date AND lockerhub_intent_no IS NOT NULL AND status <> ALL($2::text[])`,
-    [date, NOT_KILLED])).rows[0]!;
+      WHERE date_money_received = $1::date AND lockerhub_intent_no IS NOT NULL AND status = ANY($2::text[])`,
+    [date, BOOK])).rows[0]!;
 
   const redemptions = (await db.query<{ n: number; amt: string }>(
     `SELECT COUNT(*)::int AS n, COALESCE(SUM(net_payment),0) AS amt FROM redemptions
@@ -111,8 +114,8 @@ export async function computeBookSummary(db: Db, reportDate?: string): Promise<B
        FROM applications a
        LEFT JOIN users u   ON u.id  = a.enrolled_by_user_id
        LEFT JOIN agents ag ON ag.id = a.enrolled_by_agent_id
-      WHERE a.date_money_received = $1::date AND a.status <> ALL($2::text[])
-      GROUP BY u.full_name, ag.full_name`, [date, NOT_KILLED])).rows;
+      WHERE a.date_money_received = $1::date AND a.status = ANY($2::text[])
+      GROUP BY u.full_name, ag.full_name`, [date, BOOK])).rows;
   const broughtMap = new Map<string, BroughtInLine>();
   for (const r of broughtRows) {
     const kind: BroughtInLine['kind'] = r.staff_name ? 'staff' : r.agent_name ? 'agent' : 'unattributed';

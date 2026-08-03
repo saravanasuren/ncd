@@ -25,6 +25,8 @@ import type { Db } from '../../db/types.js';
 
 export interface RenewalRow {
   tenant_id: string | null;
+  /** Needed to re-open the application — the only route to its e-Sign. */
+  lockerhub_application_id: string | null;
   locker_no: string | null;
   locker_size: string | null;
   branch_id: string | null;
@@ -72,6 +74,61 @@ export function daysUntil(iso: string | null, today = new Date()): number | null
 }
 
 /**
+ * One roster tenancy → one renewal row, or `null` when it does not belong on
+ * this screen.
+ *
+ * Separated out so the decisions here can be tested directly: LockerHub is not
+ * configured under test, so anything left inside the fetch loop is reachable
+ * only by a live roster and would in practice go unverified.
+ *
+ * `today` is injectable for the same reason the date helper's is — a test that
+ * cannot fix "now" cannot pin a boundary.
+ */
+export function renewalRowFrom(
+  r: Record<string, any>,
+  withinDays: number = DEFAULT_WINDOW_DAYS,
+  today = new Date(),
+): RenewalRow | null {
+  // A tenancy that never got allotted has no lease to renew — it is unfinished
+  // enrolment, which is the Outstanding list's job, not this one.
+  if (!r.tenant_id && !r.lease_expires_on) return null;
+  // Closed/cancelled tenancies are not renewable and must not be chased.
+  const acct = String(r.account_status ?? '').toLowerCase();
+  if (acct === 'closed' || acct === 'cancelled') return null;
+
+  const expires = asDate(r.lease_expires_on);
+  const days = daysUntil(expires, today);
+  const state: RenewalRow['state'] =
+    days == null ? 'unknown' : days < 0 ? 'expired' : days <= DUE_SOON_DAYS ? 'due' : 'upcoming';
+
+  // Anything further out than the window is simply not this screen's business.
+  // "unknown" is kept regardless: a live tenancy with no expiry date on record
+  // is a gap somebody has to close, and dropping it hides it forever.
+  if (state === 'upcoming' && (days ?? 0) > withinDays) return null;
+
+  return {
+    tenant_id: r.tenant_id ? String(r.tenant_id) : null,
+    lockerhub_application_id: r.lockerhub_application_id ? String(r.lockerhub_application_id) : null,
+    locker_no: r.locker_no ?? null,
+    locker_size: r.locker_size ?? null,
+    branch_id: r.branch_id ?? null,
+    branch_name: r.branch_name ?? null,
+    tenant_name: r.tenant_name ?? null,
+    tenant_phone: r.tenant_phone ?? null,
+    customer_id: r.customer_id != null ? Number(r.customer_id) : null,
+    customer_code: r.customer_code ?? null,
+    lease_start: asDate(r.lease_start),
+    lease_expires_on: expires,
+    days_to_expiry: days,
+    annual_rent: r.annual_rent != null ? Number(r.annual_rent) : null,
+    deposit_amount: r.deposit_amount != null ? Number(r.deposit_amount) : null,
+    pledged_amount: Number(r.pledged_amount ?? 0),
+    ncd_backed: !!r.ncd_backed,
+    state,
+  };
+}
+
+/**
  * Branch scoping is decided by the CALLER, exactly as `/tenants` does it — the
  * route owns that 403 so there is one place where "which branches may this user
  * see" is answered, not two that can drift apart.
@@ -90,42 +147,8 @@ export async function lockerRenewals(
 
   const rows: RenewalRow[] = [];
   for (const r of tenancies) {
-    // A tenancy that never got allotted has no lease to renew — it is unfinished
-    // enrolment, which is the Outstanding list's job, not this one.
-    if (!r.tenant_id && !r.lease_expires_on) continue;
-    // Closed/cancelled tenancies are not renewable and must not be chased.
-    const acct = String(r.account_status ?? '').toLowerCase();
-    if (acct === 'closed' || acct === 'cancelled') continue;
-
-    const expires = asDate(r.lease_expires_on);
-    const days = daysUntil(expires);
-    const state: RenewalRow['state'] =
-      days == null ? 'unknown' : days < 0 ? 'expired' : days <= DUE_SOON_DAYS ? 'due' : 'upcoming';
-
-    // Anything further out than the window is simply not this screen's business.
-    // "unknown" is kept regardless: a live tenancy with no expiry date on record
-    // is a gap somebody has to close, and dropping it hides it forever.
-    if (state === 'upcoming' && (days ?? 0) > withinDays) continue;
-
-    rows.push({
-      tenant_id: r.tenant_id ? String(r.tenant_id) : null,
-      locker_no: r.locker_no ?? null,
-      locker_size: r.locker_size ?? null,
-      branch_id: r.branch_id ?? null,
-      branch_name: r.branch_name ?? null,
-      tenant_name: r.tenant_name ?? null,
-      tenant_phone: r.tenant_phone ?? null,
-      customer_id: r.customer_id != null ? Number(r.customer_id) : null,
-      customer_code: r.customer_code ?? null,
-      lease_start: asDate(r.lease_start),
-      lease_expires_on: expires,
-      days_to_expiry: days,
-      annual_rent: r.annual_rent != null ? Number(r.annual_rent) : null,
-      deposit_amount: r.deposit_amount != null ? Number(r.deposit_amount) : null,
-      pledged_amount: Number(r.pledged_amount ?? 0),
-      ncd_backed: !!r.ncd_backed,
-      state,
-    });
+    const row = renewalRowFrom(r, withinDays);
+    if (row) rows.push(row);
   }
 
   // Most overdue first, then soonest. The top of this list is money already

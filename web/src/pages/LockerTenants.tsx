@@ -346,7 +346,17 @@ export function LockerTenantsPage() {
                   </td>
                   <td className="py-2 pr-3 text-right mono">{r.pledged_amount > 0 ? formatINR(r.pledged_amount) : '—'}</td>
                   <td className="py-2 pr-3 font-mono text-xs text-text-muted">
-                    {r.application_no ?? r.lockerhub_application_id ?? '—'}
+                    {/* Re-open the application. This is the ONLY route back to a
+                        tenancy once staff leave the enrolment page — and so the
+                        only way to e-Sign a locker allotted earlier, or by a
+                        colleague (owner 2026-08-03). */}
+                    {r.lockerhub_application_id
+                      ? <Link to={`/app/locker-enrollment?application_id=${encodeURIComponent(r.lockerhub_application_id)}`}
+                          className="text-primary hover:underline font-sans"
+                          title="Open this locker application — payments, allotment and the e-Sign agreement">
+                          {r.application_no ?? r.lockerhub_application_id}
+                        </Link>
+                      : (r.application_no ?? '—')}
                     {can('lockers:remove-tenant') && (r.override_key || r.tenant_id) && (
                       <button className="ml-2 text-danger hover:underline font-sans"
                         title="Remove from NCD's roster. The locker stays allotted on LockerHub."

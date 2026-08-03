@@ -17,6 +17,7 @@ import { Tabs, type TabDef } from '../components/Tabs.js';
  */
 interface Row {
   tenant_id: string | null;
+  lockerhub_application_id: string | null;
   locker_no: string | null;
   locker_size: string | null;
   branch_name: string | null;
@@ -94,7 +95,16 @@ export function LockerRenewalsPage() {
         : <span>{r.tenant_name ?? '—'}</span>) },
     { key: 'tenant_phone', header: 'Phone', tdClassName: 'font-mono text-xs' },
     { key: 'locker_no', header: 'Locker', value: (r) => r.locker_no ?? '',
-      render: (r) => <span className="whitespace-nowrap">{r.locker_no ?? '—'}{r.locker_size ? <span className="text-text-muted text-xs"> · {r.locker_size}</span> : null}</span> },
+      // Links into the application so the tenancy can actually be worked on —
+      // payments, allotment, the e-Sign agreement. Without it this list can
+      // only tell you a problem exists.
+      render: (r) => <span className="whitespace-nowrap">
+        {r.lockerhub_application_id
+          ? <Link to={`/app/locker-enrollment?application_id=${encodeURIComponent(r.lockerhub_application_id)}`}
+              className="text-primary hover:underline" title="Open this locker application">{r.locker_no ?? 'Open'}</Link>
+          : (r.locker_no ?? '—')}
+        {r.locker_size ? <span className="text-text-muted text-xs"> · {r.locker_size}</span> : null}
+      </span> },
     { key: 'branch_name', header: 'Branch', value: (r) => r.branch_name ?? '' },
     { key: 'annual_rent', header: 'Annual rent', align: 'right',
       value: (r) => Number(r.annual_rent ?? 0),

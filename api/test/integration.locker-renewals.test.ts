@@ -12,7 +12,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, type TestCtx } from './helpers/server.js';
-import { daysUntil } from '../src/modules/lockers/renewals.js';
+import { daysUntil, renewalRowFrom } from '../src/modules/lockers/renewals.js';
 
 let ctx: TestCtx;
 
@@ -54,6 +54,51 @@ describe('daysUntil (lease expiry arithmetic)', () => {
     expect(daysUntil(null)).toBeNull();
     expect(daysUntil('')).toBeNull();
     expect(daysUntil('not-a-date')).toBeNull();
+  });
+});
+
+describe('which tenancies belong on the renewals screen', () => {
+  const today = new Date(Date.UTC(2026, 7, 3, 14, 30));
+  const tenancy = (over: Record<string, any> = {}) => ({
+    tenant_id: 't1', lockerhub_application_id: 'la_1', locker_no: 'L10-4',
+    tenant_name: 'Meena Krishnan', account_status: 'Active',
+    lease_expires_on: '2026-08-20', annual_rent: 3540, ...over,
+  });
+
+  it('carries the application id, which is the only route to the e-Sign', () => {
+    // The "Open" link on this screen is built from it. Drop the field and the
+    // renewals list silently becomes read-only again — the exact defect that
+    // hid the locker agreement in the first place.
+    expect(renewalRowFrom(tenancy(), 60, today)!.lockerhub_application_id).toBe('la_1');
+  });
+
+  it('classifies expired, due, upcoming and unknown', () => {
+    const state = (d: string | null) => renewalRowFrom(tenancy({ lease_expires_on: d }), 60, today)?.state;
+    expect(state('2026-05-31')).toBe('expired');   // 64 days past
+    expect(state('2026-08-03')).toBe('due');       // today — due, NOT expired
+    expect(state('2026-08-17')).toBe('due');       // 14 days — still "this week's work"
+    expect(state('2026-08-18')).toBe('upcoming');  // 15 days — just over the line
+    expect(state(null)).toBe('unknown');
+  });
+
+  it('drops a tenancy beyond the window, but never one with no expiry date', () => {
+    // 90 days out is not this screen's business at a 60-day window...
+    expect(renewalRowFrom(tenancy({ lease_expires_on: '2026-11-01' }), 60, today)).toBeNull();
+    expect(renewalRowFrom(tenancy({ lease_expires_on: '2026-11-01' }), 120, today)).toBeTruthy();
+    // ...but a live tenancy nobody holds an expiry for is a gap to close, and
+    // filtering it would hide it permanently.
+    expect(renewalRowFrom(tenancy({ lease_expires_on: null }), 60, today)).toBeTruthy();
+  });
+
+  it('never chases a closed or cancelled tenancy', () => {
+    expect(renewalRowFrom(tenancy({ account_status: 'Closed' }), 60, today)).toBeNull();
+    expect(renewalRowFrom(tenancy({ account_status: 'cancelled' }), 60, today)).toBeNull();
+  });
+
+  it('ignores an enrolment that was never allotted', () => {
+    // No tenancy and no lease: there is nothing to renew. That is the
+    // Outstanding list's job, and showing it here would double-count the work.
+    expect(renewalRowFrom({ tenant_id: null, lease_expires_on: null, lockerhub_application_id: 'la_9' }, 60, today)).toBeNull();
   });
 });
 

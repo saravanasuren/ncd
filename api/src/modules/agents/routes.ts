@@ -18,8 +18,10 @@ const createSchema = z.object({
   email: z.string().email().optional(),
   user_id: z.number().nullable().optional(),
   bank_name: z.string().optional(),
+  branch_name: z.string().optional(),
   account_number: z.string().optional(),
   ifsc: z.string().optional(),
+  account_holder_name: z.string().optional(),
 });
 
 agentsRouter.post('/', requirePermission('agents:manage'),
@@ -32,8 +34,10 @@ const updateSchema = createSchema.partial().extend({
   phone: z.string().nullable().optional(),
   email: z.string().email().nullable().optional(),
   bank_name: z.string().nullable().optional(),
+  branch_name: z.string().nullable().optional(),
   account_number: z.string().nullable().optional(),
   ifsc: z.string().nullable().optional(),
+  account_holder_name: z.string().nullable().optional(),
 });
 
 agentsRouter.put('/:id', requirePermission('agents:manage'),

@@ -65,6 +65,109 @@ async function purgeConfirm(promptText: ReturnType<typeof useConfirm>['promptTex
 }
 
 
+/**
+ * What this customer holds, and what they can be sold next (owner 2026-08-01:
+ * "whether it's an NCD or a locker customer, first a customer profile is
+ * created"). The customer is the hub; NCDs and lockers hang off them.
+ *
+ * The counts are read from data already on the page — no extra call that could
+ * leave the strip half-drawn. Only "waiting" is fetched, and it fails soft: an
+ * unanswered worklist should not blank out the holdings beside it.
+ */
+function Holdings({ customerId, pan, apps, approved, onAddNcd }: {
+  customerId: number; pan: string | null; apps: any[]; approved: boolean; onAddNcd: () => void;
+}) {
+  const { can } = useAuth();
+  const DEAD = ['Rejected', 'Cancelled', 'Redeemed', 'Matured', 'RolledOver', 'PrematureWithdrawn', 'Transferred'];
+  const open = apps.filter((r) => !DEAD.includes(r.status) && !r.archived_at);
+  // Approval is what makes an NCD live and starts interest, so an unapproved
+  // one is NOT counted here — a headline "2 live · ₹0 outstanding" reads as a
+  // bug, and worse, as though money were already earning.
+  const active = open.filter((r) => r.status === 'Active');
+  const unapproved = open.length - active.length;
+  const outstanding = active.reduce((s, r) => s + Number(r.outstanding ?? 0), 0);
+
+  // Same queryKey as LockersCard below — react-query dedupes it to one request.
+  const lockers = useQuery({
+    queryKey: ['customer-lockers', customerId],
+    queryFn: () => api.get<any>(`/api/lockers/customers/${customerId}/lockers`),
+    retry: false, enabled: can('lockers:enroll'),
+  });
+  const lh = lockers.data?.lockerhub;
+  const held = (lh?.lockers ?? lh?.applications ?? []) as any[];
+
+  const waiting = useQuery({
+    queryKey: ['outstanding', customerId],
+    queryFn: () => api.get<{ rows: { kind: string; detail: string }[] }>(`/api/reports/outstanding?customer_id=${customerId}`),
+    retry: false,
+  });
+  const pending = waiting.data?.rows ?? [];
+
+  const tile = 'flex-1 min-w-[150px] px-4 py-3 rounded-lg border border-border bg-bg';
+  const label = 'text-[11px] font-semibold text-text-label uppercase tracking-wide';
+  return (
+    <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
+      <div className="flex flex-wrap gap-3 items-stretch">
+        <div className={tile}>
+          <div className={label}>NCDs</div>
+          <div className="text-lg font-semibold leading-tight mt-0.5">{active.length} active</div>
+          <div className="text-xs text-text-muted mono">{formatINR(outstanding)} outstanding</div>
+          {unapproved > 0 && <div className="text-xs text-warn mt-0.5">+{unapproved} not approved yet</div>}
+        </div>
+        {can('lockers:enroll') && (
+          <div className={tile}>
+            <div className={label}>Lockers</div>
+            {lockers.isLoading
+              ? <div className="text-sm text-text-muted mt-1">Checking…</div>
+              : lockers.isError || lockers.data?.lockerhub_error
+                // Never claim "0 lockers" when we simply could not ask — a wrong
+                // zero here is what makes someone open a duplicate application.
+                ? <div className="text-sm text-warn mt-1">Couldn’t check</div>
+                : <>
+                    <div className="text-lg font-semibold leading-tight mt-0.5">{held.length}</div>
+                    <div className="text-xs text-text-muted truncate">
+                      {held.length === 0 ? 'none yet'
+                        : held.map((l) => l.locker_no ?? l.locker_number ?? l.status ?? '—').join(', ')}
+                    </div>
+                  </>}
+          </div>
+        )}
+        <div className={tile}>
+          <div className={label}>Waiting</div>
+          {pending.length === 0
+            ? <div className="text-sm text-text-muted mt-1">{waiting.isError ? '—' : 'Nothing pending'}</div>
+            : <>
+                <div className="text-lg font-semibold leading-tight mt-0.5 text-warn">{pending.length}</div>
+                <Link to="/app/outstanding" className="text-xs text-primary hover:underline">{pending[0]!.detail.split('—')[0]!.trim()}{pending.length > 1 ? ` +${pending.length - 1}` : ''}</Link>
+              </>}
+        </div>
+      </div>
+      {/* Adding either product starts here, because this is where staff already
+          are once the customer exists. */}
+      {(can('applications:create') || can('lockers:enroll')) && (
+        <div className="flex flex-wrap gap-2 mt-3">
+          {can('applications:create') && (
+            <button onClick={onAddNcd} disabled={!approved}
+              title={approved ? 'Record a new NCD investment for this customer' : 'The customer profile has to be approved first'}
+              className="text-xs bg-primary text-white rounded px-3 py-1.5 font-semibold disabled:opacity-40 hover:bg-primary-hover">
+              + NCD investment
+            </button>
+          )}
+          {can('lockers:enroll') && (
+            pan
+              ? <Link to={`/app/locker-enrollment?pan=${encodeURIComponent(pan)}`}
+                  className="text-xs border border-border-strong rounded px-3 py-1.5 font-semibold hover:bg-bg">+ Locker</Link>
+              // The enrolment flow finds them by PAN. Without one it would open
+              // on a blank form, so say why instead of pretending to prefill.
+              : <span title="This customer has no PAN on record, so the locker flow can’t look them up"
+                  className="text-xs border border-border rounded px-3 py-1.5 font-semibold opacity-40 cursor-not-allowed">+ Locker</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Lockers this customer holds — LockerHub's record plus OUR pledges/cheques.
  * Fetched separately so a LockerHub outage degrades this card alone. */
 function LockersCard({ customerId, customerName }: { customerId: number; customerName: string }) {
@@ -203,7 +306,15 @@ export function CustomerDetailPage() {
       )}
       {msg && <div className="text-xs text-danger mt-2">{msg}</div>}
 
-      <div className={`${card} mt-4`}>
+      <div className="mt-4">
+        <Holdings customerId={Number(id)} pan={c.pan ?? null} apps={data.applications ?? []}
+          approved={c.creation_status === 'Approved'}
+          // Instant, not smooth: the form is ~1500px down, and a smooth scroll
+          // that far is both slow and silently dropped by some renderers.
+          onAddNcd={() => document.getElementById('new-investment')?.scrollIntoView({ block: 'start' })} />
+      </div>
+
+      <div className={card}>
         <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Profile</h2>
         {/* Grouped, full detail — same field set as the quick-view popup, so the
             profile page shows everything in one place, plus the profile's richer
@@ -405,7 +516,14 @@ export function CustomerDetailPage() {
         )}
       </div>
 
+      {/* Products first and together — an NCD and a locker are two things the
+          same customer holds, so they read as one section rather than one card
+          up here and another below the KYC paperwork. */}
       <InvestmentsCard rows={data.applications ?? []} customerId={Number(id)} customerName={c.full_name} canDelete={can('applications:delete')} onChange={invalidate} onError={setMsg} />
+
+      <LockersCard customerId={Number(id)} customerName={c.full_name} />
+
+      {can('applications:create') && c.creation_status === 'Approved' && <NewInvestment customerId={Number(id)} custNoTds={c.tds_applicable === false} />}
 
       <div className={card}>
         <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Bank accounts</h2>
@@ -422,10 +540,6 @@ export function CustomerDetailPage() {
       <Demat customerId={Number(id)} customer={c} canEdit={can('customers:update')} onChange={invalidate} onError={setMsg} />
 
       <RelationsKyc customerId={Number(id)} data={data} onChange={invalidate} can={can} />
-
-      {can('applications:create') && c.creation_status === 'Approved' && <NewInvestment customerId={Number(id)} custNoTds={c.tds_applicable === false} />}
-
-      <LockersCard customerId={Number(id)} customerName={c.full_name} />
     </div>
   );
 }
@@ -694,7 +808,7 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
   const sel = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
   const clubOptions = candidates.data?.rows ?? [];
   return (
-    <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
+    <div id="new-investment" className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4 scroll-mt-4">
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">New investment</h2>
       <div className="flex flex-wrap gap-2 items-center">
         <select className={sel} value={seriesId} onChange={(e) => { setSeriesId(e.target.value); setClubWith(''); }}>

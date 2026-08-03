@@ -6,10 +6,11 @@
 import type { Db } from '../../db/types.js';
 import { computeIncentives } from '../../lib/incentive.js';
 import { getMatrix } from './matrix.js';
+import { referrerIntroducedCustomer } from './referrer.js';
 
 export async function accrueForApplication(tx: Db, applicationId: number): Promise<void> {
   const app = (await tx.query<Record<string, unknown>>(
-    'SELECT total_amount, customer_was_new_at_creation, referred_by_text, enrolled_by_user_id, enrolled_by_agent_id FROM applications WHERE id = $1',
+    'SELECT customer_id, total_amount, customer_was_new_at_creation, referred_by_text, enrolled_by_user_id, enrolled_by_agent_id FROM applications WHERE id = $1',
     [applicationId]
   )).rows[0];
   if (!app) return;
@@ -20,7 +21,22 @@ export async function accrueForApplication(tx: Db, applicationId: number): Promi
   const hasReferrer = referrerName.length > 0;
 
   const matrix = await getMatrix(tx);
-  const result = computeIncentives(matrix, isNew, hasReferrer, amount);
+  // The two sides ask DIFFERENT questions (owner rule 2026-08-03).
+  // Staff: was the customer new when this was keyed in — unchanged.
+  // Referrer: did I bring this customer in? A repeat investment from my own
+  // customer is still my money, so it pays the full rate; only a referrer
+  // arriving on somebody ELSE'S customer earns the repeat rate. See
+  // ./referrer.ts for why row order was the wrong question.
+  const staffSide = computeIncentives(matrix, isNew, hasReferrer, amount);
+  const referrerSide = hasReferrer
+    ? computeIncentives(
+        matrix,
+        await referrerIntroducedCustomer(tx, Number(app.customer_id), referrerName),
+        true,
+        amount
+      )
+    : staffSide;
+  const result = { ...staffSide, referrerSpec: referrerSide.referrerSpec, referrerAmount: referrerSide.referrerAmount };
   const today = new Date().toISOString().slice(0, 10);
 
   // Staff (or agent) side.

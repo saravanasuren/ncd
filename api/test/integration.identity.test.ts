@@ -256,7 +256,10 @@ describe('incentive accrual routing', () => {
     for (const r of rows) expect(r.payee_name, `unresolved ${r.payee_type}`).toBeTruthy();
   });
 
-  it('repeat investment referred by an agent → agent gets 0.25%, staff 0', async () => {
+  // Owner rule 2026-08-03: the 0.25% repeat rate is for somebody ELSE'S
+  // customer. Nobody referred this one before, so the agent bringing their
+  // second investment is the first to introduce them and earns the full rate.
+  it('repeat investment, no earlier referrer → the agent bringing it gets 2%', async () => {
     const a = await admin();
     const { cid } = await invest(a, { full_name: 'Repeat Investor', phone: '9811110006' }, 100000);
     // second investment for the SAME customer, brought by the agent
@@ -267,7 +270,21 @@ describe('incentive accrual routing', () => {
     const acc = (await ctx.db.query("SELECT payee_type, amount FROM incentive_accruals WHERE application_id=$1", [app2.json.id])).rows as any[];
     const agentRow = acc.find((r) => r.payee_type === 'agent');
     expect(agentRow).toBeDefined();
-    expect(Number(agentRow.amount)).toBe(1000); // 0.25% of 4,00,000
-    expect(acc.find((r) => r.payee_type === 'staff')).toBeUndefined(); // existingWithReferrer = 0
+    expect(Number(agentRow.amount)).toBe(8000); // 2% of 4,00,000
+    expect(acc.find((r) => r.payee_type === 'staff')).toBeUndefined(); // referrer takes it, staff 0
+  });
+
+  it('repeat investment brought by a DIFFERENT agent → that agent gets 0.25%', async () => {
+    const a = await admin();
+    await a.post('/api/agents', { full_name: 'Second Agent', agent_code: 'AG-SECOND' });
+    // Introduced by AG-COMM, so their first application carries that referrer.
+    const { cid } = await invest(a, { full_name: 'Poached Investor', phone: '9811110007', referred_by_text: 'AG-COMM' }, 100000);
+    await ctx.db.query('UPDATE customers SET referred_by_text = $1 WHERE id = $2', ['AG-SECOND', cid]);
+    const app2 = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-11' });
+    const ncd = await as('ncd@demo.local');
+    await approveInvestment(ncd, app2);
+    const acc = (await ctx.db.query("SELECT payee_type, amount FROM incentive_accruals WHERE application_id=$1", [app2.json.id])).rows as any[];
+    const agentRow = acc.find((r) => r.payee_type === 'agent');
+    expect(Number(agentRow.amount)).toBe(1000); // 0.25% of 4,00,000 — not their customer
   });
 });

@@ -168,6 +168,20 @@ function Holdings({ customerId, pan, apps, approved, onAddNcd }: {
   );
 }
 
+/**
+ * Whole days from today to a 'YYYY-MM-DD' date, negative once past.
+ *
+ * Compared as calendar dates in UTC, not timestamps: a lease end is a date, and
+ * measuring it against the current clock makes "ends today" read as expired for
+ * most of the working day.
+ */
+function daysUntilDate(iso: string): number | null {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const now = new Date();
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) / 86400000);
+}
+
 /** Lockers this customer holds — LockerHub's record plus OUR pledges/cheques.
  * Fetched separately so a LockerHub outage degrades this card alone. */
 function LockersCard({ customerId, customerName }: { customerId: number; customerName: string }) {
@@ -191,14 +205,47 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
       )}
       {lockers.length > 0 && (
         <div className="text-sm mb-3">
-          {lockers.map((l: any, i: number) => (
-            <div key={i} className="flex flex-wrap gap-x-3 gap-y-1 items-center border-b border-border last:border-0 py-1.5">
-              <span className="font-medium">{l.locker_no ?? l.locker_number ?? l.application_id ?? 'Locker'}</span>
-              {l.branch_name && <span className="text-text-muted text-xs">{l.branch_name}</span>}
-              {l.locker_size && <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.locker_size}</span>}
-              {(l.status ?? l.application_status) && <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.status ?? l.application_status}</span>}
-            </div>
-          ))}
+          {lockers.map((l: any, i: number) => {
+            // LockerHub's customer record (A5) carries the money and the lease
+            // for every locker they hold — annual_rent, deposit, lease_start,
+            // lease_end. This card fetched all four and drew none of them, so
+            // "what is this customer paying, and until when" could not be
+            // answered from the customer's own page (owner 2026-08-03).
+            const ends = String(l.lease_end ?? '').slice(0, 10) || null;
+            const d = ends ? daysUntilDate(ends) : null;
+            return (
+              <div key={i} className="border-b border-border last:border-0 py-1.5">
+                <div className="flex flex-wrap gap-x-3 gap-y-1 items-center">
+                  <span className="font-medium">{l.locker_no ?? l.locker_number ?? l.application_id ?? 'Locker'}</span>
+                  {l.branch_name && <span className="text-text-muted text-xs">{l.branch_name}</span>}
+                  {l.locker_size && <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.locker_size}</span>}
+                  {(l.account_status ?? l.status ?? l.application_status) && (
+                    <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.account_status ?? l.status ?? l.application_status}</span>
+                  )}
+                  {/* Renewal state, on the customer's own page — the same fact
+                      the renewals worklist is built on, so whoever opens this
+                      customer for any reason still sees the lease has lapsed. */}
+                  {d != null && d < 0 && (
+                    <Link to="/app/locker-renewals" className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger font-semibold">
+                      Rent overdue {Math.abs(d)}d
+                    </Link>
+                  )}
+                  {d != null && d >= 0 && d <= 30 && (
+                    <Link to="/app/locker-renewals" className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn font-semibold">
+                      Renews in {d}d
+                    </Link>
+                  )}
+                </div>
+                {(l.annual_rent != null || l.deposit != null || ends) && (
+                  <div className="text-xs text-text-muted mt-0.5 flex flex-wrap gap-x-3">
+                    {l.annual_rent != null && <span>Rent <span className="mono text-text">{formatINR(l.annual_rent)}</span>/yr</span>}
+                    {l.deposit != null && <span>Deposit <span className="mono text-text">{formatINR(l.deposit)}</span></span>}
+                    {ends && <span>Lease {l.lease_start ? `${String(l.lease_start).slice(0, 10)} → ` : 'to '}{ends}</span>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
       {pledges.length > 0 && (

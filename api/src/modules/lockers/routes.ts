@@ -265,6 +265,26 @@ lockersRouter.get('/tenants', asyncHandler(async (req, res) => {
   res.json({ ...result, restricted_to: scope.restricted ? scope.branches : null });
 }));
 
+// Whose locker rent is due. Same branch scoping as the roster above — it is
+// built from that roster, so anything looser would leak through the back door.
+//
+// READ-ONLY on purpose: LockerHub has no renewal call (an application carries
+// one rent leg and one deposit leg, and A18 is idempotent once a leg is
+// settled), so there is nothing here to press. See ops/LOCKERHUB-CR-RENEWALS.md.
+lockersRouter.get('/renewals', asyncHandler(async (req, res) => {
+  const { lockerRenewals } = await import('./renewals.js');
+  const { lockerBranchScopeFor } = await import('./branchScope.js');
+  const scope = await lockerBranchScopeFor(getDb(), req.user!);
+  const requested = req.query.branch_id ? String(req.query.branch_id) : undefined;
+  if (scope.restricted && requested && !scope.branchIds.includes(requested)) {
+    return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'You can only view locker renewals for your assigned branch.' } });
+  }
+  const branchId = requested ?? (scope.restricted ? scope.branchIds : undefined);
+  const days = req.query.days ? Number(req.query.days) : undefined;
+  const result = await lockerRenewals(getDb(), { branchId, withinDays: days });
+  res.json({ ...result, restricted_to: scope.restricted ? scope.branches : null });
+}));
+
 // ── Visit Log (contract §A14) ─────────────────────────────────────────────
 // Who opened which locker, when and why. Branch-scoped on read exactly like
 // the tenant roster above: a branch_staff sees their own branch's visits, not

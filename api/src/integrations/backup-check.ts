@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { config } from '../config.js';
 import type { Db } from '../db/types.js';
 import { enqueue } from '../modules/notifications/service.js';
+import { getSettingsMap } from '../modules/settings/service.js';
 import { isConfigured, newestInFolder } from './sharepoint.js';
 
 const SHAREPOINT_SECRET_EXPIRES = '2028-07-09';
@@ -72,6 +73,21 @@ export function inspectSecretExpiry(nowMs = Date.now()): { warn: boolean; note: 
   return { warn: false, note: `Azure/SharePoint secret valid until ${SHAREPOINT_SECRET_EXPIRES}.` };
 }
 
+/** Settings-driven recipient list, falling back to the super-admin/admin roles. */
+async function backupCheckRecipients(db: Db): Promise<string[]> {
+  const settings = await getSettingsMap(db);
+  const configured = settings['reports.backup_check_recipients'];
+  if (Array.isArray(configured) && configured.length) {
+    return configured.map((e) => String(e).trim()).filter(Boolean);
+  }
+  const { rows } = await db.query<{ email: string }>(
+    `SELECT u.email FROM users u JOIN roles r ON r.id = u.role_id
+      WHERE u.is_active = TRUE AND u.email IS NOT NULL AND u.email <> '' AND r.name = ANY($1::text[])`,
+    [RECIPIENT_ROLES]
+  );
+  return rows.map((r) => r.email);
+}
+
 /** Run the daily check and queue the status email (idempotent per IST day). */
 export async function runBackupCheck(db: Db, reportDate?: string): Promise<{ report_date: string; ok: boolean; emails_queued: number; local: string; offsite: string; secret: string }> {
   const reportIstDate = reportDate || ymd(ist(new Date()));
@@ -80,20 +96,16 @@ export async function runBackupCheck(db: Db, reportDate?: string): Promise<{ rep
   const secret = inspectSecretExpiry();
   const ok = local.ok && offsite.ok && !secret.warn;
 
-  const { rows: recipients } = await db.query<{ email: string }>(
-    `SELECT u.email FROM users u JOIN roles r ON r.id = u.role_id
-      WHERE u.is_active = TRUE AND u.email IS NOT NULL AND u.email <> '' AND r.name = ANY($1::text[])`,
-    [RECIPIENT_ROLES]
-  );
+  const recipients = await backupCheckRecipients(db);
   const payload = { report_date: reportIstDate, ok, local: local.note, offsite: offsite.note, secret: secret.note };
   let queued = 0;
-  for (const r of recipients) {
+  for (const email of recipients) {
     const dup = await db.query(
       `SELECT 1 FROM notifications_queue WHERE template = 'backup_check' AND to_address = $1 AND payload->>'report_date' = $2`,
-      [r.email, reportIstDate]
+      [email, reportIstDate]
     );
     if (dup.rowCount) continue;
-    await enqueue(db, { channel: 'email', template: 'backup_check', to: r.email, payload });
+    await enqueue(db, { channel: 'email', template: 'backup_check', to: email, payload });
     queued++;
   }
   return { report_date: reportIstDate, ok, emails_queued: queued, local: local.note, offsite: offsite.note, secret: secret.note };

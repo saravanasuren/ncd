@@ -134,7 +134,10 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
         [
           customerCode, name, phone,
           b.email || null,
-          b.dob || null,
+          // iso() rather than `|| null`: that caught a blank, but an
+          // unparseable date ("31/02/2026", "unknown") still reached the driver
+          // and 500'd the whole sync exactly as the blank nominee dob did.
+          iso(b.dob),
           b.gender ? String(b.gender).slice(0, 40) : null,
           // ncd has no `pin` column — fold the pincode into the address line.
           [addr.line1 || null, addr.pincode ? `PIN ${String(addr.pincode).slice(0, 15)}` : null].filter(Boolean).join(', ') || null,
@@ -164,7 +167,9 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
       };
       push('full_name', name);
       if (b.email) push('email', b.email);
-      if (b.dob) push('dob', b.dob);
+      // A date we cannot parse is left alone rather than 500ing the sync —
+      // push() skips null, so the customer keeps whatever dob they had.
+      if (b.dob) push('dob', iso(b.dob));
       if (b.gender) push('gender', String(b.gender).slice(0, 40));
       if (addr.line1) push('address', addr.line1);
       if (addr.city) push('city', addr.city);
@@ -266,12 +271,22 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
       const existingNom = (await tx.query<{ id: string }>(
         'SELECT id FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [customerId]
       )).rows[0];
+      // `iso()`, not `?? null`: LockerHub sends absent fields as EMPTY STRINGS,
+      // and `"" ?? null` is `""`, which Postgres rejects on a DATE column with
+      // `invalid input syntax for type date: ""`. That 500'd the whole sync —
+      // customer, KYC, bank, demat and all — because it runs in one
+      // transaction, and their durable queue then retried the same payload for
+      // ever. iso() also turns an unparseable date into null rather than
+      // letting the driver throw. The customer's own dob above always used
+      // `|| null`, so it was only the nominee that could carry a blank through.
+      const nomDob = iso(nomB.dob);
+      const nomRel = String(nomB.relation ?? '').trim() || null;
       if (existingNom) {
         await tx.query('UPDATE nominees SET full_name = $2, relationship = $3, dob = $4 WHERE id = $1',
-          [existingNom.id, nomB.name, nomB.relation ?? null, nomB.dob ?? null]);
+          [existingNom.id, nomB.name, nomRel, nomDob]);
       } else {
         await tx.query('INSERT INTO nominees (customer_id, full_name, relationship, dob) VALUES ($1,$2,$3,$4)',
-          [customerId, nomB.name, nomB.relation ?? null, nomB.dob ?? null]);
+          [customerId, nomB.name, nomRel, nomDob]);
       }
       updatedFields.push('nominee');
     }

@@ -274,6 +274,15 @@ export async function overview(db: Db) {
             COALESCE(sum(ia.amount),0) AS accrued,
             COALESCE(sum(ia.amount) FILTER (WHERE ia.paid_at IS NOT NULL),0) AS paid,
             COALESCE(sum(a.total_amount),0) AS investment_amount,
+            -- The investment behind the UNPAID incentive (owner 2026-08-03:
+            -- "for 1cr amount 2 lakhs of incentives are pending").
+            --
+            -- Summed from the actual applications whose accrual is unpaid, NOT
+            -- pro-rated as investment × balance/accrued. Rates are not uniform
+            -- across a payee's book — some rows sit at 2% and some at 0.25% —
+            -- so a proportional split would quietly report the wrong principal
+            -- for anyone with a mixed rate, which is most of them.
+            COALESCE(sum(a.total_amount) FILTER (WHERE ia.paid_at IS NULL),0) AS pending_investment_amount,
             CASE ia.payee_type
               WHEN 'staff' THEN (SELECT u.full_name FROM users u WHERE u.id = ia.payee_id)
               WHEN 'agent' THEN (SELECT ag.full_name FROM agents ag WHERE ag.id = ia.payee_id)
@@ -294,6 +303,7 @@ export async function overview(db: Db) {
       payee_name: (r as any).payee_name ?? null,
       is_staff: (r as any).is_staff === true,
       investment_amount: round2(Number((r as any).investment_amount)),
+      pending_investment_amount: round2(Number((r as any).pending_investment_amount)),
       accrued: round2(accrued), paid: round2(paid), balance: round2(accrued - paid),
     };
   });

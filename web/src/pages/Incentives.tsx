@@ -7,7 +7,7 @@ import { DataTable, type Column } from '../components/DataTable.js';
 import { Tabs, type TabDef } from '../components/Tabs.js';
 import { useConfirm } from '../components/Confirm.js';
 
-interface Payee { payee_type: string; payee_id: number; payee_name: string | null; is_staff: boolean; investment_amount: string; accrued: string; paid: string; balance: string; }
+interface Payee { payee_type: string; payee_id: number; payee_name: string | null; is_staff: boolean; investment_amount: string; pending_investment_amount: string; accrued: string; paid: string; balance: string; }
 interface Accrual { application_id: number; application_no: string; customer: string; customer_code: string; series_code: string; date_money_received: string | null; investment_amount: string; incentive_amount: string; paid: boolean; }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -76,6 +76,15 @@ export function IncentivesPage() {
             { key: 'accrued', header: 'Accrued', align: 'right', value: (p) => Number(p.accrued), render: (p) => <span className="mono">{formatINR(p.accrued)}</span> },
             { key: 'paid', header: 'Paid', align: 'right', value: (p) => Number(p.paid), render: (p) => <span className="mono text-text-muted">{formatINR(p.paid)}</span> },
             { key: 'balance', header: 'Balance', align: 'right', value: (p) => Number(p.balance), render: (p) => <span className="mono font-semibold">{formatINR(p.balance)}</span> },
+            // Which investment that balance is owed ON (owner 2026-08-03). The
+            // Balance column says ₹2,02,000 is due; this says it is due on
+            // ₹1,01,00,000 of business. Summed from the actual unpaid rows, so
+            // it stays right when a payee's book mixes incentive rates.
+            { key: 'pending_investment_amount', header: 'Pending for', align: 'right',
+              value: (p) => Number(p.pending_investment_amount),
+              render: (p) => Number(p.pending_investment_amount) > 0
+                ? <span className="mono" title="Investment whose incentive is still unpaid">{formatINR(p.pending_investment_amount)}</span>
+                : <span className="text-text-muted">—</span> },
             { key: 'actions', header: '', sortable: false, filterable: false, align: 'right',
               render: (p) => {
                 const key = `${p.payee_type}-${p.payee_id}`;

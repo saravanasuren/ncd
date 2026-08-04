@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { formatINR, KYC_DOCUMENT_TYPES, CORRECTABLE_CUSTOMER_FIELDS, type CustomerField } from '@new-wealth/shared';
+import { formatINR, KYC_DOCUMENT_TYPES, CORRECTABLE_CUSTOMER_FIELDS, PAYMENT_METHODS, type CustomerField } from '@new-wealth/shared';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
@@ -902,10 +902,11 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
         <label className="text-xs flex items-center gap-1.5" title="Date the money was credited to Dhanam's account — interest starts from here once approved">
           Credited<span className="text-danger">*</span> <input className={sel} type="date" value={dateReceived} onChange={(e) => setDateReceived(e.target.value)} />
         </label>
+        {/* Same shared list the approval screen uses. Hardcoding it twice is
+            how the two screens drift, which is what this list exists to end. */}
         <select className={sel} value={method} onChange={(e) => setMethod(e.target.value)}>
           <option value="">Payment method… *</option>
-          <option value="NEFT/RTGS">NEFT/RTGS</option>
-          <option value="Cheque">Cheque</option>
+          {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
         <input className={sel} placeholder="Reference / cheque no. *" value={reference} onChange={(e) => setReference(e.target.value)} />
         {/* Which Dhanam account the money was credited to — optional, can be set later. */}

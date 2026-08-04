@@ -47,6 +47,7 @@ import { createDb } from '../db/index.js';
 import type { Db } from '../db/types.js';
 import type { AuthUser } from '../lib/authUser.js';
 import * as book from '../modules/reports/book.js';
+import * as incentives from '../modules/incentives/service.js';
 import { escrowSummary } from '../modules/escrow/service.js';
 
 /**
@@ -126,17 +127,33 @@ export async function buildExtract(db: Db, outDir: string): Promise<{ generatedA
 
   // ── investments (the fact table) ───────────────────────────────────────
   const apps = await book.applicationsFlat(db, a) as Array<Record<string, unknown>>;
+  // Attribution — who handled it (staff), who brought it (agent), or a free-text
+  // referrer. A side query, so book.applicationsFlat (used elsewhere) is untouched.
+  const enrollerRows = (await db.query<{ application_no: string; staff_code: string | null; staff_name: string | null; agent_code: string | null; agent_name: string | null; referred_by: string | null }>(
+    `SELECT ap.application_no,
+            u.code AS staff_code, u.full_name AS staff_name,
+            ag.agent_code, ag.full_name AS agent_name,
+            ap.referred_by_text AS referred_by
+       FROM applications ap
+       LEFT JOIN users u   ON u.id  = ap.enrolled_by_user_id
+       LEFT JOIN agents ag ON ag.id = ap.enrolled_by_agent_id`)).rows;
+  const enrollerByApp = new Map(enrollerRows.map((r) => [r.application_no, r]));
   write('investments.csv', 'Investments',
     ['application_no', 'customer_code', 'customer', 'series_code', 'status',
      'amount', 'date_money_received', 'allotment_date', 'maturity_date', 'redemption_date',
-     'coupon_rate_pct', 'tenure_months', 'payout_frequency'],
-    apps.map((r) => [
-      r.application_no as string ?? '', r.customer_code as string ?? '', r.customer as string ?? '',
-      r.series_code as string ?? '', r.status as string ?? '',
-      num(r.total_amount), d(r.date_money_received), d(r.allotment_date),
-      d(r.maturity_date), d(r.redemption_date),
-      num(r.coupon_rate_pct), num(r.tenure_months), r.payout_frequency as string ?? '',
-    ]));
+     'coupon_rate_pct', 'tenure_months', 'payout_frequency',
+     'staff_code', 'staff_name', 'agent_code', 'agent_name', 'referred_by'],
+    apps.map((r) => {
+      const e = enrollerByApp.get(r.application_no as string);
+      return [
+        r.application_no as string ?? '', r.customer_code as string ?? '', r.customer as string ?? '',
+        r.series_code as string ?? '', r.status as string ?? '',
+        num(r.total_amount), d(r.date_money_received), d(r.allotment_date),
+        d(r.maturity_date), d(r.redemption_date),
+        num(r.coupon_rate_pct), num(r.tenure_months), r.payout_frequency as string ?? '',
+        e?.staff_code ?? '', e?.staff_name ?? '', e?.agent_code ?? '', e?.agent_name ?? '', e?.referred_by ?? '',
+      ];
+    }));
 
   // ── interest / disbursement ledger ─────────────────────────────────────
   const ledger = await book.interestLedger(db, a) as Array<Record<string, unknown>>;
@@ -197,6 +214,30 @@ export async function buildExtract(db: Db, outDir: string): Promise<{ generatedA
   ];
   write('escrow.csv', 'Escrow', ['item', 'amount', 'count'], escRows);
 
+  // ── staff (everyone referenced as an enroller/payee, so codes always resolve) ─
+  const staffRows = (await db.query<{ staff_code: string | null; full_name: string; role: string; is_active: boolean }>(
+    `SELECT u.code AS staff_code, u.full_name, r.name AS role, u.is_active
+       FROM users u JOIN roles r ON r.id = u.role_id ORDER BY u.full_name`)).rows;
+  write('staff.csv', 'Staff', ['staff_code', 'full_name', 'role', 'active'],
+    staffRows.map((r) => [r.staff_code ?? '', r.full_name ?? '', r.role ?? '', r.is_active ? 'TRUE' : 'FALSE']));
+
+  // ── agents (all, incl. inactive/deleted — historical investments reference them) ─
+  const agentRows = (await db.query<{ agent_code: string | null; full_name: string; commission_rate_pct: unknown; is_active: boolean; deleted_at: unknown }>(
+    `SELECT agent_code, full_name, commission_rate_pct, is_active, deleted_at FROM agents ORDER BY full_name`)).rows;
+  write('agents.csv', 'Agents', ['agent_code', 'full_name', 'commission_pct', 'active'],
+    agentRows.map((r) => [r.agent_code ?? '', r.full_name ?? '', num(r.commission_rate_pct), (r.is_active && !r.deleted_at) ? 'TRUE' : 'FALSE']));
+
+  // ── incentives (one row per accrual — from the incentives module's own
+  //    reconciling query, so it uses the SAME self-investment filter as the
+  //    tiles and the dashboard totals match by construction). ──────────────
+  const incRows = await incentives.accrualsForExtract(db);
+  write('incentives.csv', 'Incentives',
+    ['application_no', 'payee_type', 'payee_code', 'payee_name', 'incentive_amount', 'paid', 'paid_amount', 'accrual_date'],
+    incRows.map((r) => [
+      r.application_no ?? '', r.payee_type ?? '', r.payee_code ?? '', r.payee_name ?? '',
+      num(r.incentive_amount), r.paid ? 'TRUE' : 'FALSE', num(r.paid_amount), d(r.accrual_date),
+    ]));
+
   // ── headline totals ────────────────────────────────────────────────────
   // One row, so the dashboard can show company-level figures without having to
   // re-add the fact table (and reach a different answer).
@@ -226,7 +267,7 @@ export async function buildExtract(db: Db, outDir: string): Promise<{ generatedA
     // Numeric-looking cells go in as NUMBERS, not text — otherwise every chart
     // and SUM in the dashboard silently reads zero. Codes that merely look
     // numeric (application_no, customer_code, phone) are excluded by name.
-    const asText = new Set(['application_no', 'customer_code', 'phone', 'utr', 'pan_masked']);
+    const asText = new Set(['application_no', 'customer_code', 'phone', 'utr', 'pan_masked', 'staff_code', 'agent_code', 'payee_code']);
     const numeric = t.headers.map((h) => !asText.has(h) && /amount|_pct|months|total|issued|redeemed|outstanding|investors|count|gross|tds|net|payment|principal|penalty|interest|age/i.test(h));
     for (const r of t.rows) {
       ws.addRow(r.map((v, i) => (numeric[i] && v !== '' && Number.isFinite(Number(v)) ? Number(v) : v))).commit();

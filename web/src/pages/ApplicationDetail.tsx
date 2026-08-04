@@ -421,7 +421,9 @@ function CreditedTo({ app, appId, canEdit, onDone, onErr }: {
 }) {
   const banks = useQuery({
     queryKey: ['collection-banks'],
-    queryFn: () => api.get<{ rows: any[] }>('/api/products/banks'),
+    // /api/banks — productsRouter is mounted at `/api`, so /api/products/banks
+    // is a 404 and this select silently rendered empty.
+    queryFn: () => api.get<{ rows: any[] }>('/api/banks'),
     enabled: canEdit,
   });
   const set = (bankId: number | null) =>
@@ -442,6 +444,7 @@ function CreditedTo({ app, appId, canEdit, onDone, onErr }: {
           onChange={(e) => set(e.target.value ? Number(e.target.value) : null)}
           title="Which Dhanam account received this investment's money">
           <option value="">— not set —</option>
+          {banks.isError && <option value="" disabled>Could not load company accounts</option>}
           {opts.map((b: any) => (
             <option key={b.id} value={b.id}>
               {(b.account_label || b.bank_name)} · {b.account_number}{b.is_active ? '' : ' (inactive)'}

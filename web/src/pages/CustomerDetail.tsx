@@ -832,7 +832,11 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
   const [creditedBank, setCreditedBank] = useState('');   // which Dhanam account received it (optional)
   const [receipt, setReceipt] = useState<File | null>(null);
   const [err, setErr] = useState('');
-  const collectionBanks = useQuery({ queryKey: ['collection-banks'], queryFn: () => api.get<{ rows: any[] }>('/api/products/banks') });
+  // /api/banks, NOT /api/products/banks — productsRouter is mounted at `/api`,
+  // so its /banks route is /api/banks. The old path 404'd, react-query left
+  // `data` undefined, and `?? []` turned a broken request into an empty
+  // dropdown that looked like "no accounts configured".
+  const collectionBanks = useQuery({ queryKey: ['collection-banks'], queryFn: () => api.get<{ rows: any[] }>('/api/banks') });
   const series = useQuery({ queryKey: ['series'], queryFn: () => api.get<{ rows: any[] }>('/api/series') });
   const schemes = useQuery({ queryKey: ['schemes'], queryFn: () => api.get<{ rows: any[] }>('/api/schemes') });
   // In-flight applications in the chosen series this new line could club into
@@ -911,6 +915,9 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
         {/* Which Dhanam account the money was credited to — optional, can be set later. */}
         <select className={sel} value={creditedBank} onChange={(e) => setCreditedBank(e.target.value)} title="Which Dhanam account received the money (optional)">
           <option value="">Credited to… (optional)</option>
+          {/* A failed load must not look like "no accounts configured" — that is
+              exactly how the 404 above hid for so long. */}
+          {collectionBanks.isError && <option value="" disabled>Could not load company accounts</option>}
           {(collectionBanks.data?.rows ?? []).filter((b: any) => b.is_collection_account && b.is_active).map((b: any) => (
             <option key={b.id} value={b.id}>{(b.account_label || b.bank_name)} · {b.account_number}</option>
           ))}

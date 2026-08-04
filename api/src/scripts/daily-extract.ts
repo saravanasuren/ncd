@@ -139,7 +139,7 @@ export async function buildExtract(db: Db, outDir: string): Promise<{ generatedA
        LEFT JOIN agents ag ON ag.id = ap.enrolled_by_agent_id`)).rows;
   const enrollerByApp = new Map(enrollerRows.map((r) => [r.application_no, r]));
   write('investments.csv', 'Investments',
-    ['application_no', 'customer_code', 'customer', 'series_code', 'status',
+    ['application_no', 'customer_code', 'customer', 'series_code', 'status', 'channel', 'source',
      'amount', 'date_money_received', 'allotment_date', 'maturity_date', 'redemption_date',
      'coupon_rate_pct', 'tenure_months', 'payout_frequency',
      'staff_code', 'staff_name', 'agent_code', 'agent_name', 'referred_by'],
@@ -148,6 +148,7 @@ export async function buildExtract(db: Db, outDir: string): Promise<{ generatedA
       return [
         r.application_no as string ?? '', r.customer_code as string ?? '', r.customer as string ?? '',
         r.series_code as string ?? '', r.status as string ?? '',
+        r.channel as string ?? '', r.source as string ?? '',
         num(r.total_amount), d(r.date_money_received), d(r.allotment_date),
         d(r.maturity_date), d(r.redemption_date),
         num(r.coupon_rate_pct), num(r.tenure_months), r.payout_frequency as string ?? '',

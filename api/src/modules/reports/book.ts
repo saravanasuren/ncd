@@ -454,7 +454,11 @@ export async function applicationsFlat(db: Db, actor: AuthUser, filters: BookFil
   const { rows } = await db.query(
     `SELECT a.application_no, c.customer_code, c.full_name AS customer, s.code AS series_code,
             a.status, a.total_amount, a.date_money_received, a.allotment_date, a.maturity_date, a.redemption_date,
-            l.coupon_rate_pct, l.tenure_months, l.payout_frequency
+            l.coupon_rate_pct, l.tenure_months, l.payout_frequency,
+            a.source,
+            CASE WHEN ${IS_LOCKER} THEN 'Locker'
+                 WHEN a.source IN ('dhanamfin','lockerhub') THEN 'DhanamFin app'
+                 ELSE 'Physical' END AS channel
      ${FROM} LEFT JOIN application_lines l ON l.application_id = a.id
      WHERE ${w.sql} ORDER BY a.application_no`, w.params);
   return rows;

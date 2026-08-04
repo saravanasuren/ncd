@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useConfirm } from '../components/Confirm.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { formatINR } from '@new-wealth/shared';
+import { formatINR, paymentMethodOptions } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { ReferredByPicker } from '../components/ReferredByPicker.js';
 import { APPROVAL_TYPE_LABELS as TYPE_LABELS } from '../labels.js';
@@ -363,7 +363,7 @@ const RO_LABELS: Array<[string, string]> = [
 const FIELD_LABELS: Array<[keyof Editable['fields'], string, string]> = [
   ['total_amount', 'Investment amount', 'number'],
   ['date_money_received', 'Money received on', 'date'],
-  ['collection_method', 'Payment method', 'text'],
+  ['collection_method', 'Payment method', 'select'],
   ['collection_reference', 'Payment reference / UTR', 'text'],
   ['referred_by_text', 'Referred by (code or name)', 'text'],
 ];
@@ -474,6 +474,22 @@ function EditableInvestment({ ed, id, canAct, selfApproval, actionLabel, onDone 
             {key === 'referred_by_text' ? (
               <ReferredByPicker className={inp} value={String(f.referred_by_text ?? '')}
                 onChange={(v) => setF({ ...f, referred_by_text: v })} />
+            ) : type === 'select' ? (
+              /* Was a free text box, which is how the book ended up holding
+                 NEFT, NEFT/RTGS, RTGS and neft as four different things
+                 (owner 2026-08-04). The option list carries the record's OWN
+                 stored value when it is not one of the canonical four, so
+                 approving an "Other" or "Easebuzz" row leaves it untouched
+                 instead of silently re-pointing it. */
+              <select className={inp} value={String(f[key] ?? '')}
+                onChange={(e) => setF({ ...f, [key]: e.target.value })}>
+                {/* Only reachable when the maker left it blank — 3 live rows
+                    have. Not a valid choice, so it cannot be picked back. */}
+                {!String(f[key] ?? '').trim() && <option value="" disabled>Choose…</option>}
+                {paymentMethodOptions(ed.fields[key] as string).map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
             ) : (
               <input className={inp} type={type} value={String(f[key] ?? '')}
                 {...(key === 'total_amount' ? { min: LAKH, step: LAKH } : {})}

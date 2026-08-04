@@ -56,6 +56,9 @@ node /home/ubuntu/ncd/ops/upload-sharepoint.mjs \
   "$OUT"/interest.csv \
   "$OUT"/redemptions.csv \
   "$OUT"/series.csv \
+  "$OUT"/staff.csv \
+  "$OUT"/agents.csv \
+  "$OUT"/incentives.csv \
   "$OUT"/summary.csv \
   "$OUT"/manifest.json \
   --folder "$FOLDER"

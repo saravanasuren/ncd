@@ -206,7 +206,13 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   // enrolled — that is a segregation-of-duties break on a regulated control
   // (an external agent self-approving their own customer's verification). KYC
   // verification stays with internal staff/managers. (Review 2026-07-21.)
-  agent: STAFF_FUNNEL.filter((p) => p !== 'kyc:verify' && p !== 'kyc:reject'),
+  // No `dashboard:view` either (owner 2026-08-05): an agent is external, and
+  // the NCD Portfolio page is the company's book — outstanding, cost of funds,
+  // branch and series performance. Scoping already meant they saw only their
+  // own rows there, so this is about what the page IS rather than a leak. They
+  // keep the funnel (leads → customer → application) and My Earnings, and land
+  // on Leads like branch staff, who are filtered the same way just below.
+  agent: STAFF_FUNNEL.filter((p) => p !== 'kyc:verify' && p !== 'kyc:reject' && p !== 'dashboard:view'),
 
   customer: ['portal:self-service'],
 };

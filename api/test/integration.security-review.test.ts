@@ -58,18 +58,25 @@ describe('security review — access control', () => {
     expect(r.status).toBe(403);
   });
 
-  it('redemptions list is scoped — an own-scope agent does not see others’ redemptions', async () => {
+  it('redemptions list is scoped, and an agent cannot reach it at all', async () => {
     const inv = await activeInvestment('Scoped Redeem', '9722200003');
     const ncd = await as('ncd@demo.local');
     await ncd.post('/api/redemptions/premature', { application_id: inv.appId, reason: 'test scope' });
-    // admin (scope: all) sees it; the agent (own-agent scope, didn’t enrol it) does
-    // not — the agent has dashboard:view so it can reach the list, but scope filters.
     const adminList = await (await admin()).get('/api/redemptions');
     expect(adminList.json.rows.some((x: any) => x.application_no)).toBe(true);
+
+    // TIGHTENED 2026-08-05. The route is `redemptions:initiate` OR
+    // `dashboard:view`, and agents used to hold the latter, so they could read
+    // the list — scoped to zero rows, but reachable. The Redemptions PAGE has
+    // always been `redemptions:initiate` only, so this was an API surface no
+    // agent could ever open from the product. Agents lost `dashboard:view`
+    // (owner 2026-08-05) and the route is now closed to them outright.
     const agent = await as('agent@demo.local');
-    const agentList = await agent.get('/api/redemptions');
-    expect(agentList.status).toBe(200);
-    expect(agentList.json.rows.length).toBe(0);
+    expect((await agent.get('/api/redemptions')).status).toBe(403);
+
+    // A branch_staff, who also lacks dashboard:view, is likewise refused —
+    // scoping is not the only thing standing between them and this list.
+    expect((await (await as('staff@demo.local')).get('/api/redemptions')).status).toBe(403);
   });
 });
 

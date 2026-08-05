@@ -75,13 +75,16 @@ async function startCrons(): Promise<void> {
   // runBookSummary is per-day idempotent. Falls back to 18:00 if unparseable.
   const { runBookSummary } = await import('./integrations/book-summary.js');
   const { getSettingsMap } = await import('./modules/settings/service.js');
-  const sendMinutes = (raw: unknown): number => {
+  // `fallbackMin` so each job falls back to ITS OWN documented default rather
+  // than one shared 18:00 — a setting whose description promises 19:00 must not
+  // quietly land on 18:00 when someone mistypes it.
+  const sendMinutes = (raw: unknown, fallbackMin = 18 * 60): number => {
     const m = /^(\d{1,2}):(\d{2})$/.exec(String(raw ?? '').trim());
     if (m) {
       const h = Number(m[1]), mi = Number(m[2]);
       if (h >= 0 && h < 24 && mi >= 0 && mi < 60) return h * 60 + mi;
     }
-    return 18 * 60;
+    return fallbackMin;
   };
   setInterval(() => {
     void (async () => {
@@ -91,6 +94,25 @@ async function startCrons(): Promise<void> {
       if (nowMin < sendMinutes(map['reports.book_summary_send_time'])) return;
       await runBookSummary(getDb());
     })().catch((e) => console.warn('[cron] book summary:', (e as Error).message));
+  }, 15 * 60_000).unref();
+
+  // Daily transaction-register email (owner 2026-08-05) — the Transactions
+  // sheet, attached, once per IST day at/after the configured time. Everything
+  // is UI config (Settings → Reports): off by default, its own send time, and
+  // an explicit recipient list with NO role fallback, because the attachment is
+  // the whole register. Same 15-min tick and per-day idempotence as the book
+  // summary above.
+  const { runTransactionsEmail } = await import('./integrations/transactions-email.js');
+  setInterval(() => {
+    void (async () => {
+      const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+      const nowMin = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();
+      const map = await getSettingsMap(getDb());
+      if (map['reports.transactions_email_enabled'] !== true) return;
+      if (nowMin < sendMinutes(map['reports.transactions_email_time'], 19 * 60)) return;
+      const r = await runTransactionsEmail(getDb());
+      if (r.sent) console.log(`[cron] transaction register emailed to ${r.sent} recipient(s)`);
+    })().catch((e) => console.warn('[cron] transactions email:', (e as Error).message));
   }, 15 * 60_000).unref();
 
   // On-change SharePoint extract publisher — refreshes the dashboard feed within

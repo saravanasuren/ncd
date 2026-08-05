@@ -495,6 +495,8 @@ export interface SegmentChild {
   status: string;
   allotment_date: string | null;
   date_money_received: string | null;  // when the investment money landed — the "Date" column
+  /** Who brought it — resolved staff name, else agent, else the raw referrer. */
+  sourced_by: string;
 }
 export interface SegmentGroup {
   key: string;
@@ -564,7 +566,10 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
             s.code AS series_code, s.status AS series_status,
             sref.full_name AS staff_ref, ${REFERRER} AS referrer
      ${FROM_ATTR}
-     LEFT JOIN branches b ON b.id = c.branch_id
+     -- The branch that EARNED the investment, stamped at creation from whoever
+     -- brought it (owner 2026-08-04) — not the customer's branch, which is
+     -- filled in on only 13 of 603 customers and moves with the person.
+     LEFT JOIN branches b ON b.id = a.branch_id
      WHERE ${w.sql}`, w.params);
 
   const outstandingStatus = new Set<string>(OUTSTANDING_APPLICATION_STATUSES);
@@ -609,6 +614,10 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
       outstanding: live ? amt : 0, redeemed: live ? 0 : amt,
       status: r.status, allotment_date: toISODate(r.allotment_date ?? null),
       date_money_received: toISODate(r.date_money_received ?? null),
+      // Who brought it — the same resolved payee Staff-wise/Agent-wise group
+      // on. The branch drill shows this per investment so a branch total can be
+      // read back to the people who earned it.
+      sourced_by: r.staff_ref ?? r.referrer ?? '—',
     });
   }
   for (const [key, g] of groups) g.investors = custSets.get(key)!.size;
@@ -753,6 +762,29 @@ export async function moneyInBySource(db: Db, actor: AuthUser, filters: BookFilt
   return {
     staff: round2(Number(r.staff)), agent: round2(Number(r.agent)),
     staff_investors: Number(r.staff_investors), agent_investors: Number(r.agent_investors),
+  };
+}
+
+/**
+ * Branch-wise money in the window, for the dashboard tile (owner 2026-08-04).
+ * Same window and scope as the Staff-wise / Agent-wise tiles so the three
+ * always add up against the same denominator.
+ *
+ * Reads `a.branch_id` — the branch stamped on the investment from whoever
+ * brought it — so it does not shift when a staff member transfers.
+ */
+export async function moneyInByBranch(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+  const w = appWhere(actor, { ...filters, status: 'active' }, ['a.date_money_received IS NOT NULL']);
+  const { rows } = await db.query<{ branch: string; amount: string; investors: string }>(
+    `SELECT COALESCE(b.name,'Unassigned') AS branch,
+            COALESCE(sum(${AMT}),0) AS amount,
+            count(DISTINCT a.customer_id)::int AS investors
+     ${FROM} LEFT JOIN branches b ON b.id = a.branch_id
+     WHERE ${w.sql} GROUP BY 1 ORDER BY 2 DESC`, w.params);
+  return {
+    branches: rows.length,
+    total: round2(rows.reduce((s, r) => s + Number(r.amount), 0)),
+    rows: rows.map((r) => ({ branch: r.branch, amount: round2(Number(r.amount)), investors: Number(r.investors) })),
   };
 }
 

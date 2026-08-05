@@ -169,11 +169,17 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
       // the money is in Dhanam's account and approves — that approval is the
       // go-live (Active + schedule + incentives). Staff record the credit date
       // here so interest can start from it (owner spec 2026-07-19).
+      // Which branch earns this (owner 2026-08-04). Stamped once, never
+      // recomputed: a staff transfer must not rewrite last month's branch
+      // report. Agent-sourced and unattributable business lands on HO.
+      const { branchForReferrer } = await import('./branch.js');
+      const branchId = await branchForReferrer(tx, customer.referred_by_text);
       const { rows } = await tx.query<{ id: string }>(
-        `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, is_locker_deposit, date_money_received, collection_method, collection_reference, collection_bank_id)
-         VALUES ($1,$2,$3,'PendingApproval',$4,$5,$6,'staff',$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+        `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, is_locker_deposit, date_money_received, collection_method, collection_reference, collection_bank_id, branch_id)
+         VALUES ($1,$2,$3,'PendingApproval',$4,$5,$6,'staff',$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
         [appNo, input.customer_id, input.series_id, input.amount, isNew, customer.referred_by_text ?? null, actor.id, enrolledByAgentId,
-         input.is_locker_deposit ?? false, input.date_money_received, input.collection_method, input.collection_reference, input.collection_bank_id ?? null]
+         input.is_locker_deposit ?? false, input.date_money_received, input.collection_method, input.collection_reference, input.collection_bank_id ?? null,
+         branchId]
       );
       const appId = Number(rows[0]!.id);
       await addLine(tx, appId, scheme, input.amount, {

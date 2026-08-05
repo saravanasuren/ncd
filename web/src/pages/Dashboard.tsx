@@ -144,6 +144,12 @@ export function Dashboard() {
                     onClick={() => pickWidget('staff', 'New business by staff (in range)')} canDrill={canDrill} />
                   <Tile label="Agent-wise" value={formatINR(f.money_in_agent)} sub={`${f.money_in_agent_investors} investors`}
                     onClick={() => pickWidget('agent', 'New business by agent (in range)')} canDrill={canDrill} />
+                  {/* Branch-wise: the branch stamped on each investment from
+                      whoever brought it. Agent business counts under HO, so this
+                      totals the whole window rather than a slice of it. */}
+                  <Tile label="Branch-wise" value={formatINR(f.money_in_branch ?? 0)}
+                    sub={`across ${f.money_in_branch_count ?? 0} branch${(f.money_in_branch_count ?? 0) === 1 ? '' : 'es'}`}
+                    onClick={() => pickWidget('branch', 'New business by branch (in range)')} canDrill={canDrill} />
                   {overview.data.rate_mix && (
                     <Tile label="Cost of funds" value={`${overview.data.rate_mix.weighted_avg_rate}%`}
                       sub={`Weighted-avg coupon on ${formatINR(overview.data.rate_mix.total_outstanding)}`}
@@ -476,8 +482,14 @@ function GroupRows({ g, open, onToggle, onPickCustomer }: { g: any; open: boolea
               <button onClick={() => onPickCustomer(ch)} className="text-primary hover:underline text-left">{ch.customer}</button>
             ) : ch.customer}
             {' '}<span className="text-text-muted font-mono">{ch.application_no}</span>
+            {' '}<span className="text-text-muted">· {ch.series_code}</span>
+            {/* Who brought it. The branch drill is unreadable without this —
+                a branch total has to be traceable to the people who earned it. */}
+            {ch.sourced_by && ch.sourced_by !== '—' && (
+              <div className="text-text-muted">brought by {ch.sourced_by}</div>
+            )}
           </td>
-          <td className="py-1 px-3 text-right text-text-muted">{ch.series_code}</td>
+          <td className="py-1 px-3 text-right text-text-muted whitespace-nowrap">{ch.date_money_received ?? '—'}</td>
           <td className="py-1 px-3 text-right text-text-muted">{ch.status}</td>
           {/* Outstanding column: 0 once redeemed (was wrongly showing the original amount). */}
           <td className="py-1 pl-3 text-right mono">{formatINR(ch.outstanding ?? ch.amount)}</td>

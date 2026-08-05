@@ -6,11 +6,12 @@ import { api } from '../api/client.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { CustomerProfileModal } from '../components/CustomerProfileModal.js';
 
-type Seg = 'series' | 'customer' | 'district' | 'agent' | 'staff' | 'lockerhub' | 'dhanamfin';
+type Seg = 'series' | 'customer' | 'district' | 'branch' | 'agent' | 'staff' | 'lockerhub' | 'dhanamfin';
 const TABS: { key: Seg; label: string }[] = [
   { key: 'series', label: 'Series-wise' },
   { key: 'customer', label: 'Customer-wise' },
   { key: 'district', label: 'District-wise' },
+  { key: 'branch', label: 'Branch-wise' },
   { key: 'agent', label: 'Agent-wise' },
   { key: 'staff', label: 'Staff-wise' },
   { key: 'lockerhub', label: 'Locker Deposit' },
@@ -22,6 +23,8 @@ interface Child {
   application_no: string; customer_id: number; customer: string; customer_code: string;
   series_code: string; amount: string; outstanding: string; redeemed: string; status: string; allotment_date: string | null;
   date_money_received: string | null;
+  /** Who brought the investment — the Branch-wise tab's "Brought by" column. */
+  sourced_by: string;
 }
 interface Group {
   key: string; label: string; sublabel: string | null; district: string | null; sourced_by: string | null;
@@ -151,7 +154,7 @@ function groupColumns(tab: Seg, expanded: Set<string>, toggle: (k: string) => vo
       outstanding,
     ];
   }
-  const label = tab === 'district' ? 'District' : tab === 'agent' ? 'Agent' : 'Staff';
+  const label = tab === 'district' ? 'District' : tab === 'branch' ? 'Branch' : tab === 'agent' ? 'Agent' : 'Staff';
   return [{ key: 'label', header: label, value: (g) => g.label, render: expander }, investors, ncds, outstanding];
 }
 
@@ -161,6 +164,8 @@ function ChildTable({ tab, rows, onPickCustomer }: { tab: Seg; rows: Child[]; on
   const cols: [string, keyof Child][] =
     tab === 'customer' ? [['Series', 'series_code'], ['App no.', 'application_no'], ['Date', 'date_money_received'], ['Status', 'status'], ['Allotted', 'allotment_date']]
     : (tab === 'series' || tab === 'lockerhub' || tab === 'dhanamfin') ? [['Customer', 'customer'], ['App no.', 'application_no'], ['Date', 'date_money_received'], ['Status', 'status'], ['Allotted', 'allotment_date']]
+    // Branch-wise answers "who brought this, and when" — the owner's ask.
+    : tab === 'branch' ? [['Customer', 'customer'], ['Brought by', 'sourced_by'], ['Date', 'date_money_received'], ['App no.', 'application_no'], ['Status', 'status']]
     : [['Customer', 'customer'], ['Series', 'series_code'], ['App no.', 'application_no'], ['Date', 'date_money_received'], ['Status', 'status']];
   return (
     <div className="bg-bg/60 px-4 py-2 border-l-2 border-primary/30">

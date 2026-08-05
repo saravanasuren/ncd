@@ -62,7 +62,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
   // Point-in-time interest snapshots (independent of the selected window):
   //  - accrued_total    : total interest payable AS ON today (since the last payout)
   //  - monthly_projected : gross run-rate monthly coupon cost of the outstanding book
-  const [kpis, seriesRows, districts, moneyIn, newInv, moneyBySource, interest, accrued, redemptionRows, redemptionsOfSeriesRows, leadFunnel, almTiles, rateMix, todayBook, accruedTotal, monthlyInterest] = await Promise.all([
+  const [kpis, seriesRows, districts, moneyIn, newInv, moneyBySource, interest, accrued, redemptionRows, redemptionsOfSeriesRows, leadFunnel, almTiles, rateMix, todayBook, accruedTotal, monthlyInterest, moneyByBranch] = await Promise.all([
     book.kpis(db, actor, seriesFilter),                    // snapshot, but honours a selected series
     book.seriesSummary(db, actor, {}),                     // ALL series (pie + active/last-series pick)
     book.districtwise(db, actor, seriesFilter),            // snapshot (pie), honours a selected series
@@ -79,6 +79,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     book.todayBook(db, actor, today),                      // today's additions/deletions
     book.interestAccrued(db, actor, {}, anchor, today),                                              // "Interest Details" panel — whole book, ignores the range/series picker
     book.monthlyInterestRunRate(db, actor, {}),                                                      // "Interest Details" panel — whole-book run-rate, ignores the range/series picker
+    book.moneyInByBranch(db, actor, filters),              // flow (Branch-wise tile) — same window as staff/agent
   ]);
   // Incentive totals (Staff vs Agent) — management only.
   const incentiveTotals = showIncentives ? await incentives.incentiveTotals(db) : null;
@@ -107,6 +108,11 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
       money_in_agent: moneyBySource.agent,
       money_in_staff_investors: moneyBySource.staff_investors,
       money_in_agent_investors: moneyBySource.agent_investors,
+      // Branch-wise: the same window's money, split by the branch stamped on
+      // each investment. Agent-sourced business sits under HO (owner
+      // 2026-08-04), so this totals to the whole window, not a subset.
+      money_in_branch: moneyByBranch.total,
+      money_in_branch_count: moneyByBranch.branches,
       new_investments: newInv.count,   // count of investments funded in the selected window
       interest_paid: interest.paid,        // interest actually paid in the window (0 for the current MTD)
       interest_due: interest.total,        // paid + still-scheduled, for reference
@@ -242,6 +248,8 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
       return { kind: 'groups', groups: await book.segmentGrouped(db, actor, 'staff', filters) };
     case 'agent':                  // flow: new business in window by agent
       return { kind: 'groups', groups: await book.segmentGrouped(db, actor, 'agent', filters) };
+    case 'branch':                 // flow: new business in window by branch (owner 2026-08-04)
+      return { kind: 'groups', groups: await book.segmentGrouped(db, actor, 'branch', filters) };
 
     // ── flat lists ──
     case 'new-investments':

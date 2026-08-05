@@ -27,10 +27,14 @@ describe('segments — branch / channel tabs, redeemed children, search', () => 
     const series = Number((await db.query("INSERT INTO series (code, name, status, opened_at, allotted_at) VALUES ('NCD-SEG','Seg Series','Allotted','2026-06-01','2026-07-15') RETURNING id")).rows[0]!.id);
     const c1 = Number((await db.query("INSERT INTO customers (customer_code, full_name, phone, creation_status, is_active, branch_id) VALUES ('SEGC1','Seg One','9700000001','Approved',TRUE,$1) RETURNING id", [branch])).rows[0]!.id);
     const c2 = Number((await db.query("INSERT INTO customers (customer_code, full_name, phone, creation_status, is_active, branch_id) VALUES ('SEGC2','Seg Two','9700000002','Approved',TRUE,$1) RETURNING id", [branch])).rows[0]!.id);
+    // branch_id on the APPLICATION, not just the customer: since 2026-08-04 the
+    // Branch-wise segment reports the branch that EARNED the investment (stamped
+    // from whoever brought it) rather than the branch on the customer record,
+    // which is filled in on almost nobody and moves with the person.
     const mkApp = async (no: string, cid: number, status: string, amt: number, source: string, locker = false, dmr: string | null = null) =>
       db.query(
-        "INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, source, is_locker_deposit, date_money_received, allotment_date) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'2026-07-15')",
-        [no, cid, series, status, amt, source, locker, dmr]);
+        "INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, source, is_locker_deposit, date_money_received, allotment_date, branch_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'2026-07-15',$9)",
+        [no, cid, series, status, amt, source, locker, dmr, branch]);
     await mkApp('APP-SEG-1', c1, 'Active', 500000, 'lockerhub', false, '2026-07-06');   // active, lockerhub
     await mkApp('APP-SEG-2', c2, 'Redeemed', 300000, 'dhanamfin', false, '2026-07-01');  // redeemed, dhanamfin
     await mkApp('APP-SEG-3', c1, 'Active', 200000, 'dhanamfin', true, '2026-07-05');      // active locker deposit, dhanamfin

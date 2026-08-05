@@ -799,8 +799,13 @@ export async function newInvestmentsList(db: Db, actor: AuthUser, filters: BookF
   const { rows } = await db.query(
     `SELECT a.application_no, c.id AS customer_id, c.full_name AS customer, c.customer_code, s.code AS series_code,
             COALESCE(b.name,'—') AS branch,
-            a.total_amount AS amount, a.date_money_received, a.is_locker_deposit, a.source, a.status
-     ${FROM} LEFT JOIN branches b ON b.id = c.branch_id
+            a.total_amount AS amount, a.date_money_received, a.allotment_date,
+            a.is_locker_deposit, a.source, a.status
+     -- a.branch_id, not c.branch_id: the branch that EARNED the investment.
+     -- Reading the customer's branch here left most rows '—' while the
+     -- Branch-wise tile counted the very same investments under HO — one word
+     -- meaning two things on one screen.
+     ${FROM} LEFT JOIN branches b ON b.id = a.branch_id
      WHERE ${w.sql} ORDER BY a.date_money_received DESC, a.application_no`, w.params);
   return rows;
 }

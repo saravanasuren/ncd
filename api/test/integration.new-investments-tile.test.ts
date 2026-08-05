@@ -105,3 +105,38 @@ describe('the tile and its drill can never disagree', () => {
     });
   }
 });
+
+describe('the drill columns the screen reads', () => {
+  it('carries BOTH dates — money received and allotment', async () => {
+    const d = await drill(`?from=${TODAY}&to=${TODAY}`);
+    const row = (d.rows as any[])[0];
+    expect(row.date_money_received).toBeTruthy();
+    expect('allotment_date' in row).toBe(true);
+  });
+
+  it('an un-allotted investment comes back with a null allotment date, not a fake one', async () => {
+    await ctx.db.query(
+      `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, date_money_received, allotment_date)
+       SELECT 'APP-NIT-NOALLOT', customer_id, series_id, 'Active', 400000, $1, NULL
+         FROM applications WHERE application_no = 'APP-NIT-TODAY-1'`, [TODAY]);
+    const d = await drill(`?from=${TODAY}&to=${TODAY}`);
+    const row = (d.rows as any[]).find((r) => r.application_no === 'APP-NIT-NOALLOT');
+    expect(row).toBeTruthy();
+    expect(row.allotment_date).toBeNull();
+  });
+
+  // The Branch column used to read the CUSTOMER's branch, so most rows showed
+  // '—' while the Branch-wise tile counted the very same investments under a
+  // branch. One word, two meanings, on one screen.
+  it('Branch is the branch stamped on the INVESTMENT, not on the customer', async () => {
+    const branchId = Number((await ctx.db.query(
+      `INSERT INTO branches (code, name) VALUES ('NITBR','Nit Test Branch')
+       ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name RETURNING id`)).rows[0]!.id);
+    // Branch on the investment only — the customer deliberately has none.
+    await ctx.db.query("UPDATE applications SET branch_id = $1 WHERE application_no = 'APP-NIT-TODAY-2'", [branchId]);
+    await ctx.db.query("UPDATE customers SET branch_id = NULL WHERE customer_code = 'NIT001'");
+    const d = await drill(`?from=${TODAY}&to=${TODAY}`);
+    const row = (d.rows as any[]).find((r) => r.application_no === 'APP-NIT-TODAY-2');
+    expect(row.branch).toBe('Nit Test Branch');
+  });
+});

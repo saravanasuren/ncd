@@ -13,7 +13,8 @@
 import PDFDocument from 'pdfkit';
 import type { Db } from '../../../db/types.js';
 import { errors } from '../../../lib/errors.js';
-import { nextCode } from '../../../lib/sequences.js';
+import { nextCode, nextSeq } from '../../../lib/sequences.js';
+import { formatNumber } from '../../../lib/numbering.js';
 import { getCompanyProfile, getBondSignature } from '../../products/service.js';
 import { companyHeader, COMPANY, LOGO_PATH, HAS_LOGO } from './shared.js';
 
@@ -203,6 +204,124 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
   y = _drawDetailTable(doc, y, rows);
   const signatures = await Promise.all([0, 1, 2].map((i) => getBondSignature(db, i).then((s) => s?.buffer ?? null)));
   _drawLegalAndSign(doc, y, co, invested, signatures);
+
+  doc.end();
+  return done;
+}
+
+/**
+ * Consolidated bond serial per (customer, series) — the single filing bond's
+ * number, assigned LAZILY on first generation (mirrors ensureBondSerial). Own
+ * sequence + `CB-{yyyy}-{seq}` so it never collides with the per-app `BC-` run.
+ */
+async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId: number, year: number): Promise<string> {
+  const existing = (await db.query<{ bond_serial_no: string }>(
+    'SELECT bond_serial_no FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2', [customerId, seriesId])).rows[0];
+  if (existing) return existing.bond_serial_no;
+  const candidate = formatNumber('CB-{yyyy}-{seq:6}', { seq: await nextSeq(db, 'consolidated_bond'), year });
+  const ins = await db.query<{ bond_serial_no: string }>(
+    `INSERT INTO consolidated_bonds (customer_id, series_id, bond_serial_no) VALUES ($1, $2, $3)
+     ON CONFLICT (customer_id, series_id) DO NOTHING RETURNING bond_serial_no`, [customerId, seriesId, candidate]);
+  if (ins.rows[0]) return ins.rows[0].bond_serial_no;
+  // A concurrent generation won the race — adopt the serial it assigned.
+  return (await db.query<{ bond_serial_no: string }>(
+    'SELECT bond_serial_no FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2', [customerId, seriesId])).rows[0]!.bond_serial_no;
+}
+
+/** The "Comprising N investments" list — documents which small investments the
+ *  consolidated bond is made of (application no, value, units, allotment date). */
+function _drawComprising(doc: Doc, y: number, apps: Array<Record<string, unknown>>, faceValue: number): number {
+  const x = 50, w = doc.page.width - 100;
+  doc.fillColor(C.NAVY).font('Helvetica-Bold').fontSize(9.5).text(`Comprising ${apps.length} investment${apps.length === 1 ? '' : 's'}:`, x, y);
+  y = doc.y + 4;
+  doc.font('Helvetica').fontSize(8.5).fillColor(C.TEXT);
+  for (const a of apps) {
+    const units = faceValue > 0 ? Math.round(Number(a.total_amount || 0) / faceValue) : 0;
+    doc.text(`•  ${a.application_no}  —  ${_fmtINR(a.total_amount)}  (${units} NCD${units === 1 ? '' : 's'})  ·  allotted ${_fmtDate(a.allotment_date)}`, x + 8, y, { width: w - 8 });
+    y = doc.y + 1;
+  }
+  return doc.y + 16;
+}
+
+/**
+ * Consolidated debenture certificate for one customer's whole holding in a
+ * series — ONE bond, total value, total units, plus the breakup of the small
+ * investments it comprises. Document-only: the underlying investments and their
+ * interest/redemption are unchanged.
+ */
+export async function consolidatedBondCertificatePdf(db: Db, customerId: number, seriesId: number): Promise<Buffer> {
+  const apps = (await db.query<Record<string, unknown>>(
+    `SELECT a.id, a.application_no, a.total_amount, a.allotment_date, a.maturity_date, a.status,
+            l.coupon_rate_pct, l.tenure_months, l.face_value
+       FROM applications a
+       JOIN LATERAL (
+         SELECT COALESCE(al.coupon_rate_pct, sch.coupon_rate_pct) AS coupon_rate_pct, al.tenure_months,
+                COALESCE(sch.face_value, 100000) AS face_value
+           FROM application_lines al LEFT JOIN schemes sch ON sch.id = al.scheme_id
+          WHERE al.application_id = a.id ORDER BY al.id LIMIT 1
+       ) l ON TRUE
+      WHERE a.customer_id = $1 AND a.series_id = $2 AND a.status = ANY($3::text[])
+      ORDER BY a.date_money_received NULLS LAST, a.id`,
+    [customerId, seriesId, [...ISSUABLE]])).rows;
+  if (!apps.length) throw errors.notFound('No issued investments for this customer in this series');
+
+  const cust = (await db.query<Record<string, unknown>>('SELECT full_name, address, city, state FROM customers WHERE id = $1', [customerId])).rows[0];
+  const series = (await db.query<Record<string, unknown>>('SELECT code, name, deemed_date FROM series WHERE id = $1', [seriesId])).rows[0];
+  if (!cust || !series) throw errors.notFound('Customer or series not found');
+  const nominee = (await db.query<Record<string, unknown>>('SELECT full_name FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [customerId])).rows[0];
+  const co = companyHeader(await getCompanyProfile(db));
+
+  const totalInvested = apps.reduce((s, a) => s + Number(a.total_amount || 0), 0);
+  const faceValue = Number(apps[0]!.face_value || 100000);
+  const numNcds = faceValue > 0 ? Math.round(totalInvested / faceValue) : null;
+  const tenureMonths = Number(apps[0]!.tenure_months) || BOND_REDEMPTION_MONTHS;
+  const uniq = (v: unknown[]) => [...new Set(v.filter((x) => x != null).map(String))];
+
+  const coupons = uniq(apps.map((a) => (a.coupon_rate_pct != null ? Number(a.coupon_rate_pct).toFixed(2) : null)));
+  const rateLabel = coupons.length === 1 ? `${coupons[0]}% per annum` : coupons.length ? 'As per breakup below' : '—';
+  const allotDates = uniq(apps.map((a) => (a.allotment_date ? _fmtDate(a.allotment_date) : null)));
+  const allotLabel = allotDates.length === 1 ? allotDates[0]! : allotDates.length ? 'As per breakup below' : '—';
+  const redDates = uniq(apps.map((a) => {
+    const rd = a.maturity_date || (a.allotment_date ? _addMonths(a.allotment_date, Number(a.tenure_months) || tenureMonths) : null);
+    return rd ? _fmtDate(rd) : null;
+  }));
+  const redLabel = redDates.length === 1 ? redDates[0]! : redDates.length ? 'As per breakup below' : '—';
+
+  const anyAllot = apps.map((a) => a.allotment_date).find(Boolean) ?? series.deemed_date ?? null;
+  const year = new Date(String(anyAllot ?? new Date().toISOString())).getUTCFullYear();
+  const certificateNo = await ensureConsolidatedBondSerial(db, customerId, seriesId, year);
+  const fullAddress = [cust.address, cust.city, cust.state].filter(Boolean).join(', ') || '—';
+
+  const doc = new PDFDocument({ size: 'A4', margin: 50 });
+  const chunks: Buffer[] = [];
+  doc.on('data', (c: Buffer) => chunks.push(c));
+  const done = new Promise<Buffer>((res) => doc.on('end', () => res(Buffer.concat(chunks))));
+
+  _drawBorder(doc);
+  let y = _drawHeader(doc, co);
+  y = _drawTitle(doc, y);
+  const addrColW = doc.page.width - 100 - 180 - 24;
+  doc.font('Helvetica-Bold').fontSize(10);
+  const addrRowH = Math.max(24, Math.ceil(doc.heightOfString(fullAddress, { width: addrColW })) + 14);
+
+  const rows: Array<[string, string, number?]> = [
+    ['Category', `${series.code || series.name || '—'} Series`],
+    ['Certificate No', certificateNo],
+    ['Name of NCD Holder', (cust.full_name as string) || '—'],
+    ['Address of NCD Holder', fullAddress, addrRowH],
+    ['Nominee', (nominee?.full_name as string) || '—'],
+    ['Investment Value (Rs.)', _fmtINR(totalInvested)],
+    ['Number of NCDs', numNcds != null ? String(numNcds) : '—'],
+    ['Coupon Rate', rateLabel],
+    ['Date of Allotment', allotLabel],
+    ['Date of Redemption', redLabel],
+    ['Face Value per NCD (Rs.)', _fmtINR(faceValue)],
+    ['Redemption Value (Rs.)', _fmtINR(totalInvested)],
+  ];
+  y = _drawDetailTable(doc, y, rows);
+  y = _drawComprising(doc, y, apps, faceValue);
+  const signatures = await Promise.all([0, 1, 2].map((i) => getBondSignature(db, i).then((s) => s?.buffer ?? null)));
+  _drawLegalAndSign(doc, y, co, totalInvested, signatures);
 
   doc.end();
   return done;

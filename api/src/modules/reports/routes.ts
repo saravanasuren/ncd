@@ -97,6 +97,18 @@ reportsRouter.get('/bond/:applicationId.pdf', requirePermission('customers:read'
     res.setHeader('Content-Disposition', `inline; filename="bond-${req.params.applicationId}.pdf"`);
     res.end(buf);
   }));
+// The consolidated "filing bond" — one certificate covering all of a customer's
+// issued investments in a series (total value, total units, + the breakup).
+reportsRouter.get('/consolidated-bond/:customerId/:seriesId.pdf', requirePermission('customers:read'),
+  asyncHandler(async (req, res) => {
+    const { assertCustomerVisible } = await import('../../lib/visibility.js');
+    await assertCustomerVisible(getDb(), req.user!, Number(req.params.customerId));
+    const { consolidatedBondCertificatePdf } = await import('./forms/bond.js');
+    const buf = await consolidatedBondCertificatePdf(getDb(), Number(req.params.customerId), Number(req.params.seriesId));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="consolidated-bond-${req.params.customerId}-${req.params.seriesId}.pdf"`);
+    res.end(buf);
+  }));
 reportsRouter.get('/allotment/:applicationId.pdf', requirePermission('customers:read'),
   asyncHandler(async (req, res) => {
     const { assertApplicationVisible } = await import('../../lib/visibility.js');

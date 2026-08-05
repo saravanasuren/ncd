@@ -58,6 +58,24 @@ async function outlineSheet(wb: WB, title: string, cols: ColDef[], groups: Outli
   await ws.commit();
 }
 
+/**
+ * The Transactions sheet on its own, as an in-memory workbook — the daily email
+ * attaches this. Deliberately the SAME `transactionsSheet` the NCD book uses,
+ * so what lands in an inbox and what a download gives can never differ.
+ *
+ * Buffered rather than streamed: an attachment has to exist in full before the
+ * message can be composed, and this sheet is one row per transaction (907 on
+ * the live book, ~30 KB) rather than the tens of thousands the interest ledger
+ * carries.
+ */
+export async function transactionsWorkbookBuffer(db: Db, actor: AuthUser, filters: book.BookFilters = {}): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Dhanam NCD';
+  const ws = wb.addWorksheet('Transactions', { views: [{ state: 'frozen', ySplit: 1 }] });
+  await writeTransactions(ws, db, actor, filters);
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
 export async function buildNcdBook(out: Writable, db: Db, actor: AuthUser, filters: book.BookFilters = {}): Promise<void> {
   const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: out, useStyles: true, useSharedStrings: false });
   wb.creator = 'Dhanam NCD';
@@ -169,8 +187,7 @@ export async function buildNcdBook(out: Writable, db: Db, actor: AuthUser, filte
  * says so rather than pretending to be a gross figure.
  *
  */
-async function transactionsSheet(wb: WB, db: Db, actor: AuthUser, filters: book.BookFilters) {
-  const ws = startSheet(wb, 'Transactions', [
+const TXN_COLS: ColDef[] = [
     { header: 'Sl.No', width: 7 },
     { header: 'Date', width: 13 },
     { header: 'NCD Series', width: 17 },
@@ -181,8 +198,22 @@ async function transactionsSheet(wb: WB, db: Db, actor: AuthUser, filters: book.
     { header: 'Amount', width: 16, money: true },
     { header: 'District', width: 16 },
     { header: 'DOB', width: 12 },
-    { header: 'Int', width: 8 },
-  ]);
+  { header: 'Int', width: 8 },
+];
+
+/**
+ * Writes the register onto an ALREADY-CREATED worksheet, so the streaming
+ * workbook (the NCD book tab) and the buffered one (the daily email attachment)
+ * share a single definition and cannot drift apart.
+ *
+ * `commit` exists on streaming rows and not on in-memory ones, hence the
+ * optional call — the same code has to be right in both modes.
+ */
+async function writeTransactions(ws: WS, db: Db, actor: AuthUser, filters: book.BookFilters) {
+  ws.columns = TXN_COLS.map((c) => ({ header: c.header, width: c.width, style: c.money ? { numFmt: INR, alignment: { horizontal: 'right' as const } } : {} }));
+  const hdr = ws.getRow(1);
+  hdr.eachCell((c) => { c.fill = HEADER_FILL; c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; });
+  hdr.commit?.();
   const rows = await book.transactionRegister(db, actor, filters);
   let issued = 0, redeemed = 0;
   rows.forEach((r, i) => {
@@ -191,10 +222,18 @@ async function transactionsSheet(wb: WB, db: Db, actor: AuthUser, filters: book.
       i + 1, fmtDate(r.txn_date), r.series_code, r.pan ?? '', r.name, r.agent_code,
       r.trans_type, r.amount, r.district ?? '', fmtDate(r.dob),
       r.rate == null ? '' : `${Number(r.rate)}%`,
-    ]).commit();
+    ]).commit?.();
   });
   // `redeemed` is already negative, so this adds to the net.
-  boldRow(ws, [`Net (${rows.length} transactions)`, '', '', '', '', '', '', issued + redeemed, '', '', '']);
+  const foot = ws.addRow([`Net (${rows.length} transactions)`, '', '', '', '', '', '', issued + redeemed, '', '', '']);
+  foot.eachCell((c) => { c.font = { bold: true }; });
+  foot.commit?.();
+}
+
+/** The register as a tab in the streaming NCD book workbook. */
+async function transactionsSheet(wb: WB, db: Db, actor: AuthUser, filters: book.BookFilters) {
+  const ws = wb.addWorksheet('Transactions', { views: [{ state: 'frozen', ySplit: 1 }] });
+  await writeTransactions(ws, db, actor, filters);
   await ws.commit();
 }
 

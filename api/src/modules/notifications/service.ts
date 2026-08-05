@@ -12,6 +12,7 @@ import type { Db } from '../../db/types.js';
 import { renderTemplate } from './templates.js';
 import { providerFor } from '../../integrations/notify/index.js';
 import { config } from '../../config.js';
+import { attachmentFor } from './attachments.js';
 
 export interface EnqueueInput {
   channel: 'email' | 'sms' | 'whatsapp';
@@ -73,7 +74,14 @@ export async function drainOnce(db: Db, limit = 25): Promise<{ sent: number; fai
     try {
       const payload = (r.payload as Record<string, unknown>) ?? {};
       const { subject, body, html } = renderTemplate(String(r.template), payload);
-      const res = await providerFor(String(r.channel)).send(String(r.to_address), subject, body, { template: String(r.template), payload, html });
+      // A file, if this template carries one — built now rather than stored on
+      // the row, so a retry attaches the book as it stands at that moment.
+      // Email only; the SMS/WhatsApp providers ignore it.
+      const attachment = String(r.channel) === 'email'
+        ? await attachmentFor(db, String(r.template), payload)
+        : null;
+      const res = await providerFor(String(r.channel)).send(String(r.to_address), subject, body,
+        { template: String(r.template), payload, html, ...(attachment ? { attachment } : {}) });
 
       if (res.ok) {
         await db.query(

@@ -283,7 +283,12 @@ const INVESTMENT_COLS: FlatCol[] = [
   { key: 'application_no', header: 'App No' }, { key: 'customer', header: 'Customer' },
   { key: 'series_code', header: 'Series' }, { key: 'branch', header: 'Branch' },
   { key: 'amount', header: 'Amount', kind: 'money' },
-  { key: 'date_money_received', header: 'Received', kind: 'date' }, { key: 'status', header: 'Status' },
+  // Two dates, because they answer different questions: when the money landed
+  // (interest runs from here) and when the NCD was actually allotted. Blank
+  // until allotment, which is itself the useful signal.
+  { key: 'date_money_received', header: 'Received', kind: 'date' },
+  { key: 'allotment_date', header: 'Allotted', kind: 'date' },
+  { key: 'status', header: 'Status' },
 ];
 const FLAT_COLS: Record<string, FlatCol[]> = {
   'new-investments': INVESTMENT_COLS,

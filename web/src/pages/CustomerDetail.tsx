@@ -646,6 +646,52 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
   };
   const restoreApp = (r: any) => run(api.post(`/api/applications/${r.id}/unarchive`));
   const purgeApp = async (r: any) => { const reason = await purgeConfirm(promptText, `investment ${r.application_no}`); if (reason) run(api.del(`/api/applications/${r.id}`, { confirm: true, reason })); };
+  const numOf = (code: string) => parseInt(String(code).replace(/[^0-9]/g, ''), 10) || 0;
+  const prettySeries = (code: string) => String(code).replace(/_/g, ' ').replace(/\bROLLOVER\b/i, 'Rollover');
+  // Group the customer's investments by series (newest series first).
+  const groups = (() => {
+    const m = new Map<string, any[]>();
+    for (const r of rows) { const k = r.series_code ?? '—'; if (!m.has(k)) m.set(k, []); m.get(k)!.push(r); }
+    return [...m.entries()].map(([code, rs]) => ({ code, rows: rs })).sort((a, b) => numOf(b.code) - numOf(a.code));
+  })();
+  const liveOf = (rs: any[]) => rs.filter((r) => !DEAD.includes(r.status) && !r.archived_at);
+  const [open, setOpen] = useState<Set<string>>(() => new Set(groups.filter((g) => liveOf(g.rows).length > 0).map((g) => g.code)));
+  const toggle = (c: string) => setOpen((s) => { const n = new Set(s); if (n.has(c)) n.delete(c); else n.add(c); return n; });
+
+  const investmentRow = (r: any) => (
+    <tr key={r.id} className={`border-b border-border last:border-0 hover:bg-bg cursor-pointer ${r.archived_at ? 'opacity-50' : ''}`}
+      onClick={() => nav(`/app/applications/${r.id}`, { state: { from: { path: `/app/customers/${customerId}`, label: customerName } } })}>
+      <td className={`${td} font-mono text-xs whitespace-nowrap`}>
+        {r.application_no}
+        {r.line_count > 1 && <span className="ml-1.5 text-[10px] rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn" title={`Paid in ${r.line_count} credits — open to see the breakup`}>{r.line_count} credits</span>}
+      </td>
+      <td className={td}>
+        <span className={`text-[11px] rounded px-1.5 py-0.5 ${appPill[r.status] ?? 'bg-[color:var(--warn-bg)] text-warn'}`}>{r.status}</span>
+        {r.archived_at && <span className="ml-1 text-[11px] rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger">Archived</span>}
+      </td>
+      <td className={`${td} whitespace-nowrap`}>
+        {r.esigned_at
+          ? <span className="text-[11px] rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success" title={`eSigned on ${String(r.esigned_at).slice(0, 10)}`}>✓ eSigned</span>
+          : <span className="text-[11px] rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn" title="Not eSigned yet">Not signed</span>}
+        {r.esigned_at && r.has_signed_copy && (
+          <a href={`/api/reports/esigned/${r.id}.pdf`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+             className="ml-1.5 text-[11px] text-primary hover:underline">view</a>
+        )}
+      </td>
+      <td className={`${td} text-xs whitespace-nowrap`}>{r.date_money_received ? String(r.date_money_received).slice(0, 10) : '—'}</td>
+      <td className={`${td} text-right mono`}>{formatINR(r.amount)}</td>
+      <td className={`${td} text-right mono font-medium`}>{formatINR(r.outstanding ?? 0)}</td>
+      {canDelete && (
+        <td className={`${td} text-right whitespace-nowrap`} onClick={(e) => e.stopPropagation()}>
+          {r.archived_at
+            ? <button onClick={() => restoreApp(r)} className="text-xs text-primary hover:underline mr-3">Restore</button>
+            : <button onClick={() => archiveApp(r)} className="text-xs text-primary hover:underline mr-3">Archive</button>}
+          <button onClick={() => purgeApp(r)} className="text-xs text-danger hover:underline">Delete</button>
+        </td>
+      )}
+    </tr>
+  );
+
   return (
     <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1">Investments</h2>
@@ -653,54 +699,42 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
         <div className="py-2 text-text-muted text-sm">No investments yet.</div>
       ) : (
         <>
-          <div className="text-xs text-text-muted mb-2">
+          <div className="text-xs text-text-muted mb-3">
             {live.length} live · outstanding <span className="font-semibold text-text">{formatINR(outstanding)}</span>
-            {rows.length > live.length ? ` · ${rows.length - live.length} closed` : ''}
+            {rows.length > live.length ? ` · ${rows.length - live.length} closed` : ''} · {groups.length} series
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className={th}>Series</th><th className={th}>App no</th>
-                  <th className={th}>Status</th><th className={th}>eSign</th><th className={th}>Received</th>
-                  <th className={`${th} text-right`}>Invested</th><th className={`${th} text-right`}>Outstanding</th>
-                  {canDelete && <th className={`${th} text-right`}></th>}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id} className={`border-b border-border last:border-0 hover:bg-bg cursor-pointer ${r.archived_at ? 'opacity-50' : ''}`}
-                    onClick={() => nav(`/app/applications/${r.id}`, { state: { from: { path: `/app/customers/${customerId}`, label: customerName } } })}>
-                    <td className={td}>{r.series_code}</td>
-                    <td className={`${td} font-mono text-xs whitespace-nowrap`}>{r.application_no}</td>
-                    <td className={td}>
-                      <span className={`text-[11px] rounded px-1.5 py-0.5 ${appPill[r.status] ?? 'bg-[color:var(--warn-bg)] text-warn'}`}>{r.status}</span>
-                      {r.archived_at && <span className="ml-1 text-[11px] rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger">Archived</span>}
-                    </td>
-                    <td className={`${td} whitespace-nowrap`}>
-                      {r.esigned_at
-                        ? <span className="text-[11px] rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success" title={`eSigned on ${String(r.esigned_at).slice(0, 10)}`}>✓ eSigned</span>
-                        : <span className="text-[11px] rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn" title="Not eSigned yet">Not signed</span>}
-                      {r.esigned_at && r.has_signed_copy && (
-                        <a href={`/api/reports/esigned/${r.id}.pdf`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
-                           className="ml-1.5 text-[11px] text-primary hover:underline">view</a>
-                      )}
-                    </td>
-                    <td className={`${td} text-xs whitespace-nowrap`}>{r.date_money_received ? String(r.date_money_received).slice(0, 10) : '—'}</td>
-                    <td className={`${td} text-right mono`}>{formatINR(r.amount)}</td>
-                    <td className={`${td} text-right mono font-medium`}>{formatINR(r.outstanding ?? 0)}</td>
-                    {canDelete && (
-                      <td className={`${td} text-right whitespace-nowrap`} onClick={(e) => e.stopPropagation()}>
-                        {r.archived_at
-                          ? <button onClick={() => restoreApp(r)} className="text-xs text-primary hover:underline mr-3">Restore</button>
-                          : <button onClick={() => archiveApp(r)} className="text-xs text-primary hover:underline mr-3">Archive</button>}
-                        <button onClick={() => purgeApp(r)} className="text-xs text-danger hover:underline">Delete</button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex flex-col gap-2">
+            {groups.map((g) => {
+              const gl = liveOf(g.rows);
+              const gInvested = g.rows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
+              const gOut = gl.reduce((s, r) => s + Number(r.outstanding ?? 0), 0);
+              const isOpen = open.has(g.code);
+              return (
+                <div key={g.code} className="border border-border rounded-lg overflow-hidden">
+                  <button type="button" onClick={() => toggle(g.code)}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 bg-bg hover:bg-surface text-left">
+                    <span className={`text-text-muted text-xs transition-transform ${isOpen ? 'rotate-90' : ''}`}>▸</span>
+                    <span className="font-semibold text-sm">{prettySeries(g.code)}</span>
+                    <span className="text-xs text-text-muted">{g.rows.length} investment{g.rows.length === 1 ? '' : 's'}</span>
+                    <span className="ml-auto text-xs text-text-muted">invested <span className="font-medium text-text mono">{formatINR(gInvested)}</span> · outstanding <span className="font-semibold text-text mono">{formatINR(gOut)}</span></span>
+                  </button>
+                  {isOpen && (
+                    <div className="overflow-x-auto border-t border-border">
+                      <table className="w-full text-sm border-collapse">
+                        <thead>
+                          <tr className="border-b border-border">
+                            <th className={th}>App no</th><th className={th}>Status</th><th className={th}>eSign</th><th className={th}>Received</th>
+                            <th className={`${th} text-right`}>Invested</th><th className={`${th} text-right`}>Outstanding</th>
+                            {canDelete && <th className={`${th} text-right`}></th>}
+                          </tr>
+                        </thead>
+                        <tbody>{g.rows.map(investmentRow)}</tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </>
       )}

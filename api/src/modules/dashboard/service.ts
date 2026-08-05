@@ -114,6 +114,9 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
       money_in_branch: moneyByBranch.total,
       money_in_branch_count: moneyByBranch.branches,
       new_investments: newInv.count,   // count of investments funded in the selected window
+      // True when no date range is picked, so the figure is the most recent
+      // (capped at 30) rather than a chosen window — the tile says which.
+      new_investments_recent: newInv.recent,
       interest_paid: interest.paid,        // interest actually paid in the window (0 for the current MTD)
       interest_due: interest.total,        // paid + still-scheduled, for reference
       interest_accrued: accrued.total,     // current period only; 0 for past ranges

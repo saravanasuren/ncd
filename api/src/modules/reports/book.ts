@@ -814,10 +814,32 @@ export async function newInvestmentsList(db: Db, actor: AuthUser, filters: BookF
  * total/count and its drill list come from these SAME rows, so they never
  * disagree.
  */
+/**
+ * "New investments" for the tile and its drill (owner 2026-08-04).
+ *
+ * With NO date range selected ("All") the whole book is 800+ investments, and a
+ * tile reading the lifetime total is a number nobody acts on. So All shows the
+ * **30 most recently funded** — a rolling recent-activity view. Pick any range
+ * and it means exactly what it says: Today shows today's, this month shows this
+ * month's, uncapped.
+ *
+ * `newInvestmentsList` already returns newest-funded first, so the cap is just a
+ * slice of the same rows the total is summed from — the tile and the drill can
+ * never disagree, which is the rule this tile was rebuilt around.
+ */
+export const NEW_INVESTMENTS_RECENT_CAP = 30;
+
 export async function newInvestmentsInRange(db: Db, actor: AuthUser, filters: BookFilters = {}) {
-  const rows = await newInvestmentsList(db, actor, filters);
+  const all = await newInvestmentsList(db, actor, filters);
+  // A range was asked for → answer it in full. No range → the recent 30.
+  const windowed = !!(filters.from || filters.to);
+  const rows = windowed ? all : all.slice(0, NEW_INVESTMENTS_RECENT_CAP);
   const total = rows.reduce((s: number, r: any) => s + Number(r.amount), 0);
-  return { rows, total: round2(total), count: rows.length };
+  // `recent` says WHICH question was answered, not whether the cap bit. With no
+  // range and only 8 investments on the book the answer is still "the recent
+  // ones, whole book" — labelling that "in this period" would name a period
+  // that was never chosen.
+  return { rows, total: round2(total), count: rows.length, recent: !windowed };
 }
 
 /** Interest whose payout date lands in the window (net). Total + rows. */

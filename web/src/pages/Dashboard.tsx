@@ -117,17 +117,16 @@ export function Dashboard() {
                     primary onClick={() => pickWidget('series', `${activeSeries?.code ?? 'Active series'} — investments`, activeSeries?.series_id)} canDrill={canDrill && !!activeSeries} />
                   <Tile label="Outstanding book" value={formatINR(k.outstanding_book)} sub={`${k.active_investors} investors`}
                     onClick={() => pickWidget('outstanding', 'Outstanding book — by series')} canDrill={canDrill} />
-                  {/* "New investments" tile hidden at the owner's request
-                      (2026-08-04). The figure and its drill-down are left
-                      intact — /api/dashboard still returns money_in and
-                      new_investments, and the 'new-investments' widget still
-                      resolves — so restoring it is uncommenting this Tile, not
-                      rebuilding it:
-
-                      <Tile label="New investments" value={formatINR(f.money_in)}
-                        sub={`${f.new_investments} investment${f.new_investments === 1 ? '' : 's'} in this period`}
-                        onClick={() => pickWidget('new-investments', 'New investments')} canDrill={canDrill} />
-                  */}
+                  {/* No range picked → the most recent 30, a rolling
+                      recent-activity view (the whole book is a number nobody
+                      acts on). Any range → exactly that range, uncapped. */}
+                  <Tile label="New investments" value={formatINR(f.money_in)}
+                    sub={f.new_investments_recent
+                      ? `last ${f.new_investments} · whole book`
+                      : `${f.new_investments} investment${f.new_investments === 1 ? '' : 's'} in this period`}
+                    onClick={() => pickWidget('new-investments',
+                      f.new_investments_recent ? `New investments — last ${f.new_investments}` : 'New investments in range')}
+                    canDrill={canDrill} />
                   <Tile label="Locker deposits" value={formatINR(f.money_in_locker)} sub={`${f.money_in_locker_investors} investors`}
                     onClick={() => pickWidget('locker', 'Locker deposits in range')} canDrill={canDrill} />
                   <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub={`${f.money_in_app_investors} investors`}

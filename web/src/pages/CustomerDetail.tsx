@@ -652,9 +652,11 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
   const groups = (() => {
     const m = new Map<string, any[]>();
     for (const r of rows) { const k = r.series_code ?? '—'; if (!m.has(k)) m.set(k, []); m.get(k)!.push(r); }
-    return [...m.entries()].map(([code, rs]) => ({ code, rows: rs })).sort((a, b) => numOf(b.code) - numOf(a.code));
+    return [...m.entries()].map(([code, rs]) => ({ code, series_id: rs[0]?.series_id, rows: rs })).sort((a, b) => numOf(b.code) - numOf(a.code));
   })();
   const liveOf = (rs: any[]) => rs.filter((r) => !DEAD.includes(r.status) && !r.archived_at);
+  // Statuses that count as "issued" — a consolidated (filing) bond covers these.
+  const ISSUABLE = new Set(['Active', 'Matured', 'Redeemed', 'RolledOver']);
   const [open, setOpen] = useState<Set<string>>(() => new Set(groups.filter((g) => liveOf(g.rows).length > 0).map((g) => g.code)));
   const toggle = (c: string) => setOpen((s) => { const n = new Set(s); if (n.has(c)) n.delete(c); else n.add(c); return n; });
 
@@ -709,15 +711,21 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
               const gInvested = g.rows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
               const gOut = gl.reduce((s, r) => s + Number(r.outstanding ?? 0), 0);
               const isOpen = open.has(g.code);
+              const hasIssuable = g.rows.some((r) => ISSUABLE.has(r.status));
               return (
                 <div key={g.code} className="border border-border rounded-lg overflow-hidden">
-                  <button type="button" onClick={() => toggle(g.code)}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 bg-bg hover:bg-surface text-left">
+                  <div onClick={() => toggle(g.code)}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 bg-bg hover:bg-surface text-left cursor-pointer">
                     <span className={`text-text-muted text-xs transition-transform ${isOpen ? 'rotate-90' : ''}`}>▸</span>
                     <span className="font-semibold text-sm">{prettySeries(g.code)}</span>
                     <span className="text-xs text-text-muted">{g.rows.length} investment{g.rows.length === 1 ? '' : 's'}</span>
                     <span className="ml-auto text-xs text-text-muted">invested <span className="font-medium text-text mono">{formatINR(gInvested)}</span> · outstanding <span className="font-semibold text-text mono">{formatINR(gOut)}</span></span>
-                  </button>
+                    {hasIssuable && g.series_id && (
+                      <a href={`/api/reports/consolidated-bond/${customerId}/${g.series_id}.pdf`} target="_blank" rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()} className="text-xs text-primary hover:underline whitespace-nowrap ml-1"
+                        title="One filing bond covering all this customer's investments in this series (total value + units)">Consolidated bond ↗</a>
+                    )}
+                  </div>
                   {isOpen && (
                     <div className="overflow-x-auto border-t border-border">
                       <table className="w-full text-sm border-collapse">

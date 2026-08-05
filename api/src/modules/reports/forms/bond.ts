@@ -228,21 +228,6 @@ async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId
     'SELECT bond_serial_no FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2', [customerId, seriesId])).rows[0]!.bond_serial_no;
 }
 
-/** The "Comprising N investments" list — documents which small investments the
- *  consolidated bond is made of (application no, value, units, allotment date). */
-function _drawComprising(doc: Doc, y: number, apps: Array<Record<string, unknown>>, faceValue: number): number {
-  const x = 50, w = doc.page.width - 100;
-  doc.fillColor(C.NAVY).font('Helvetica-Bold').fontSize(9.5).text(`Comprising ${apps.length} investment${apps.length === 1 ? '' : 's'}:`, x, y);
-  y = doc.y + 4;
-  doc.font('Helvetica').fontSize(8.5).fillColor(C.TEXT);
-  for (const a of apps) {
-    const units = faceValue > 0 ? Math.round(Number(a.total_amount || 0) / faceValue) : 0;
-    doc.text(`•  ${a.application_no}  —  ${_fmtINR(a.total_amount)}  (${units} NCD${units === 1 ? '' : 's'})  ·  allotted ${_fmtDate(a.allotment_date)}`, x + 8, y, { width: w - 8 });
-    y = doc.y + 1;
-  }
-  return doc.y + 16;
-}
-
 /**
  * Consolidated debenture certificate for one customer's whole holding in a
  * series — ONE bond, total value, total units, plus the breakup of the small
@@ -319,7 +304,6 @@ export async function consolidatedBondCertificatePdf(db: Db, customerId: number,
     ['Redemption Value (Rs.)', _fmtINR(totalInvested)],
   ];
   y = _drawDetailTable(doc, y, rows);
-  y = _drawComprising(doc, y, apps, faceValue);
   const signatures = await Promise.all([0, 1, 2].map((i) => getBondSignature(db, i).then((s) => s?.buffer ?? null)));
   _drawLegalAndSign(doc, y, co, totalInvested, signatures);
 

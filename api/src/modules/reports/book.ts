@@ -684,6 +684,100 @@ export async function redemptions(db: Db, actor: AuthUser, filters: BookFilters 
   return rows;
 }
 
+export interface TransactionRow {
+  txn_date: string | null;
+  series_code: string;
+  pan: string | null;
+  name: string;
+  agent_code: string;
+  trans_type: 'Issue' | 'Redemption';
+  amount: number;
+  district: string | null;
+  dob: string | null;
+  rate: number | null;
+  application_no: string;
+}
+
+/**
+ * Transaction register (owner 2026-08-05) — every ADDITION and DELETION on the
+ * book as one chronological list, the shape the old wealth sheet had.
+ *
+ *   Issue      = an investment funded, dated by money-received, amount POSITIVE
+ *   Redemption = money returned, dated by redemption date, amount NEGATIVE
+ *
+ * Redemptions are negative on purpose (owner's call): the Amount column then
+ * sums to the NET movement of the book over whatever period you filter, which
+ * is the only reading of a register total that means anything. The reference
+ * sheet was inconsistent about this — one redemption -2,00,000 and another
+ * +10,00,000 on the same page.
+ *
+ * There is no "rollover" transaction type. Six series are literally NAMED
+ * "NCD 05 Rollover" … "NCD 10 Rollover", so a redemption inside one of those is
+ * an ordinary redemption that happens to sit in a series with Rollover in its
+ * name. Reading it as a transaction kind would invent a concept the book does
+ * not have.
+ *
+ * The date window applies to a DIFFERENT column on each side of the union, so
+ * `appWhere` is called WITHOUT dates and each half adds its own — otherwise
+ * redemptions would be filtered by when the money originally came in.
+ */
+export async function transactionRegister(
+  db: Db, actor: AuthUser, filters: BookFilters = {},
+): Promise<TransactionRow[]> {
+  const w = appWhere(actor, { seriesIds: filters.seriesIds });
+  const params = [...w.params];
+  let issueDate = '', redDate = '';
+  if (filters.from) {
+    params.push(filters.from);
+    issueDate += ` AND a.date_money_received >= $${params.length}`;
+    redDate += ` AND r.redemption_date >= $${params.length}`;
+  }
+  if (filters.to) {
+    params.push(filters.to);
+    issueDate += ` AND a.date_money_received <= $${params.length}`;
+    redDate += ` AND r.redemption_date <= $${params.length}`;
+  }
+  // The coupon the investment actually carries. First line: a clubbed
+  // investment's parts share one rate, so any of them answers the question.
+  const RATE = `LEFT JOIN LATERAL (
+    SELECT al.coupon_rate_pct FROM application_lines al
+     WHERE al.application_id = a.id ORDER BY al.id LIMIT 1) ln ON TRUE`;
+  // An investment that was later redeemed still keeps its Issue row — the
+  // register is what happened, not what survives. Only never-issued states are
+  // excluded, the same set the series register treats as "not raised".
+  const ISSUED = `a.status NOT IN ('Rejected','Cancelled','Draft','PendingApproval')`;
+
+  const { rows } = await db.query<TransactionRow>(
+    `SELECT a.date_money_received AS txn_date, s.code AS series_code, c.pan, c.full_name AS name,
+            COALESCE(${REFERRER}, '') AS agent_code, 'Issue' AS trans_type,
+            a.total_amount AS amount, c.district, c.dob, ln.coupon_rate_pct AS rate,
+            a.application_no
+     ${FROM_ATTR} ${RATE}
+     WHERE ${w.sql} AND ${ISSUED} AND a.date_money_received IS NOT NULL${issueDate}
+
+     UNION ALL
+
+     SELECT r.redemption_date AS txn_date, s.code AS series_code, c.pan, c.full_name AS name,
+            COALESCE(${REFERRER}, '') AS agent_code, 'Redemption' AS trans_type,
+            -r.net_payment AS amount, c.district, c.dob, ln.coupon_rate_pct AS rate,
+            a.application_no
+     FROM redemptions r
+     JOIN applications a ON a.id = r.application_id
+     JOIN customers c ON c.id = a.customer_id
+     JOIN series s ON s.id = a.series_id
+     ${REFERRER_LATERAL_JOINS} ${RATE}
+     WHERE r.status IN ('Approved','Paid') AND ${w.sql}${redDate}
+
+     ORDER BY 1, 11, 6`, params);   // date, then app no (col 11), then type — stable
+  return rows.map((r) => ({
+    ...r,
+    txn_date: toISODate(r.txn_date ?? null),
+    dob: toISODate(r.dob ?? null),
+    amount: round2(Number(r.amount)),
+    rate: r.rate == null ? null : Number(r.rate),
+  }));
+}
+
 /**
  * The active window of the given series: from the earliest open date to the
  * latest allotment date (or today, for a series not yet allotted). Open date

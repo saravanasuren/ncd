@@ -18,6 +18,7 @@ import { CustomersPage } from './pages/Customers.js';
 import { CustomerDetailPage } from './pages/CustomerDetail.js';
 import { LockerEnrollmentPage } from './pages/LockerEnrollment.js';
 import { LockerTenantsPage } from './pages/LockerTenants.js';
+import { LockerProfilePage } from './pages/LockerProfile.js';
 import { LockerRenewalsPage } from './pages/LockerRenewals.js';
 import { LockerVisitsPage } from './pages/LockerVisits.js';
 import { ApprovalsPage } from './pages/Approvals.js';
@@ -110,6 +111,7 @@ export function App() {
           <Route path="people/:type/:id" element={<RequirePerm perm="dashboard:drilldown"><PersonDetailPage /></RequirePerm>} />
           <Route path="locker-enrollment" element={<RequirePerm perm="lockers:enroll"><LockerEnrollmentPage /></RequirePerm>} />
           <Route path="locker-tenants" element={<RequirePerm perm="lockers:enroll"><LockerTenantsPage /></RequirePerm>} />
+          <Route path="lockers/:applicationId" element={<RequirePerm perm="lockers:enroll"><LockerProfilePage /></RequirePerm>} />
           <Route path="locker-renewals" element={<RequirePerm perm="lockers:enroll"><LockerRenewalsPage /></RequirePerm>} />
           <Route path="locker-visits" element={<RequirePerm perm="lockers:enroll"><LockerVisitsPage /></RequirePerm>} />
           <Route path="applications" element={<RequirePerm perm="customers:read"><ApplicationsPage /></RequirePerm>} />

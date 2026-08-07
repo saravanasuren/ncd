@@ -363,7 +363,11 @@ export async function setDematerialised(db: Db, actor: AuthUser, customerId: num
 
 export async function addBankAccount(db: Db, actor: AuthUser, customerId: number, input: { account_number: string; ifsc: string; bank_name?: string; branch_name?: string; branch_city?: string; account_type?: string; holder_name?: string; tds_applicable?: boolean }) {
   await assertVisible(db, actor, customerId);
-  const pd = await kycProvider().pennyDrop(input.account_number, input.ifsc);
+  // Pass the beneficiary name so the penny-drop does the NAME match too — not
+  // just account+IFSC validity. Without it, an account with the right number
+  // but a wrong holder name verified silently (inconsistent with enrolment,
+  // which checks the name via /lookups/penny-drop). owner 2026-08-06.
+  const pd = await kycProvider().pennyDrop(input.account_number, input.ifsc, input.holder_name);
   return db.withTx(async (tx) => {
     const dup = await tx.query('SELECT 1 FROM customer_bank_accounts WHERE customer_id = $1 AND account_number = $2 AND ifsc = $3', [customerId, input.account_number, input.ifsc]);
     if (dup.rowCount) {
@@ -405,12 +409,12 @@ export async function addBankAccount(db: Db, actor: AuthUser, customerId: number
  */
 export async function reverifyBankAccount(db: Db, actor: AuthUser, customerId: number, bankId: number) {
   await assertVisible(db, actor, customerId);
-  const b = (await db.query<{ account_number: string; ifsc: string | null; penny_drop_status: string }>(
-    'SELECT account_number, ifsc, penny_drop_status FROM customer_bank_accounts WHERE id = $1 AND customer_id = $2',
+  const b = (await db.query<{ account_number: string; ifsc: string | null; holder_name: string | null; penny_drop_status: string }>(
+    'SELECT account_number, ifsc, holder_name, penny_drop_status FROM customer_bank_accounts WHERE id = $1 AND customer_id = $2',
     [bankId, customerId])).rows[0];
   if (!b) throw errors.notFound('Bank account not found for this customer');
   if (!b.ifsc) throw errors.unprocessable('This account has no IFSC on file — it cannot be verified. Add the account again with its IFSC.');
-  const pd = await kycProvider().pennyDrop(b.account_number, b.ifsc);
+  const pd = await kycProvider().pennyDrop(b.account_number, b.ifsc, b.holder_name ?? undefined);
   await db.withTx(async (tx) => {
     await tx.query(
       'UPDATE customer_bank_accounts SET penny_drop_status = $1, penny_drop_detail = $2, verified_at = CASE WHEN $1 = $3 THEN now() ELSE verified_at END WHERE id = $4',

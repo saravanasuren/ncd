@@ -23,6 +23,10 @@ import { createWaiver, cancelWaiver } from './waivers.js';
 // locker_fee_waiver approval hooks, and a lazy import would leave an approval
 // silently side-effect-free until the first waiver request after a restart.
 import './feeWaivers.js';
+// Static for the same reason: registers the locker_cheque_clearance approval
+// hooks at boot, so approving a cheque clearance works on a fresh restart even
+// before any cheque route is hit.
+import './cheques.js';
 import { linkTenant, removeTenant, restoreTenant } from './tenantOverrides.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
@@ -548,11 +552,14 @@ lockersRouter.post('/cheques', asyncHandler(async (req, res) => {
   }));
 }));
 
+// "Funds cleared" is now a MAKER action: it raises a locker_cheque_clearance
+// approval (Admin/CXO). The cheque clears + settles on LockerHub only when the
+// checker approves it (see cheques.ts). Same maker permission as before.
 lockersRouter.post('/cheques/:id/clear', requirePermission('applications:confirm-collection'),
   asyncHandler(async (req, res) => {
     const b = z.object({ cleared_on: z.string().min(4), reference: z.string().nullish() }).parse(req.body ?? {});
-    const { clearCheque } = await import('./cheques.js');
-    res.json(await clearCheque(getDb(), req.user!, Number(req.params.id), { clearedOn: b.cleared_on, reference: b.reference ?? null }));
+    const { requestClearance } = await import('./cheques.js');
+    res.status(201).json(await requestClearance(getDb(), req.user!, Number(req.params.id), { clearedOn: b.cleared_on, reference: b.reference ?? null }));
   }));
 
 // Retry a settlement that failed after the cheque cleared (§A18 is idempotent).

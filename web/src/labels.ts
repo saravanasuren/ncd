@@ -70,6 +70,8 @@ export const APPROVAL_TYPE_LABELS: Record<string, string> = {
   interest_batch: 'Interest Payout',
   payout_adjustment: 'Payout Adjustment',
   locker_deposit_waiver: 'Locker Deposit Waiver',
+  locker_fee_waiver: 'Locker Fee Waiver',
+  locker_cheque_clearance: 'Locker Cheque Clearance',
 };
 
 export function approvalTypeLabel(t: string): string {

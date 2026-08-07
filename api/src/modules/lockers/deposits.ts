@@ -190,8 +190,18 @@ export async function linkDeposit(
       settled = true;
       lockerStatus = (r?.application_status ?? r?.status ?? null) as string | null;
     } catch (e) {
-      settleError = (e as Error).message;
-      console.warn(`[locker] deposit leg link-ncd failed for locker ${input.lockerApplicationId}: ${settleError}`);
+      const raw = (e as Error).message;
+      // LockerHub keys its payments table UNIQUE on the NCD application number
+      // (its `wealth_ncd_id` column), so backing a SECOND locker with the same
+      // investment trips "UNIQUE constraint failed: payments.wealth_ncd_id".
+      // Our model allows one NCD to back several lockers (owner 2026-08-07) —
+      // the real fix is LockerHub rescoping that constraint (see
+      // ops/LOCKERHUB-CR-LOCKER-PAYMENTS.md). Until then, translate the raw
+      // SQLite text into something a staff member can actually act on.
+      settleError = /unique constraint failed:\s*payments\.wealth_ncd_id/i.test(raw)
+        ? `LockerHub currently allows an investment to back only one locker's deposit, so it wouldn't accept ${app.application_no} for this locker (it already backs another). The pledge is saved on our side; a LockerHub fix to allow one investment across multiple lockers is pending.`
+        : raw;
+      console.warn(`[locker] deposit leg link-ncd failed for locker ${input.lockerApplicationId}: ${raw}`);
     }
   }
 

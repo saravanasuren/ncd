@@ -24,6 +24,25 @@ const TEMPLATES: Record<string, Renderer> = {
       `If you didn't request this, you can ignore this email; your password stays unchanged.`,
     ].join('\n'),
   }),
+  /** Daily transaction register — the sheet rides as an .xlsx attachment. */
+  transactions_daily: (p) => ({
+    subject: `Dhanam NCD — transaction register, ${p.report_date}`,
+    body: [
+      `The transaction register as at ${p.report_date} is attached.`,
+      '',
+      `Transactions: ${p.rows}`,
+      `Issued: ${p.issued}`,
+      `Redeemed: ${p.redeemed}`,
+      `Net: ${p.net}`,
+      '',
+      p.changed_today === false
+        ? 'Nothing was added or redeemed today — the register is unchanged since yesterday.'
+        : `Added or redeemed today: ${p.today_rows}`,
+      '',
+      'Every addition and deletion since the book opened, oldest first. Redemptions carry a minus, so the Amount column totals the net movement.',
+    ].join('\n'),
+  }),
+
   handover_approved: (p) => ({
     subject: 'Customer handover approved',
     body: `The handover of ${p.customerName} has been approved.`,

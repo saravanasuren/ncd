@@ -34,6 +34,17 @@ export interface SendMeta {
   /** Rich HTML body for email. When present, the email provider sends it as the
    *  HTML part with `body` as the plain-text fallback. Ignored by SMS/WhatsApp. */
   html?: string;
+  /** A file to send with the message. Email only — SMS/WhatsApp ignore it.
+   *  Built at SEND time, never stored on the queue row: an Excel workbook has
+   *  no business sitting in a JSONB payload, and a retry should attach today's
+   *  book rather than a stale copy. */
+  attachment?: Attachment;
+}
+
+export interface Attachment {
+  filename: string;
+  content: Buffer;
+  contentType: string;
 }
 
 export interface NotifyProvider {

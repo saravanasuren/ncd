@@ -12,10 +12,25 @@ export function sesProvider(): NotifyProvider {
       if (!to) return { ok: false, error: 'no destination' };
       try {
         // Lazy import so dev/test without the SDK/creds never loads it.
-        const { SESClient, SendEmailCommand } = await import('@aws-sdk/client-ses');
+        const { SESClient, SendEmailCommand, SendRawEmailCommand } = await import('@aws-sdk/client-ses');
         const client = new SESClient({ region: config.SES_REGION });
+        const from = `"${config.NOTIFICATIONS_FROM_NAME}" <${config.NOTIFICATIONS_FROM_EMAIL}>`;
+
+        // An attachment cannot ride SendEmailCommand — it takes a subject and a
+        // body and nothing else — so a file forces the raw path with a MIME
+        // message we compose ourselves.
+        if (meta?.attachment) {
+          const { buildRawEmail } = await import('./mime.js');
+          const raw = buildRawEmail({
+            from, to, replyTo: config.NOTIFICATIONS_REPLY_TO,
+            subject, text: body, html: meta.html, attachment: meta.attachment,
+          });
+          const rawOut = await client.send(new SendRawEmailCommand({ RawMessage: { Data: raw } }));
+          return { ok: true, messageId: rawOut.MessageId };
+        }
+
         const out = await client.send(new SendEmailCommand({
-          Source: `"${config.NOTIFICATIONS_FROM_NAME}" <${config.NOTIFICATIONS_FROM_EMAIL}>`,
+          Source: from,
           ReplyToAddresses: [config.NOTIFICATIONS_REPLY_TO],
           Destination: { ToAddresses: [to] },
           Message: {

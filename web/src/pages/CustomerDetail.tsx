@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { useConfirm } from '../components/Confirm.js';
+import { ReferredByPicker } from '../components/ReferredByPicker.js';
 
 /** NCDs are issued in whole ₹1,00,000 units (owner spec 2026-07-23). */
 const LAKH = 100000;
@@ -536,7 +537,11 @@ export function CustomerDetailPage() {
                     return (
                       <label key={f.key} className={`text-xs ${dirty ? 'text-primary font-semibold' : 'text-text-muted'}`}>
                         {f.label}
-                        {f.kind === 'boolean' ? (
+                        {f.key === 'referred_by_text' ? (
+                          // Searchable staff/agent dropdown (free text still allowed),
+                          // so reassigning "Referred by" offers the real names.
+                          <div className="mt-1"><ReferredByPicker value={String(val)} onChange={(v) => set(v)} className={`${inp} w-full`} /></div>
+                        ) : f.kind === 'boolean' ? (
                           <div className="mt-1"><input type="checkbox" checked={val === true} onChange={(e) => set(e.target.checked)} /></div>
                         ) : f.kind === 'select' ? (
                           <select className={`${inp} w-full mt-1`} value={String(val)} onChange={(e) => set(e.target.value)}>

@@ -1045,3 +1045,65 @@ export async function leadsByStatus(db: Db, actor: AuthUser) {
   const sc = scopeWhere(scopeFor(actor), { userCol: 'created_by_user_id', agentCol: 'created_by_agent_id', branchCol: 'branch_id' }, 0);
   return (await db.query(`SELECT status, full_name, phone, place, source, interested_scheme, expected_amount, follow_up_date FROM investor_leads WHERE ${sc.sql} ORDER BY status, full_name`, sc.params)).rows;
 }
+
+/**
+ * NCDs approaching maturity within `days` (owner 2026-08-07 — parity with the
+ * wealth app's Maturity Alerts). Scoped like every other book query. Each line
+ * carries its days-remaining and, if the redemption row is already scheduled,
+ * the gross/TDS/net that will pay out. Totals bucket by 30/60/all days.
+ */
+export async function maturityAlerts(db: Db, actor: AuthUser, days: number, seriesId?: number | null) {
+  const window = Math.min(365, Math.max(1, Math.floor(days) || 90));
+  const params: unknown[] = [];
+  const sc = scopeWhere(scopeFor(actor), APP_SCOPE, 0);
+  params.push(...sc.params);
+  params.push(window);
+  const conds = [
+    sc.sql,
+    "a.status = 'Active'",
+    `a.maturity_date BETWEEN CURRENT_DATE AND CURRENT_DATE + $${params.length}::int`,
+  ];
+  if (seriesId) { params.push(seriesId); conds.push(`a.series_id = $${params.length}`); }
+
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT a.id AS application_id, a.application_no, a.maturity_date,
+            (a.maturity_date - CURRENT_DATE)::int AS days_remaining,
+            al.outstanding_amount,
+            ds.gross_amount, ds.tds_amount, ds.net_amount,
+            c.id AS customer_id, c.customer_code, c.full_name AS customer_name, c.phone, c.pan,
+            sr.code AS series_code, sch.code AS scheme_code, al.tenure_months
+       FROM applications a
+       JOIN customers c ON c.id = a.customer_id
+       JOIN series sr ON sr.id = a.series_id
+       JOIN application_lines al ON al.application_id = a.id AND al.status = 'Active'
+       LEFT JOIN schemes sch ON sch.id = al.scheme_id
+       LEFT JOIN disbursement_schedule ds
+              ON ds.line_id = al.id AND ds.due_type = 'Redemption' AND ds.status = 'Scheduled'
+      WHERE ${conds.join(' AND ')}
+      ORDER BY a.maturity_date ASC, c.full_name ASC`, params);
+
+  const principal = (r: Record<string, unknown>) => Number(r.outstanding_amount || 0);
+  const inWindow = (r: Record<string, unknown>, d: number) => Number(r.days_remaining) <= d;
+  const totals = {
+    count_30d: rows.filter((r) => inWindow(r, 30)).length,
+    amount_30d: rows.filter((r) => inWindow(r, 30)).reduce((s, r) => s + principal(r), 0),
+    count_60d: rows.filter((r) => inWindow(r, 60)).length,
+    amount_60d: rows.filter((r) => inWindow(r, 60)).reduce((s, r) => s + principal(r), 0),
+    count_all: rows.length,
+    amount_all: rows.reduce((s, r) => s + principal(r), 0),
+  };
+  return {
+    days: window,
+    totals,
+    alerts: rows.map((r) => ({
+      application_id: Number(r.application_id), application_no: r.application_no,
+      maturity_date: toISODate(r.maturity_date as string | null), days_remaining: Number(r.days_remaining),
+      outstanding_amount: principal(r),
+      gross_amount: r.gross_amount == null ? null : Number(r.gross_amount),
+      tds_amount: r.tds_amount == null ? null : Number(r.tds_amount),
+      net_amount: r.net_amount == null ? null : Number(r.net_amount),
+      customer_id: Number(r.customer_id), customer_code: r.customer_code, customer_name: r.customer_name,
+      phone: r.phone, pan: r.pan, series_code: r.series_code, scheme_code: r.scheme_code, tenure_months: r.tenure_months,
+    })),
+  };
+}

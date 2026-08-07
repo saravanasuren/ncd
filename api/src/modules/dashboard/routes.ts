@@ -4,6 +4,7 @@ import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
 import * as s from './service.js';
+import * as book from '../reports/book.js';
 import type { BookFilters } from '../reports/book.js';
 
 export const dashboardRouter = Router();
@@ -23,6 +24,12 @@ dashboardRouter.get('/overview', requirePermission('dashboard:view'),
 
 dashboardRouter.get('/monthly-redemptions', requirePermission('dashboard:view'),
   asyncHandler(async (req, res) => res.json({ rows: await s.monthlyRedemptions(getDb(), req.user!) })));
+
+// NCDs approaching maturity within N days (default 90), scoped. Parity with the
+// wealth app's Maturity Alerts.
+dashboardRouter.get('/maturity-alerts', requirePermission('dashboard:view'),
+  asyncHandler(async (req, res) => res.json(await book.maturityAlerts(
+    getDb(), req.user!, req.query.days ? Number(req.query.days) : 90, req.query.series_id ? Number(req.query.series_id) : null))));
 
 dashboardRouter.get('/search', requirePermission('dashboard:view', 'customers:read'),
   asyncHandler(async (req, res) => res.json(await s.search(getDb(), req.user!, String(req.query.q ?? '')))));

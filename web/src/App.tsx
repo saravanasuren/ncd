@@ -30,6 +30,7 @@ import { PersonDetailPage } from './pages/PersonDetail.js';
 import { AllotmentsPage } from './pages/Allotments.js';
 import { PayoutsPage } from './pages/Payouts.js';
 import { EscrowPage } from './pages/Escrow.js';
+import { MaturityAlertsPage } from './pages/MaturityAlerts.js';
 import { MyEarningsPage } from './pages/MyEarnings.js';
 import { RedemptionsPage } from './pages/Redemptions.js';
 import { IncentivesPage } from './pages/Incentives.js';
@@ -120,6 +121,7 @@ export function App() {
           <Route path="allotments" element={<RequirePerm perm="allotments:execute"><AllotmentsPage /></RequirePerm>} />
           <Route path="redemptions" element={<RequirePerm perm="redemptions:initiate"><RedemptionsPage /></RequirePerm>} />
           <Route path="ncd-events" element={<RequirePerm perm="redemptions:initiate"><EventsPage /></RequirePerm>} />
+          <Route path="maturity-alerts" element={<RequirePerm perm="dashboard:view"><MaturityAlertsPage /></RequirePerm>} />
           <Route path="masters" element={<RequirePerm perm="products:manage"><MastersPage /></RequirePerm>} />
           <Route path="payouts" element={<RequirePerm perm="payouts:generate"><PayoutsPage /></RequirePerm>} />
           <Route path="escrow" element={<RequirePerm perm="escrow:reconcile"><EscrowPage /></RequirePerm>} />

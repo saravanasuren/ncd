@@ -71,9 +71,15 @@ describe('9-tab NCD book export', () => {
     expect(names).toEqual([
       'NCD Summary', 'NCD by Series', 'Master Client', 'Redemption', 'Depositorwise',
       'Districtwise', 'Agent wise', 'Staff wise', 'Leads', 'Applications', 'Interest Payouts',
+      'Transactions',
     ]);
     expect(wb.getWorksheet('Applications')!.getRow(1).getCell(1).value).toBe('App No');
     expect(wb.getWorksheet('Interest Payouts')!.getRow(1).getCell(6).value).toBe('Type');
+    // Transactions (owner 2026-08-05) — the additions/deletions register, in the
+    // column order of the sheet it replaces.
+    const txnHdr = wb.getWorksheet('Transactions')!.getRow(1);
+    expect([1, 2, 3, 4, 7, 8, 11].map((c) => txnHdr.getCell(c).value))
+      .toEqual(['Sl.No', 'Date', 'NCD Series', 'PA.NO', 'Trans Type', 'Amount', 'Int']);
     // grouped sheets collapse detail rows under a summary (outline level 1, hidden)
     const dep = wb.getWorksheet('Depositorwise')!;
     let hasCollapsedDetail = false;

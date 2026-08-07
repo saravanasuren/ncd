@@ -153,5 +153,48 @@ export async function buildNcdBook(out: Writable, db: Db, actor: AuthUser, filte
   }
   await ws11.commit();
 
+  // Tab 12 — Transactions (every addition and deletion, chronological)
+  await transactionsSheet(wb, db, actor, filters);
+
   await wb.commit(); // finalise the zip + end the stream
 }
+
+/**
+ * The transaction register the owner asked for (2026-08-05): additions and
+ * deletions of customers' money in one chronological list, the shape their old
+ * wealth sheet had.
+ *
+ * Redemptions carry a NEGATIVE amount, so the Amount column sums to the NET
+ * movement of the book over whatever window was filtered — and the footer total
+ * says so rather than pretending to be a gross figure.
+ *
+ */
+async function transactionsSheet(wb: WB, db: Db, actor: AuthUser, filters: book.BookFilters) {
+  const ws = startSheet(wb, 'Transactions', [
+    { header: 'Sl.No', width: 7 },
+    { header: 'Date', width: 13 },
+    { header: 'NCD Series', width: 17 },
+    { header: 'PA.NO', width: 13 },
+    { header: 'Name', width: 30 },
+    { header: 'Agent Code', width: 20 },
+    { header: 'Trans Type', width: 12 },
+    { header: 'Amount', width: 16, money: true },
+    { header: 'District', width: 16 },
+    { header: 'DOB', width: 12 },
+    { header: 'Int', width: 8 },
+  ]);
+  const rows = await book.transactionRegister(db, actor, filters);
+  let issued = 0, redeemed = 0;
+  rows.forEach((r, i) => {
+    if (r.trans_type === 'Issue') issued += r.amount; else redeemed += r.amount;
+    ws.addRow([
+      i + 1, fmtDate(r.txn_date), r.series_code, r.pan ?? '', r.name, r.agent_code,
+      r.trans_type, r.amount, r.district ?? '', fmtDate(r.dob),
+      r.rate == null ? '' : `${Number(r.rate)}%`,
+    ]).commit();
+  });
+  // `redeemed` is already negative, so this adds to the net.
+  boldRow(ws, [`Net (${rows.length} transactions)`, '', '', '', '', '', '', issued + redeemed, '', '', '']);
+  await ws.commit();
+}
+

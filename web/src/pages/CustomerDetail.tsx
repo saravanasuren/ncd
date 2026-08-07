@@ -1173,8 +1173,14 @@ function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onEr
                   {[b.bank_name, b.branch_name, b.branch_city].filter(Boolean).join(' · ')}
                 </div>
               )}
+              {/* Why the penny-drop failed — name mismatch (shows the bank's actual
+                  name), a bad account number, or the bank not responding — so a
+                  failure is actionable rather than just "Failed". */}
+              {b.penny_drop_status !== 'Verified' && b.penny_drop_detail && (
+                <div className="text-xs text-danger mt-0.5">{b.penny_drop_detail}</div>
+              )}
             </div>
-            <span className={`text-xs rounded px-1.5 py-0.5 ${b.penny_drop_status === 'Verified' ? 'bg-[color:var(--success-bg)] text-success' : b.penny_drop_status === 'Failed' ? 'bg-[color:var(--danger-bg)] text-danger' : 'bg-bg text-text-muted'}`}>{b.penny_drop_status}</span>
+            <span title={b.penny_drop_detail ?? undefined} className={`text-xs rounded px-1.5 py-0.5 ${b.penny_drop_status === 'Verified' ? 'bg-[color:var(--success-bg)] text-success' : b.penny_drop_status === 'Failed' ? 'bg-[color:var(--danger-bg)] text-danger' : 'bg-bg text-text-muted'}`}>{b.penny_drop_status}</span>
             {b.is_active && <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--primary-ring)] text-primary">Active</span>}
             <span className="ml-auto flex items-center gap-3">
               {/* A misspelt beneficiary name is what prints on the bank file —

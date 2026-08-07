@@ -38,6 +38,13 @@ productsRouter.get('/banks', requireAuth, asyncHandler(async (_req, res) => res.
 productsRouter.post('/banks', manage, asyncHandler(async (req, res) => res.status(201).json(await s.createBank(getDb(), req.user!, req.body))));
 
 // Holidays
+// Locker pricing — NCD-owned deposit + rent per size (UI-configurable).
+productsRouter.get('/locker-pricing', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listLockerPricing(getDb()) })));
+productsRouter.put('/locker-pricing/:size', manage, asyncHandler(async (req, res) => {
+  await s.upsertLockerPricing(getDb(), req.user!, String(req.params.size), req.body);
+  res.json({ ok: true });
+}));
+
 productsRouter.get('/holidays', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listHolidays(getDb()) })));
 productsRouter.post('/holidays', manage, asyncHandler(async (req, res) => {
   const { d, label } = z.object({ d: z.string(), label: z.string() }).parse(req.body);

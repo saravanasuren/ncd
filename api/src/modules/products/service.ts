@@ -215,3 +215,48 @@ async function genericUpdate(
     await writeAudit(tx, { actorId: actor.id, action, entityType: table, entityId: id, before: cur.rows[0], after: input });
   });
 }
+
+// ── Locker pricing (NCD-owned deposit + rent per size; owner 2026-08-07) ──
+export async function listLockerPricing(db: Db) {
+  const rows = (await db.query<Record<string, unknown>>(
+    'SELECT size, deposit_amount, annual_rent, updated_at FROM locker_pricing ORDER BY deposit_amount DESC NULLS LAST, size')).rows;
+  return rows.map((r) => ({
+    size: r.size,
+    deposit_amount: r.deposit_amount == null ? null : Number(r.deposit_amount),
+    annual_rent: r.annual_rent == null ? null : Number(r.annual_rent),
+    updated_at: r.updated_at,
+  }));
+}
+
+/** Create-or-update the deposit/rent for a size. A blank field clears to NULL. */
+export async function upsertLockerPricing(db: Db, actor: AuthUser, size: string, input: { deposit_amount?: number | null; annual_rent?: number | null }) {
+  const sz = String(size ?? '').trim();
+  if (!sz) throw errors.badRequest('size is required');
+  const num = (v: unknown): number | null => {
+    if (v === '' || v === null || v === undefined) return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) throw errors.badRequest('Amounts must be zero or more');
+    return n;
+  };
+  const deposit = num(input.deposit_amount);
+  const rent = num(input.annual_rent);
+  await db.query(
+    `INSERT INTO locker_pricing (size, deposit_amount, annual_rent, updated_by_user_id, updated_at)
+     VALUES ($1,$2,$3,$4, now())
+     ON CONFLICT (size) DO UPDATE SET deposit_amount = EXCLUDED.deposit_amount, annual_rent = EXCLUDED.annual_rent,
+       updated_by_user_id = EXCLUDED.updated_by_user_id, updated_at = now()`,
+    [sz, deposit, rent, actor.id]);
+  await writeAudit(db, { actorId: actor.id, action: 'locker_pricing.upsert', entityType: 'locker_pricing', entityId: null, after: { size: sz, deposit_amount: deposit, annual_rent: rent } });
+  return { size: sz, deposit_amount: deposit, annual_rent: rent };
+}
+
+/** The configured deposit/rent for a size — used to send NCD's own amounts to
+ *  LockerHub on locker-application create. NULL when unset. */
+export async function lockerPricingFor(db: Db, size: string): Promise<{ deposit_amount: number | null; annual_rent: number | null } | null> {
+  const r = (await db.query<Record<string, unknown>>('SELECT deposit_amount, annual_rent FROM locker_pricing WHERE size = $1', [String(size ?? '').trim()])).rows[0];
+  if (!r) return null;
+  return {
+    deposit_amount: r.deposit_amount == null ? null : Number(r.deposit_amount),
+    annual_rent: r.annual_rent == null ? null : Number(r.annual_rent),
+  };
+}

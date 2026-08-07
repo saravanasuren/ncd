@@ -419,6 +419,58 @@ function AckSignature() {
 }
 
 /** Admin → Masters (docs/05): schemes, series, TDS rules, banks, holidays, company profile. */
+/** NCD-owned locker deposit + rent per size (owner 2026-08-07). Editable in
+ *  place; rent is blank until set. Sent to LockerHub on new locker applications. */
+function LockerPricing() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ['locker-pricing'], queryFn: () => api.get<{ rows: any[] }>('/api/locker-pricing') });
+  const [form, setForm] = useState<Record<string, { deposit: string; rent: string }>>({});
+  const [newRow, setNewRow] = useState({ size: '', deposit: '', rent: '' });
+  const [err, setErr] = useState('');
+  const rows = data?.rows ?? [];
+  const val = (size: string, k: 'deposit' | 'rent', fallback: number | null) =>
+    form[size]?.[k] ?? (fallback == null ? '' : String(fallback));
+  const set = (size: string, k: 'deposit' | 'rent', v: string, r: any) =>
+    setForm((s) => ({ ...s, [size]: { deposit: k === 'deposit' ? v : (s[size]?.deposit ?? (r.deposit_amount ?? '')), rent: k === 'rent' ? v : (s[size]?.rent ?? (r.annual_rent ?? '')) } }));
+  const save = useMutation({
+    mutationFn: (v: { size: string; deposit_amount: string | number | null; annual_rent: string | number | null }) =>
+      api.put(`/api/locker-pricing/${encodeURIComponent(v.size)}`, { deposit_amount: v.deposit_amount === '' ? null : v.deposit_amount, annual_rent: v.annual_rent === '' ? null : v.annual_rent }),
+    onSuccess: () => { setErr(''); setNewRow({ size: '', deposit: '', rent: '' }); qc.invalidateQueries({ queryKey: ['locker-pricing'] }); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
+  const th = 'text-left text-xs font-semibold text-text-label uppercase tracking-wide px-3 py-2';
+  const td = 'px-3 py-2';
+  return (
+    <div className={card}>
+      <h2 className="text-sm font-semibold mb-1">Locker pricing (per size)</h2>
+      <p className="text-xs text-text-muted mb-3">Deposit and yearly rent for each locker size. Sent to LockerHub on new applications. Rent is optional — leave blank to set later.</p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead><tr className="border-b border-border"><th className={th}>Size</th><th className={th}>Deposit (₹)</th><th className={th}>Annual rent (₹)</th><th className={th}></th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.size} className="border-b border-border last:border-0">
+                <td className={`${td} font-semibold`}>{r.size}</td>
+                <td className={td}><input className={`${inp} w-32`} inputMode="numeric" value={val(r.size, 'deposit', r.deposit_amount)} onChange={(e) => set(r.size, 'deposit', e.target.value.replace(/[^\d.]/g, ''), r)} /></td>
+                <td className={td}><input className={`${inp} w-32`} inputMode="numeric" placeholder="—" value={val(r.size, 'rent', r.annual_rent)} onChange={(e) => set(r.size, 'rent', e.target.value.replace(/[^\d.]/g, ''), r)} /></td>
+                <td className={td}><button className={btn} disabled={save.isPending} onClick={() => { setErr(''); save.mutate({ size: r.size, deposit_amount: val(r.size, 'deposit', r.deposit_amount), annual_rent: val(r.size, 'rent', r.annual_rent) }); }}>Save</button></td>
+              </tr>
+            ))}
+            <tr>
+              <td className={td}><input className={`${inp} w-24`} placeholder="Size" value={newRow.size} onChange={(e) => setNewRow({ ...newRow, size: e.target.value })} /></td>
+              <td className={td}><input className={`${inp} w-32`} inputMode="numeric" placeholder="Deposit" value={newRow.deposit} onChange={(e) => setNewRow({ ...newRow, deposit: e.target.value.replace(/[^\d.]/g, '') })} /></td>
+              <td className={td}><input className={`${inp} w-32`} inputMode="numeric" placeholder="Rent (optional)" value={newRow.rent} onChange={(e) => setNewRow({ ...newRow, rent: e.target.value.replace(/[^\d.]/g, '') })} /></td>
+              <td className={td}><button className={btn} disabled={!newRow.size || save.isPending} onClick={() => { setErr(''); save.mutate({ size: newRow.size.trim(), deposit_amount: newRow.deposit, annual_rent: newRow.rent }); }}>+ Add size</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {err && <div className="text-xs text-danger mt-2">{err}</div>}
+    </div>
+  );
+}
+
 export function MastersPage() {
   return (
     <div className="w-full">
@@ -428,6 +480,7 @@ export function MastersPage() {
       <SeriesSection />
       <TdsRules />
       <Banks />
+      <LockerPricing />
       <Holidays />
       <CompanyProfile />
     </div>

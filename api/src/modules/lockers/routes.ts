@@ -173,7 +173,16 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
     const { buildApplicantBlock } = await import('./applicant.js');
     applicant = (await buildApplicantBlock(getDb(), customer_id)) ?? undefined;
   }
-  res.status(201).json(await lh.createLockerApplication(staffOf(req), { ...input, ...(applicant ? { applicant } : {}) }));
+  // NCD owns locker pricing (owner 2026-08-07): send our configured deposit/rent
+  // for this size. LockerHub honouring them is a pending contract change
+  // (LOCKERHUB-CR §7); until then they fall back to their own figures.
+  const { lockerPricingFor } = await import('../products/service.js');
+  const pricing = await lockerPricingFor(getDb(), b.locker_size);
+  const priceFields: Record<string, number> = {};
+  if (pricing?.deposit_amount != null) priceFields.deposit_amount = pricing.deposit_amount;
+  if (pricing?.annual_rent != null) priceFields.annual_rent = pricing.annual_rent;
+
+  res.status(201).json(await lh.createLockerApplication(staffOf(req), { ...input, ...priceFields, ...(applicant ? { applicant } : {}) }));
 }));
 
 lockersRouter.post('/applications/:id/payment-link', asyncHandler(async (req, res) => {

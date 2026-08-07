@@ -210,7 +210,19 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
             -- An agent also HAS a user row, so the agent identity wins: enrolling
             -- as an agent is what the book attributes the customer to.
             COALESCE(ag.full_name, u.full_name) AS enrolled_by_name,
-            CASE WHEN ag.id IS NOT NULL THEN 'agent' WHEN u.id IS NOT NULL THEN 'staff' END AS enrolled_by_kind,
+            -- Which COLUMN is populated does not decide what someone IS. An
+            -- agent who has no agents row still logs in and enrols as a user,
+            -- so the customer carries enrolled_by_user_id — and this used to
+            -- print "(staff)" for a person the Users page calls Agent
+            -- (Selvarajkumar, owner 2026-08-04: 4 such users, 6 customers).
+            --
+            -- is_staff is the same test the Incentives page already uses to
+            -- decide the Staff vs Agent tab, so the two screens now agree
+            -- instead of contradicting each other about one person.
+            CASE
+              WHEN ag.id IS NOT NULL THEN 'agent'
+              WHEN u.id IS NOT NULL THEN CASE WHEN COALESCE(u.is_staff, FALSE) THEN 'staff' ELSE 'agent' END
+            END AS enrolled_by_kind,
             ag.agent_code AS enrolled_by_agent_code
        FROM customers c
        LEFT JOIN users  u  ON u.id  = c.enrolled_by_user_id

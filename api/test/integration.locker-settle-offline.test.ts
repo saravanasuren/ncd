@@ -50,6 +50,15 @@ afterAll(async () => { await new Promise<void>((r) => mock.close(() => r())); aw
 
 const admin = async () => { const c = new Client(ctx.base); await c.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' }); return c; };
 
+// Clearing a cheque now goes through Approvals: "funds cleared" raises the
+// approval, and the leg settles on LockerHub only when a checker approves. The
+// settle assertions below therefore fire on the APPROVE, not the clear.
+async function clearViaApproval(a: Client, chequeId: number, body: { cleared_on: string; reference?: string }) {
+  const req = await a.post(`/api/lockers/cheques/${chequeId}/clear`, body);
+  expect(req.status).toBe(201);
+  return a.post(`/api/approvals/${req.json.request_id}/approve`, { extra: { self_approval_reason: 'Verified the bank credit against the statement; approving as super admin.' } });
+}
+
 // One pending cheque per (application, leg) is enforced, so each case gets its
 // own application — otherwise the second `takeCheque` 409s on the first.
 let n = 0;
@@ -85,9 +94,8 @@ describe('clearing a cheque settles the leg', () => {
   it('sends method=cheque with the bank reference and the cleared date', async () => {
     const id = await takeCheque('deposit');
     seen = [];
-    const r = await (await admin()).post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-08-02', reference: 'UTR-77' });
+    const r = await clearViaApproval(await admin(), id, { cleared_on: '2026-08-02', reference: 'UTR-77' });
     expect(r.status).toBe(200);
-    expect(r.json.settled).toBe(true);
 
     const call = settleCalls()[0]!;
     expect(call.body.leg).toBe('deposit');
@@ -96,36 +104,36 @@ describe('clearing a cheque settles the leg', () => {
     expect(call.body.received_on).toBe('2026-08-02');
     // Never our figure — their side derives the amount from the leg.
     expect(call.body.amount).toBeUndefined();
-    // Their audit log must show the real person.
+    // Their audit log must show the real person (the approver).
     expect(call.body.staff?.name).toBeTruthy();
   });
 
   it('falls back to the cheque number when there is no bank reference', async () => {
     const id = await takeCheque();
     seen = [];
-    await (await admin()).post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-08-02' });
+    await clearViaApproval(await admin(), id, { cleared_on: '2026-08-02' });
     expect(settleCalls()[0]!.body.reference).toMatch(/^CHQ-/);
   });
 
   it('stamps the row so the register can prove it settled', async () => {
     const id = await takeCheque();
-    await (await admin()).post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-08-02' });
-    const row = (await ctx.db.query('SELECT lockerhub_settled_at, lockerhub_error FROM locker_cheques WHERE id = $1', [id])).rows[0] as any;
+    await clearViaApproval(await admin(), id, { cleared_on: '2026-08-02' });
+    const row = (await ctx.db.query('SELECT status, lockerhub_settled_at, lockerhub_error FROM locker_cheques WHERE id = $1', [id])).rows[0] as any;
+    expect(row.status).toBe('Cleared');
     expect(row.lockerhub_settled_at).toBeTruthy();
     expect(row.lockerhub_error).toBeNull();
   });
 });
 
 describe('when LockerHub refuses, the money still cleared', () => {
-  it('the clear succeeds, and says plainly that the leg did not settle', async () => {
+  it('approval clears the cheque even when the leg does not settle', async () => {
     const id = await takeCheque();
     settleFails = true;
     try {
-      const r = await (await admin()).post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-08-02' });
-      expect(r.status).toBe(200);              // NOT an error — the cheque cleared
-      expect(r.json.settled).toBe(false);
-      expect(r.json.cheque.status).toBe('Cleared');
-      expect(r.json.note).toMatch(/not settled|outstanding/i);
+      // The approval still succeeds — the money cleared; the failed settle is
+      // recorded on the row, never rolled back.
+      const r = await clearViaApproval(await admin(), id, { cleared_on: '2026-08-02' });
+      expect(r.status).toBe(200);
     } finally { settleFails = false; }
 
     const row = (await ctx.db.query('SELECT status, lockerhub_settled_at, lockerhub_error FROM locker_cheques WHERE id = $1', [id])).rows[0] as any;
@@ -137,7 +145,7 @@ describe('when LockerHub refuses, the money still cleared', () => {
   it('retrying afterwards settles it and clears the error', async () => {
     const id = await takeCheque();
     settleFails = true;
-    try { await (await admin()).post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-08-02' }); }
+    try { await clearViaApproval(await admin(), id, { cleared_on: '2026-08-02' }); }
     finally { settleFails = false; }
 
     const r = await (await admin()).post(`/api/lockers/cheques/${id}/settle-retry`, {});
@@ -149,7 +157,7 @@ describe('when LockerHub refuses, the money still cleared', () => {
 
   it('retrying an ALREADY-settled cheque calls nobody', async () => {
     const id = await takeCheque();
-    await (await admin()).post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-08-02' });
+    await clearViaApproval(await admin(), id, { cleared_on: '2026-08-02' });
     seen = [];
     const r = await (await admin()).post(`/api/lockers/cheques/${id}/settle-retry`, {});
     expect(r.json.settled).toBe(true);

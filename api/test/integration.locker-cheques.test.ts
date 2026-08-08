@@ -69,24 +69,26 @@ describe('locker cheque register', () => {
     expect((await staff.post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-07-24' })).status).toBe(403);
   });
 
-  it('a collection-confirming user clears it; LockerHub unreachable does not undo the clear', async () => {
+  it('a maker submits it for clearance; the approval clears it, and LockerHub unreachable does not undo the clear', async () => {
     const a = await admin();
     const list = await a.get(`/api/lockers/cheques?application_id=${APP}`);
     const id = list.json.rows.find((x: any) => x.leg === 'rent').id;
-    const r = await a.post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-07-24', reference: 'BANKREF1' });
-    expect(r.status).toBe(200);
-    expect(r.json.cheque.status).toBe('Cleared');
-    expect(r.json.cheque.cleared_on).toBe('2026-07-24');
-    expect(r.json.cheque.reference).toBe('BANKREF1');
-    // LockerHub is unconfigured here, so the settle could not land. The money
-    // still cleared — that must never be rolled back — and the failure is
-    // reported instead of being swallowed.
-    expect(r.json.settled).toBe(false);
-    expect(r.json.note).toMatch(/did NOT accept the settlement/i);
-    expect(r.json.cheque.lockerhub_settled_at).toBeNull();
-    expect(r.json.cheque.lockerhub_error).toBeTruthy();
-    // Clearing twice is refused.
+    // "Funds cleared" now raises an approval — the cheque does not clear yet.
+    const req = await a.post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-07-24', reference: 'BANKREF1' });
+    expect(req.status).toBe(201);
+    // Submitting again while the approval is open is refused.
     expect((await a.post(`/api/lockers/cheques/${id}/clear`, { cleared_on: '2026-07-25' })).status).toBe(409);
+    // A checker approves → the cheque clears. LockerHub is unconfigured, so the
+    // settle could not land; the money still cleared and is never rolled back,
+    // with the failure recorded on the row.
+    const ok = await a.post(`/api/approvals/${req.json.request_id}/approve`, { extra: { self_approval_reason: 'Verified the credit against the statement; approving as super admin.' } });
+    expect(ok.status).toBe(200);
+    const row = (await ctx.db.query('SELECT status, cleared_on, reference, lockerhub_settled_at, lockerhub_error FROM locker_cheques WHERE id = $1', [id])).rows[0] as any;
+    expect(row.status).toBe('Cleared');
+    expect(String(row.cleared_on).slice(0, 10)).toBe('2026-07-24');
+    expect(row.reference).toBe('BANKREF1');
+    expect(row.lockerhub_settled_at).toBeNull();
+    expect(row.lockerhub_error).toBeTruthy();
   });
 
   it('a bounced cheque frees the leg so a replacement can be taken', async () => {

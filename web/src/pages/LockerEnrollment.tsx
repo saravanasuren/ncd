@@ -66,7 +66,6 @@ export function LockerEnrollmentPage() {
   const [pledge, setPledge] = useState<{ deposit: number; total: number; shortfall: number; used: number; max: number; fully: boolean; settled: boolean } | null>(null);
   // Cheque register (NCD-side only — never settles the locker on LockerHub).
   const [cheques, setCheques] = useState<any[]>([]);
-  const [pendingChq, setPendingChq] = useState<any[]>([]);
   const [chqLeg, setChqLeg] = useState<'rent' | 'deposit' | null>(null);
   const [chq, setChq] = useState({ cheque_no: '', bank_name: '', amount: '', received_on: new Date().toISOString().slice(0, 10) });
   const [name, setName] = useState('');
@@ -215,10 +214,6 @@ export function LockerEnrollmentPage() {
     const r = await run(api.get<any>(`/api/lockers/cheques?application_id=${encodeURIComponent(app.application_id)}`));
     if (r) setCheques(r.rows ?? []);
   };
-  const loadPendingCheques = async () => {
-    const r = await run(api.get<any>('/api/lockers/cheques?status=Pending'));
-    if (r) setPendingChq(r.rows ?? []);
-  };
   const saveCheque = async () => {
     if (!chqLeg || !app?.application_id) return;
     const r = await run(api.post<any>('/api/lockers/cheques', {
@@ -237,31 +232,16 @@ export function LockerEnrollmentPage() {
     if (r) {
       setChqLeg(null);
       setChq({ cheque_no: '', bank_name: '', amount: '', received_on: new Date().toISOString().slice(0, 10) });
-      await loadCheques(); await loadPendingCheques();
+      await loadCheques();
     }
   };
-  const clearCheque = async (id: number) => {
-    const on = await promptText({
-      title: 'Mark this cheque cleared', label: 'Date the funds cleared in the bank',
-      inputType: 'date', defaultValue: new Date().toISOString().slice(0, 10), minLength: 10, confirmLabel: 'Next',
-    });
-    if (!on) return;
-    const ref = await promptText({ title: 'Bank reference', body: 'Optional — leave blank if you do not have one.', label: 'Reference', minLength: 0, confirmLabel: 'Mark cleared' });
-    if (ref === null) return;
-    const r = await run(api.post<any>(`/api/lockers/cheques/${id}/clear`, { cleared_on: on, reference: ref.trim() || undefined }));
-    if (r) {
-      // The clear always succeeds locally; the LockerHub leg may not. Say which
-      // happened rather than leaving a locker quietly unsettled.
-      setErr(r.settled ? '' : (r.note ?? 'Cleared here, but LockerHub did not accept the settlement.'));
-      await loadCheques(); await loadPendingCheques(); await refreshApp();
-    }
-  };
-  /** Push a cleared-but-unsettled cheque to LockerHub again. Safe to repeat. */
+  /** Push a cleared-but-unsettled cheque to LockerHub again. Safe to repeat.
+   *  (Clearing a cheque now goes through Approvals — see the Approvals page.) */
   const retrySettlement = async (id: number) => {
     const r = await run(api.post<any>(`/api/lockers/cheques/${id}/settle-retry`, {}));
     if (r) {
       setErr(r.settled ? '' : (r.note ?? 'LockerHub still did not accept it.'));
-      await loadCheques(); await loadPendingCheques(); await refreshApp();
+      await loadCheques(); await refreshApp();
     }
   };
   /**
@@ -395,17 +375,6 @@ export function LockerEnrollmentPage() {
     }));
     if (r) await refreshApp();
   };
-  const bounceCheque = async (id: number) => {
-    const reason = await promptText({
-      title: 'Cheque did not clear', body: 'Bounced, or withdrawn by the customer?',
-      label: 'Reason', confirmLabel: 'Record', danger: true,
-    });
-    if (!reason) return;
-    const r = await run(api.post<any>(`/api/lockers/cheques/${id}/bounce`, { reason }));
-    if (r) { await loadCheques(); await loadPendingCheques(); }
-  };
-  // The register loads on mount so staff land on "what's awaiting clearance".
-  useEffect(() => { void loadPendingCheques(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   // Waivers belong to an application, so they follow it rather than the mount.
   useEffect(() => { void loadFeeWaivers(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id]);
   // There is no agreement until there is a locker — §A19 is post-allotment.
@@ -504,47 +473,9 @@ export function LockerEnrollmentPage() {
         </div>
       )}
 
-      {/* Cheques taken but not yet cleared. NCD-side bookkeeping only — the
-          locker stays unsettled until the leg is actually paid. */}
-      {pendingChq.length > 0 && (
-        <div className={card}>
-          <h2 className={h2}>Cheques awaiting clearance</h2>
-          <p className="text-xs text-text-muted -mt-2 mb-3">
-            Recorded in NCD for your books. A cleared cheque does <b>not</b> settle the locker — complete it in <b>LockerHub → Tenants</b> (mark the row Paid, method = cheque).
-            <b> Never open the payment link for a cheque customer</b>: it is a live payment page and would collect the money a second time.
-          </p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr className="text-left text-xs text-text-label uppercase tracking-wide border-b border-border">
-                  <th className="py-2 pr-3">Customer</th><th className="py-2 pr-3">Locker app</th><th className="py-2 pr-3">Leg</th>
-                  <th className="py-2 pr-3 text-right">Amount</th><th className="py-2 pr-3">Cheque</th><th className="py-2 pr-3">Received</th><th />
-                </tr>
-              </thead>
-              <tbody>
-                {pendingChq.map((q) => (
-                  <tr key={q.id} className="border-b border-border last:border-0">
-                    <td className="py-2 pr-3">{q.customer_name ?? '—'} <span className="font-mono text-xs text-text-muted">{q.customer_code ?? ''}</span></td>
-                    <td className="py-2 pr-3 font-mono text-xs">{q.lockerhub_application_id}</td>
-                    <td className="py-2 pr-3">{q.leg}</td>
-                    <td className="py-2 pr-3 text-right mono">{money(q.amount)}</td>
-                    <td className="py-2 pr-3 font-mono text-xs">{q.cheque_no}{q.bank_name ? ` · ${q.bank_name}` : ''}</td>
-                    <td className="py-2 pr-3 text-xs text-text-muted">{q.received_on}</td>
-                    <td className="py-2 text-right whitespace-nowrap">
-                      {can('applications:confirm-collection') ? (
-                        <>
-                          <button className="text-xs text-primary hover:underline mr-3" disabled={busy} onClick={() => clearCheque(q.id)}>Funds cleared</button>
-                          <button className="text-xs text-danger hover:underline" disabled={busy} onClick={() => bounceCheque(q.id)}>Did not clear</button>
-                        </>
-                      ) : <span className="text-xs text-text-muted">awaiting confirmation</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      {/* Cheque clearance moved to the Approvals page (owner 2026-08-07): a maker
+          marks "funds cleared" there, an Admin/CXO approves, and only then does
+          the leg settle on LockerHub. Enrollment just records the cheque. */}
 
       {/* 1 — Branch + size */}
       <div className={card}>

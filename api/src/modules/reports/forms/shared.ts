@@ -71,20 +71,34 @@ export function fmtINR(v: unknown): string {
 }
 
 /**
- * A customer's postal address for a printed document, in the order the reports
- * already use (reports/book.ts `fullAddress`): street, city, district, state,
- * pincode. Blank parts are dropped — a customer with no district reads
+ * A customer's postal address for a printed document: street, city, district,
+ * state, pincode. Blank parts are dropped — a customer with no district reads
  * "12 Main St, Erode, TN, 638001", not "12 Main St, Erode, , TN, 638001".
+ *
+ * A part that simply REPEATS the one before it is dropped too (owner 2026-08-08).
+ * In Tamil Nadu a town is very often its own district, so the honest field values
+ * city='ERODE', district='ERODE' printed "…, ERODE, ERODE, TAMILNADU, 638009" on
+ * the bond certificate. The data is right; saying it twice on a certificate is
+ * not. Comparison is case- and space-insensitive, and only ADJACENT parts are
+ * compared — a pincode that also appears inside the free-text street line is left
+ * alone, because guessing at that would mangle real addresses.
  *
  * Every document MUST build the address through here. District and pincode were
  * missing from the bond for months because each form assembled its own address
  * from whichever columns it happened to SELECT (`district` has existed since
  * migration 002 and `pincode` since 028).
+ *
+ * NOTE: reports/book.ts has its own `fullAddress` for the spreadsheets and does
+ * NOT collapse repeats — the reports are a data extract, where showing exactly
+ * what each column holds is the point.
  */
 export function customerAddress(r: Record<string, unknown>): string {
-  return [r.address, r.city, r.district, r.state, r.pincode]
+  const parts = [r.address, r.city, r.district, r.state, r.pincode]
     .map((v) => (v == null ? '' : String(v).trim()))
-    .filter(Boolean)
+    .filter(Boolean);
+  const key = (s: string) => s.replace(/\s+/g, ' ').trim().toUpperCase();
+  return parts
+    .filter((p, i) => i === 0 || key(p) !== key(parts[i - 1]!))
     .join(', ');
 }
 

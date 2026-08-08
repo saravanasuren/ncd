@@ -36,6 +36,34 @@ describe('customerAddress', () => {
       .toBe('');
   });
 
+  // A town is very often its own district in TN, so city == district is normal,
+  // honest data — but a certificate must not say it twice (owner 2026-08-08).
+  it('says a repeated city/district once', () => {
+    expect(customerAddress({
+      address: '6/1 SANTHANKARUKKU 3RD STREET', city: 'ERODE', district: 'ERODE',
+      state: 'TAMILNADU', pincode: '638009',
+    })).toBe('6/1 SANTHANKARUKKU 3RD STREET, ERODE, TAMILNADU, 638009');
+  });
+
+  it('ignores case and spacing when deciding it is a repeat', () => {
+    expect(customerAddress({ address: '1 Main St', city: 'Erode', district: ' ERODE ', state: 'TN', pincode: '638009' }))
+      .toBe('1 Main St, Erode, TN, 638009');
+    expect(customerAddress({ address: '1 Main St', city: 'New  Delhi', district: 'NEW DELHI', state: 'DL', pincode: '110001' }))
+      .toBe('1 Main St, New  Delhi, DL, 110001');
+  });
+
+  it('only collapses ADJACENT repeats — a genuinely different district survives', () => {
+    expect(customerAddress({
+      address: '12 Cross Rd', city: 'Chitheri', district: 'Krishnagiri', state: 'Tamilnadu', pincode: '631003',
+    })).toBe('12 Cross Rd, Chitheri, Krishnagiri, Tamilnadu, 631003');
+    // A pincode repeated inside the free-text street line is NOT stripped —
+    // guessing inside someone's address would mangle real ones.
+    expect(customerAddress({
+      address: 'No209A, Nalliampalayam, Namakkal - 638182', city: 'Namakkal', district: 'Namakkal',
+      state: null, pincode: '638182',
+    })).toBe('No209A, Nalliampalayam, Namakkal - 638182, Namakkal, 638182');
+  });
+
   it('names every address column, so a form cannot fetch a partial address', () => {
     for (const col of ['address', 'city', 'district', 'state', 'pincode']) {
       expect(addressColumns()).toContain(col);

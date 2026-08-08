@@ -6,9 +6,15 @@
  *
  * Owner decision 2026-07-21: NCD issues the bond right after eSign, before
  * allotment — so the certificate number and allotment/redemption dates stay
- * blank ("—") until the series is allotted. NCD schema: single `address`
- * (no district/pin), series `deemed_date` (no close/allotted_at). The certificate
- * number is NCD's own (migration 031), assigned lazily on first generation.
+ * blank ("—") until the series is allotted. Series uses `deemed_date` (no
+ * close/allotted_at). The certificate number is NCD's own (migration 031),
+ * assigned lazily on first generation.
+ *
+ * The holder's address is built by `customerAddress` (shared.ts) so it matches
+ * the reports: street, city, DISTRICT, state, PINCODE. This file used to select
+ * and join only address/city/state — the header even claimed NCD had "no
+ * district/pin" — so both certificates printed an address missing the district
+ * and pincode the customer profile clearly showed (fixed 2026-08-08).
  */
 import PDFDocument from 'pdfkit';
 import type { Db } from '../../../db/types.js';
@@ -16,7 +22,7 @@ import { errors } from '../../../lib/errors.js';
 import { nextCode, nextSeq } from '../../../lib/sequences.js';
 import { formatNumber } from '../../../lib/numbering.js';
 import { getCompanyProfile, getBondSignature } from '../../products/service.js';
-import { companyHeader, COMPANY, LOGO_PATH, HAS_LOGO } from './shared.js';
+import { companyHeader, COMPANY, LOGO_PATH, HAS_LOGO, customerAddress, addressColumns } from './shared.js';
 
 /** Only an issued investment carries a certificate — a pending application must
  * never burn a certificate number (mirrors wealth's gate). */
@@ -151,7 +157,7 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
   const a = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.customer_id, a.application_no, a.total_amount, a.allotment_date, a.maturity_date,
             a.status, a.bond_serial_no,
-            c.full_name, c.address, c.city, c.state,
+            c.full_name, ${addressColumns('c.')},
             s.code AS series_code, s.name AS series_name, s.deemed_date, s.isin
        FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
       WHERE a.id = $1`, [applicationId])).rows[0];
@@ -172,7 +178,7 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
   const rateLabel = line.coupon_rate_pct != null ? `${Number(line.coupon_rate_pct).toFixed(2)}% per annum` : '—';
   const allotmentDate = a.allotment_date || a.deemed_date || null; // blank until allotted
   const redemptionDate = a.maturity_date || (allotmentDate ? _addMonths(allotmentDate, tenureMonths) : null);
-  const fullAddress = [a.address, a.city, a.state].filter(Boolean).join(', ') || '—';
+  const fullAddress = customerAddress(a) || '—';
 
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
   const chunks: Buffer[] = [];
@@ -250,7 +256,7 @@ export async function consolidatedBondCertificatePdf(db: Db, customerId: number,
     [customerId, seriesId, [...ISSUABLE]])).rows;
   if (!apps.length) throw errors.notFound('No issued investments for this customer in this series');
 
-  const cust = (await db.query<Record<string, unknown>>('SELECT full_name, address, city, state FROM customers WHERE id = $1', [customerId])).rows[0];
+  const cust = (await db.query<Record<string, unknown>>(`SELECT full_name, ${addressColumns()} FROM customers WHERE id = $1`, [customerId])).rows[0];
   const series = (await db.query<Record<string, unknown>>('SELECT code, name, deemed_date FROM series WHERE id = $1', [seriesId])).rows[0];
   if (!cust || !series) throw errors.notFound('Customer or series not found');
   const nominee = (await db.query<Record<string, unknown>>('SELECT full_name FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [customerId])).rows[0];
@@ -275,7 +281,7 @@ export async function consolidatedBondCertificatePdf(db: Db, customerId: number,
   const anyAllot = apps.map((a) => a.allotment_date).find(Boolean) ?? series.deemed_date ?? null;
   const year = new Date(String(anyAllot ?? new Date().toISOString())).getUTCFullYear();
   const certificateNo = await ensureConsolidatedBondSerial(db, customerId, seriesId, year);
-  const fullAddress = [cust.address, cust.city, cust.state].filter(Boolean).join(', ') || '—';
+  const fullAddress = customerAddress(cust) || '—';
 
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
   const chunks: Buffer[] = [];

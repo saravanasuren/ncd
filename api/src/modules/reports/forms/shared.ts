@@ -70,6 +70,30 @@ export function fmtINR(v: unknown): string {
   return 'Rs. ' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 });
 }
 
+/**
+ * A customer's postal address for a printed document, in the order the reports
+ * already use (reports/book.ts `fullAddress`): street, city, district, state,
+ * pincode. Blank parts are dropped — a customer with no district reads
+ * "12 Main St, Erode, TN, 638001", not "12 Main St, Erode, , TN, 638001".
+ *
+ * Every document MUST build the address through here. District and pincode were
+ * missing from the bond for months because each form assembled its own address
+ * from whichever columns it happened to SELECT (`district` has existed since
+ * migration 002 and `pincode` since 028).
+ */
+export function customerAddress(r: Record<string, unknown>): string {
+  return [r.address, r.city, r.district, r.state, r.pincode]
+    .map((v) => (v == null ? '' : String(v).trim()))
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** Columns `customerAddress` reads — spread into a customers SELECT so a form
+ *  can never fetch a partial address again. Prefix e.g. 'c.' when joined. */
+export function addressColumns(prefix = ''): string {
+  return ['address', 'city', 'district', 'state', 'pincode'].map((c) => `${prefix}${c}`).join(', ');
+}
+
 /** Indian rupee amount → words (up to crores). Ported from wealth. */
 export function amountInWords(input: unknown): string {
   const n = Number(String(input).replace(/[^\d.]/g, ''));

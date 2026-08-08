@@ -518,6 +518,30 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
     };
   }
 
+  if (id && req.entity_type === 'tds_threshold_events') {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT e.outstanding_at_crossing, e.crossed_on, e.interest_paid_untaxed, e.tds_rate_pct, e.tds_to_recover,
+              c.full_name AS customer, c.customer_code
+         FROM tds_threshold_events e JOIN customers c ON c.id = e.customer_id WHERE e.id = $1`, [id])).rows[0];
+    if (r) {
+      const inr = (v: unknown) => `₹${Number(v ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      return {
+        subject: `${r.customer}${r.customer_code ? ` (${r.customer_code})` : ''} — TDS now applicable`,
+        amount: Number(r.tds_to_recover),
+        facts: clean([
+          fact('Customer', `${r.customer}${r.customer_code ? ` (${r.customer_code})` : ''}`),
+          fact('Current outstanding', inr(r.outstanding_at_crossing)),
+          fact('Threshold crossed on', toISODate(r.crossed_on as string | null)),
+          fact('TDS status', 'Not Applicable → Applicable'),
+          fact('Interest already paid (untaxed)', inr(r.interest_paid_untaxed)),
+          fact('TDS rate', `${Number(r.tds_rate_pct)}%`),
+          fact('TDS to recover', inr(r.tds_to_recover)),
+          fact('Applied in', 'the next interest payout batch (one-time deduction)'),
+        ]),
+      };
+    }
+  }
+
   if (id && req.entity_type === 'locker_deposit_waivers') {
     const r = (await db.query<Record<string, unknown>>(
       `SELECT w.tenant_name, w.tenant_phone, w.locker_no, w.branch_id, w.reason, c.full_name AS customer, c.customer_code

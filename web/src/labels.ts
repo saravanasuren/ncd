@@ -70,6 +70,7 @@ export const APPROVAL_TYPE_LABELS: Record<string, string> = {
   interest_batch: 'Interest Payout',
   payout_adjustment: 'Payout Adjustment',
   locker_deposit_waiver: 'Locker Deposit Waiver',
+  tds_threshold: 'TDS Applicability (₹30L crossed)',
 };
 
 export function approvalTypeLabel(t: string): string {

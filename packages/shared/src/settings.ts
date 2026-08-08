@@ -372,6 +372,35 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     editableBy: 'super_admin',
   },
 
+  // ── TDS threshold (owner 2026-08-07) ──
+  {
+    key: 'tds.threshold_amount',
+    group: 'TDS',
+    label: 'TDS applicability threshold (₹)',
+    description: "When a customer's outstanding NCD book crosses this, they become TDS-applicable and an approval is raised to recover TDS on interest already paid.",
+    type: 'number',
+    default: 3000000,
+    editableBy: 'admin',
+  },
+  {
+    key: 'tds.rate_with_pan_pct',
+    group: 'TDS',
+    label: 'TDS rate — PAN on file (%)',
+    description: 'Rate applied to already-paid interest when recovering TDS, for a customer with a valid PAN.',
+    type: 'number',
+    default: 10,
+    editableBy: 'admin',
+  },
+  {
+    key: 'tds.rate_without_pan_pct',
+    group: 'TDS',
+    label: 'TDS rate — no PAN (%)',
+    description: 'Higher rate applied when the customer has no PAN on file.',
+    type: 'number',
+    default: 20,
+    editableBy: 'admin',
+  },
+
   // ── System ──
   {
     key: 'system.api_page_limit_max',

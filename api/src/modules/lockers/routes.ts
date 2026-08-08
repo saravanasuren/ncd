@@ -220,13 +220,36 @@ lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) =
       after: { reason: b.override.reason, approved_by: b.override.approved_by, locker_id: b.locker_id ?? null },
     });
   }
+  let result: Record<string, unknown>;
   try {
-    res.json(await lh.allocate(staffOf(req), String(req.params.id), b));
+    result = await lh.allocate(staffOf(req), String(req.params.id), b) as Record<string, unknown>;
   } catch (e) {
     const detail = (e as { detail?: { already?: boolean } }).detail;
     if (detail?.already === true) { res.json({ ...detail, success: true, already: true }); return; }
     throw e;
   }
+  // The booking is complete → confirm it to the customer on WhatsApp (owner
+  // 2026-08-07). Best-effort and only AFTER a real allocation: never block or
+  // fail the response on a notify error, and inert until an approved template
+  // is configured (WAPPCLOUD_LOCKER_TEMPLATE), so it can't misfire silently.
+  void (async () => {
+    try {
+      const { enqueue } = await import('../notifications/service.js');
+      const { formatPhone } = await import('../../integrations/notify/wappcloud.js');
+      const t = (result.tenant ?? result) as Record<string, unknown>;
+      const phone = formatPhone(String(t.phone ?? t.tenant_phone ?? ''));
+      if (!phone) return;
+      await enqueue(getDb(), {
+        channel: 'whatsapp', template: 'locker_booked', to: phone,
+        payload: {
+          name: t.name ?? t.tenant_name ?? '',
+          locker_no: t.locker_no ?? t.locker_number ?? (b.locker_id ?? ''),
+          branch: t.branch_name ?? t.branch ?? '',
+        },
+      });
+    } catch (e) { console.warn('[locker] booking WhatsApp enqueue failed (non-fatal):', (e as Error).message); }
+  })();
+  res.json(result);
 }));
 
 // ── Deposit links: back a locker's deposit with an NCD investment ──────────

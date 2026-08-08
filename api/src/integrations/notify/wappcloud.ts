@@ -72,6 +72,15 @@ export function templateFor(meta: SendMeta | undefined): WappTemplate | null {
     if (p.documentUrl) tpl.document = { url: String(p.documentUrl), filename: String(p.documentName ?? 'Acknowledgment.pdf') };
     return tpl;
   }
+  // Locker booked/allotted. {{1}} name, {{2}} locker no, {{3}} branch. Inert
+  // until an approved template name is configured (WAPPCLOUD_LOCKER_TEMPLATE).
+  if (meta?.template === 'locker_booked' && config.WAPPCLOUD_LOCKER_TEMPLATE) {
+    const p = meta.payload ?? {};
+    return {
+      name: config.WAPPCLOUD_LOCKER_TEMPLATE,
+      variables: { '1': String(p.name ?? ''), '2': String(p.locker_no ?? ''), '3': String(p.branch ?? '') },
+    };
+  }
   return null;
 }
 

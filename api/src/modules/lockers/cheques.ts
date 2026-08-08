@@ -33,6 +33,7 @@ import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { toISODate } from '../../lib/dates.js';
 import * as lh from '../../integrations/lockerhub/client.js';
+import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 
 export type ChequeLeg = 'rent' | 'deposit';
 
@@ -84,6 +85,9 @@ const shape = (r: Record<string, unknown>) => ({
    *  money is in but their leg is still open — the row someone must chase. */
   lockerhub_settled_at: r.lockerhub_settled_at ?? null,
   lockerhub_error: r.lockerhub_error ?? null,
+  /** The open cheque-clearance approval, if this cheque has been submitted for
+   *  one. Pending + set = awaiting a checker; Pending + NULL = not yet sent. */
+  approval_request_id: r.approval_request_id == null ? null : Number(r.approval_request_id),
 });
 
 /** Take a cheque against a locker application. */
@@ -155,14 +159,80 @@ export async function listCheques(db: Db, filters: { status?: string; lockerAppl
   return { rows: rows.map(shape), note: SETTLEMENT_NOTE };
 }
 
-/** Money landed in the bank — releases NCD's hold only. */
-export async function clearCheque(db: Db, actor: AuthUser, id: number, input: { clearedOn: string; reference?: string | null }) {
-  const cleared = await settle(db, actor, id, 'Cleared', { clearedOn: input.clearedOn, reference: input.reference ?? null });
-  // Settle AFTER the local commit, never inside it: an open HTTP call in a
-  // transaction holds a row lock for the length of someone else's outage, and
-  // rolling the clear back would be wrong anyway — the money did clear.
-  return settleOnLockerHub(db, actor, cleared.cheque);
+/**
+ * Maker step: "funds cleared". This no longer clears the cheque directly — it
+ * raises a `locker_cheque_clearance` approval (owner 2026-08-07). The cheque
+ * stays Pending, now carrying the open approval; an Admin/CXO checker approves
+ * it, and only THEN does it clear and settle on LockerHub (see the handler
+ * below). Clearing real money against paper that could bounce is the control
+ * the checker exists for.
+ */
+export async function requestClearance(db: Db, actor: AuthUser, id: number, input: { clearedOn: string; reference?: string | null }) {
+  const cur = (await db.query<Record<string, unknown>>('SELECT * FROM locker_cheques WHERE id = $1', [id])).rows[0];
+  if (!cur) throw errors.notFound('Cheque not found');
+  if (cur.status !== 'Pending') throw errors.conflict(`This cheque is already ${String(cur.status).toLowerCase()}`);
+  if (cur.approval_request_id) throw errors.conflict('This cheque is already awaiting clearance approval.');
+  if (!input.clearedOn) throw errors.badRequest('A cleared-on date is required');
+
+  return db.withTx(async (tx) => {
+    const req = await createApprovalRequest(tx, {
+      type: 'locker_cheque_clearance', entityType: 'locker_cheques', entityId: id, makerUserId: actor.id,
+      metadata: {
+        cheque_id: id,
+        locker_application: cur.lockerhub_application_id,
+        leg: cur.leg, amount: Number(cur.amount), cheque_no: cur.cheque_no, bank_name: cur.bank_name ?? null,
+        cleared_on: input.clearedOn, reference: input.reference ?? null,
+        applicant_name: cur.applicant_name ?? null,
+      },
+    });
+    const row = (await tx.query<Record<string, unknown>>(
+      'UPDATE locker_cheques SET approval_request_id = $1, updated_at = now() WHERE id = $2 RETURNING *', [req.id, id])).rows[0]!;
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'locker.cheque.clearance_request', entityType: 'locker_cheques', entityId: id,
+      after: { approval_request_id: req.id, cleared_on: input.clearedOn, reference: input.reference ?? null },
+    });
+    return { cheque: shape(row), request_id: req.id, request_no: req.request_no, status: 'PendingClearanceApproval' as const };
+  });
 }
+
+/** On approval: clear the cheque and settle the leg on LockerHub. Runs inside the
+ *  approval transaction — the LockerHub push tolerates failure (records the error,
+ *  never rolls back the decision), matching the fee-waiver flow. */
+registerOnFinalApprove('locker_cheque_clearance', async (tx, req) => {
+  const id = req.metadata.cheque_id ? Number(req.metadata.cheque_id) : (req.entity_id ? Number(req.entity_id) : null);
+  if (!id) return;
+  // ApprovalRow carries the maker; the approver is the latest approve action.
+  const act = (await tx.query<{ approver_user_id: string }>(
+    `SELECT approver_user_id FROM approval_actions WHERE approval_request_id = $1 AND action = 'approve' ORDER BY id DESC LIMIT 1`,
+    [req.id])).rows[0];
+  const clearedOn = (req.metadata.cleared_on as string | null) ?? null;
+  const reference = (req.metadata.reference as string | null) ?? null;
+  const row = (await tx.query<Record<string, unknown>>(
+    `UPDATE locker_cheques
+        SET status = 'Cleared', cleared_on = $1, reference = COALESCE($2, reference),
+            settled_by_user_id = $3, approval_request_id = NULL, updated_at = now()
+      WHERE id = $4 AND status = 'Pending' AND approval_request_id = $5 RETURNING *`,
+    [clearedOn, reference, act?.approver_user_id ?? null, id, req.id])).rows[0];
+  if (!row) return; // already handled / cancelled
+  await writeAudit(tx, { actorId: act?.approver_user_id ? Number(act.approver_user_id) : null, action: 'locker.cheque.cleared', entityType: 'locker_cheques', entityId: id, after: { via: 'approval', request_id: req.id } });
+  // Settle the leg on LockerHub (§A18). tx is a Db, so this runs in the same
+  // transaction; it never throws — a their-side failure is recorded on the row
+  // and retryable, exactly as before.
+  const approver = (await tx.query<{ id: string; full_name: string; email: string; role: string }>(
+    'SELECT u.id, u.full_name, u.email, r.name AS role FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = $1',
+    [row.settled_by_user_id])).rows[0];
+  await settleOnLockerHub(tx, {
+    id: Number(approver?.id ?? 0), fullName: approver?.full_name ?? 'NCD checker',
+    email: approver?.email ?? '', role: (approver?.role ?? 'admin') as AuthUser['role'],
+  } as AuthUser, shape(row));
+});
+
+/** On rejection: drop the open approval; the cheque stays Pending (re-submit or bounce). */
+registerOnReject('locker_cheque_clearance', async (tx, req) => {
+  const id = req.metadata.cheque_id ? Number(req.metadata.cheque_id) : (req.entity_id ? Number(req.entity_id) : null);
+  if (!id) return;
+  await tx.query('UPDATE locker_cheques SET approval_request_id = NULL, updated_at = now() WHERE id = $1 AND approval_request_id = $2', [id, req.id]);
+});
 
 /**
  * Push a cleared cheque to LockerHub (§A18) and record what happened.

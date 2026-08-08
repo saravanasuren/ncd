@@ -18,6 +18,7 @@ import { CustomersPage } from './pages/Customers.js';
 import { CustomerDetailPage } from './pages/CustomerDetail.js';
 import { LockerEnrollmentPage } from './pages/LockerEnrollment.js';
 import { LockerTenantsPage } from './pages/LockerTenants.js';
+import { LockerProfilePage } from './pages/LockerProfile.js';
 import { LockerRenewalsPage } from './pages/LockerRenewals.js';
 import { LockerVisitsPage } from './pages/LockerVisits.js';
 import { ApprovalsPage } from './pages/Approvals.js';
@@ -30,6 +31,7 @@ import { PersonDetailPage } from './pages/PersonDetail.js';
 import { AllotmentsPage } from './pages/Allotments.js';
 import { PayoutsPage } from './pages/Payouts.js';
 import { EscrowPage } from './pages/Escrow.js';
+import { MaturityAlertsPage } from './pages/MaturityAlerts.js';
 import { TdsThresholdPage } from './pages/TdsThreshold.js';
 import { MyEarningsPage } from './pages/MyEarnings.js';
 import { RedemptionsPage } from './pages/Redemptions.js';
@@ -111,6 +113,7 @@ export function App() {
           <Route path="people/:type/:id" element={<RequirePerm perm="dashboard:drilldown"><PersonDetailPage /></RequirePerm>} />
           <Route path="locker-enrollment" element={<RequirePerm perm="lockers:enroll"><LockerEnrollmentPage /></RequirePerm>} />
           <Route path="locker-tenants" element={<RequirePerm perm="lockers:enroll"><LockerTenantsPage /></RequirePerm>} />
+          <Route path="lockers/:applicationId" element={<RequirePerm perm="lockers:enroll"><LockerProfilePage /></RequirePerm>} />
           <Route path="locker-renewals" element={<RequirePerm perm="lockers:enroll"><LockerRenewalsPage /></RequirePerm>} />
           <Route path="locker-visits" element={<RequirePerm perm="lockers:enroll"><LockerVisitsPage /></RequirePerm>} />
           <Route path="applications" element={<RequirePerm perm="customers:read"><ApplicationsPage /></RequirePerm>} />
@@ -121,6 +124,7 @@ export function App() {
           <Route path="allotments" element={<RequirePerm perm="allotments:execute"><AllotmentsPage /></RequirePerm>} />
           <Route path="redemptions" element={<RequirePerm perm="redemptions:initiate"><RedemptionsPage /></RequirePerm>} />
           <Route path="ncd-events" element={<RequirePerm perm="redemptions:initiate"><EventsPage /></RequirePerm>} />
+          <Route path="maturity-alerts" element={<RequirePerm perm="dashboard:view"><MaturityAlertsPage /></RequirePerm>} />
           <Route path="masters" element={<RequirePerm perm="products:manage"><MastersPage /></RequirePerm>} />
           <Route path="payouts" element={<RequirePerm perm="payouts:generate"><PayoutsPage /></RequirePerm>} />
           <Route path="escrow" element={<RequirePerm perm="escrow:reconcile"><EscrowPage /></RequirePerm>} />

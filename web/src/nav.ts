@@ -31,6 +31,7 @@ export const NAV: NavItem[] = [
   { to: '/app/allotments', label: 'Allotments', anyOf: ['allotments:execute'], group: 'Periodic' },
   { to: '/app/redemptions', label: 'Redemptions', anyOf: ['redemptions:initiate'], group: 'Periodic' },
   { to: '/app/ncd-events', label: 'NCD Events', anyOf: ['redemptions:initiate'], group: 'Periodic' },
+  { to: '/app/maturity-alerts', label: 'Maturity Alerts', anyOf: ['dashboard:view'], group: 'Periodic' },
   { to: '/app/payouts', label: 'Payouts', anyOf: ['payouts:generate'], group: 'Periodic' },
   { to: '/app/escrow', label: 'Escrow', anyOf: ['escrow:reconcile'], group: 'Periodic' },
   { to: '/app/tds-threshold', label: 'TDS ₹30L Crossings', anyOf: ['approvals:check-premature'], group: 'Periodic' },

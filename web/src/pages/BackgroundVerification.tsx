@@ -57,6 +57,7 @@ export function BackgroundVerificationPage() {
   const [q, setQ] = useState('');
   const [kyc, setKyc] = useState('');
   const [seriesId, setSeriesId] = useState('');
+  const [missing, setMissing] = useState('');
   const [msg, setMsg] = useState('');
   const [edit, setEdit] = useState<{ cid: number; key: string; label: string; value: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -101,8 +102,39 @@ export function BackgroundVerificationPage() {
 
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Could not load background verification.</div>;
-  const rows = data?.rows ?? [];
+  const allRows = data?.rows ?? [];
   const c = data?.counters ?? {};
+
+  // Filter by a specific missing/pending requirement (client-side — the grid
+  // already carries every check). A row "has X pending" when that check isn't
+  // valid, or the required document isn't on file.
+  const MISSING_OPTS: { key: string; label: string }[] = [
+    { key: 'bank', label: 'Bank account missing' },
+    { key: 'demat', label: 'Demat missing' },
+    { key: 'pan', label: 'PAN pending' },
+    { key: 'aadhaar', label: 'Aadhaar pending' },
+    { key: 'address', label: 'Address missing' },
+    { key: 'photo', label: 'Photo missing' },
+    { key: 'signature', label: 'Signature missing' },
+    { key: 'address_proof', label: 'Address proof missing' },
+    { key: 'nominee', label: 'Nominee missing' },
+  ];
+  const dc = (r: Row, k: string) => r.data_checks.find((x) => x.key === k);
+  const rowPending = (r: Row, key: string): boolean => {
+    switch (key) {
+      case 'bank': return !dc(r, 'bank_account_number')?.valid;
+      case 'demat': return !dc(r, 'depository')?.valid || !dc(r, 'demat_dp_id')?.present || !dc(r, 'demat_client_id')?.present;
+      case 'pan': return !dc(r, 'pan')?.valid || !r.docs?.PAN;
+      case 'aadhaar': return !dc(r, 'aadhaar')?.valid;
+      case 'address': return !dc(r, 'address')?.present;
+      case 'photo': return !r.docs?.Photo;
+      case 'signature': return !r.docs?.Signature;
+      case 'address_proof': return !r.docs?.AddressProof;
+      case 'nominee': return !dc(r, 'nominee')?.valid;
+      default: return true;
+    }
+  };
+  const rows = missing ? allRows.filter((r) => rowPending(r, missing)) : allRows;
 
   return (
     <div className="w-full">
@@ -122,6 +154,11 @@ export function BackgroundVerificationPage() {
           <option value="Verified">Verified</option>
           <option value="Rejected">Rejected</option>
         </select>
+        <select value={missing} onChange={(e) => setMissing(e.target.value)} className="px-2.5 py-1.5 text-sm border border-border-strong rounded">
+          <option value="">Any requirement</option>
+          {MISSING_OPTS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+        </select>
+        {missing && <span className="text-xs text-text-muted">{rows.length} of {allRows.length} shown</span>}
       </div>
 
       <div className="flex flex-wrap gap-2 mb-3 text-xs">

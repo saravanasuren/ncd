@@ -290,9 +290,13 @@ export function LockerTenantsPage() {
               {rows.map((r) => (
                 <tr key={r.tenant_id || r.lockerhub_application_id || r.application_no} className="border-b border-border last:border-0">
                   <td className="py-2 pr-3">
-                    {r.customer_id
-                      ? <Link to={`/app/customers/${r.customer_id}`} className="text-primary hover:underline">{r.tenant_name ?? '—'}</Link>
-                      : (r.tenant_name ?? '—')}
+                    {/* The name opens the complete locker profile (owner
+                        2026-08-07) — the customer is linked from inside it. */}
+                    {r.lockerhub_application_id
+                      ? <Link to={`/app/lockers/${encodeURIComponent(r.lockerhub_application_id)}`} className="text-primary hover:underline" title="Open the complete locker profile">{r.tenant_name ?? '—'}</Link>
+                      : r.customer_id
+                        ? <Link to={`/app/customers/${r.customer_id}`} className="text-primary hover:underline">{r.tenant_name ?? '—'}</Link>
+                        : (r.tenant_name ?? '—')}
                     {r.ncd_backed && <span className="ml-1.5 text-[10px] rounded px-1 py-0.5 bg-primary/10 text-primary align-middle">NCD</span>}
                     <div className="text-xs text-text-muted">
                       {r.tenant_phone ?? ''} {r.customer_code ? `· ${r.customer_code}` : ''}

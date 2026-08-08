@@ -5,6 +5,7 @@ import { formatINR, paymentMethodOptions } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { ReferredByPicker } from '../components/ReferredByPicker.js';
 import { APPROVAL_TYPE_LABELS as TYPE_LABELS } from '../labels.js';
+import { useAuth } from '../auth/AuthContext.js';
 
 interface ApprovalReq {
   id: number;
@@ -209,6 +210,82 @@ function AppInvestmentNotice({ appId, amount, needsAttribution, referredBy, onDo
   );
 }
 
+/** Maker step for locker cheques: "funds cleared" raises an Admin/CXO approval
+ *  (which then clears + settles on LockerHub), "did not clear" bounces it. All
+ *  cheque handling lives on this page (owner 2026-08-07); the raised approval
+ *  appears in the queue below. Hidden when there are no pending cheques. */
+function ChequeClearanceMaker({ onMsg }: { onMsg: (m: string) => void }) {
+  const { can } = useAuth();
+  const { promptText } = useConfirm();
+  const qc = useQueryClient();
+  const cheques = useQuery({ queryKey: ['locker-cheques-pending'], queryFn: () => api.get<{ rows: any[] }>('/api/lockers/cheques?status=Pending') });
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['locker-cheques-pending'] }); qc.invalidateQueries({ queryKey: ['approvals'] }); };
+
+  const submit = useMutation({
+    mutationFn: async (id: number) => {
+      const on = await promptText({ title: 'Mark this cheque cleared', label: 'Date the funds cleared in the bank', inputType: 'date', defaultValue: new Date().toISOString().slice(0, 10), minLength: 10, confirmLabel: 'Next' });
+      if (!on) return null;
+      const ref = await promptText({ title: 'Bank reference', body: 'Optional — leave blank if you do not have one.', label: 'Reference', minLength: 0, confirmLabel: 'Send for approval' });
+      if (ref === null) return null;
+      return api.post(`/api/lockers/cheques/${id}/clear`, { cleared_on: on, reference: ref.trim() || undefined });
+    },
+    onSuccess: (r) => { if (r) { onMsg('Sent to Approvals — an Admin/CXO confirms it, which clears the cheque and settles the leg on LockerHub.'); refresh(); } },
+    onError: (e) => onMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const bounce = useMutation({
+    mutationFn: async (id: number) => {
+      const reason = await promptText({ title: 'Cheque did not clear', body: 'Bounced, or withdrawn by the customer?', label: 'Reason', confirmLabel: 'Record', danger: true });
+      if (!reason) return null;
+      return api.post(`/api/lockers/cheques/${id}/bounce`, { reason });
+    },
+    onSuccess: (r) => { if (r) { onMsg(''); refresh(); } },
+    onError: (e) => onMsg(e instanceof ApiError ? e.message : 'Failed'),
+  });
+
+  const rows = cheques.data?.rows ?? [];
+  if (!rows.length) return null;
+  const canAct = can('applications:confirm-collection');
+
+  return (
+    <div className="mb-5">
+      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Cheques awaiting clearance <span className="text-text-muted">({rows.length})</span></h2>
+      <p className="text-xs text-text-muted -mt-1 mb-2">A cheque cleared the bank? Mark it here — it goes to an Admin/CXO for approval, and only then settles the locker leg on LockerHub.</p>
+      <div className="bg-surface border border-border rounded-lg shadow-card overflow-x-auto">
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="text-left text-xs text-text-label uppercase tracking-wide border-b border-border">
+              <th className="py-2 px-4">Customer</th><th className="py-2 pr-3">Locker app</th><th className="py-2 pr-3">Leg</th>
+              <th className="py-2 pr-3 text-right">Amount</th><th className="py-2 pr-3">Cheque</th><th className="py-2 pr-3">Received</th><th className="pr-4" />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((q) => (
+              <tr key={q.id} className="border-b border-border last:border-0">
+                <td className="py-2 px-4">{q.customer_name ?? '—'} <span className="font-mono text-xs text-text-muted">{q.customer_code ?? ''}</span></td>
+                <td className="py-2 pr-3 font-mono text-xs">{q.lockerhub_application_id}</td>
+                <td className="py-2 pr-3">{q.leg}</td>
+                <td className="py-2 pr-3 text-right mono">{formatINR(q.amount)}</td>
+                <td className="py-2 pr-3 font-mono text-xs">{q.cheque_no}{q.bank_name ? ` · ${q.bank_name}` : ''}</td>
+                <td className="py-2 pr-3 text-xs text-text-muted">{q.received_on}</td>
+                <td className="py-2 pr-4 text-right whitespace-nowrap">
+                  {q.approval_request_id
+                    ? <span className="text-xs text-warn">awaiting approval below</span>
+                    : canAct ? (
+                      <>
+                        <button className="text-xs text-primary hover:underline mr-3" disabled={submit.isPending} onClick={() => submit.mutate(q.id)}>Funds cleared</button>
+                        <button className="text-xs text-danger hover:underline" disabled={bounce.isPending} onClick={() => bounce.mutate(q.id)}>Did not clear</button>
+                      </>
+                    ) : <span className="text-xs text-text-muted">awaiting confirmation</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export function ApprovalsPage() {
   const { promptText } = useConfirm();
   const qc = useQueryClient();
@@ -233,6 +310,8 @@ export function ApprovalsPage() {
       <h1 className="text-xl font-bold tracking-tight m-0">Approvals</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Requests waiting on a checker. You can't approve your own submissions.</p>
       {msg && <div className="text-xs text-danger mb-3">{msg}</div>}
+      <ChequeClearanceMaker onMsg={setMsg} />
+
       {groupsOf(data!.rows).map(([type, rows]) => (
       <div key={type} className="mb-5">
         <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">

@@ -128,6 +128,14 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Locker Fee Waiver',
     levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
   },
+  // A locker cheque cleared the bank — a maker marks it, a checker confirms, and
+  // only then does the leg settle on LockerHub. Real money against paper that
+  // could have bounced, so the checker is the control: Admin / CXO.
+  locker_cheque_clearance: {
+    type: 'locker_cheque_clearance',
+    label: 'Locker Cheque Clearance',
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
+  },
   // Customer crossed the ₹30L outstanding threshold → becomes TDS-applicable and
   // TDS on already-paid interest is recovered once. Tax control → Admin/CXO.
   tds_threshold: {

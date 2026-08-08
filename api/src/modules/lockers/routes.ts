@@ -23,6 +23,10 @@ import { createWaiver, cancelWaiver } from './waivers.js';
 // locker_fee_waiver approval hooks, and a lazy import would leave an approval
 // silently side-effect-free until the first waiver request after a restart.
 import './feeWaivers.js';
+// Static for the same reason: registers the locker_cheque_clearance approval
+// hooks at boot, so approving a cheque clearance works on a fresh restart even
+// before any cheque route is hit.
+import './cheques.js';
 import { linkTenant, removeTenant, restoreTenant } from './tenantOverrides.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
@@ -173,7 +177,16 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
     const { buildApplicantBlock } = await import('./applicant.js');
     applicant = (await buildApplicantBlock(getDb(), customer_id)) ?? undefined;
   }
-  res.status(201).json(await lh.createLockerApplication(staffOf(req), { ...input, ...(applicant ? { applicant } : {}) }));
+  // NCD owns locker pricing (owner 2026-08-07): send our configured deposit/rent
+  // for this size. LockerHub honouring them is a pending contract change
+  // (LOCKERHUB-CR §7); until then they fall back to their own figures.
+  const { lockerPricingFor } = await import('../products/service.js');
+  const pricing = await lockerPricingFor(getDb(), b.locker_size);
+  const priceFields: Record<string, number> = {};
+  if (pricing?.deposit_amount != null) priceFields.deposit_amount = pricing.deposit_amount;
+  if (pricing?.annual_rent != null) priceFields.annual_rent = pricing.annual_rent;
+
+  res.status(201).json(await lh.createLockerApplication(staffOf(req), { ...input, ...priceFields, ...(applicant ? { applicant } : {}) }));
 }));
 
 lockersRouter.post('/applications/:id/payment-link', asyncHandler(async (req, res) => {
@@ -220,13 +233,36 @@ lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) =
       after: { reason: b.override.reason, approved_by: b.override.approved_by, locker_id: b.locker_id ?? null },
     });
   }
+  let result: Record<string, unknown>;
   try {
-    res.json(await lh.allocate(staffOf(req), String(req.params.id), b));
+    result = await lh.allocate(staffOf(req), String(req.params.id), b) as Record<string, unknown>;
   } catch (e) {
     const detail = (e as { detail?: { already?: boolean } }).detail;
     if (detail?.already === true) { res.json({ ...detail, success: true, already: true }); return; }
     throw e;
   }
+  // The booking is complete → confirm it to the customer on WhatsApp (owner
+  // 2026-08-07). Best-effort and only AFTER a real allocation: never block or
+  // fail the response on a notify error, and inert until an approved template
+  // is configured (WAPPCLOUD_LOCKER_TEMPLATE), so it can't misfire silently.
+  void (async () => {
+    try {
+      const { enqueue } = await import('../notifications/service.js');
+      const { formatPhone } = await import('../../integrations/notify/wappcloud.js');
+      const t = (result.tenant ?? result) as Record<string, unknown>;
+      const phone = formatPhone(String(t.phone ?? t.tenant_phone ?? ''));
+      if (!phone) return;
+      await enqueue(getDb(), {
+        channel: 'whatsapp', template: 'locker_booked', to: phone,
+        payload: {
+          name: t.name ?? t.tenant_name ?? '',
+          locker_no: t.locker_no ?? t.locker_number ?? (b.locker_id ?? ''),
+          branch: t.branch_name ?? t.branch ?? '',
+        },
+      });
+    } catch (e) { console.warn('[locker] booking WhatsApp enqueue failed (non-fatal):', (e as Error).message); }
+  })();
+  res.json(result);
 }));
 
 // ── Deposit links: back a locker's deposit with an NCD investment ──────────
@@ -250,6 +286,13 @@ lockersRouter.get('/customers/:customerId/lockers', asyncHandler(async (req, res
 // Branch-scoped for branch_staff (owner 2026-07-24): "only those staffs who
 // are assigned to those specific branch gets to look only that particular
 // branch portfolio." See branchScope.ts for who is restricted and why.
+// The complete picture of one locker/tenancy — NCD backing, cheques + clearance,
+// waivers, and the LockerHub-live locker/payment/e-sign facts, in one place.
+lockersRouter.get('/profile', asyncHandler(async (req, res) => {
+  const { lockerProfile } = await import('./profile.js');
+  res.json(await lockerProfile(getDb(), String(req.query.application_id ?? '')));
+}));
+
 lockersRouter.get('/tenants', asyncHandler(async (req, res) => {
   const { lockerTenants } = await import('./deposits.js');
   const { lockerBranchScopeFor } = await import('./branchScope.js');
@@ -548,11 +591,14 @@ lockersRouter.post('/cheques', asyncHandler(async (req, res) => {
   }));
 }));
 
+// "Funds cleared" is now a MAKER action: it raises a locker_cheque_clearance
+// approval (Admin/CXO). The cheque clears + settles on LockerHub only when the
+// checker approves it (see cheques.ts). Same maker permission as before.
 lockersRouter.post('/cheques/:id/clear', requirePermission('applications:confirm-collection'),
   asyncHandler(async (req, res) => {
     const b = z.object({ cleared_on: z.string().min(4), reference: z.string().nullish() }).parse(req.body ?? {});
-    const { clearCheque } = await import('./cheques.js');
-    res.json(await clearCheque(getDb(), req.user!, Number(req.params.id), { clearedOn: b.cleared_on, reference: b.reference ?? null }));
+    const { requestClearance } = await import('./cheques.js');
+    res.status(201).json(await requestClearance(getDb(), req.user!, Number(req.params.id), { clearedOn: b.cleared_on, reference: b.reference ?? null }));
   }));
 
 // Retry a settlement that failed after the cheque cleared (§A18 is idempotent).

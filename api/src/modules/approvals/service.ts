@@ -569,6 +569,29 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
     };
   }
 
+  if (id && req.entity_type === 'locker_cheques') {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT q.lockerhub_application_id, q.leg, q.amount, q.cheque_no, q.bank_name, q.cleared_on, q.reference,
+              COALESCE(c.full_name, q.applicant_name) AS customer, c.customer_code
+         FROM locker_cheques q LEFT JOIN customers c ON c.id = q.customer_id
+        WHERE q.id = $1`, [id])).rows[0];
+    if (r) return {
+      subject: `${r.customer ?? 'Locker applicant'} · ${r.leg} cheque`,
+      amount: money(r.amount),
+      facts: clean([
+        fact('Applicant', r.customer ? `${r.customer}${r.customer_code ? ` (${r.customer_code})` : ''}` : null),
+        fact('Leg', r.leg),
+        fact('Amount', r.amount),
+        fact('Cheque no.', r.cheque_no),
+        fact('Bank', r.bank_name),
+        fact('Cleared on', dateOnly(r.cleared_on) ?? (meta.cleared_on ? dateOnly(meta.cleared_on) : null)),
+        fact('Bank reference', r.reference ?? meta.reference),
+        fact('Locker application', r.lockerhub_application_id),
+        fact('On approval', 'Cheque marked Cleared and the leg settled on LockerHub'),
+      ]),
+    };
+  }
+
   if (id && req.entity_type === 'payout_batches') {
     const r = (await db.query<Record<string, unknown>>(
       `SELECT b.payout_date, b.total_net, b.status,

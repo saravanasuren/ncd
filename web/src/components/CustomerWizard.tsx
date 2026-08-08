@@ -490,7 +490,16 @@ export function CustomerWizard(
                 </div>
               </Field>
               <div className="sm:col-span-2"><FilePick label="Nominee KYC photo" hint="Aadhaar / PAN scan of the nominee (image or PDF)" file={files.nominee_kyc} onPick={(x) => setFile('nominee_kyc', x)} /></div>
-              <div className="sm:col-span-2"><Field label="Nominee address"><textarea className={inp} rows={2} value={f.nom_address} onChange={(e) => set({ nom_address: e.target.value })} /></Field></div>
+              <div className="sm:col-span-2">
+                <Field label="Nominee address">
+                  <label className="flex items-center gap-1.5 text-xs text-text-muted mb-1 cursor-pointer">
+                    <input type="checkbox"
+                      onChange={(e) => { if (e.target.checked) set({ nom_address: [f.address, f.city, f.district, f.state, f.pincode].map((x) => String(x || '').trim()).filter(Boolean).join(', ') }); }} />
+                    Same as customer address
+                  </label>
+                  <textarea className={inp} rows={2} value={f.nom_address} onChange={(e) => set({ nom_address: e.target.value })} />
+                </Field>
+              </div>
               <Field label="Guardian name (if minor)"><input className={inp} value={f.guardian_name} onChange={(e) => set({ guardian_name: e.target.value })} /></Field>
               <Field label="Guardian PAN (if minor)"><input className={`${inp} uppercase`} value={f.guardian_pan} onChange={(e) => set({ guardian_pan: e.target.value.toUpperCase() })} /></Field>
             </div>

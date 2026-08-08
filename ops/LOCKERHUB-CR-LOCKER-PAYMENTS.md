@@ -85,6 +85,17 @@ enrollment screen says so). Please confirm the updated deposit amounts are live 
 `/locker-availability` / the application legs, so NCD and the app show the right
 figures.
 
+## 6. **[pricing ownership change]** Accept NCD-supplied deposit/rent on create
+
+Owner decision (2026-08-07): **NCD now owns locker pricing** — deposit + rent per
+size are configured in NCD (Masters → Locker pricing) and NCD sends them on
+**A7 create-locker-application** as `deposit_amount` and `annual_rent`.
+
+Please have A7 **honour these when present** (fall back to your own figures when
+omitted), so the amount on the locker legs is the one NCD configured. Until this
+ships, NCD sends the fields but they're ignored — the figures diverge, which is
+the gap this closes.
+
 ---
 
 ### Summary

@@ -248,7 +248,10 @@ export const upsertCustomer = (staff: ActingStaff, profile: Record<string, unkno
  */
 export const createLockerApplication = (
   staff: ActingStaff,
-  input: { phone: string; name?: string; email?: string; branch_id: string; locker_size: string; applicant?: Record<string, unknown> },
+  input: { phone: string; name?: string; email?: string; branch_id: string; locker_size: string; applicant?: Record<string, unknown>;
+    // NCD-owned pricing sent on create (owner 2026-08-07). LockerHub honouring
+    // these is a pending contract change; omitted when unset.
+    deposit_amount?: number; annual_rent?: number },
 ) => lhFetch<Record<string, unknown>>('POST', '/locker-applications', { body: { ...input, staff } });
 
 export const paymentLink = (staff: ActingStaff, applicationId: string, leg: 'rent' | 'deposit') =>

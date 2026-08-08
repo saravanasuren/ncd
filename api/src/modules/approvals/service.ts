@@ -521,21 +521,29 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
   if (id && req.entity_type === 'tds_threshold_events') {
     const r = (await db.query<Record<string, unknown>>(
       `SELECT e.outstanding_at_crossing, e.crossed_on, e.interest_paid_untaxed, e.tds_rate_pct, e.tds_to_recover,
-              c.full_name AS customer, c.customer_code
+              e.source, e.is_estimate, c.full_name AS customer, c.customer_code
          FROM tds_threshold_events e JOIN customers c ON c.id = e.customer_id WHERE e.id = $1`, [id])).rows[0];
     if (r) {
       const inr = (v: unknown) => `₹${Number(v ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      // Raised by the enrolment prompt rather than the scan: the customer is
+      // ALREADY TDS-applicable (the prompt flipped them), so this card is only
+      // about collecting the past TDS — and the figure is approximate, because a
+      // single flat rate over all interest paid may not match what history would
+      // have deducted payout by payout. The checker verifies before approving.
+      const estimate = Boolean(r.is_estimate);
       return {
-        subject: `${r.customer}${r.customer_code ? ` (${r.customer_code})` : ''} — TDS now applicable`,
+        subject: `${r.customer}${r.customer_code ? ` (${r.customer_code})` : ''} — ${estimate ? 'recover TDS on interest already paid' : 'TDS now applicable'}`,
         amount: Number(r.tds_to_recover),
         facts: clean([
           fact('Customer', `${r.customer}${r.customer_code ? ` (${r.customer_code})` : ''}`),
           fact('Current outstanding', inr(r.outstanding_at_crossing)),
           fact('Threshold crossed on', toISODate(r.crossed_on as string | null)),
-          fact('TDS status', 'Not Applicable → Applicable'),
+          fact('TDS status', estimate ? 'Already Applicable (set at enrolment)' : 'Not Applicable → Applicable'),
+          fact('Raised by', r.source === 'enrolment' ? 'the >₹30L prompt at enrolment' : 'the nightly ₹30L scan'),
           fact('Interest already paid (untaxed)', inr(r.interest_paid_untaxed)),
           fact('TDS rate', `${Number(r.tds_rate_pct)}%`),
-          fact('TDS to recover', inr(r.tds_to_recover)),
+          fact(estimate ? 'TDS to recover (approximate)' : 'TDS to recover', inr(r.tds_to_recover)),
+          estimate ? fact('Please check', 'This is a rough figure — a flat rate on the total interest already paid. The TDS actually due may differ payout by payout. Verify against the customer\'s interest history before approving.') : null,
           fact('Applied in', 'the next interest payout batch (one-time deduction)'),
         ]),
       };

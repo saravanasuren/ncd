@@ -7,7 +7,7 @@
  * one-time Approved Deduction that the next interest batch consumes exactly once.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, requiredInvestmentFields, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -101,5 +101,91 @@ describe('TDS threshold', () => {
     await a.post('/api/tds/scan');
     const n = (await ctx.db.query("SELECT count(*)::int AS c FROM tds_threshold_events e JOIN customers cu ON cu.id=e.customer_id WHERE cu.full_name='TDS Under'")).rows[0] as any;
     expect(Number(n.c)).toBe(0);
+  });
+
+  // A rejection used to mean nothing: the 6-hourly cron re-raised the same
+  // approval within hours, forever. Rejected is now final until reopened.
+  it('a rejected crossing is not re-raised, and reopening puts it back in scope', async () => {
+    const a = await admin();
+    const { customerId } = await setup('TDS Reject', '9847000004', 'PQRST5555Z', 3200000, 100000);
+
+    await a.post('/api/tds/scan');
+    const ev = (await ctx.db.query('SELECT id, approval_request_id FROM tds_threshold_events WHERE customer_id = $1', [customerId])).rows[0] as any;
+    const rej = await a.post(`/api/approvals/${ev.approval_request_id}/reject`, { reason: 'Form 15H on file — do not recover.' });
+    expect(rej.status).toBe(200);
+    expect((await ctx.db.query('SELECT status FROM tds_threshold_events WHERE id = $1', [ev.id])).rows[0]).toMatchObject({ status: 'Rejected' });
+
+    // The customer is still over the threshold and still not-applicable, but a
+    // rescan must NOT ask again.
+    await a.post('/api/tds/scan');
+    const afterRescan = (await ctx.db.query('SELECT count(*)::int AS c FROM tds_threshold_events WHERE customer_id = $1', [customerId])).rows[0] as any;
+    expect(Number(afterRescan.c)).toBe(1);
+
+    // Reopening is the deliberate way back — the next scan raises a fresh one.
+    const re = await a.post(`/api/tds/events/${ev.id}/reopen`, {});
+    expect(re.status).toBe(200);
+    await a.post('/api/tds/scan');
+    const afterReopen = (await ctx.db.query("SELECT count(*)::int AS c FROM tds_threshold_events WHERE customer_id = $1 AND status = 'PendingApproval'", [customerId])).rows[0] as any;
+    expect(Number(afterReopen.c)).toBe(1);
+
+    // Only a rejected event can be reopened.
+    const bad = await a.post(`/api/tds/events/${ev.id}/reopen`, {});
+    expect(bad.status).toBe(400);
+  });
+
+  // The OTHER door into TDS-applicable: staff answer "yes" to the >₹30L prompt at
+  // enrolment. That flipped the flag and collected nothing — the recovery now
+  // rides along, flagged as an estimate.
+  it('the >₹30L prompt at enrolment also raises the recovery, marked approximate', async () => {
+    const a = await admin();
+    const { customerId } = await setup('TDS Prompt', '9847000005', 'LMNOP1111Q', 500000, 300000);
+    // Below the threshold, so the scan ignores them — only the prompt applies.
+    await a.post('/api/tds/scan');
+    expect(Number((await ctx.db.query('SELECT count(*)::int AS c FROM tds_threshold_events WHERE customer_id = $1', [customerId])).rows[0] as any).c ?? 0).toBe(0);
+
+    const create = await a.post('/api/applications', {
+      ...requiredInvestmentFields(),
+      customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 3100000,
+      collection_reference: 'TDS-PROMPT-1',
+      mark_customer_tds: true,
+    });
+    expect(create.status).toBe(201);
+
+    // Flag flipped immediately (unchanged behaviour) …
+    expect((await ctx.db.query('SELECT tds_applicable FROM customers WHERE id = $1', [customerId])).rows[0]).toMatchObject({ tds_applicable: true });
+    // … and the recovery on the ₹3L already paid untaxed is now on the table.
+    const ev = (await ctx.db.query('SELECT source, is_estimate, interest_paid_untaxed, tds_rate_pct, tds_to_recover, status FROM tds_threshold_events WHERE customer_id = $1', [customerId])).rows[0] as any;
+    expect(ev.source).toBe('enrolment');
+    expect(ev.is_estimate).toBe(true);
+    expect(Number(ev.interest_paid_untaxed)).toBe(300000);
+    expect(Number(ev.tds_to_recover)).toBe(30000);        // 10% of ₹3,00,000, PAN on file
+    expect(ev.status).toBe('PendingApproval');            // nothing deducted until approved
+  });
+
+  it('the prompt raises nothing when no interest was ever paid untaxed', async () => {
+    const a = await admin();
+    const { customerId } = await setup('TDS PromptNil', '9847000006', 'RSTUV2222W', 500000, 0);
+    const create = await a.post('/api/applications', {
+      ...requiredInvestmentFields(),
+      customer_id: customerId, series_id: seriesId, scheme_id: schemeId, amount: 3100000,
+      collection_reference: 'TDS-PROMPT-2', mark_customer_tds: true,
+    });
+    expect(create.status).toBe(201);
+    expect(Number((await ctx.db.query('SELECT count(*)::int AS c FROM tds_threshold_events WHERE customer_id = $1', [customerId])).rows[0] as any).c ?? 0).toBe(0);
+  });
+
+  it('lists the crossings for the history page, newest first', async () => {
+    const a = await admin();
+    const all = await a.get('/api/tds/events');
+    expect(all.status).toBe(200);
+    expect(all.json.rows.length).toBeGreaterThan(0);
+    const first = all.json.rows[0];
+    expect(first).toHaveProperty('customer');
+    expect(first).toHaveProperty('source');
+    expect(first).toHaveProperty('is_estimate');
+
+    const applied = await a.get('/api/tds/events?status=Applied');
+    expect(applied.status).toBe(200);
+    expect(applied.json.rows.every((r: any) => r.status === 'Applied')).toBe(true);
   });
 });

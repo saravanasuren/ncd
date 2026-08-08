@@ -125,6 +125,17 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
         if (upd.rowCount) {
           await writeAudit(tx, { actorId: actor.id, action: 'customer.tds.on-large-investment', entityType: 'customers', entityId: input.customer_id,
             after: { tds_applicable: true, reason: `Investment of ₹${input.amount.toLocaleString('en-IN')} (> ₹30L) for a No-TDS customer — operator confirmed TDS applies` } });
+          // Flipping the flag only taxes interest FROM NOW ON. The TDS on interest
+          // already paid to them while exempt still has to be collected — the same
+          // recovery the nightly ₹30L scan raises. Without this, every customer who
+          // came through this prompt escaped the recovery entirely (owner 2026-08-08).
+          //
+          // The amount is an ESTIMATE: one flat rate over all interest already paid,
+          // where history may have taxed each payout differently. It goes to
+          // Approvals labelled as approximate for a human to check, and nothing is
+          // deducted until it is approved. Dynamic import keeps the module cycle out.
+          const { raiseEnrolmentTdsRecovery } = await import('../tds/service.js');
+          await raiseEnrolmentTdsRecovery(tx, input.customer_id, actor.id);
         }
       }
 

@@ -32,6 +32,7 @@ import { AllotmentsPage } from './pages/Allotments.js';
 import { PayoutsPage } from './pages/Payouts.js';
 import { EscrowPage } from './pages/Escrow.js';
 import { MaturityAlertsPage } from './pages/MaturityAlerts.js';
+import { TdsThresholdPage } from './pages/TdsThreshold.js';
 import { MyEarningsPage } from './pages/MyEarnings.js';
 import { RedemptionsPage } from './pages/Redemptions.js';
 import { IncentivesPage } from './pages/Incentives.js';
@@ -127,6 +128,7 @@ export function App() {
           <Route path="masters" element={<RequirePerm perm="products:manage"><MastersPage /></RequirePerm>} />
           <Route path="payouts" element={<RequirePerm perm="payouts:generate"><PayoutsPage /></RequirePerm>} />
           <Route path="escrow" element={<RequirePerm perm="escrow:reconcile"><EscrowPage /></RequirePerm>} />
+          <Route path="tds-threshold" element={<RequirePerm perm="approvals:check-premature"><TdsThresholdPage /></RequirePerm>} />
           <Route path="incentives" element={<RequirePerm perm="incentives:manage-eligibility"><IncentivesPage /></RequirePerm>} />
           <Route path="my-earnings" element={<RequirePerm perm="earnings:read-own"><MyEarningsPage /></RequirePerm>} />
           <Route path="settings" element={<RequirePerm perm={['settings:manage', 'settings:workflow-config']}><SettingsPage /></RequirePerm>} />

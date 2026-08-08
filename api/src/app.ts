@@ -38,6 +38,7 @@ import { webhooksRouter } from './modules/webhooks/routes.js';
 import { eventsRouter } from './modules/events/routes.js';
 import { statementsRouter } from './modules/statements/routes.js';
 import { escrowRouter } from './modules/escrow/routes.js';
+import { tdsRouter } from './modules/tds/routes.js';
 import { auditRouter, systemRouter } from './modules/admin/routes.js';
 import { importsRouter } from './modules/imports/routes.js';
 import { authLimiter, otpLimiter, writeLimiter, integrationLimiter } from './middleware/rateLimit.js';
@@ -110,6 +111,7 @@ export function createApp(): Express {
   app.use('/api/payouts', payoutsRouter);
   app.use('/api/bank-statements', statementsRouter);
   app.use('/api/escrow', escrowRouter);
+  app.use('/api/tds', tdsRouter);
   app.use('/api/redemptions', redemptionsRouter);
   app.use('/api/lockers', lockersRouter);
   app.use('/api/ncd-events', eventsRouter);

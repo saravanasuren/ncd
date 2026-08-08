@@ -96,6 +96,17 @@ async function startCrons(): Promise<void> {
     })().catch((e) => console.warn('[cron] book summary:', (e as Error).message));
   }, 15 * 60_000).unref();
 
+  // TDS threshold scan — a customer whose outstanding book crossed ₹30L becomes
+  // TDS-applicable; raise the recovery approval. Runs a few times a day (the
+  // partial-unique guard makes re-raising a no-op, so exact timing doesn't
+  // matter). The import also registers the tds_threshold approval handlers.
+  const { scanTdsThreshold } = await import('./modules/tds/service.js');
+  setInterval(() => {
+    void scanTdsThreshold(getDb())
+      .then((r) => { if (r.raised) console.log(`[cron] TDS threshold: raised ${r.raised} approval(s)`); })
+      .catch((e) => console.warn('[cron] tds threshold:', (e as Error).message));
+  }, 6 * 3600_000).unref();
+
   // Daily transaction-register email (owner 2026-08-05) — the Transactions
   // sheet, attached, once per IST day at/after the configured time. Everything
   // is UI config (Settings → Reports): off by default, its own send time, and

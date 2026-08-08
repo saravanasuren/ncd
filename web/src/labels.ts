@@ -72,6 +72,7 @@ export const APPROVAL_TYPE_LABELS: Record<string, string> = {
   locker_deposit_waiver: 'Locker Deposit Waiver',
   locker_fee_waiver: 'Locker Fee Waiver',
   locker_cheque_clearance: 'Locker Cheque Clearance',
+  tds_threshold: 'TDS Applicability (₹30L crossed)',
 };
 
 export function approvalTypeLabel(t: string): string {

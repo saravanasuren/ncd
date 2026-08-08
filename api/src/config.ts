@@ -49,6 +49,7 @@ const schema = z.object({
   WAPPCLOUD_OTP_TEMPLATE: z.string().optional(),
   WAPPCLOUD_INTEREST_TEMPLATE: z.string().optional(), // approved interest-paid template (default 'ncd_interest_final')
   WAPPCLOUD_ACK_TEMPLATE: z.string().optional(),      // approved acknowledgement template (default 'ncd_akn')
+  WAPPCLOUD_LOCKER_TEMPLATE: z.string().optional(),   // approved locker-booked template — inert until set
   WHATSAPP_TEST_PHONE: z.string().optional(), // redirects ALL WhatsApp sends while set
   // Pacing + retry for the notification queue. WappCloud rate-limits by IP —
   // ~90 back-to-back sends returns 429 "try again after 15 minutes" — so a

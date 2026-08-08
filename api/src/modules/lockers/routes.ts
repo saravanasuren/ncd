@@ -254,6 +254,13 @@ lockersRouter.get('/customers/:customerId/lockers', asyncHandler(async (req, res
 // Branch-scoped for branch_staff (owner 2026-07-24): "only those staffs who
 // are assigned to those specific branch gets to look only that particular
 // branch portfolio." See branchScope.ts for who is restricted and why.
+// The complete picture of one locker/tenancy — NCD backing, cheques + clearance,
+// waivers, and the LockerHub-live locker/payment/e-sign facts, in one place.
+lockersRouter.get('/profile', asyncHandler(async (req, res) => {
+  const { lockerProfile } = await import('./profile.js');
+  res.json(await lockerProfile(getDb(), String(req.query.application_id ?? '')));
+}));
+
 lockersRouter.get('/tenants', asyncHandler(async (req, res) => {
   const { lockerTenants } = await import('./deposits.js');
   const { lockerBranchScopeFor } = await import('./branchScope.js');

@@ -666,16 +666,16 @@ export function LockerEnrollmentPage() {
                   {leg === 'deposit' && !settled && (
                     ncdCust ? (
                       candidates === null ? (
-                        <button className={btnGhost} disabled={busy} onClick={loadCandidates}>or back it with an NCD investment…</button>
+                        <button className={btnGhost} disabled={busy} onClick={loadCandidates}>or back it with an investment…</button>
                       ) : candidates.length === 0 ? (
-                        <span className="text-xs text-text-muted">No live NCD of {ncdCust.full_name} has free amount to pledge.</span>
+                        <span className="text-xs text-text-muted">No live investment of {ncdCust.full_name} has free amount to pledge.</span>
                       ) : (
                         <>
                           <select className={inp} value={chosenNcd} onChange={(e) => setChosenNcd(e.target.value)}>
-                            <option value="">Back with an NCD…</option>
+                            <option value="">Back with an investment…</option>
                             {candidates.map((c) => (
                               <option key={c.id} value={String(c.id)} disabled={c.free <= 0}>
-                                {c.application_no} · {c.series_code} · {money(c.free)} free
+                                {c.application_no} · {c.product_type === 'subordinate_bond' ? 'Sub bond' : 'NCD'}{c.series_code ? ` ${c.series_code}` : ''} · {money(c.free)} free
                               </option>
                             ))}
                           </select>

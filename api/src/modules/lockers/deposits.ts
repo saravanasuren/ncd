@@ -263,17 +263,31 @@ export async function releaseLink(db: Db, actor: AuthUser, linkId: number, reaso
 export async function linkCandidates(db: Db, customerId: number) {
   const rows = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.application_no, a.status, s.code AS series_code,
+            a.product_type, sp.code AS sob_product_code,
             COALESCE((SELECT sum(al.outstanding_amount) FROM application_lines al
                        WHERE al.application_id = a.id AND al.status = 'Active'), a.total_amount) AS outstanding,
             COALESCE((SELECT sum(l.linked_amount) FROM locker_deposit_links l
                        WHERE l.application_id = a.id AND l.status = 'active'), 0) AS linked
-       FROM applications a JOIN series s ON s.id = a.series_id
+       -- LEFT, and a sob_products join beside it: the owner confirmed a locker
+       -- deposit may be pledged against "ncd or sbu debt. either of them"
+       -- (2026-08-10). An inner join to series silently hid every subordinate
+       -- bond from the picker, so the choice existed in the rules but not on
+       -- the screen. linkDeposit itself already worked for one (it reads the
+       -- applications table directly), so this was the only thing in the way.
+       FROM applications a
+       LEFT JOIN series s ON s.id = a.series_id
+       LEFT JOIN sob_products sp ON sp.id = a.sob_product_id
       WHERE a.customer_id = $1 AND a.archived_at IS NULL AND a.status = 'Active'
       ORDER BY a.id DESC`, [customerId])).rows;
   return rows.map((r) => {
     const outstanding = Number(r.outstanding), linked = Number(r.linked);
     return {
-      id: Number(r.id), application_no: r.application_no, series_code: r.series_code, status: r.status,
+      id: Number(r.id), application_no: r.application_no, status: r.status,
+      product_type: (r.product_type as string) ?? 'ncd',
+      // The picker shows ONE label per row: an NCD is identified by its series,
+      // a subordinate bond by its product. Falling back to the other product's
+      // field would print a blank next to a real amount of money.
+      series_code: r.series_code ?? r.sob_product_code ?? null,
       outstanding, linked, free: Math.max(0, Number((outstanding - linked).toFixed(2))),
     };
   });

@@ -19,14 +19,74 @@
 import PDFDocument from 'pdfkit';
 import type { Db } from '../../../db/types.js';
 import { errors } from '../../../lib/errors.js';
-import { nextCode, nextSeq } from '../../../lib/sequences.js';
-import { formatNumber } from '../../../lib/numbering.js';
+import { nextSeq, isUniqueViolation } from '../../../lib/sequences.js';
+import { formatNumber, DEFAULT_NUMBER_FORMATS } from '../../../lib/numbering.js';
 import { getCompanyProfile, getBondSignature } from '../../products/service.js';
 import { companyHeader, COMPANY, LOGO_PATH, HAS_LOGO, customerAddress, addressColumns } from './shared.js';
 
 /** Only an issued investment carries a certificate — a pending application must
  * never burn a certificate number (mirrors wealth's gate). */
 const ISSUABLE = new Set(['Active', 'Matured', 'Redeemed', 'RolledOver']);
+
+/** Consolidated certificate number. Its own run, so it can never collide with
+ * the per-investment `BC-` series even though both count from 1. */
+const CONSOLIDATED_BOND_FORMAT = 'CB-{yyyy}-{seq:6}';
+
+/**
+ * How many numbers we will step past before giving up. Only ever consumed when
+ * the counter is sitting behind numbers already issued, which migration 067
+ * heals — so in practice the first attempt always wins.
+ */
+const MAX_SERIAL_ATTEMPTS = 50;
+
+/**
+ * Allocate a certificate number and claim it, with the hard guarantee the owner
+ * asked for (2026-08-10): **a number is never issued twice**.
+ *
+ * Three things have to be true at once, and each is enforced by a different
+ * layer, so no single mistake can produce a duplicate:
+ *
+ *   1. The counter hands out one value per call — `nextSeq` is a single atomic
+ *      UPDATE … RETURNING, so two simultaneous requests cannot read the same
+ *      number.
+ *   2. The DATABASE refuses a repeat — a unique index on each serial column
+ *      (031 for applications, 067 for consolidated_bonds). This is the part that
+ *      makes the guarantee absolute: even a bug here cannot write a duplicate,
+ *      the write simply fails.
+ *   3. If (2) does fire — only possible when the counter has drifted BELOW the
+ *      book, e.g. a restore from an older dump or a hand-edited sequence — we
+ *      step to the next number instead of failing the print or, far worse,
+ *      silently reusing one.
+ *
+ * `claim` returns the serial it wrote, or null when the TARGET record already
+ * holds one (a concurrent generation beat us); `existing` then supplies that
+ * number so both callers converge on a single certificate number.
+ *
+ * A retry leaves the skipped number unused. That is deliberate: a gap in the
+ * run is harmless, a duplicate is not.
+ */
+async function allocateSerial(
+  db: Db,
+  key: string,
+  template: string,
+  year: number,
+  claim: (candidate: string) => Promise<string | null>,
+  existing: () => Promise<string | null>,
+): Promise<string> {
+  for (let attempt = 0; attempt < MAX_SERIAL_ATTEMPTS; attempt++) {
+    const candidate = formatNumber(template, { seq: await nextSeq(db, key), year });
+    try {
+      const claimed = await claim(candidate);
+      if (claimed) return claimed;
+    } catch (e) {
+      if (!isUniqueViolation(e)) throw e;
+      continue;                       // that number is taken — advance, never reuse
+    }
+    const cur = await existing();     // someone else claimed the target first
+    if (cur) return cur;
+  }
+  throw new Error(`could not allocate a unique '${key}' certificate number after ${MAX_SERIAL_ATTEMPTS} attempts`);
+}
 
 /**
  * Certificate number, assigned LAZILY on first generation (wealth parity:
@@ -39,14 +99,14 @@ async function ensureBondSerial(db: Db, applicationId: number, a: Record<string,
   if (a.bond_serial_no) return String(a.bond_serial_no);
   if (!ISSUABLE.has(String(a.status))) return null; // not issued yet → prints "—"
   const year = new Date(String(a.allotment_date ?? new Date().toISOString())).getUTCFullYear();
-  const candidate = await nextCode(db, 'bond', undefined, year);
-  const upd = await db.query<{ bond_serial_no: string }>(
-    'UPDATE applications SET bond_serial_no = $1 WHERE id = $2 AND bond_serial_no IS NULL RETURNING bond_serial_no',
-    [candidate, applicationId]);
-  if (upd.rows[0]) return upd.rows[0].bond_serial_no;
-  const cur = (await db.query<{ bond_serial_no: string | null }>(
-    'SELECT bond_serial_no FROM applications WHERE id = $1', [applicationId])).rows[0];
-  return cur?.bond_serial_no ?? null;
+  return allocateSerial(
+    db, 'bond', DEFAULT_NUMBER_FORMATS.bond, year,
+    async (candidate) => (await db.query<{ bond_serial_no: string }>(
+      'UPDATE applications SET bond_serial_no = $1 WHERE id = $2 AND bond_serial_no IS NULL RETURNING bond_serial_no',
+      [candidate, applicationId])).rows[0]?.bond_serial_no ?? null,
+    async () => (await db.query<{ bond_serial_no: string | null }>(
+      'SELECT bond_serial_no FROM applications WHERE id = $1', [applicationId])).rows[0]?.bond_serial_no ?? null,
+  );
 }
 
 const C = { GOLD: '#c9a227', GOLD_DEEP: '#a8851f', NAVY: '#1a2540', TEXT: '#1a1a1a', MUTED: '#666666', TINT: '#fcf6e3' };
@@ -221,17 +281,22 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
  * sequence + `CB-{yyyy}-{seq}` so it never collides with the per-app `BC-` run.
  */
 async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId: number, year: number): Promise<string> {
-  const existing = (await db.query<{ bond_serial_no: string }>(
-    'SELECT bond_serial_no FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2', [customerId, seriesId])).rows[0];
-  if (existing) return existing.bond_serial_no;
-  const candidate = formatNumber('CB-{yyyy}-{seq:6}', { seq: await nextSeq(db, 'consolidated_bond'), year });
-  const ins = await db.query<{ bond_serial_no: string }>(
-    `INSERT INTO consolidated_bonds (customer_id, series_id, bond_serial_no) VALUES ($1, $2, $3)
-     ON CONFLICT (customer_id, series_id) DO NOTHING RETURNING bond_serial_no`, [customerId, seriesId, candidate]);
-  if (ins.rows[0]) return ins.rows[0].bond_serial_no;
-  // A concurrent generation won the race — adopt the serial it assigned.
-  return (await db.query<{ bond_serial_no: string }>(
-    'SELECT bond_serial_no FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2', [customerId, seriesId])).rows[0]!.bond_serial_no;
+  const readExisting = async () => (await db.query<{ bond_serial_no: string }>(
+    'SELECT bond_serial_no FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2',
+    [customerId, seriesId])).rows[0]?.bond_serial_no ?? null;
+  const existing = await readExisting();
+  if (existing) return existing;
+  // ON CONFLICT names the (customer, series) pair only, so a clash on the
+  // SERIAL's own unique index (067) still raises — which is what allocateSerial
+  // catches to step to the next number rather than reuse one.
+  return allocateSerial(
+    db, 'consolidated_bond', CONSOLIDATED_BOND_FORMAT, year,
+    async (candidate) => (await db.query<{ bond_serial_no: string }>(
+      `INSERT INTO consolidated_bonds (customer_id, series_id, bond_serial_no) VALUES ($1, $2, $3)
+       ON CONFLICT (customer_id, series_id) DO NOTHING RETURNING bond_serial_no`,
+      [customerId, seriesId, candidate])).rows[0]?.bond_serial_no ?? null,
+    readExisting,
+  );
 }
 
 /**

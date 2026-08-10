@@ -59,8 +59,8 @@ usersRouter.put(
   '/:id',
   requirePermission('users:manage'),
   asyncHandler(async (req, res) => {
-    await service.updateUser(getDb(), req.user!, Number(req.params.id), updateSchema.parse(req.body));
-    res.json({ ok: true });
+    const result = await service.updateUser(getDb(), req.user!, Number(req.params.id), updateSchema.parse(req.body));
+    res.json({ ok: true, ...result });
   })
 );
 

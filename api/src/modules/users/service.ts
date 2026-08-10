@@ -102,7 +102,14 @@ export interface UpdateUserInput {
   is_staff?: boolean;
 }
 
-export async function updateUser(db: Db, actor: AuthUser, id: number, input: UpdateUserInput): Promise<void> {
+export interface UserUpdateResult {
+  /** Set when marking the user staff auto-folded an agent record into them. */
+  agentMerged: { agent_code: string; accruals_moved: number; amount_moved: number } | null;
+  /** Set when there WAS an agent record but the auto-merge couldn't run. */
+  agentMergeSkipped: string | null;
+}
+
+export async function updateUser(db: Db, actor: AuthUser, id: number, input: UpdateUserInput): Promise<UserUpdateResult> {
   await db.withTx(async (tx) => {
     const cur = await tx.query<Record<string, unknown>>('SELECT * FROM users WHERE id = $1', [id]);
     if (!cur.rows[0]) throw errors.notFound('User not found');
@@ -136,6 +143,35 @@ export async function updateUser(db: Db, actor: AuthUser, id: number, input: Upd
     await tx.query(`UPDATE users SET ${sets.join(', ')} WHERE id = $${++p}`, params);
     await writeAudit(tx, { actorId: actor.id, action: 'user.update', entityType: 'users', entityId: id, before: cur.rows[0], after: input });
   });
+
+  // Owner 2026-08-10: marking a user "staff" should make them staff EVERYWHERE,
+  // including a person who also holds a separate agent record (the Dhanapal
+  // shape). is_staff alone can't move that record's incentive — it's keyed
+  // payee_type='agent' — so fold any agent record they own into their now-staff
+  // identity automatically. Runs AFTER the update commits (so the merge sees
+  // is_staff=true) and OUTSIDE that tx (mergeAgentIntoStaff opens its own).
+  let agentMerged: UserUpdateResult['agentMerged'] = null;
+  let agentMergeSkipped: string | null = null;
+  if (input.is_staff === true) {
+    const live = (await db.query<{ id: string }>(
+      'SELECT id FROM agents WHERE user_id = $1 AND deleted_at IS NULL', [id])).rows;
+    if (live.length) {
+      const { mergeAgentIntoStaff } = await import('../agents/service.js');
+      try {
+        for (const r of live) {
+          const res = await mergeAgentIntoStaff(db, actor, Number(r.id), id);
+          agentMerged = { agent_code: res.agent_code, accruals_moved: res.accruals_moved, amount_moved: res.amount_moved };
+        }
+      } catch (e) {
+        // Best-effort: the flag is already saved. Surface why the merge could
+        // not run (e.g. the same investment already earns on the staff side, or
+        // the role is still 'agent') so a human can finish it — never fail the
+        // whole edit over it.
+        agentMergeSkipped = e instanceof Error ? e.message : 'Could not merge the agent record automatically';
+      }
+    }
+  }
+  return { agentMerged, agentMergeSkipped };
 }
 
 export async function setUserBranches(db: Db, actor: AuthUser, id: number, branchIds: number[]): Promise<void> {

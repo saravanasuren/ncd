@@ -48,6 +48,7 @@ export function UsersPage() {
   const [edit, setEdit] = useState<EditState | null>(null);
   const [branchModal, setBranchModal] = useState<{ id: number; name: string; ids: number[] } | null>(null);
   const [err, setErr] = useState('');
+  const [notice, setNotice] = useState('');
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['users'],
@@ -78,7 +79,7 @@ export function UsersPage() {
 
   const update = useMutation({
     mutationFn: (e: EditState) =>
-      api.put(`/api/users/${e.id}`, {
+      api.put<{ ok: boolean; agentMerged: { agent_code: string; accruals_moved: number; amount_moved: number } | null; agentMergeSkipped: string | null }>(`/api/users/${e.id}`, {
         full_name: e.full_name,
         role: e.role,
         branch_id: e.branch_id ? Number(e.branch_id) : null,
@@ -88,7 +89,13 @@ export function UsersPage() {
         is_staff: e.is_staff,
         ...(e.password ? { password: e.password } : {}),
       }),
-    onSuccess: () => { setEdit(null); qc.invalidateQueries({ queryKey: ['users'] }); },
+    onSuccess: (data) => {
+      setEdit(null);
+      qc.invalidateQueries({ queryKey: ['users'] });
+      // Marking someone staff can auto-fold their agent record into them.
+      if (data.agentMerged) setNotice(`Also merged their agent record ${data.agentMerged.agent_code} into staff — moved ${data.agentMerged.accruals_moved} incentive entr${data.agentMerged.accruals_moved === 1 ? 'y' : 'ies'} (₹${data.agentMerged.amount_moved.toLocaleString('en-IN')}) to the staff side.`);
+      else if (data.agentMergeSkipped) setErr(`Saved, but their agent record could NOT be merged automatically: ${data.agentMergeSkipped}. Use "Merge into staff" on the Agents page.`);
+    },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to update user'),
   });
 
@@ -192,6 +199,13 @@ export function UsersPage() {
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Users</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">Staff, agents and portal accounts.</p>
+
+      {notice && (
+        <div className="text-sm bg-[color:var(--success-bg)] text-success border border-success/30 rounded px-3 py-2 mb-4 flex items-start gap-2">
+          <span>{notice}</span>
+          <button onClick={() => setNotice('')} className="ml-auto text-xs shrink-0 hover:underline">Dismiss</button>
+        </div>
+      )}
 
       {can('users:manage') && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5">

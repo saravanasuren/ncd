@@ -6,6 +6,65 @@ import { useAuth } from '../auth/AuthContext.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { useConfirm } from '../components/Confirm.js';
 
+interface LastInterestSummary {
+  batch_no: string; payout_date: string;
+  customers: number; investments: number; gross: number; tds: number; net: number;
+}
+
+/** Last paid batch vs the batch about to be cut — each metric coloured green
+ *  when this batch is higher, red when lower, muted when unchanged. */
+function BatchComparison({ last, now }: {
+  last: LastInterestSummary;
+  now: { customers: number; investments: number; gross: number; tds: number; net: number };
+}) {
+  const rows: Array<{ label: string; last: number; now: number; money?: boolean }> = [
+    { label: 'Customers', last: last.customers, now: now.customers },
+    { label: 'Investments', last: last.investments, now: now.investments },
+    { label: 'Gross', last: last.gross, now: now.gross, money: true },
+    { label: 'TDS', last: last.tds, now: now.tds, money: true },
+    { label: 'Net', last: last.net, now: now.net, money: true },
+  ];
+  const fmt = (v: number, money?: boolean) => (money ? formatINR(v) : String(v));
+  return (
+    <div className="mt-3 pt-3 border-t border-border">
+      <div className="text-[11px] font-semibold text-text-label uppercase tracking-wide mb-2">
+        vs last paid batch — <span className="mono">{last.batch_no}</span> · {last.payout_date}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="text-xs w-full max-w-[560px]">
+          <thead>
+            <tr className="text-text-muted">
+              <th className="font-medium py-1 pr-4 text-left"></th>
+              <th className="font-medium py-1 pr-4 text-right">Last batch</th>
+              <th className="font-medium py-1 pr-4 text-right">This batch</th>
+              <th className="font-medium py-1 text-right">Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const d = r.now - r.last;
+              const color = d > 0 ? 'text-success' : d < 0 ? 'text-danger' : 'text-text-muted';
+              const arrow = d > 0 ? '▲' : d < 0 ? '▼' : '–';
+              const pct = r.last !== 0 ? Math.round((d / r.last) * 100) : null;
+              return (
+                <tr key={r.label} className="border-t border-border/60">
+                  <td className="py-1 pr-4 text-text-label">{r.label}</td>
+                  <td className="py-1 pr-4 text-right mono text-text-muted">{fmt(r.last, r.money)}</td>
+                  <td className="py-1 pr-4 text-right mono font-semibold">{fmt(r.now, r.money)}</td>
+                  <td className={`py-1 text-right mono ${color}`}>
+                    {arrow}{' '}{d === 0 ? '0' : `${d > 0 ? '+' : '−'}${fmt(Math.abs(d), r.money)}`}
+                    {pct !== null && d !== 0 ? ` (${d > 0 ? '+' : '−'}${Math.abs(pct)}%)` : ''}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export function PayoutsPage() {
   const qc = useQueryClient();
   const { confirm, promptText } = useConfirm();
@@ -16,6 +75,7 @@ export function PayoutsPage() {
   const [confirming, setConfirming] = useState(false);
 
   const preview = useQuery({ queryKey: ['payout-preview', date], queryFn: () => api.get<any>(`/api/payouts/preview?date=${date}`) });
+  const lastBatch = useQuery({ queryKey: ['payout-last-interest'], queryFn: () => api.get<{ summary: LastInterestSummary | null }>('/api/payouts/last-interest-summary') });
   const batches = useQuery({ queryKey: ['payout-batches'], queryFn: () => api.get<{ rows: any[] }>('/api/payouts') });
   const statements = useQuery({ queryKey: ['bank-statements'], queryFn: () => api.get<{ rows: any[] }>('/api/bank-statements') });
 
@@ -128,7 +188,8 @@ export function PayoutsPage() {
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
       {preview.data && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5 text-sm">
-          <span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'} with interest accrued to this date · gross <span className="mono font-semibold">{formatINR(sheetTotals.gross)}</span> · TDS <span className="mono">−{formatINR(sheetTotals.tds)}</span> · net <span className="mono font-semibold">{formatINR(sheetTotals.net)}</span>
+          <span className="font-semibold">{preview.data.customers ?? 0}</span> customer{(preview.data.customers ?? 0) === 1 ? '' : 's'}
+          {' '}(<span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'}) with interest accrued to this date · gross <span className="mono font-semibold">{formatINR(sheetTotals.gross)}</span> · TDS <span className="mono">−{formatINR(sheetTotals.tds)}</span> · net <span className="mono font-semibold">{formatINR(sheetTotals.net)}</span>
           {(sheetTotals.addition > 0 || sheetTotals.deduction > 0) && (
             <span className="text-text-muted"> · additions <span className="mono">+{formatINR(sheetTotals.addition)}</span> · deductions <span className="mono">−{formatINR(sheetTotals.deduction)}</span> · payable <span className="mono font-semibold">{formatINR(sheetTotals.total)}</span></span>
           )}
@@ -138,6 +199,15 @@ export function PayoutsPage() {
               Nothing to download for this date: every investment is already settled to it or beyond.
               Interest accrues from the last paid date — pick a later date to see it.
             </div>
+          )}
+          {/* Last batch vs this one — so the person cutting the batch can sanity-
+              check the movement before claiming it (owner 2026-08-10). */}
+          {lastBatch.data?.summary && preview.data.count > 0 && (
+            <BatchComparison
+              last={lastBatch.data.summary}
+              now={{ customers: preview.data.customers ?? 0, investments: preview.data.count,
+                     gross: sheetTotals.gross, tds: sheetTotals.tds, net: sheetTotals.net }}
+            />
           )}
         </div>
       )}

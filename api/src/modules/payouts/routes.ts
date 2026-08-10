@@ -20,8 +20,18 @@ const sheetDate = (q: unknown): string => {
   return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : new Date().toISOString().slice(0, 10);
 };
 
+/**
+ * Which run: 'ncd' (default) or 'subordinate_bond'. Absent means NCD, so every
+ * existing caller and bookmark keeps its current meaning, and the NCD run now
+ * excludes subordinate bonds without anyone having to remember to ask
+ * (owner 2026-08-10: "A completely separate run").
+ */
+const productOf = (q: unknown): s.ProductType =>
+  String(q ?? '') === 'subordinate_bond' ? 'subordinate_bond' : 'ncd';
+const productLabel = (p: s.ProductType) => (p === 'subordinate_bond' ? 'subordinate-bond-' : '');
+
 payoutsRouter.get('/preview', requirePermission('payouts:generate'),
-  asyncHandler(async (req, res) => res.json(await s.previewDue(getDb(), sheetDate(req.query.date)))));
+  asyncHandler(async (req, res) => res.json(await s.previewDue(getDb(), sheetDate(req.query.date), productOf(req.query.product)))));
 
 // The last batch actually marked Paid — for the "last vs this" comparison box.
 payoutsRouter.get('/last-interest-summary', requirePermission('payouts:generate'),
@@ -31,9 +41,12 @@ payoutsRouter.get('/last-interest-summary', requirePermission('payouts:generate'
 payoutsRouter.get('/sheet.xlsx', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {
     const date = sheetDate(req.query.date);
-    const buffer = await s.neftSheetForDate(getDb(), date);
+    const product = productOf(req.query.product);
+    const buffer = await s.neftSheetForDate(getDb(), date, product);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="NEFT-interest-upto-${date}.xlsx"`);
+    // The filename says which product, so the two runs cannot be confused for
+    // each other in a downloads folder on payout day.
+    res.setHeader('Content-Disposition', `attachment; filename="NEFT-${productLabel(product)}interest-upto-${date}.xlsx"`);
     res.send(buffer);
   }));
 
@@ -61,8 +74,11 @@ payoutsRouter.get('/', requirePermission('payouts:generate'),
 
 payoutsRouter.post('/', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {
-    const { payout_date, utr } = z.object({ payout_date: z.string(), utr: z.string().optional() }).parse(req.body);
-    res.status(201).json(await s.createInterestBatch(getDb(), req.user!, payout_date, utr));
+    const { payout_date, utr, product_type } = z.object({
+      payout_date: z.string(), utr: z.string().optional(),
+      product_type: z.enum(['ncd', 'subordinate_bond']).optional(),
+    }).parse(req.body);
+    res.status(201).json(await s.createInterestBatch(getDb(), req.user!, payout_date, utr, product_type ?? 'ncd'));
   }));
 
 payoutsRouter.post('/:id/mark-paid', requirePermission('payouts:mark-paid-manual'),
@@ -102,7 +118,7 @@ payoutsRouter.get('/:id/summary.xlsx', requirePermission('payouts:generate'),
 payoutsRouter.get('/preview.summary.xlsx', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {
     const date = sheetDate(req.query.date);
-    const buffer = await s.summaryForDate(getDb(), date);
+    const buffer = await s.summaryForDate(getDb(), date, productOf(req.query.product));
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="NEFT-preview-summary-${date}.xlsx"`);
     res.end(buffer);
@@ -112,7 +128,7 @@ payoutsRouter.get('/preview.summary.xlsx', requirePermission('payouts:generate')
 payoutsRouter.get('/preview.pdf', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {
     const date = sheetDate(req.query.date);
-    const buffer = await s.previewPdf(getDb(), date);
+    const buffer = await s.previewPdf(getDb(), date, productOf(req.query.product));
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="NEFT-preview-${date}.pdf"`);
     res.end(buffer);

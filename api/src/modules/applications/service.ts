@@ -30,8 +30,17 @@ const SCOPE_COLS = {
 
 export interface CreateApplicationInput {
   customer_id: number;
-  series_id: number;
-  scheme_id: number;
+  /**
+   * 'subordinate_bond' is NOT an NCD (owner spec 2026-08-10): it belongs to no
+   * series, is priced from a sob_product instead of a scheme, and is numbered
+   * SOB-. Absent means 'ncd', so every existing caller keeps its meaning.
+   */
+  product_type?: 'ncd' | 'subordinate_bond';
+  /** NCD only — a subordinate bond must not carry either (chk_app_product_shape). */
+  series_id?: number;
+  scheme_id?: number;
+  /** Subordinate bond only: the product carrying its rate, tenure and day-count. */
+  sob_product_id?: number;
   amount: number;
   // Date the money hit Dhanam's account, entered by staff at enrolment. Stored
   // now; interest starts from it once the investment is approved (go-live).
@@ -74,7 +83,12 @@ async function attachReceipt(db: Db, actor: AuthUser, appId: number, filename: s
 
 /** One credit. `pay` is THIS part's own payment detail — a clubbed investment
  *  has several, paid on different days against different references, and the
- *  application-level columns only ever describe the first. */
+ *  application-level columns only ever describe the first.
+ *
+ *  `pricing` is a scheme for an NCD, or a sob_product shaped like one for a
+ *  subordinate bond (`id: null`, since a sub bond has no scheme). Either way
+ *  the rate, tenure, frequency and day-count are SNAPSHOT onto the line, so a
+ *  later edit to the scheme or product never rewrites a live investment. */
 async function addLine(
   tx: Db, appId: number, scheme: Record<string, unknown>, amount: number,
   pay?: { date_money_received?: string; collection_method?: string; collection_reference?: string;
@@ -91,7 +105,12 @@ async function addLine(
 
 export async function createApplication(db: Db, actor: AuthUser, input: CreateApplicationInput) {
   const settings = await getSettingsMap(db);
-  const appFmt = String(settings['numbering.application_format'] ?? 'APP-{yyyy}-{seq:6}');
+  const isSob = input.product_type === 'subordinate_bond';
+  // Subordinate bonds are numbered SOB-2026-000001 on their own counter, so the
+  // two products never share a number space (owner 2026-08-10).
+  const appFmt = isSob
+    ? String(settings['numbering.subordinate_bond_format'] ?? 'SOB-{yyyy}-{seq:6}')
+    : String(settings['numbering.application_format'] ?? 'APP-{yyyy}-{seq:6}');
   // The receipt photo is mandatory and attached inside the create transaction,
   // so an application row never exists without one. Bad bytes 400 here, before
   // any row is written; if the transaction fails the stored file is removed —
@@ -99,8 +118,30 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
   const storedReceipt = await storeReceiptFile(input.receipt.filename, input.receipt.data_base64);
   try {
     return await db.withTx(async (tx) => {
-      const scheme = (await tx.query<Record<string, unknown>>('SELECT * FROM schemes WHERE id = $1', [input.scheme_id])).rows[0];
-      if (!scheme) throw errors.badRequest('Unknown scheme');
+      // What prices this investment. An NCD takes it from the scheme attached
+      // to its series; a subordinate bond has no series and therefore no
+      // scheme, so it takes the same four figures from its product master.
+      // Shaped alike so everything downstream — the line, the schedule, the
+      // interest engine — needs no special case.
+      let scheme: Record<string, unknown>;
+      if (isSob) {
+        if (!input.sob_product_id) throw errors.badRequest('Choose a subordinate bond product');
+        const p = (await tx.query<Record<string, unknown>>(
+          'SELECT * FROM sob_products WHERE id = $1', [input.sob_product_id])).rows[0];
+        if (!p) throw errors.badRequest('Unknown subordinate bond product');
+        // A retired product must not take new money; existing investments on it
+        // are unaffected because the line already holds its own snapshot.
+        if (p.is_active === false) throw errors.badRequest('That subordinate bond product is no longer active');
+        scheme = {
+          id: null, // no scheme — application_lines.scheme_id is nullable
+          coupon_rate_pct: p.coupon_rate_pct, tenure_months: p.tenure_months,
+          payout_frequency: p.payout_frequency, day_count_convention: p.day_count_convention,
+        };
+      } else {
+        const s = (await tx.query<Record<string, unknown>>('SELECT * FROM schemes WHERE id = $1', [input.scheme_id])).rows[0];
+        if (!s) throw errors.badRequest('Unknown scheme');
+        scheme = s;
+      }
       // NCDs are still ISSUED in whole ₹1,00,000 units — but a single credit
       // need not be one (owner 2026-08-01). Money arrives in parts: ₹50,000
       // today, ₹50,000 next week, clubbed into one ₹1,00,000 investment.
@@ -140,6 +181,14 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
       }
 
       // Clubbing: append this line's amount to an existing in-flight application.
+      //
+      // NOT offered for subordinate bonds. Clubbing exists to gather part
+      // payments up to a whole ₹1,00,000 unit, and the owner confirmed sub
+      // bonds have no unit rule — so what clubbing should mean for one has
+      // never been specified. Refused loudly rather than guessed at.
+      if (input.club_with_application_id && isSob) {
+        throw errors.badRequest('Subordinate bonds cannot be clubbed — record the investment for its full amount');
+      }
       if (input.club_with_application_id) {
         const target = (await tx.query<{ id: string; status: string; series_id: string; total_amount: string }>(
           'SELECT id, status, series_id, total_amount FROM applications WHERE id = $1', [input.club_with_application_id])).rows[0];
@@ -173,7 +222,7 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
       const enrolledByAgentId = actor.agentId ?? (customer.enrolled_by_agent_id ? Number(customer.enrolled_by_agent_id) : null);
       const priorCount = Number((await tx.query<{ n: string }>('SELECT count(*)::int AS n FROM applications WHERE customer_id = $1', [input.customer_id])).rows[0]!.n);
       const isNew = priorCount === 0;
-      const appNo = await nextCode(tx, 'application', appFmt);
+      const appNo = await nextCode(tx, isSob ? 'subordinate_bond' : 'application', appFmt);
 
       // Every staff-enrolled investment goes through one gate: it lands in
       // PendingApproval and an investment approval is raised. The admin verifies
@@ -186,9 +235,13 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
       const { branchForReferrer } = await import('./branch.js');
       const branchId = await branchForReferrer(tx, customer.referred_by_text);
       const { rows } = await tx.query<{ id: string }>(
-        `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, is_locker_deposit, date_money_received, collection_method, collection_reference, collection_bank_id, branch_id)
-         VALUES ($1,$2,$3,'PendingApproval',$4,$5,$6,'staff',$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
-        [appNo, input.customer_id, input.series_id, input.amount, isNew, customer.referred_by_text ?? null, actor.id, enrolledByAgentId,
+        `INSERT INTO applications (application_no, customer_id, series_id, product_type, sob_product_id, status, total_amount, customer_was_new_at_creation, referred_by_text, source, enrolled_by_user_id, enrolled_by_agent_id, is_locker_deposit, date_money_received, collection_method, collection_reference, collection_bank_id, branch_id)
+         VALUES ($1,$2,$3,$4,$5,'PendingApproval',$6,$7,$8,'staff',$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+        // A subordinate bond carries NO series and an NCD carries NO product —
+        // chk_app_product_shape refuses anything else, so a slip here fails
+        // loudly at insert rather than producing a mislabelled investment.
+        [appNo, input.customer_id, isSob ? null : input.series_id, isSob ? 'subordinate_bond' : 'ncd', isSob ? input.sob_product_id : null,
+         input.amount, isNew, customer.referred_by_text ?? null, actor.id, enrolledByAgentId,
          input.is_locker_deposit ?? false, input.date_money_received, input.collection_method, input.collection_reference, input.collection_bank_id ?? null,
          branchId]
       );

@@ -59,6 +59,11 @@ export async function outstandingItems(db: Db, actor: AuthUser, customerId?: num
       WHERE ${sc.sql}${custFilter}
         AND a.archived_at IS NULL
         AND a.status IN ('Draft','PendingApproval','PendingFundVerification','PendingEsign')
+        -- Subordinate bonds carry NO whole-unit rule (owner 2026-08-10), so a
+        -- ₹60,000 one is a complete investment, not a part payment. Without
+        -- this it would be listed as "needs ₹40,000 more" — advice that is
+        -- simply wrong for the product.
+        AND a.product_type <> 'subordinate_bond'
         AND (round(a.total_amount * 100)::bigint % ${LAKH * 100}) <> 0
       ORDER BY a.created_at`, sc.params)).rows;
 
@@ -72,7 +77,10 @@ export async function outstandingItems(db: Db, actor: AuthUser, customerId?: num
       WHERE ${sc.sql}${custFilter}
         AND a.archived_at IS NULL
         AND a.status = 'PendingApproval'
-        AND (round(a.total_amount * 100)::bigint % ${LAKH * 100}) = 0
+        -- A subordinate bond of any amount is approvable, so it belongs here
+        -- whatever its total; an NCD still has to be a whole unit first.
+        AND (a.product_type = 'subordinate_bond'
+             OR (round(a.total_amount * 100)::bigint % ${LAKH * 100}) = 0)
       ORDER BY a.created_at`, sc.params)).rows;
 
   // 3) + 4) Locker cheques. Not scoped by the application scope above — a

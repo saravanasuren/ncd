@@ -23,6 +23,10 @@ const sheetDate = (q: unknown): string => {
 payoutsRouter.get('/preview', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => res.json(await s.previewDue(getDb(), sheetDate(req.query.date)))));
 
+// The last batch actually marked Paid — for the "last vs this" comparison box.
+payoutsRouter.get('/last-interest-summary', requirePermission('payouts:generate'),
+  asyncHandler(async (_req, res) => res.json({ summary: await s.lastPaidInterestSummary(getDb()) })));
+
 // Stateless: pull the sheet for ANY date, as often as you like. Writes nothing.
 payoutsRouter.get('/sheet.xlsx', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {

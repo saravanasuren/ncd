@@ -110,6 +110,7 @@ export async function previewDue(db: Db, payoutDate: string) {
     totals.gross += gross; totals.tds += tds; totals.net += net;
     out.push({
       line_id: Number(l.line_id), application_id: Number(l.application_id),
+      customer_id: Number(l.customer_id),
       application_no: l.application_no, customer_name: l.customer_name,
       due_date: payoutDate, due_type: 'Interest',
       from_date: paidThrough, days,
@@ -127,7 +128,7 @@ export async function previewDue(db: Db, payoutDate: string) {
   const { rows: redemptionSlices } = await db.query<Record<string, unknown>>(
     `SELECT ds.id AS schedule_id, ds.line_id, ds.application_id, ds.due_date,
             ds.gross_amount, ds.tds_amount, ds.net_amount, ds.principal_basis,
-            a.application_no, c.full_name AS customer_name,
+            a.application_no, c.id AS customer_id, c.full_name AS customer_name,
             COALESCE((SELECT max(p.due_date) FROM disbursement_schedule p
                        WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
                          AND p.due_type IN ${DUE_TYPES} AND p.status = 'Paid'),
@@ -153,6 +154,7 @@ export async function previewDue(db: Db, payoutDate: string) {
     out.push({
       schedule_id: Number(r.schedule_id),
       line_id: Number(r.line_id), application_id: Number(r.application_id),
+      customer_id: Number(r.customer_id),
       application_no: r.application_no, customer_name: r.customer_name,
       due_date: due, due_type: 'BrokenInterest',
       row_type: 'Redemption',
@@ -226,6 +228,42 @@ export async function previewDue(db: Db, payoutDate: string) {
       total: round2(totals.net + addTotal - dedTotal),
     },
     count: out.length,
+    // Distinct people behind the rows — a customer with several debentures is
+    // one customer but many investments (owner 2026-08-10).
+    customers: new Set(out.map((r) => Number(r.customer_id))).size,
+  };
+}
+
+export interface LastInterestBatchSummary {
+  batch_no: string; payout_date: string;
+  customers: number; investments: number; gross: number; tds: number; net: number;
+}
+
+/**
+ * The most recent interest batch that was actually marked Paid, summarised the
+ * same way the live preview is — distinct customers, distinct investments, and
+ * gross/TDS/net over its paid interest rows. Feeds the "last batch vs this one"
+ * comparison under the payouts total (owner 2026-08-10). Null if none paid yet.
+ */
+export async function lastPaidInterestSummary(db: Db): Promise<LastInterestBatchSummary | null> {
+  const batch = (await db.query<{ id: string; batch_no: string; payout_date: string }>(
+    `SELECT id, batch_no, payout_date FROM payout_batches
+      WHERE kind = 'interest' AND status = 'Paid'
+      ORDER BY payout_date DESC, id DESC LIMIT 1`)).rows[0];
+  if (!batch) return null;
+  const agg = (await db.query<{ customers: string; investments: string; gross: string; tds: string; net: string }>(
+    `SELECT count(DISTINCT a.customer_id) AS customers,
+            count(DISTINCT ds.application_id) AS investments,
+            COALESCE(sum(ds.gross_amount), 0) AS gross,
+            COALESCE(sum(ds.tds_amount), 0)   AS tds,
+            COALESCE(sum(ds.net_amount), 0)   AS net
+       FROM disbursement_schedule ds
+       JOIN applications a ON a.id = ds.application_id
+      WHERE ds.batch_id = $1 AND ds.status = 'Paid' AND ds.due_type IN ${DUE_TYPES}`, [batch.id])).rows[0]!;
+  return {
+    batch_no: batch.batch_no, payout_date: String(batch.payout_date).slice(0, 10),
+    customers: Number(agg.customers), investments: Number(agg.investments),
+    gross: round2(Number(agg.gross)), tds: round2(Number(agg.tds)), net: round2(Number(agg.net)),
   };
 }
 

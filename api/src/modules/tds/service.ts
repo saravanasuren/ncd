@@ -139,7 +139,9 @@ export async function scanTdsThreshold(db: Db, actor?: AuthUser): Promise<TdsSca
         AND NOT EXISTS (SELECT 1 FROM tds_threshold_events e
                          WHERE e.customer_id = c.id AND e.status IN ${SETTLED_SQL})
       GROUP BY c.id, c.pan
-     HAVING COALESCE(SUM(al.outstanding_amount) FILTER (WHERE al.status = 'Active'), 0) >= $1`,
+     -- STRICTLY over the threshold: a book sitting exactly ON ₹30L must NOT
+     -- flag (owner 2026-08-10) — only ₹30,00,001 and above crosses.
+     HAVING COALESCE(SUM(al.outstanding_amount) FILTER (WHERE al.status = 'Active'), 0) > $1`,
     [cfg.threshold])).rows;
 
   const out: TdsScanResult = { scanned: candidates.length, raised: 0, customers: [] };

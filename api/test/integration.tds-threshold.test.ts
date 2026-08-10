@@ -103,6 +103,21 @@ describe('TDS threshold', () => {
     expect(Number(n.c)).toBe(0);
   });
 
+  // The threshold is STRICTLY over ₹30L (owner 2026-08-10): a book sitting
+  // exactly ON ₹30,00,000 must not flag — only ₹30,00,001 and above crosses.
+  it('leaves a customer sitting exactly on ₹30L alone (strictly over)', async () => {
+    const a = await admin();
+    await setup('TDS Exact', '9847000007', 'EXACT3000Z', 3000000, 100000); // book == ₹30,00,000
+    await a.post('/api/tds/scan');
+    const n = (await ctx.db.query("SELECT count(*)::int AS c FROM tds_threshold_events e JOIN customers cu ON cu.id=e.customer_id WHERE cu.full_name='TDS Exact'")).rows[0] as any;
+    expect(Number(n.c)).toBe(0);
+    // One rupee over does cross.
+    await setup('TDS OverOne', '9847000008', 'OVERR3001Z', 3000001, 100000);
+    await a.post('/api/tds/scan');
+    const m = (await ctx.db.query("SELECT count(*)::int AS c FROM tds_threshold_events e JOIN customers cu ON cu.id=e.customer_id WHERE cu.full_name='TDS OverOne'")).rows[0] as any;
+    expect(Number(m.c)).toBe(1);
+  });
+
   // A rejection used to mean nothing: the 6-hourly cron re-raised the same
   // approval within hours, forever. Rejected is now final until reopened.
   it('a rejected crossing is not re-raised, and reopening puts it back in scope', async () => {

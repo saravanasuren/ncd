@@ -21,6 +21,7 @@ import { leadsRouter } from './modules/leads/routes.js';
 import { customersRouter } from './modules/customers/routes.js';
 import { lookupsRouter } from './modules/lookups/routes.js';
 import { approvalsRouter } from './modules/approvals/routes.js';
+import { navRouter } from './modules/nav/routes.js';
 import { applicationsRouter } from './modules/applications/routes.js';
 import { agentsRouter } from './modules/agents/routes.js';
 import { allotmentsRouter } from './modules/allotments/routes.js';
@@ -105,6 +106,7 @@ export function createApp(): Express {
   app.use('/api/background-verification', bgvRouter);
   app.use('/api/lookups', lookupsRouter);
   app.use('/api/approvals', approvalsRouter);
+  app.use('/api/nav', navRouter);
   app.use('/api/applications', applicationsRouter);
   app.use('/api/agents', agentsRouter);
   app.use('/api/allotments', allotmentsRouter);

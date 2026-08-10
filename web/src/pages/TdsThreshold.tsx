@@ -52,7 +52,7 @@ export function TdsThresholdPage() {
     queryFn: () => api.get<{ rows: TdsEvent[] }>(`/api/tds/events${status ? `?status=${status}` : ''}`),
   });
 
-  const refresh = () => qc.invalidateQueries({ queryKey: ['tds-events'] });
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['tds-events'] }); qc.invalidateQueries({ queryKey: ['nav-badges'] }); };
 
   const scan = useMutation({
     mutationFn: () => api.post<{ scanned: number; raised: number }>('/api/tds/scan', {}),

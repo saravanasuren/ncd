@@ -219,7 +219,7 @@ function ChequeClearanceMaker({ onMsg }: { onMsg: (m: string) => void }) {
   const { promptText } = useConfirm();
   const qc = useQueryClient();
   const cheques = useQuery({ queryKey: ['locker-cheques-pending'], queryFn: () => api.get<{ rows: any[] }>('/api/lockers/cheques?status=Pending') });
-  const refresh = () => { qc.invalidateQueries({ queryKey: ['locker-cheques-pending'] }); qc.invalidateQueries({ queryKey: ['approvals'] }); };
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['locker-cheques-pending'] }); qc.invalidateQueries({ queryKey: ['approvals'] }); qc.invalidateQueries({ queryKey: ['nav-badges'] }); };
 
   const submit = useMutation({
     mutationFn: async (id: number) => {
@@ -298,7 +298,7 @@ export function ApprovalsPage() {
   const act = useMutation({
     mutationFn: (v: { id: number; action: 'approve' | 'reject'; reason?: string }) =>
       api.post(`/api/approvals/${v.id}/${v.action}`, v.action === 'reject' ? { reason: v.reason } : {}),
-    onSuccess: () => { setMsg(''); qc.invalidateQueries({ queryKey: ['approvals'] }); },
+    onSuccess: () => { setMsg(''); qc.invalidateQueries({ queryKey: ['approvals'] }); qc.invalidateQueries({ queryKey: ['nav-badges'] }); },
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
 

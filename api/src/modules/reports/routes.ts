@@ -168,6 +168,36 @@ reportsRouter.get('/customer-wise.xlsx', requirePermission('reports:download'),
     res.end(buf);
   }));
 
+// Series-wise holder list with demat details — one row per unique holder in the
+// chosen series (name, PAN, total invested, depository / DP ID / Client ID).
+reportsRouter.get('/series-holders', requirePermission('reports:download'),
+  asyncHandler(async (req, res) => {
+    const seriesId = Number(req.query.series_id);
+    if (!seriesId) { res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'series_id is required' } }); return; }
+    const meta = (await getDb().query<{ code: string; name: string }>('SELECT code, name FROM series WHERE id = $1', [seriesId])).rows[0];
+    if (!meta) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Series not found' } }); return; }
+    const rows = await book.seriesHoldersReport(getDb(), req.user!, seriesId);
+    res.json({
+      series_code: meta.code, series_name: meta.name, rows, count: rows.length,
+      grand_total: rows.reduce((s, r) => s + r.total_invested, 0),
+      investments: rows.reduce((s, r) => s + r.investments, 0),
+    });
+  }));
+
+reportsRouter.get('/series-holders.xlsx', requirePermission('reports:download'),
+  asyncHandler(async (req, res) => {
+    const seriesId = Number(req.query.series_id);
+    if (!seriesId) { res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'series_id is required' } }); return; }
+    const meta = (await getDb().query<{ code: string }>('SELECT code FROM series WHERE id = $1', [seriesId])).rows[0];
+    if (!meta) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Series not found' } }); return; }
+    const rows = await book.seriesHoldersReport(getDb(), req.user!, seriesId);
+    const { seriesHoldersXlsx } = await import('./documents.js');
+    const buf = await seriesHoldersXlsx(meta.code, rows);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="series-holders-${meta.code}.xlsx"`);
+    res.end(buf);
+  }));
+
 // 26Q quarterly TDS filing annexure. :quarter = 'YYYY-Qn'.
 reportsRouter.get('/tds-26q/:quarter.xlsx', requirePermission('reports:download'),
   asyncHandler(async (req, res) => {

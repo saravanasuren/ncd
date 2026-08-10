@@ -35,4 +35,8 @@ export const DEFAULT_NUMBER_FORMATS = {
   transfer: 'TRF-{yyyy}-{seq:6}',
   redemption: 'MCR-{yyyy}-{seq:6}',
   bond: 'BC-{yyyy}-{seq:6}',        // bond certificate number (lazy, on first generation)
+  // Subordinate bonds are numbered SOB-2026-000001 on their OWN counter, not
+  // the APP- one (owner 2026-08-10). Same shape as `application` so the two
+  // read alike; the leading token is what tells them apart at a glance.
+  subordinate_bond: 'SOB-{yyyy}-{seq:6}',
 } as const;

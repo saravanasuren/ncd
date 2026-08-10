@@ -65,6 +65,50 @@ export async function setSeriesIsin(db: Db, actor: AuthUser, id: number, isin: s
   await writeAudit(db, { actorId: actor.id, action: 'series.isin', entityType: 'series', entityId: id, after: { isin } });
 }
 
+// ── Subordinate Bond products (owner spec 2026-08-10) ──
+//
+// The sub-bond equivalent of a scheme. A subordinate bond belongs to no series,
+// so there is no scheme to carry its rate — the owner chose a product master
+// over per-investment rates so a rate change is one edit, and two customers on
+// the same product cannot silently end up on different rates.
+//
+// No min_ticket / multiple_of here on purpose: the owner confirmed subordinate
+// bonds carry NO whole-₹1,00,000 unit rule (unlike NCDs).
+export async function listSobProducts(db: Db) {
+  return (await db.query('SELECT * FROM sob_products ORDER BY code')).rows;
+}
+export async function createSobProduct(db: Db, actor: AuthUser, s: Record<string, unknown>) {
+  const code = String(s.code ?? '').trim();
+  const name = String(s.name ?? '').trim();
+  const tenure = Number(s.tenure_months);
+  const rate = Number(s.coupon_rate_pct);
+  if (!code) throw errors.badRequest('Code is required');
+  if (!name) throw errors.badRequest('Name is required');
+  if (!Number.isInteger(tenure) || tenure <= 0) throw errors.badRequest('Tenure must be a whole number of months');
+  // A zero-rate bond pays no interest, which is far more likely to be a slip
+  // than an intention — and it would generate a schedule of ₹0 payouts.
+  if (!Number.isFinite(rate) || rate <= 0) throw errors.badRequest('Interest rate must be greater than zero');
+  return db.withTx(async (tx) => {
+    const dup = (await tx.query('SELECT id FROM sob_products WHERE upper(code) = upper($1)', [code])).rows[0];
+    if (dup) throw errors.conflict(`A subordinate bond product with code ${code} already exists`);
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO sob_products (code, name, tenure_months, payout_frequency, coupon_rate_pct, day_count_convention, tds_rule_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [code, name, tenure, s.payout_frequency ?? 'Monthly', rate,
+       s.day_count_convention ?? 'Actual365', s.tds_rule_id ?? null]
+    );
+    const id = Number(rows[0]!.id);
+    await writeAudit(tx, { actorId: actor.id, action: 'sob_product.create', entityType: 'sob_products', entityId: id, after: s });
+    return { id };
+  });
+}
+export async function updateSobProduct(db: Db, actor: AuthUser, id: number, s: Record<string, unknown>) {
+  // `code` is deliberately NOT updatable — investments are read and reconciled
+  // by it, exactly as a scheme's code is fixed once issued.
+  const fields = ['name', 'tenure_months', 'payout_frequency', 'coupon_rate_pct', 'day_count_convention', 'tds_rule_id', 'is_active'];
+  await genericUpdate(db, actor, 'sob_products', id, s, fields, 'sob_product.update');
+}
+
 // ── TDS rules ──
 export async function listTdsRules(db: Db) {
   return (await db.query('SELECT * FROM tds_rules ORDER BY name')).rows;

@@ -62,8 +62,11 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
   // Point-in-time interest snapshots (independent of the selected window):
   //  - accrued_total    : total interest payable AS ON today (since the last payout)
   //  - monthly_projected : gross run-rate monthly coupon cost of the outstanding book
-  const [kpis, seriesRows, districts, moneyIn, newInv, moneyBySource, interest, accrued, redemptionRows, redemptionsOfSeriesRows, leadFunnel, almTiles, rateMix, todayBook, accruedTotal, monthlyInterest, moneyByBranch] = await Promise.all([
+  const [kpis, sobSummary, seriesRows, districts, moneyIn, newInv, moneyBySource, interest, accrued, redemptionRows, redemptionsOfSeriesRows, leadFunnel, almTiles, rateMix, todayBook, accruedTotal, monthlyInterest, moneyByBranch] = await Promise.all([
     book.kpis(db, actor, seriesFilter),                    // snapshot, but honours a selected series
+    // Subordinate bonds alone. kpis() above INCLUDES them in the Outstanding
+    // Book per the owner's answer; this is the separate tile beside it.
+    book.subordinateBondSummary(db, actor, seriesFilter),
     book.seriesSummary(db, actor, {}),                     // ALL series (pie + active/last-series pick)
     book.districtwise(db, actor, seriesFilter),            // snapshot (pie), honours a selected series
     book.moneyInByChannel(db, actor, filters),             // flow (locker/app channel split still honours the range)
@@ -98,6 +101,7 @@ export async function overview(db: Db, actor: AuthUser, filters: book.BookFilter
     active_series: activeSeries,
     last_series: lastSeries,
     kpis,                       // outstanding_book, active_investors, interest_paid, interest_scheduled
+    subordinate_bonds: sobSummary,  // outstanding, investments, investors — NOT an NCD figure
     flow: {
       money_in: newInv.total,          // new investments funded in the selected window
       money_in_locker: moneyIn.locker,
@@ -259,6 +263,11 @@ export async function drill(db: Db, actor: AuthUser, widget: string, filters: bo
       // Same last-30 rows the tile totals come from — never a second query
       // that could disagree with what the tile just showed.
       return { kind: 'rows', rows: (await book.newInvestmentsInRange(db, actor, filters)).rows };
+    case 'subordinate-bonds':
+      // The separate Subordinate Bond tile's drill (owner 2026-08-10). Reads
+      // the same helper the tile totals come from, so the list can never
+      // disagree with the number the user just clicked.
+      return { kind: 'rows', rows: await book.subordinateBonds(db, actor, filters) };
     case 'locker':
       return { kind: 'rows', rows: await book.newInvestmentsList(db, actor, filters, 'locker') };
     case 'app':

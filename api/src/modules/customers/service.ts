@@ -257,7 +257,9 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
             -- how many credits were clubbed into this investment (>1 = has a
             -- payment breakup), so the customer's list can flag it at a glance.
             (SELECT count(*)::int FROM application_lines al2 WHERE al2.application_id = a.id) AS line_count
-     FROM applications a JOIN series s ON s.id = a.series_id
+     -- LEFT: subordinate bonds have no series and would otherwise vanish from
+     -- the customer's own profile — the one place they must always appear.
+     FROM applications a LEFT JOIN series s ON s.id = a.series_id
      LEFT JOIN LATERAL (
        SELECT sum(al.outstanding_amount) FILTER (WHERE al.status = 'Active') AS live
        FROM application_lines al WHERE al.application_id = a.id

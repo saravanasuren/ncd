@@ -27,7 +27,13 @@ applicationsRouter.post('/', requirePermission('applications:create'),
     // same transaction, so no application ever exists without one. The bare
     // POST /:id/receipt endpoint remains for replacing a receipt later.
     const input = z.object({
-      customer_id: z.number(), series_id: z.number(), scheme_id: z.number(), amount: z.number().positive(),
+      customer_id: z.number(),
+      // Absent means 'ncd', so every existing caller — staff UI, the LockerHub
+      // inbound writes, the imports — keeps working unchanged.
+      product_type: z.enum(['ncd', 'subordinate_bond']).optional(),
+      series_id: z.number().optional(), scheme_id: z.number().optional(),
+      sob_product_id: z.number().optional(),
+      amount: z.number().positive(),
       date_money_received: z.string().min(1), collection_method: z.string().min(1), collection_reference: z.string().min(1),
       receipt: z.object({ filename: z.string().min(1), mime: z.string(), data_base64: z.string().min(1) }),
       club_with_application_id: z.number().optional(), is_locker_deposit: z.boolean().optional(),
@@ -35,7 +41,16 @@ applicationsRouter.post('/', requirePermission('applications:create'),
       mark_customer_tds: z.boolean().optional(),
       // Which Dhanam account the money was credited to (optional; markable later).
       collection_bank_id: z.number().nullable().optional(),
-    }).parse(req.body);
+    })
+      // series_id/scheme_id became optional above so a subordinate bond can omit
+      // them — which would otherwise let an NCD through with neither and fail
+      // deep in the service (or, worse, at the DB constraint) instead of here
+      // with a message that says which field is missing.
+      .refine((v) => v.product_type === 'subordinate_bond' || (v.series_id != null && v.scheme_id != null),
+        { message: 'series_id and scheme_id are required for an NCD investment', path: ['series_id'] })
+      .refine((v) => v.product_type !== 'subordinate_bond' || v.sob_product_id != null,
+        { message: 'sob_product_id is required for a subordinate bond', path: ['sob_product_id'] })
+      .parse(req.body);
     res.status(201).json(await s.createApplication(getDb(), req.user!, input));
   }));
 

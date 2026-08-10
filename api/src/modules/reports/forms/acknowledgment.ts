@@ -20,7 +20,10 @@ export async function acknowledgmentPdf(db: Db, applicationId: number): Promise<
             a.collection_method, a.collection_reference,
             c.full_name AS customer_name, c.customer_code, c.address, c.city, c.state, c.email, c.pan,
             s.code AS series_code, s.name AS series_name
-       FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
+       -- LEFT: a subordinate bond has no series. With an inner join this
+       -- returned no row and the ack failed with "Application not found" —
+       -- silently, because activation catches and logs it rather than failing.
+       FROM applications a JOIN customers c ON c.id = a.customer_id LEFT JOIN series s ON s.id = a.series_id
       WHERE a.id = $1`, [applicationId])).rows[0];
   if (!a) throw errors.notFound('Application not found');
   const co = companyHeader(await getCompanyProfile(db));

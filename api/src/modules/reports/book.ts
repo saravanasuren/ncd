@@ -48,11 +48,36 @@ function appWhere(actor: AuthUser, filters: BookFilters, extra: string[] = []): 
   return { sql: conds.join(' AND '), params };
 }
 
-const FROM = `FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
-  LEFT JOIN LATERAL (
+const BOOK_LATERAL = `LEFT JOIN LATERAL (
     SELECT sum(al.outstanding_amount) FILTER (WHERE al.status = 'Active') AS live
     FROM application_lines al WHERE al.application_id = a.id
   ) bk ON TRUE`;
+
+/**
+ * NCDs only.
+ *
+ * The inner join to series is what excludes subordinate bonds, and that is the
+ * owner's requirement for everything series-shaped: "It should not affect NCD
+ * series totals, counts, allotments, or reports" (2026-08-10). Every existing
+ * book function keeps this and therefore keeps meaning exactly what it did.
+ */
+const FROM = `FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
+  ${BOOK_LATERAL}`;
+
+/**
+ * EVERY investment — NCDs and subordinate bonds alike.
+ *
+ * Used only where the owner asked for the combined figure: the Outstanding Book
+ * ("include them but also an other seperate tile also"). Deliberately a separate
+ * constant rather than relaxing FROM, so which reports include sub bonds is an
+ * explicit choice at each call site and not a property of a join everything
+ * happens to share.
+ */
+const FROM_ALL = `FROM applications a JOIN customers c ON c.id = a.customer_id LEFT JOIN series s ON s.id = a.series_id
+  ${BOOK_LATERAL}`;
+
+/** Subordinate bonds only — the separate tile, and its drill-down. */
+const SOB_ONLY = `a.product_type = 'subordinate_bond'`;
 
 /**
  * Book amount of one application: the LIVE line-level outstanding (partial
@@ -124,19 +149,23 @@ const FROM_ATTR = `${FROM}${REFERRER_LATERAL_JOINS}`;
 export const REFERRER = `COALESCE(sref.full_name, aref.full_name, ${EFF_REF})`;
 
 export async function kpis(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+  // FROM_ALL, not FROM: the owner asked for the Outstanding Book to INCLUDE
+  // subordinate bonds, with a separate tile beside it showing them alone
+  // (2026-08-10). A series filter still narrows to NCDs on its own, because a
+  // subordinate bond has no series to match.
   const active = appWhere(actor, { ...filters, status: 'active' });
   const outstanding = await db.query<{ v: string; n: string; inv: string }>(
-    `SELECT COALESCE(sum(${AMT}),0) AS v, count(a.id)::int AS n, count(DISTINCT a.customer_id)::int AS inv ${FROM} WHERE ${active.sql}`, active.params);
+    `SELECT COALESCE(sum(${AMT}),0) AS v, count(a.id)::int AS n, count(DISTINCT a.customer_id)::int AS inv ${FROM_ALL} WHERE ${active.sql}`, active.params);
   // interest paid (net) and due, over the schedule for in-scope apps
   const scopeAll = appWhere(actor, {});
   const paid = await db.query<{ v: string }>(
     `SELECT COALESCE(sum(ds.net_amount),0) AS v FROM disbursement_schedule ds
      WHERE ds.status = 'Paid' AND ds.due_type IN ('Interest','BrokenInterest')
-       AND ds.application_id IN (SELECT a.id ${FROM} WHERE ${scopeAll.sql})`, scopeAll.params);
+       AND ds.application_id IN (SELECT a.id ${FROM_ALL} WHERE ${scopeAll.sql})`, scopeAll.params);
   const due = await db.query<{ v: string }>(
     `SELECT COALESCE(sum(ds.net_amount),0) AS v FROM disbursement_schedule ds
      WHERE ds.status = 'Scheduled' AND ds.due_type IN ('Interest','BrokenInterest')
-       AND ds.application_id IN (SELECT a.id ${FROM} WHERE ${scopeAll.sql})`, scopeAll.params);
+       AND ds.application_id IN (SELECT a.id ${FROM_ALL} WHERE ${scopeAll.sql})`, scopeAll.params);
   const r = outstanding.rows[0]!;
   return {
     outstanding_book: round2(Number(r.v)),
@@ -160,6 +189,46 @@ export async function seriesSummary(db: Db, actor: AuthUser, filters: BookFilter
             -- excludes never-funded statuses (Rejected/Cancelled/Draft/PendingApproval).
             COALESCE(sum(a.total_amount) FILTER (WHERE a.status NOT IN ('Rejected','Cancelled','Draft','PendingApproval')),0) AS issued
      ${FROM} WHERE ${w.sql} GROUP BY s.id, s.code, s.status ORDER BY s.code`, w.params);
+  return rows;
+}
+
+/**
+ * Subordinate bonds, on their own — the separate dashboard tile the owner asked
+ * for beside the combined Outstanding Book (2026-08-10).
+ *
+ * FROM_ALL + SOB_ONLY rather than FROM: an inner join to series would return
+ * nothing at all here, since a subordinate bond has none.
+ */
+export async function subordinateBondSummary(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+  // A series filter cannot narrow subordinate bonds — they belong to none — so
+  // it is dropped rather than applied to produce a confident zero.
+  const w = appWhere(actor, { ...filters, seriesIds: undefined, status: 'active' });
+  const r = (await db.query<{ v: string; n: string; inv: string }>(
+    `SELECT COALESCE(sum(${AMT}),0) AS v, count(a.id)::int AS n, count(DISTINCT a.customer_id)::int AS inv
+     ${FROM_ALL} WHERE ${w.sql} AND ${SOB_ONLY}`, w.params)).rows[0]!;
+  return {
+    outstanding: round2(Number(r.v)),
+    investments: Number(r.n),
+    investors: Number(r.inv),
+  };
+}
+
+/** The tile's drill-down: one row per live subordinate bond. */
+export async function subordinateBonds(db: Db, actor: AuthUser, filters: BookFilters = {}) {
+  const w = appWhere(actor, { ...filters, seriesIds: undefined, status: 'active' });
+  const { rows } = await db.query(
+    `SELECT a.id, a.application_no, c.full_name AS customer, c.customer_code,
+            sp.code AS product_code, sp.name AS product_name,
+            l.coupon_rate_pct, l.tenure_months,
+            a.date_money_received, a.total_amount AS amount, ${AMT} AS outstanding, a.status
+     ${FROM_ALL}
+     LEFT JOIN sob_products sp ON sp.id = a.sob_product_id
+     -- Rate/tenure from the LINE: it is the snapshot the investment is priced
+     -- on, so editing the product later never rewrites a live bond.
+     LEFT JOIN LATERAL (SELECT coupon_rate_pct, tenure_months FROM application_lines al
+                         WHERE al.application_id = a.id ORDER BY al.id LIMIT 1) l ON TRUE
+     WHERE ${w.sql} AND ${SOB_ONLY}
+     ORDER BY a.date_money_received DESC NULLS LAST, a.id DESC`, w.params);
   return rows;
 }
 

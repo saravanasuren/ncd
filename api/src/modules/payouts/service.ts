@@ -33,11 +33,26 @@ const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((x) => `'${x}'
  * the watermark and paying advances it, a period can never be paid twice, and the
  * next run always starts fresh from the date you just paid.
  */
-export async function previewDue(db: Db, payoutDate: string) {
+/**
+ * Interest due up to `payoutDate`, for ONE product.
+ *
+ * `productType` defaults to 'ncd', which is what makes the runs separate: every
+ * existing caller is the NCD run and now excludes subordinate bonds without
+ * having to remember to. The owner asked for "a completely separate run" —
+ * separate batch, separate summary sheet, separate NEFT file (2026-08-10).
+ *
+ * 🔒 The CALCULATION below is untouched and must stay so. The owner chose "same
+ * calculation, kept separate": days, day-count denominator, gross, TDS and the
+ * first-period +1 rule are identical for both products. Only WHICH ROWS are
+ * gathered differs.
+ */
+export type ProductType = 'ncd' | 'subordinate_bond';
+
+export async function previewDue(db: Db, payoutDate: string, productType: ProductType = 'ncd') {
   const { rows: lines } = await db.query<Record<string, unknown>>(
     `SELECT l.id AS line_id, l.application_id, l.outstanding_amount, l.coupon_rate_pct,
             l.day_count_convention, l.payout_frequency, l.amount AS line_amount,
-            l.scheme_id,
+            l.scheme_id, a.sob_product_id,
             a.application_no, a.interest_start_date, a.payout_bank_account_id, a.customer_id,
             c.full_name AS customer_name, c.is_nri, c.tds_applicable AS cust_tds,
             c.tax_form, c.tax_form_expires_on,
@@ -59,7 +74,8 @@ export async function previewDue(db: Db, payoutDate: string) {
        JOIN applications a ON a.id = l.application_id
        JOIN customers c ON c.id = a.customer_id
       WHERE l.status = 'Active' AND a.status IN (${OUTSTANDING_SQL_LIST})
-      ORDER BY c.full_name`);
+        AND a.product_type = $1
+      ORDER BY c.full_name`, [productType]);
 
   const out: Record<string, unknown>[] = [];
   const totals = { gross: 0, tds: 0, net: 0 };
@@ -94,10 +110,17 @@ export async function previewDue(db: Db, payoutDate: string) {
     const gross = round2((principal * Number(l.coupon_rate_pct)) / 100 * days / denom);
     if (gross <= 0) continue;
 
+    // The owner confirmed subordinate bonds follow the SAME TDS rules. A sub
+    // bond has no scheme, so its rule comes from the sob_product instead —
+    // without this it would silently fall back to DEFAULT_TDS_RULE and ignore
+    // the rule actually configured on the product.
     const tdsRule = l.scheme_id
       ? (await db.query<{ rate_pct: number }>(
           'SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [l.scheme_id])).rows[0] ?? DEFAULT_TDS_RULE
-      : DEFAULT_TDS_RULE;
+      : l.sob_product_id
+        ? (await db.query<{ rate_pct: number }>(
+            'SELECT tr.* FROM sob_products p JOIN tds_rules tr ON tr.id = p.tds_rule_id WHERE p.id = $1', [l.sob_product_id])).rows[0] ?? DEFAULT_TDS_RULE
+        : DEFAULT_TDS_RULE;
     const tds = computeTds(
       tdsRule,
       { is_nri: l.is_nri as boolean, tds_applicable: l.cust_tds as boolean,
@@ -138,7 +161,10 @@ export async function previewDue(db: Db, payoutDate: string) {
        JOIN customers c ON c.id = a.customer_id
       WHERE ds.due_type = 'BrokenInterest' AND ds.status = 'Scheduled'
         AND ds.batch_id IS NULL AND ds.due_date <= $1::date
-      ORDER BY c.full_name`, [payoutDate]);
+        -- A redemption slice belongs to its own product's run too, or a
+        -- subordinate bond's broken interest would be paid on the NCD sheet.
+        AND a.product_type = $2
+      ORDER BY c.full_name`, [payoutDate, productType]);
   for (const r of redemptionSlices) {
     const gross = Number(r.gross_amount);
     // Owner 2026-07-27: a redemption slice belongs to the month it fell due
@@ -267,10 +293,11 @@ export async function lastPaidInterestSummary(db: Db): Promise<LastInterestBatch
   };
 }
 
-export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: string, utr?: string) {
+export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: string, utr?: string, productType: ProductType = 'ncd') {
   return db.withTx(async (tx) => {
-    const due = await previewDue(tx, payoutDate);
-    if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
+    const due = await previewDue(tx, payoutDate, productType);
+    if (due.count === 0) throw errors.unprocessable(
+      `No ${productType === 'subordinate_bond' ? 'subordinate bond ' : ''}interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
     // An approved deduction larger than what has accrued cannot settle — refuse
     // with the application named rather than writing a negative payment.
     const neg = (due.rows as Record<string, unknown>[]).find((r) => Number(r.total_amount) < 0);
@@ -279,9 +306,11 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
     // total_net is what the bank actually pays — net interest plus additions
     // minus deductions. gross/tds stay pure interest.
     const { rows } = await tx.query<{ id: string }>(
-      `INSERT INTO payout_batches (batch_no, kind, payout_date, total_gross, total_tds, total_net, status, created_by_user_id)
-       VALUES ($1,'interest',$2,$3,$4,$5,'PendingChecker',$6) RETURNING id`,
-      [batchNo, payoutDate, due.totals.gross, due.totals.tds, due.totals.total, actor.id]
+      // product_type stamps WHICH run this is, so its NEFT file and summary
+      // sheet stay that product's alone and the two can never merge later.
+      `INSERT INTO payout_batches (batch_no, kind, payout_date, total_gross, total_tds, total_net, status, created_by_user_id, product_type)
+       VALUES ($1,'interest',$2,$3,$4,$5,'PendingChecker',$6,$7) RETURNING id`,
+      [batchNo, payoutDate, due.totals.gross, due.totals.tds, due.totals.total, actor.id, productType]
     );
     const batchId = Number(rows[0]!.id);
 
@@ -627,8 +656,8 @@ async function neftHeaderBits(db: Db) {
  * pulled for as many dates, as many times, as you like. A batch is only created
  * when you claim the money was actually paid (createInterestBatch).
  */
-export async function neftSheetForDate(db: Db, payoutDate: string): Promise<Buffer> {
-  const due = await previewDue(db, payoutDate);
+export async function neftSheetForDate(db: Db, payoutDate: string, productType: ProductType = 'ncd'): Promise<Buffer> {
+  const due = await previewDue(db, payoutDate, productType);
   if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
   const neg = (due.rows as Record<string, unknown>[]).find((r) => Number(r.total_amount) < 0);
   if (neg) throw errors.unprocessable(`Deduction (₹${neg.deduction_amount}) exceeds the interest accrued for ${neg.application_no} (net ₹${neg.net_amount}) — edit or cancel the adjustment first.`);
@@ -840,8 +869,8 @@ export async function summaryForBatch(db: Db, batchId: number): Promise<{ buffer
  * sets (and totals) disagreed. Ops reconcile these two documents against each
  * other; they must be two views of one dataset.
  */
-async function summaryRowsForDate(db: Db, payoutDate: string): Promise<Record<string, unknown>[]> {
-  const due = await previewDue(db, payoutDate);
+async function summaryRowsForDate(db: Db, payoutDate: string, productType: ProductType = 'ncd'): Promise<Record<string, unknown>[]> {
+  const due = await previewDue(db, payoutDate, productType);
   if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
   const lineIds = (due.rows as Record<string, unknown>[]).map((r) => Number(r.line_id));
   const statics = (await db.query<Record<string, unknown>>(
@@ -887,8 +916,8 @@ async function summaryRowsForDate(db: Db, payoutDate: string): Promise<Record<st
 }
 
 /** Summary sheet for the un-batched preview up to a cut-off date. */
-export async function summaryForDate(db: Db, payoutDate: string): Promise<Buffer> {
-  const rows = await summaryRowsForDate(db, payoutDate);
+export async function summaryForDate(db: Db, payoutDate: string, productType: ProductType = 'ncd'): Promise<Buffer> {
+  const rows = await summaryRowsForDate(db, payoutDate, productType);
   const { buildSummarySheet } = await import('../../lib/payout-summary.js');
   return buildSummarySheet(rows as never[]);
 }
@@ -958,10 +987,12 @@ export async function summaryPdfForBatch(db: Db, batchId: number): Promise<{ buf
   };
 }
 
-export async function previewPdf(db: Db, payoutDate: string): Promise<Buffer> {
+export async function previewPdf(db: Db, payoutDate: string, productType: ProductType = 'ncd'): Promise<Buffer> {
   // Same rows as the preview NEFT + summary sheets — one dataset, three views.
-  const rows = await summaryRowsForDate(db, payoutDate);
-  return summaryPdf(rows, 'Interest payout preview', `Everything accrued up to ${payoutDate} · not yet batched`);
+  const rows = await summaryRowsForDate(db, payoutDate, productType);
+  return summaryPdf(rows,
+    productType === 'subordinate_bond' ? 'Subordinate bond interest payout preview' : 'Interest payout preview',
+    `Everything accrued up to ${payoutDate} · not yet batched`);
 }
 
 /**

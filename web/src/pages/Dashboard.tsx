@@ -91,6 +91,7 @@ export function Dashboard() {
         : overview.error ? <div className="text-danger mt-6">Failed to load dashboard.</div>
           : (() => {
             const k = overview.data.kpis, f = overview.data.flow, isnap = overview.data.interest_snapshot;
+            const sob = overview.data.subordinate_bonds as { outstanding: number; investments: number; investors: number } | undefined;
             // Selected series (if any) — drives the two redemption readings.
             const selSeriesId: number | null = range.series?.[0] ?? null;
             const seriesList2: { series_id: number; code: string }[] = overview.data.series ?? [];
@@ -116,6 +117,15 @@ export function Dashboard() {
                     onClick={() => pickWidget('new-investments',
                       f.new_investments_recent ? `New investments — last ${f.new_investments}` : 'New investments in range')}
                     canDrill={canDrill} />
+                  {/* Subordinate bonds, on their own (owner 2026-08-10). These
+                      are ALSO inside Outstanding Book above — the owner asked
+                      for both — so the sub-line says so rather than leaving
+                      someone to add the two tiles together and double-count. */}
+                  {sob && sob.investments > 0 && (
+                    <Tile label="Subordinate bonds" value={formatINR(sob.outstanding)}
+                      sub={`${sob.investments} bond${sob.investments === 1 ? '' : 's'} · ${sob.investors} investor${sob.investors === 1 ? '' : 's'} · also in Outstanding book`}
+                      onClick={() => pickWidget('subordinate-bonds', 'Subordinate bonds')} canDrill={canDrill} />
+                  )}
                   <Tile label="Locker deposits" value={formatINR(f.money_in_locker)} sub={`${f.money_in_locker_investors} investors`}
                     onClick={() => pickWidget('locker', 'Locker deposits in range')} canDrill={canDrill} />
                   <Tile label="DhanamFin app" value={formatINR(f.money_in_app)} sub={`${f.money_in_app_investors} investors`}
@@ -270,6 +280,19 @@ const INVESTMENT_COLS: FlatCol[] = [
 ];
 const FLAT_COLS: Record<string, FlatCol[]> = {
   'new-investments': INVESTMENT_COLS,
+  // Its own columns: a subordinate bond has no series to show, and the product
+  // + rate are what identify it instead.
+  'subordinate-bonds': [
+    { key: 'application_no', header: 'Bond no' },
+    { key: 'customer', header: 'Customer' },
+    { key: 'product_code', header: 'Product' },
+    { key: 'coupon_rate_pct', header: 'Rate' },
+    { key: 'tenure_months', header: 'Tenure' },
+    { key: 'date_money_received', header: 'Received', kind: 'date' },
+    { key: 'amount', header: 'Invested', kind: 'money' },
+    { key: 'outstanding', header: 'Outstanding', kind: 'money' },
+    { key: 'status', header: 'Status' },
+  ],
   locker: INVESTMENT_COLS,
   app: INVESTMENT_COLS,
   'interest-month': [

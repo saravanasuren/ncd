@@ -176,10 +176,17 @@ export async function approve(
     // This is the gate that covers the inbound LockerHub writes too: they land
     // as PendingApproval rather than being refused at the door.
     if (req.request_type === 'subscription' && req.entity_type === 'applications' && req.entity_id) {
-      const app = (await tx.query<{ total_amount: string; scheme_id: string | null }>(
-        `SELECT a.total_amount, (SELECT al.scheme_id FROM application_lines al WHERE al.application_id = a.id ORDER BY al.id LIMIT 1) AS scheme_id
+      const app = (await tx.query<{ total_amount: string; scheme_id: string | null; product_type: string }>(
+        `SELECT a.total_amount, a.product_type, (SELECT al.scheme_id FROM application_lines al WHERE al.application_id = a.id ORDER BY al.id LIMIT 1) AS scheme_id
            FROM applications a WHERE a.id = $1`, [Number(req.entity_id)])).rows[0];
-      if (app) await assertValidTicket(tx, app.scheme_id ? Number(app.scheme_id) : null, Number(app.total_amount));
+      // Subordinate bonds are exempt: the owner confirmed they carry NO whole
+      // ₹1,00,000 unit rule (2026-08-10). This is not a cosmetic skip — a sub
+      // bond line has no scheme_id, and ticketRule() FALLS BACK to ₹1L/₹1L when
+      // the scheme is null, so without this a ₹60,000 subordinate bond would be
+      // refused at approval by a rule that does not apply to it.
+      if (app && app.product_type !== 'subordinate_bond') {
+        await assertValidTicket(tx, app.scheme_id ? Number(app.scheme_id) : null, Number(app.total_amount));
+      }
     }
     const prior = await priorApprovers(tx, id);
     const selfReason = typeof extra?.self_approval_reason === 'string' ? extra.self_approval_reason.trim() : undefined;
@@ -349,12 +356,23 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
     `SELECT a.id, a.application_no, a.total_amount, a.date_money_received, a.collection_method,
             a.collection_reference, a.referred_by_text, a.interest_start_date, a.created_at,
             (a.receipt_file_path IS NOT NULL) AS has_receipt,
-            a.status, s.code AS series_code, sc.code AS scheme_code,
-            sc.coupon_rate_pct, sc.tenure_months,
+            a.status, a.product_type, s.code AS series_code,
+            COALESCE(sc.code, sp.code) AS scheme_code,
+            -- From the LINE, not the scheme: the line is the snapshot the
+            -- investment is actually priced on, and it is the only source for
+            -- a subordinate bond (which has no scheme). For an NCD the two
+            -- agree, because the line was copied from the scheme at create.
+            COALESCE(sc.coupon_rate_pct, l.coupon_rate_pct) AS coupon_rate_pct,
+            COALESCE(sc.tenure_months, l.tenure_months) AS tenure_months,
             a.customer_id, c.full_name AS customer, c.customer_code, c.pan, c.phone, c.dob
        FROM applications a
        JOIN customers c ON c.id = a.customer_id
-       JOIN series s ON s.id = a.series_id
+       -- LEFT, not INNER: a subordinate bond has no series, and an inner join
+       -- returned no row at all, and the null-guard below then left the
+       -- checker with NO investment detail to review on a product the owner
+       -- confirmed goes through the very same approval gate.
+       LEFT JOIN series s ON s.id = a.series_id
+       LEFT JOIN sob_products sp ON sp.id = a.sob_product_id
        LEFT JOIN application_lines l ON l.application_id = a.id
        LEFT JOIN schemes sc ON sc.id = l.scheme_id
       WHERE a.id = $1 LIMIT 1`, [Number(req.entity_id)])).rows[0];
@@ -400,7 +418,9 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
       phone: (r.phone as string) ?? '—',
       dob: d(r.dob) || '—',
       application_no: r.application_no,
-      series: r.series_code,
+      // A subordinate bond belongs to no series — say so plainly rather than
+      // showing a blank the checker has to interpret.
+      series: r.product_type === 'subordinate_bond' ? 'Subordinate Bond (no series)' : r.series_code,
       scheme: r.scheme_code ?? '—',
       rate: r.coupon_rate_pct != null ? `${Number(r.coupon_rate_pct)}%` : '—',
       tenure: r.tenure_months != null ? `${r.tenure_months} months` : '—',
@@ -464,7 +484,8 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
               c.full_name AS customer, c.customer_code, s.code AS series_code,
               u.full_name AS enrolled_by
          FROM applications a JOIN customers c ON c.id = a.customer_id
-         JOIN series s ON s.id = a.series_id
+         -- LEFT for the same reason as above: no series must not mean no card.
+         LEFT JOIN series s ON s.id = a.series_id
          LEFT JOIN users u ON u.id = a.enrolled_by_user_id
         WHERE a.id = $1`, [id])).rows[0];
     if (r) return {

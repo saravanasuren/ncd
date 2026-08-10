@@ -20,10 +20,15 @@ const SELF_INVESTMENT = `(
      AND regexp_replace(c.phone,'\\D','','g') = (SELECT regexp_replace(ag.phone,'\\D','','g') FROM agents ag WHERE ag.id = ia.payee_id))
 )`;
 const NOT_SELF = `NOT COALESCE(${SELF_INVESTMENT}, false)`;
+// LEFT JOIN series: the owner confirmed subordinate bonds earn on the SAME
+// incentive matrix. accrual.ts reads `applications` directly, so a sub-bond
+// incentive was being WRITTEN correctly — but every read here inner-joined
+// series, so it was invisible on the Incentives page, absent from balances and
+// impossible to pay. Money owed that nobody could see.
 const ACCRUAL_FROM = `FROM incentive_accruals ia
   JOIN applications a ON a.id = ia.application_id
   JOIN customers c ON c.id = a.customer_id
-  JOIN series s ON s.id = a.series_id`;
+  LEFT JOIN series s ON s.id = a.series_id`;
 
 export async function payeeBalance(db: Db, payeeType: string, payeeId: number) {
   // Balance = eligible accruals not yet paid (paid = accruals with paid_at set).

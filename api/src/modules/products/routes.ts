@@ -15,6 +15,15 @@ productsRouter.get('/schemes', requireAuth, asyncHandler(async (_req, res) => re
 productsRouter.post('/schemes', manage, asyncHandler(async (req, res) => res.status(201).json(await s.createScheme(getDb(), req.user!, req.body))));
 productsRouter.put('/schemes/:id', manage, asyncHandler(async (req, res) => { await s.updateScheme(getDb(), req.user!, Number(req.params.id), req.body); res.json({ ok: true }); }));
 
+// Subordinate Bond products (owner 2026-08-10) — the sub-bond equivalent of a
+// scheme, since a subordinate bond belongs to no series. Readable by any signed
+// -in user (enrolment needs the list); managed under the same products:manage
+// permission as schemes, so no new permission has to be granted before the
+// feature is reachable.
+productsRouter.get('/sob-products', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listSobProducts(getDb()) })));
+productsRouter.post('/sob-products', manage, asyncHandler(async (req, res) => res.status(201).json(await s.createSobProduct(getDb(), req.user!, req.body))));
+productsRouter.put('/sob-products/:id', manage, asyncHandler(async (req, res) => { await s.updateSobProduct(getDb(), req.user!, Number(req.params.id), req.body); res.json({ ok: true }); }));
+
 // Series
 productsRouter.get('/series', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listSeries(getDb()) })));
 productsRouter.post('/series', manage, asyncHandler(async (req, res) => res.status(201).json(await s.createSeries(getDb(), req.user!, req.body))));

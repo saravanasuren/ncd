@@ -869,8 +869,17 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
   // WARNING, not a block — the server accepts any positive amount, and approval
   // is what refuses a total that isn't a whole unit. Blocking here would force
   // staff to record a figure the bank statement doesn't show.
+  // Is this an NCD or a Subordinate Bond (owner spec 2026-08-10)? A subordinate
+  // bond belongs to no series, is priced from its own product master, and is
+  // numbered SOB-.
+  const [productType, setProductType] = useState<'ncd' | 'subordinate_bond'>('ncd');
+  const isSob = productType === 'subordinate_bond';
+  const [sobProductId, setSobProductId] = useState('');
   const isWholeUnit = amount !== '' && Number(amount) >= LAKH && Math.round(Number(amount) * 100) % (LAKH * 100) === 0;
-  const isPartPayment = amount !== '' && Number(amount) > 0 && !isWholeUnit;
+  // Subordinate bonds have NO whole-unit rule, so the part-payment warning must
+  // not appear for one — it would tell staff to top up an investment that is
+  // already complete.
+  const isPartPayment = !isSob && amount !== '' && Number(amount) > 0 && !isWholeUnit;
   const [dateReceived, setDateReceived] = useState('');
   const [clubWith, setClubWith] = useState('');
   const [lockerDeposit, setLockerDeposit] = useState(false);
@@ -886,6 +895,8 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
   const collectionBanks = useQuery({ queryKey: ['collection-banks'], queryFn: () => api.get<{ rows: any[] }>('/api/banks') });
   const series = useQuery({ queryKey: ['series'], queryFn: () => api.get<{ rows: any[] }>('/api/series') });
   const schemes = useQuery({ queryKey: ['schemes'], queryFn: () => api.get<{ rows: any[] }>('/api/schemes') });
+  // Same mount caveat as /api/banks above — productsRouter is on `/api`.
+  const sobProducts = useQuery({ queryKey: ['sob-products'], queryFn: () => api.get<{ rows: any[] }>('/api/sob-products') });
   // In-flight applications in the chosen series this new line could club into
   // (append to an existing pre-allotment application instead of a new one).
   const candidates = useQuery({
@@ -906,7 +917,12 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
       if (!receipt) throw new ApiError('VALIDATION', 400, 'Receipt photo is required');
       if (receipt.size > 4 * 1024 * 1024) throw new ApiError('too_large', 400, 'Receipt must be under 4 MB');
       return api.post<{ id: number }>('/api/applications', {
-        customer_id: customerId, series_id: Number(seriesId), scheme_id: Number(schemeId), amount: Number(amount),
+        customer_id: customerId, amount: Number(amount),
+        // A subordinate bond sends its product and NO series/scheme; an NCD the
+        // reverse. The database constraint refuses any other combination.
+        ...(isSob
+          ? { product_type: 'subordinate_bond', sob_product_id: Number(sobProductId) }
+          : { series_id: Number(seriesId), scheme_id: Number(schemeId) }),
         date_money_received: dateReceived,
         collection_method: method.trim(),
         collection_reference: reference.trim(),
@@ -925,6 +941,9 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
   });
   // Mandatory before Create is allowed — mirrors the API schema.
   const missingRequired = () => [
+    isSob && !sobProductId && 'subordinate bond product',
+    !isSob && !seriesId && 'series',
+    !isSob && !schemeId && 'scheme',
     !dateReceived && 'credited date',
     !method && 'payment method',
     !reference.trim() && 'reference / cheque no.',
@@ -936,20 +955,53 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
   return (
     <div id="new-investment" className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4 scroll-mt-4">
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">New investment</h2>
+      {/* NCD or Subordinate Bond. Chosen FIRST because it changes what the rest
+          of the form asks for — a subordinate bond has no series and no scheme,
+          and no ₹1,00,000 unit rule. Switching clears the other product's
+          fields so a stale series can never ride along on a sub bond. */}
+      <div className="flex flex-wrap gap-1 items-center mb-3">
+        {([['ncd', 'NCD'], ['subordinate_bond', 'Subordinate Bond']] as const).map(([v, label]) => (
+          <button key={v} type="button"
+            onClick={() => { setProductType(v); setClubWith(''); setSeriesId(''); setSchemeId(''); setSobProductId(''); }}
+            className={`text-xs rounded px-3 py-1.5 border font-semibold ${productType === v
+              ? 'border-primary text-primary bg-[color:var(--primary-bg,transparent)]'
+              : 'border-border text-text-muted hover:bg-bg'}`}>
+            {label}
+          </button>
+        ))}
+        {isSob && <span className="text-xs text-text-muted">Not part of any NCD series · numbered SOB-</span>}
+      </div>
       <div className="flex flex-wrap gap-2 items-center">
-        <select className={sel} value={seriesId} onChange={(e) => { setSeriesId(e.target.value); setClubWith(''); }}>
-          <option value="">Series…</option>
-          {/* Only an OPEN series can take a new investment (closed/allotted are locked). */}
-          {(series.data?.rows ?? []).filter((s) => s.status === 'Open').map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
-        </select>
-        <select className={sel} value={schemeId} onChange={(e) => setSchemeId(e.target.value)}>
-          <option value="">Scheme…</option>
-          {(schemes.data?.rows ?? []).map((s) => <option key={s.id} value={s.id}>{s.code} ({s.coupon_rate_pct}%)</option>)}
-        </select>
+        {isSob ? (
+          <select className={sel} value={sobProductId} onChange={(e) => setSobProductId(e.target.value)}>
+            <option value="">Subordinate bond product… *</option>
+            {/* Retired products are hidden: existing investments on one are
+                unaffected, since the line holds its own rate snapshot. */}
+            {(sobProducts.data?.rows ?? []).filter((p) => p.is_active !== false).map((p) => (
+              <option key={p.id} value={p.id}>{p.code} ({p.coupon_rate_pct}% · {p.tenure_months}m)</option>
+            ))}
+          </select>
+        ) : (
+          <>
+            <select className={sel} value={seriesId} onChange={(e) => { setSeriesId(e.target.value); setClubWith(''); }}>
+              <option value="">Series…</option>
+              {/* Only an OPEN series can take a new investment (closed/allotted are locked). */}
+              {(series.data?.rows ?? []).filter((s) => s.status === 'Open').map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
+            </select>
+            <select className={sel} value={schemeId} onChange={(e) => setSchemeId(e.target.value)}>
+              <option value="">Scheme…</option>
+              {(schemes.data?.rows ?? []).map((s) => <option key={s.id} value={s.id}>{s.code} ({s.coupon_rate_pct}%)</option>)}
+            </select>
+          </>
+        )}
         {/* NCDs are issued in whole ₹1,00,000 units — step/min make the browser
-            enforce it, and the hint below states it before they submit. */}
-        <input className={sel} placeholder="Amount (₹1,00,000 units)" type="number" min={LAKH} step={LAKH}
-          value={amount} onChange={(e) => setAmount(e.target.value)} />
+            enforce it. A subordinate bond has no unit rule, so it must not
+            carry that step or the browser would block a valid ₹60,000. */}
+        {isSob
+          ? <input className={sel} placeholder="Amount" type="number" min={1}
+              value={amount} onChange={(e) => setAmount(e.target.value)} />
+          : <input className={sel} placeholder="Amount (₹1,00,000 units)" type="number" min={LAKH} step={LAKH}
+              value={amount} onChange={(e) => setAmount(e.target.value)} />}
         <label className="text-xs flex items-center gap-1.5" title="Date the money was credited to Dhanam's account — interest starts from here once approved">
           Credited<span className="text-danger">*</span> <input className={sel} type="date" value={dateReceived} onChange={(e) => setDateReceived(e.target.value)} />
         </label>
@@ -1013,7 +1065,11 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
           {applyTds === 'yes' && <div className="text-text-muted mt-1">The customer will be marked TDS-applicable — 10% is deducted on <b>all</b> their investments from now on, not just this one.</div>}
         </div>
       )}
-      {clubOptions.length > 0 && (
+      {/* Explicitly not offered for a subordinate bond. It would already be
+          hidden (the candidates query keys off the series, which a sub bond has
+          none of), but relying on that is relying on an accident — and the
+          server refuses the combination outright. */}
+      {!isSob && clubOptions.length > 0 && (
         <label className="flex items-center gap-2 text-xs text-text-muted mt-3">
           Club into an in-flight application:
           <select className={sel} value={clubWith} onChange={(e) => setClubWith(e.target.value)}>

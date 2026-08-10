@@ -80,6 +80,20 @@ describe('agents admin + payee search', () => {
     expect((s2.json.rows as Array<{ kind: string }>).some((r) => r.kind === 'staff')).toBe(true);
   });
 
+  it('does not double-list an agent that has a paired login user (shadow dedup)', async () => {
+    const a = await admin();
+    // createAgent gives every agent a paired login user (agents.user_id). That
+    // login must NOT surface as its own payee row — the agent already represents
+    // the person, else the same name appears twice in the referred-by dropdown.
+    const ag = await a.post('/api/agents', { full_name: 'Shadowy Referrer' });
+    expect(Number(ag.json.user_id)).toBeGreaterThan(0); // it really has a shadow login
+
+    const s = await a.get('/api/agents/payee-search?q=Shadowy Referrer');
+    const mine = (s.json.rows as Array<{ kind: string; full_name: string }>).filter((r) => r.full_name === 'Shadowy Referrer');
+    expect(mine.length).toBe(1);         // once, not twice
+    expect(mine[0]!.kind).toBe('agent'); // the agent row, not the bare login
+  });
+
   it('edits an agent: name, phone and bank details persist; list returns them', async () => {
     const a = await admin();
     const ag = await a.post('/api/agents', { full_name: 'Editable Agent' });

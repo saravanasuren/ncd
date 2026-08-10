@@ -407,11 +407,13 @@ export async function todayBook(db: Db, actor: AuthUser, today: string) {
   const addRows = (await db.query<Record<string, unknown>>(
     `SELECT a.application_no, c.id AS customer_id, c.full_name AS customer, c.customer_code,
             s.code AS series_code, a.total_amount AS amount, a.date_money_received, a.status,
-            NULLIF(btrim(a.referred_by_text), '') AS referred_by,
+            -- Show the referrer's NAME, never their code (owner 2026-08-10) —
+            -- the same REFERRER rule used across the reports.
+            NULLIF(btrim(${REFERRER}), '') AS referred_by,
             CASE WHEN ${IS_LOCKER} THEN 'Locker'
                  WHEN a.source IN ('dhanamfin','lockerhub') THEN 'DhanamFin app'
                  ELSE COALESCE(NULLIF(btrim(a.collection_method), ''), 'Physical') END AS received_via
-     ${FROM} WHERE ${addScope.sql} AND a.date_money_received = $${addScope.params.length + 1}::date
+     ${FROM_ATTR} WHERE ${addScope.sql} AND a.date_money_received = $${addScope.params.length + 1}::date
      ORDER BY a.total_amount DESC, a.application_no`, [...addScope.params, today])).rows;
 
   // deletions: redemptions created today (scoped via their application), with detail + type split.

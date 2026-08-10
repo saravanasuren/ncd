@@ -259,10 +259,16 @@ export async function searchPayees(db: Db, q: string) {
   const agents = (await db.query(
     `SELECT 'agent' AS kind, id, agent_code AS code, full_name FROM agents
      WHERE is_active = TRUE AND deleted_at IS NULL AND (full_name ILIKE $1 OR agent_code ILIKE $1) ORDER BY full_name LIMIT 10`, [like])).rows;
+  // Every agent was given a paired login (migration 039), so the same person
+  // otherwise appears TWICE — once from `agents` (with a code) and once from
+  // `users` (the bare login, no code). Exclude any user that IS an agent's
+  // login; the agent row already represents them. Real employees (who are not
+  // an agent's shadow) still come through. (owner 2026-08-10)
   const staff = (await db.query(
     `SELECT CASE WHEN u.is_staff THEN 'staff' ELSE 'agent' END AS kind, u.id, u.code, u.full_name
        FROM users u JOIN roles r ON r.id = u.role_id
      WHERE u.is_active = TRUE AND r.name <> 'customer' AND (u.full_name ILIKE $1 OR u.code ILIKE $1)
+       AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.user_id = u.id AND a.deleted_at IS NULL)
      ORDER BY u.full_name LIMIT 10`, [like])).rows;
   return [...agents, ...staff];
 }

@@ -49,6 +49,8 @@ import type { AuthUser } from '../lib/authUser.js';
 import * as book from '../modules/reports/book.js';
 import * as incentives from '../modules/incentives/service.js';
 import { escrowSummary } from '../modules/escrow/service.js';
+import { payoutAnchor } from '../modules/dashboard/service.js';
+import { getSettingsMap } from '../modules/settings/service.js';
 
 /**
  * The extract is the WHOLE book, so it runs with unrestricted scope — same as a
@@ -244,12 +246,25 @@ export async function buildExtract(db: Db, outDir: string): Promise<{ generatedA
   // re-add the fact table (and reach a different answer).
   const k = await book.kpis(db, a) as Record<string, unknown>;
   const asOf = new Date().toISOString();
+  // Interest accrued but not yet paid, AS ON asOf — the exact figure the
+  // dashboard's "Interest Details" panel shows (consumer asked it to match):
+  // accrual runs from the most recent payout-day anchor to today, whole book.
+  // interest_monthly / interest_daily are the same run-rate the dashboard uses
+  // (Σ outstanding × coupon% ÷ 12, and the annual figure ÷ 365). (owner 2026-08-10)
+  const asOfDate = asOf.slice(0, 10);
+  const settings = await getSettingsMap(db);
+  const payoutDay = Number(settings['interest.payout_day_of_month'] ?? 28) || 28;
+  const accrued = await book.interestAccrued(db, a, {}, payoutAnchor(asOfDate, payoutDay), asOfDate);
+  const runRate = await book.monthlyInterestRunRate(db, a, {});
+  const interestDaily = Math.round((runRate.annual / 365) * 100) / 100;
   write('summary.csv', 'Summary',
     ['as_of', 'outstanding_book', 'active_investors', 'interest_paid', 'interest_scheduled',
+     'interest_accrued', 'interest_monthly', 'interest_daily',
      'customers', 'investments', 'series',
      'escrow_balance', 'escrow_not_enrolled', 'escrow_as_of'],
     [[asOf, num(k.outstanding_book), num(k.active_investors), num(k.interest_paid),
-      num(k.interest_scheduled), customers.length, apps.length, series.length,
+      num(k.interest_scheduled), num(accrued.total), num(runRate.gross_monthly), num(interestDaily),
+      customers.length, apps.length, series.length,
       num(esc.escrow_balance), num(esc.not_enrolled_total), d(esc.as_of)]]);
 
   // ── one workbook, one tab per table ────────────────────────────────────

@@ -18,7 +18,7 @@ import { OUTSTANDING_APPLICATION_STATUSES } from '@new-wealth/shared';
 
 /** Most recent payout-day anchor (28th by default) on/before `asOf`. Accrual runs
  * from here to `asOf`. Config-driven via settings.interest.payout_day_of_month. */
-function payoutAnchor(asOf: string, payoutDay: number): string {
+export function payoutAnchor(asOf: string, payoutDay: number): string {
   const d = new Date(`${asOf}T00:00:00Z`);
   const y = d.getUTCFullYear(), m = d.getUTCMonth(), day = d.getUTCDate();
   const anchor = day >= payoutDay ? new Date(Date.UTC(y, m, payoutDay)) : new Date(Date.UTC(y, m - 1, payoutDay));

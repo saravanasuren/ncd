@@ -1107,3 +1107,39 @@ export async function maturityAlerts(db: Db, actor: AuthUser, days: number, seri
     })),
   };
 }
+
+/** One row per unique holder in a series — name, PAN, total invested and demat
+ *  details. "Current holders" = on-book statuses; "total invested" = subscribed. */
+export interface SeriesHolderRow {
+  full_name: string;
+  pan: string | null;
+  total_invested: number;
+  investments: number;
+  depository: string | null;   // NSDL | CDSL
+  dp_id: string | null;
+  client_id: string | null;
+  is_dematerialised: boolean | null;
+}
+
+export async function seriesHoldersReport(db: Db, actor: AuthUser, seriesId: number): Promise<SeriesHolderRow[]> {
+  // status:'active' → OUTSTANDING statuses (current holders); seriesIds scopes to
+  // the chosen series; extra keeps live, non-archived customers. appWhere adds the
+  // actor's branch scope, so a branch user sees only their branch's holders.
+  const w = appWhere(actor, { seriesIds: [seriesId], status: 'active' }, ['c.is_active = TRUE', 'c.archived_at IS NULL']);
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT c.full_name, c.pan, c.depository, c.demat_dp_id, c.demat_client_id, c.is_dematerialised,
+            COALESCE(SUM(a.total_amount), 0) AS total_invested, COUNT(a.id)::int AS investments
+     ${FROM} WHERE ${w.sql}
+     GROUP BY c.id, c.full_name, c.pan, c.depository, c.demat_dp_id, c.demat_client_id, c.is_dematerialised
+     ORDER BY SUM(a.total_amount) DESC, c.full_name`, w.params);
+  return rows.map((r) => ({
+    full_name: r.full_name as string,
+    pan: (r.pan as string) ?? null,
+    total_invested: round2(Number(r.total_invested)),
+    investments: Number(r.investments),
+    depository: (r.depository as string) ?? null,
+    dp_id: (r.demat_dp_id as string) ?? null,
+    client_id: (r.demat_client_id as string) ?? null,
+    is_dematerialised: (r.is_dematerialised as boolean) ?? null,
+  }));
+}

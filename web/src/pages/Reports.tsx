@@ -109,6 +109,13 @@ export function ReportsPage() {
             </div>
           </div>
         )}
+        {can('reports:download') && (
+          <div className={card}>
+            <h2 className="text-sm font-semibold mb-2">Series holders — demat</h2>
+            <p className="text-xs text-text-muted mb-2">Pick a series → its unique holders with PAN, total invested and demat details (NSDL/CDSL, DP ID, Client ID).</p>
+            <a href="/app/reports/series-holders" className={dl}>Open report →</a>
+          </div>
+        )}
         {can('settings:manage') && (
           <div className={card}>
             <h2 className="text-sm font-semibold mb-2">Full database dump</h2>

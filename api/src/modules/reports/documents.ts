@@ -203,6 +203,28 @@ export async function customerWiseXlsx(rows: import('./book.js').CustomerWiseRow
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+/** Per-series holder list with demat details (one row per unique holder). */
+export async function seriesHoldersXlsx(seriesLabel: string, rows: import('./book.js').SeriesHolderRow[]): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Holders');
+  ws.addRow([`Series ${seriesLabel} — holders (demat)`]).eachCell((c) => { c.font = { bold: true, size: 13 }; });
+  ws.addRow([]);
+  ws.addRow(['S.No', 'Name', 'PAN', 'Total Invested', 'No. of Investments', 'Depository', 'DP ID', 'Client ID', 'Dematerialised'])
+    .eachCell((c) => { c.font = { bold: true }; });
+  rows.forEach((r, i) => {
+    ws.addRow([
+      i + 1, r.full_name, r.pan ?? '', r.total_invested, r.investments,
+      r.depository ?? '', r.dp_id ?? '', r.client_id ?? '',
+      r.is_dematerialised == null ? '' : (r.is_dematerialised ? 'Yes' : 'No'),
+    ]);
+  });
+  ws.addRow([]);
+  ws.addRow(['', 'TOTAL', '', rows.reduce((s, r) => s + r.total_invested, 0), rows.reduce((s, r) => s + r.investments, 0)])
+    .eachCell((c) => { c.font = { bold: true }; });
+  ws.columns = [{ width: 6 }, { width: 28 }, { width: 14 }, { width: 16 }, { width: 18 }, { width: 12 }, { width: 16 }, { width: 18 }, { width: 14 }];
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
 /** Full DB dump — key tables as sheets (admin). STREAMS to the response so the
  * large Schedule sheet (~tens of thousands of rows) never buffers the whole
  * workbook in memory (that OOM-killed the 512M service → nginx 502). */

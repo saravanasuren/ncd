@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { ROLE_LABELS } from '@new-wealth/shared';
 import { useAuth } from '../auth/AuthContext.js';
@@ -15,6 +16,14 @@ export function AppShell() {
   const nav = useNavigate();
   const location = useLocation();
   const items = NAV.filter((i) => can(...i.anyOf) && !(user && i.hideForRoles?.includes(user.role)));
+  // Pending-work counts for the sidebar badges — polled so they stay live as
+  // items are approved/rejected elsewhere (owner 2026-08-10). Keyed by nav route.
+  const badges = useQuery({
+    queryKey: ['nav-badges'],
+    queryFn: () => api.get<{ counts: Record<string, number> }>('/api/nav/badges'),
+    refetchInterval: 60_000,
+  });
+  const counts = badges.data?.counts ?? {};
   const [q, setQ] = useState('');
   const [pwOpen, setPwOpen] = useState(false);
   const [results, setResults] = useState<{ customers: any[]; applications: any[]; agents: any[]; staff: any[] } | null>(null);
@@ -56,11 +65,17 @@ export function AppShell() {
           {items.map((item) => (
             <NavLink key={item.to} to={item.to}
               className={({ isActive }) =>
-                `px-3 py-2 rounded text-sm ${
+                `px-3 py-2 rounded text-sm flex items-center gap-2 ${
                   isActive ? 'bg-[color:var(--primary-ring)] text-primary font-semibold' : 'text-text-label hover:bg-bg'
                 }`
               }>
-              {item.label}
+              <span className="min-w-0 truncate">{item.label}</span>
+              {(counts[item.to] ?? 0) > 0 && (
+                <span className="ml-auto shrink-0 min-w-[1.25rem] text-center text-[11px] font-semibold rounded-full px-1.5 py-0.5 bg-primary text-white"
+                  title={`${counts[item.to]} waiting for you`}>
+                  {counts[item.to]}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>

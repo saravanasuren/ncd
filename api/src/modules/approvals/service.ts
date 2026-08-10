@@ -295,6 +295,35 @@ export async function getById(db: Db, id: number): Promise<ApprovalRow | null> {
 }
 
 /**
+ * How many pending requests are actually waiting on THIS user to act — the same
+ * visibility getQueue applies (right checker permission, not the maker unless a
+ * self-approving super admin, and not one they have already acted on), but
+ * without the per-row subject/amount lookups, so it is cheap enough for the
+ * sidebar badge to poll (owner 2026-08-10).
+ */
+export async function pendingApprovalsCount(db: Db, user: AuthUser): Promise<number> {
+  const canCheck: Permission[] = ['approvals:check', 'approvals:check-premature', 'approvals:check-handover'];
+  if (!canCheck.some((p) => user.permissions.includes(p))) return 0;
+  const { rows } = await db.query<Record<string, unknown>>(
+    "SELECT * FROM approval_requests WHERE status = 'Pending'");
+  if (rows.length === 0) return 0;
+  const acted = new Set((await db.query<{ approval_request_id: string }>(
+    'SELECT DISTINCT approval_request_id FROM approval_actions WHERE approver_user_id = $1', [user.id]))
+    .rows.map((r) => String(r.approval_request_id)));
+  let n = 0;
+  for (const r of rows) {
+    const req = rowToApproval(r);
+    if (!user.permissions.includes(checkerPermFor(req))) continue;
+    const isMaker = req.maker_user_id === user.id;
+    const selfApproval = isMaker && user.role === 'super_admin';
+    if (isMaker && !selfApproval) continue;
+    if (acted.has(String(req.id))) continue;
+    n++;
+  }
+  return n;
+}
+
+/**
  * The applications a pending batch approval will act on — the same predicate
  * the on-approve handler uses (activation: PendingActivation in the series;
  * allotment: Active and not yet allotted). Snapshot at read time.

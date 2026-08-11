@@ -8,6 +8,21 @@ import { formatNumber, DEFAULT_NUMBER_FORMATS } from './numbering.js';
 
 export type SequenceKey = keyof typeof DEFAULT_NUMBER_FORMATS;
 
+/**
+ * Is this a Postgres unique-violation (SQLSTATE 23505)?
+ *
+ * Callers that allocate a human-visible number use this to tell "that number is
+ * already taken, take the next one" apart from a real failure. The code is
+ * checked first; the message is a fallback because the error crosses a driver
+ * boundary (pg in production, PGlite in tests) and only the code is guaranteed
+ * to survive both.
+ */
+export function isUniqueViolation(e: unknown): boolean {
+  const err = e as { code?: string; message?: string } | null;
+  if (err?.code === '23505') return true;
+  return /duplicate key value|unique constraint/i.test(String(err?.message ?? ''));
+}
+
 /** Allocate the next sequence value for `key` (creates the row if absent). */
 export async function nextSeq(tx: Db, key: string): Promise<number> {
   const upsert = await tx.query<{ next_value: string }>(

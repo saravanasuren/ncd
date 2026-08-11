@@ -197,8 +197,14 @@ export interface TdsEventRow {
 /** History: every ₹30L crossing, what it recovered, and how it ended. */
 export async function listTdsEvents(db: Db, opts: { status?: string } = {}): Promise<TdsEventRow[]> {
   const params: unknown[] = [];
-  let where = '';
-  if (opts.status) { params.push(opts.status); where = `WHERE e.status = $${params.length}`; }
+  // 'Withdrawn' events were auto-flagged in error (e.g. a book sitting exactly
+  // ON ₹30L, before the threshold went strictly-over) and pulled back — they
+  // are NOT a crossing and must never appear on this list under any filter
+  // (owner 2026-08-10). A genuine later crossing raises a fresh event, so this
+  // hides only the mistakes, never a real one.
+  const conds: string[] = ["e.status <> 'Withdrawn'"];
+  if (opts.status) { params.push(opts.status); conds.push(`e.status = $${params.length}`); }
+  const where = `WHERE ${conds.join(' AND ')}`;
   const rows = (await db.query<Record<string, unknown>>(
     `SELECT e.id, e.customer_id, c.full_name AS customer, c.customer_code,
             e.outstanding_at_crossing, e.crossed_on, e.interest_paid_untaxed, e.tds_rate_pct,

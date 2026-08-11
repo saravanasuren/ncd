@@ -24,9 +24,14 @@ import { customerAuthRouter } from './auth.js';
 import { customerReadsRouter } from './reads.js';
 import { customerWritesRouter } from './writes.js';
 import { agentsRouter } from './agents.js';
+import { exportRouter } from './export.js';
 
 export const integrationRouter = Router();
 integrationRouter.use(requireIntegrationKey);
+
+// Read-only export surface for Notwo (docs/NOTWO_INTEGRATION_ARCHITECTURE.md).
+// GET-only; sits behind the same key auth + rate limiter as the rest.
+integrationRouter.use('/export/v1', exportRouter);
 
 /** ncd-native summary lookup (kept alongside the legacy /customer-by-phone). */
 integrationRouter.get('/customers/by-phone/:phone', asyncHandler(async (req, res) => {

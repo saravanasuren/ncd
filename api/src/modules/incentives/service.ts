@@ -123,11 +123,12 @@ export async function incentiveTotals(db: Db) {
  * 'referrer' payee has no code and its name is the free-text referrer.
  */
 export async function accrualsForExtract(db: Db): Promise<Array<{
-  application_no: string; payee_type: string; payee_code: string | null; payee_name: string | null;
+  external_accrual_id: string; investment_id: string; application_no: string; payee_type: string; payee_id: string;
+  payee_code: string | null; payee_name: string | null;
   incentive_amount: string; paid: boolean; paid_amount: string; accrual_date: string;
 }>> {
   const { rows } = await db.query(
-    `SELECT a.application_no, ia.payee_type,
+    `SELECT ia.id AS external_accrual_id, a.id AS investment_id, a.application_no, ia.payee_type, ia.payee_id,
             CASE ia.payee_type
               WHEN 'staff' THEN (SELECT u.code FROM users u WHERE u.id = ia.payee_id)
               WHEN 'agent' THEN (SELECT ag.agent_code FROM agents ag WHERE ag.id = ia.payee_id)

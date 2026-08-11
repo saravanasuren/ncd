@@ -13,6 +13,7 @@ let seriesId: number;
 let schemeId: number;
 let custId: number;
 let appId: number;
+let appNo: string;
 const KEY = 'dev-integration-key';
 
 const exp = (path: string, key: string | null = KEY) =>
@@ -36,6 +37,7 @@ beforeAll(async () => {
   });
   appId = Number(create.json.id);
   await approveInvestment(ncd, create); // → Active, so it lands in the reports
+  appNo = String((await ctx.db.query('SELECT application_no FROM applications WHERE id = $1', [appId])).rows[0]!.application_no);
 });
 afterAll(async () => { await ctx.close(); });
 
@@ -105,5 +107,60 @@ describe('export API — stage 1 contract', () => {
     expect(r.json.data.length).toBeLessThanOrEqual(1);
     // next_cursor is a number when more rows remain, else null.
     expect(r.json.next_cursor === null || typeof r.json.next_cursor === 'number').toBe(true);
+  });
+});
+
+const SERIES_FIELDS = ['external_series_id', 'series_code', 'status', 'investors', 'issued', 'redeemed', 'outstanding'].sort();
+const STAFF_FIELDS = ['external_staff_id', 'staff_code', 'full_name', 'role', 'active'].sort();
+const AGENT_FIELDS = ['external_agent_id', 'agent_code', 'full_name', 'commission_pct', 'active'].sort();
+const INCENTIVE_FIELDS = ['external_accrual_id', 'application_no', 'payee_type', 'payee_code', 'payee_name', 'incentive_amount', 'paid', 'paid_amount', 'accrual_date'].sort();
+const INTEREST_FIELDS = ['due_date', 'application_no', 'customer_code', 'customer', 'series_code', 'due_type', 'gross_amount', 'tds_amount', 'net_amount', 'status', 'paid_at', 'utr'].sort();
+
+describe('export API — stage 2 (book resources)', () => {
+  it('manifest lists all stage-2 resource counts', async () => {
+    const r = await exp('/manifest');
+    for (const f of ['customers', 'investments', 'series', 'redemptions', 'staff', 'agents', 'incentives']) {
+      expect(r.json.resources, `resources.${f}`).toHaveProperty(f);
+    }
+  });
+
+  it('series: our demo series present, exact allowlist', async () => {
+    const r = await exp('/series');
+    expect(r.status).toBe(200);
+    const row = r.json.data.find((s: any) => s.series_code === 'NCD DEMO');
+    expect(row).toBeTruthy();
+    expect(Object.keys(row).sort()).toEqual(SERIES_FIELDS);
+    expect(typeof row.external_series_id).toBe('number');
+  });
+
+  it('staff: rows present, exact allowlist', async () => {
+    const r = await exp('/staff');
+    expect(r.status).toBe(200);
+    expect(r.json.data.length).toBeGreaterThan(0);
+    expect(Object.keys(r.json.data[0]).sort()).toEqual(STAFF_FIELDS);
+  });
+
+  it('agents: exact allowlist when rows exist', async () => {
+    const r = await exp('/agents');
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.json.data)).toBe(true);
+    if (r.json.data.length) expect(Object.keys(r.json.data[0]).sort()).toEqual(AGENT_FIELDS);
+  });
+
+  it('redemptions & incentives: envelope + allowlist when rows exist', async () => {
+    const red = await exp('/redemptions');
+    expect(red.status).toBe(200);
+    expect(Array.isArray(red.json.data)).toBe(true);
+    const inc = await exp('/incentives');
+    expect(inc.status).toBe(200);
+    if (inc.json.data.length) expect(Object.keys(inc.json.data[0]).sort()).toEqual(INCENTIVE_FIELDS);
+  });
+
+  it('interest: drill-down by application_no returns the 12-field ledger rows', async () => {
+    const r = await exp(`/interest?application_no=${encodeURIComponent(appNo)}`);
+    expect(r.status).toBe(200);
+    expect(r.json.data.length).toBeGreaterThan(0); // an Active investment has a schedule
+    expect(Object.keys(r.json.data[0]).sort()).toEqual(INTEREST_FIELDS);
+    expect(r.json.data.every((x: any) => x.application_no === appNo)).toBe(true);
   });
 });

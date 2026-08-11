@@ -426,7 +426,7 @@ interface Editable {
   readonly: Record<string, string>;
   fields: {
     total_amount: number; date_money_received: string; collection_method: string;
-    collection_reference: string; referred_by_text: string;
+    collection_reference: string; referred_by_text: string; collection_bank_id: number | null;
   };
 }
 
@@ -444,6 +444,7 @@ const FIELD_LABELS: Array<[keyof Editable['fields'], string, string]> = [
   ['date_money_received', 'Money received on', 'date'],
   ['collection_method', 'Payment method', 'select'],
   ['collection_reference', 'Payment reference / UTR', 'text'],
+  ['collection_bank_id', 'Credited to (Dhanam account)', 'bank'],
   ['referred_by_text', 'Referred by (code or name)', 'text'],
 ];
 
@@ -454,6 +455,12 @@ function EditableInvestment({ ed, id, canAct, selfApproval, actionLabel, onDone 
   const [f, setF] = useState(ed.fields);
   const [err, setErr] = useState('');
   const [selfReason, setSelfReason] = useState('');
+  // The Dhanam accounts money can be credited to (the collection accounts).
+  const banks = useQuery({
+    queryKey: ['collection-banks'],
+    queryFn: () => api.get<{ rows: Array<{ id: number; account_label: string; account_number: string | null; is_collection_account: boolean; is_active: boolean }> }>('/api/banks'),
+  });
+  const collectionBanks = (banks.data?.rows ?? []).filter((b) => b.is_collection_account && b.is_active);
   const blocked = !!selfApproval && selfReason.trim().length < 3;
   const dirty = (Object.keys(ed.fields) as Array<keyof Editable['fields']>).some((k) => String(f[k] ?? '') !== String(ed.fields[k] ?? ''));
   // Approval is the go-live gate: nothing becomes Active off-denomination,
@@ -553,6 +560,19 @@ function EditableInvestment({ ed, id, canAct, selfApproval, actionLabel, onDone 
             {key === 'referred_by_text' ? (
               <ReferredByPicker className={inp} value={String(f.referred_by_text ?? '')}
                 onChange={(v) => setF({ ...f, referred_by_text: v })} />
+            ) : key === 'collection_bank_id' ? (
+              <select className={inp} value={f.collection_bank_id != null ? String(f.collection_bank_id) : ''}
+                onChange={(e) => setF({ ...f, collection_bank_id: e.target.value ? Number(e.target.value) : null })}>
+                <option value="">— not recorded —</option>
+                {collectionBanks.map((b) => (
+                  <option key={b.id} value={b.id}>{b.account_label}{b.account_number ? ` (${b.account_number})` : ''}</option>
+                ))}
+                {/* Keep an already-set account selectable even if it's since been
+                    de-flagged/deactivated, so approving doesn't silently wipe it. */}
+                {f.collection_bank_id != null && !collectionBanks.some((b) => b.id === f.collection_bank_id) && (
+                  <option value={f.collection_bank_id}>current account #{f.collection_bank_id}</option>
+                )}
+              </select>
             ) : type === 'select' ? (
               /* Was a free text box, which is how the book ended up holding
                  NEFT, NEFT/RTGS, RTGS and neft as four different things

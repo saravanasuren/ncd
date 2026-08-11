@@ -159,7 +159,7 @@ export async function approve(
         if (!(f in edits)) continue;
         const raw = edits[f];
         const val = raw === '' || raw === undefined ? null : raw;
-        params.push(f === 'total_amount' && val !== null ? Number(val) : val);
+        params.push((f === 'total_amount' || f === 'collection_bank_id') && val !== null ? Number(val) : val);
         sets.push(`${f} = $${params.length}`);
       }
       if (sets.length) {
@@ -345,7 +345,7 @@ export async function pendingApprovalsCount(db: Db, user: AuthUser): Promise<num
 // (go-live overwrites it).
 export const EDITABLE_APPLICATION_FIELDS = [
   'total_amount', 'date_money_received', 'collection_method',
-  'collection_reference', 'referred_by_text',
+  'collection_reference', 'referred_by_text', 'collection_bank_id',
 ] as const;
 
 /** The maker's input, pre-filled so the approver sees (and can correct) exactly
@@ -354,7 +354,7 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
   if (req.entity_type !== 'applications' || !req.entity_id) return null;
   const r = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.application_no, a.total_amount, a.date_money_received, a.collection_method,
-            a.collection_reference, a.referred_by_text, a.interest_start_date, a.created_at,
+            a.collection_reference, a.referred_by_text, a.collection_bank_id, a.interest_start_date, a.created_at,
             (a.receipt_file_path IS NOT NULL) AS has_receipt,
             a.status, a.product_type, s.code AS series_code,
             COALESCE(sc.code, sp.code) AS scheme_code,
@@ -434,6 +434,7 @@ export async function editableForRequest(db: Db, req: { entity_type?: string | n
       collection_method: (r.collection_method ?? '') as string,
       collection_reference: (r.collection_reference ?? '') as string,
       referred_by_text: (r.referred_by_text ?? '') as string,
+      collection_bank_id: r.collection_bank_id != null ? Number(r.collection_bank_id) : null,
     },
   };
 }
@@ -482,11 +483,13 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
     const r = (await db.query<Record<string, unknown>>(
       `SELECT a.application_no, a.total_amount, a.status, a.date_money_received, a.referred_by_text,
               c.full_name AS customer, c.customer_code, s.code AS series_code,
-              u.full_name AS enrolled_by
+              u.full_name AS enrolled_by,
+              cb.account_label AS credited_label, cb.bank_name AS credited_bank, cb.account_number AS credited_account
          FROM applications a JOIN customers c ON c.id = a.customer_id
          -- LEFT for the same reason as above: no series must not mean no card.
          LEFT JOIN series s ON s.id = a.series_id
          LEFT JOIN users u ON u.id = a.enrolled_by_user_id
+         LEFT JOIN banks cb ON cb.id = a.collection_bank_id
         WHERE a.id = $1`, [id])).rows[0];
     if (r) return {
       subject: `${r.customer} · ${r.application_no}`,
@@ -496,6 +499,9 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
         fact('Application', r.application_no),
         fact('Series', r.series_code),
         fact('Money received', dateOnly(r.date_money_received) ?? 'not recorded'),
+        fact('Credited to', r.credited_label
+          ? `${r.credited_label}${r.credited_account ? ` (${r.credited_account})` : ''}`
+          : 'not recorded'),
         fact('Referred by', r.referred_by_text ?? 'Direct'),
         fact('Enrolled by', r.enrolled_by),
         fact('Current status', r.status),

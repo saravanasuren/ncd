@@ -25,7 +25,7 @@ usersRouter.get(
 );
 
 const createSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().email(),
   full_name: z.string().min(1),
   role: z.string(),
   password: z.string().min(8),
@@ -46,6 +46,7 @@ usersRouter.post(
 
 const updateSchema = z.object({
   full_name: z.string().min(1).optional(),
+  email: z.string().trim().email().optional(),
   role: z.string().optional(),
   branch_id: z.number().nullable().optional(),
   reports_to_user_id: z.number().nullable().optional(),

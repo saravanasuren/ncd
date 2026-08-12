@@ -61,9 +61,6 @@ export function LockerEnrollmentPage() {
   const [ncdCust, setNcdCust] = useState<any | null>(null); // matched NCD customer
   const [notFound, setNotFound] = useState(false);
   // Backing the deposit with one of the customer's existing NCDs.
-  const [candidates, setCandidates] = useState<any[] | null>(null);
-  const [chosenNcd, setChosenNcd] = useState('');
-  const [pledge, setPledge] = useState<{ deposit: number; total: number; shortfall: number; used: number; max: number; fully: boolean; settled: boolean } | null>(null);
   // Cheque register (NCD-side only — never settles the locker on LockerHub).
   const [cheques, setCheques] = useState<any[]>([]);
   const [chqLeg, setChqLeg] = useState<'rent' | 'deposit' | null>(null);
@@ -181,32 +178,6 @@ export function LockerEnrollmentPage() {
     if (!app?.application_id) return;
     const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}`));
     if (r) setApp((a: any) => ({ ...a, ...r }));
-  };
-  /** This customer's live NCDs and how much of each is still free to pledge. */
-  const loadCandidates = async () => {
-    if (!ncdCust) return;
-    const r = await run(api.get<any>(`/api/lockers/deposit-links/candidates?customer_id=${ncdCust.id}`));
-    if (r) setCandidates(r.candidates ?? []);
-  };
-  /** Pledge the chosen NCD against this locker's deposit leg. The amount is
-   * LockerHub's own deposit figure — never typed here. */
-  const linkNcd = async () => {
-    if (!chosenNcd || !app?.application_id) return;
-    const r = await run(api.post<any>('/api/lockers/deposit-links', {
-      application_id: Number(chosenNcd),
-      lockerhub_application_id: String(app.application_id),
-    }));
-    if (r) {
-      setChosenNcd('');
-      setPledge({
-        deposit: Number(r.deposit_amount ?? 0), total: Number(r.pledged_total ?? 0),
-        shortfall: Number(r.shortfall_remaining ?? 0), used: Number(r.ncds_linked ?? 0),
-        max: Number(r.max_ncds ?? 0), fully: !!r.fully_backed, settled: !!r.lockerhub_settled,
-      });
-      // Refresh the list so the next pick shows updated free amounts.
-      await loadCandidates();
-      await refreshApp();
-    }
   };
   // ── Cheque register ────────────────────────────────────────────────────
   const loadCheques = async () => {
@@ -487,7 +458,7 @@ export function LockerEnrollmentPage() {
           </select>
           <select className={inp} value={size} disabled={!branchId || avail.isLoading} onChange={(e) => { setSize(e.target.value); setApp(null); setLockerId(''); }}>
             <option value="">{avail.isLoading ? 'Loading…' : 'Size…'}</option>
-            {(avail.data?.sizes ?? []).map((s) => <option key={s.size} value={s.size} disabled={s.vacant_count <= 0}>{s.size} · {money(s.rent_payable ?? s.rent_incl_gst)} rent · {money(s.deposit)} deposit · {s.vacant_count} vacant</option>)}
+            {(avail.data?.sizes ?? []).map((s) => <option key={s.size} value={s.size} disabled={s.vacant_count <= 0}>{s.size} · {money(s.rent_payable ?? s.rent_incl_gst)} rent · {s.vacant_count} vacant</option>)}
           </select>
           {/* Locker number, chosen here rather than at allotment (owner
               2026-07-29): the customer is standing at the counter now, and
@@ -522,10 +493,9 @@ export function LockerEnrollmentPage() {
               Rent (incl. GST {chosen.gst_pct}%): <s>{money(chosen.rent_incl_gst)}</s>
               {' '}· Waiver{chosen.rent_waiver_pct != null ? ` (${chosen.rent_waiver_pct}%)` : ''}: −{money(chosen.rent_waiver_amount ?? chosen.rent_incl_gst - chosen.rent_payable)}
               {' '}· Payable: <b className="text-text">{money(chosen.rent_payable)}</b>
-              {' '}· Deposit: <b className="text-text">{money(chosen.deposit)}</b>
             </div>
           ) : (
-            <div className="text-xs text-text-muted mt-2">Rent (incl. GST {chosen.gst_pct}%): <b className="text-text">{money(chosen.rent_incl_gst)}</b> · Deposit: <b className="text-text">{money(chosen.deposit)}</b></div>
+            <div className="text-xs text-text-muted mt-2">Rent (incl. GST {chosen.gst_pct}%): <b className="text-text">{money(chosen.rent_incl_gst)}</b></div>
           )
         )}
       </div>
@@ -621,10 +591,9 @@ export function LockerEnrollmentPage() {
                   <div className="text-xs text-text-muted">
                     Rent <s>{money(app.pricing.rent_incl_gst)}</s>
                     {' '}− waiver{app.pricing.rent_waiver_pct != null ? ` ${app.pricing.rent_waiver_pct}%` : ''} = <b className="text-text">{money(app.pricing.rent_payable)}</b>
-                    {' '}· Deposit {money(app.pricing.deposit)}
                   </div>
                 ) : (
-                  <div className="text-xs text-text-muted">Rent {money(app.pricing.rent_incl_gst)} · Deposit {money(app.pricing.deposit)}</div>
+                  <div className="text-xs text-text-muted">Rent {money(app.pricing.rent_incl_gst)}</div>
                 )
               )}
             </div>
@@ -637,7 +606,9 @@ export function LockerEnrollmentPage() {
         <div className={card}>
           <h2 className={h2}>4 · Collect payment (online)</h2>
           <div className="flex flex-col gap-2">
-            {(['rent', 'deposit'] as const).map((leg) => {
+            {/* RENT-ONLY (owner 2026-08-12): NCD lockers collect rent only; the
+                deposit is auto-waived at enrolment, so no deposit leg is shown. */}
+            {(['rent'] as const).map((leg) => {
               const st = legState(leg);
               const settled = st?.settled === true;
               const link = links[leg];
@@ -659,32 +630,6 @@ export function LockerEnrollmentPage() {
                       <button className={btnGhost} onClick={() => navigator.clipboard?.writeText(link.url)}>Copy</button>
                       <a className={btnGhost} href={link.url} target="_blank" rel="noopener noreferrer">Open</a>
                     </>
-                  )}
-                  {/* Back the deposit with one of this customer's NCDs. The
-                      amount is LockerHub's own deposit figure — staff pick the
-                      investment, never the number. */}
-                  {leg === 'deposit' && !settled && (
-                    ncdCust ? (
-                      candidates === null ? (
-                        <button className={btnGhost} disabled={busy} onClick={loadCandidates}>or back it with an investment…</button>
-                      ) : candidates.length === 0 ? (
-                        <span className="text-xs text-text-muted">No live investment of {ncdCust.full_name} has free amount to pledge.</span>
-                      ) : (
-                        <>
-                          <select className={inp} value={chosenNcd} onChange={(e) => setChosenNcd(e.target.value)}>
-                            <option value="">Back with an investment…</option>
-                            {candidates.map((c) => (
-                              <option key={c.id} value={String(c.id)} disabled={c.free <= 0}>
-                                {c.application_no} · {c.product_type === 'subordinate_bond' ? 'Sub bond' : 'NCD'}{c.series_code ? ` ${c.series_code}` : ''} · {money(c.free)} free
-                              </option>
-                            ))}
-                          </select>
-                          <button className={btnGhost} disabled={!chosenNcd || busy} onClick={linkNcd}>Link deposit</button>
-                        </>
-                      )
-                    ) : (
-                      <span className="text-xs text-text-muted">Look the customer up by PAN to back this deposit with an NCD.</span>
-                    )
                   )}
                   {/* A waiver in flight, or approved and stuck. Money is only
                       actually waived once LockerHub has it. */}
@@ -751,13 +696,6 @@ export function LockerEnrollmentPage() {
                 </div>
               );
             })}
-            {pledge && (
-              <div className={`text-xs rounded px-3 py-2 ${pledge.fully ? 'bg-[color:var(--success-bg)] text-success' : 'bg-[color:var(--warn-bg)] text-warn'}`}>
-                {pledge.fully
-                  ? <>Deposit fully backed — {money(pledge.total)} of {money(pledge.deposit)} pledged across {pledge.used} investment(s).{pledge.settled ? ' Settled on LockerHub.' : ' LockerHub settlement did not confirm — retry the link.'}</>
-                  : <>{money(pledge.total)} of {money(pledge.deposit)} pledged across {pledge.used} of {pledge.max} investment(s) — <b>{money(pledge.shortfall)} still needed</b>. Link another NCD to complete it; the locker is not settled until it's fully backed.</>}
-              </div>
-            )}
             {chqLeg && (
               <div className="flex flex-wrap gap-2 items-end border-t border-border pt-3 mt-1">
                 <label className="text-xs text-text-muted">Cheque no<input className={`${inp} block mt-1 w-40`} value={chq.cheque_no} onChange={(e) => setChq({ ...chq, cheque_no: e.target.value })} autoFocus /></label>

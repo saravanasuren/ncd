@@ -30,6 +30,7 @@ const EMPTY_FORM = { full_name: '', email: '', password: '', role: '', branch_id
 interface EditState {
   id: number;
   full_name: string;
+  email: string;    // the login address
   role: string;
   branch_id: string;
   reports_to_user_id: string;
@@ -81,6 +82,7 @@ export function UsersPage() {
     mutationFn: (e: EditState) =>
       api.put<{ ok: boolean; agentMerged: { agent_code: string; accruals_moved: number; amount_moved: number } | null; agentMergeSkipped: string | null }>(`/api/users/${e.id}`, {
         full_name: e.full_name,
+        email: e.email.trim(),
         role: e.role,
         branch_id: e.branch_id ? Number(e.branch_id) : null,
         reports_to_user_id: e.reports_to_user_id ? Number(e.reports_to_user_id) : null,
@@ -123,7 +125,14 @@ export function UsersPage() {
       render: (u) => edit?.id === u.id
         ? <input className={inp} value={edit.full_name} onChange={(e) => setEdit({ ...edit, full_name: e.target.value })} />
         : u.full_name },
-    { key: 'email', header: 'Email', tdClassName: 'text-text-muted' },
+    // Editable: this IS the login address. 24 agent-derived accounts sit on a
+    // placeholder @agents.dhanam.local that nobody can receive mail at, so they
+    // could never sign in until it could be changed (owner 2026-08-12).
+    { key: 'email', header: 'Email', tdClassName: 'text-text-muted',
+      render: (u) => edit?.id === u.id
+        ? <input className={`${inp} w-56`} type="email" placeholder="Login email" autoComplete="off"
+            value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} />
+        : u.email },
     { key: 'role', header: 'Role', value: (u) => (isRole(u.role) ? ROLE_LABELS[u.role] : u.role),
       render: (u) => edit?.id === u.id
         ? <select className={inp} value={edit.role} onChange={(e) => setEdit({ ...edit, role: e.target.value })}>
@@ -166,7 +175,8 @@ export function UsersPage() {
           <input className={`${inp} w-32`} type="password" placeholder="New password" autoComplete="new-password"
             value={edit.password} onChange={(e) => setEdit({ ...edit, password: e.target.value })} />
           <button
-            disabled={!edit.full_name || (edit.password !== '' && edit.password.length < 8) || update.isPending}
+            disabled={!edit.full_name || !/^\S+@\S+\.\S+$/.test(edit.email.trim())
+              || (edit.password !== '' && edit.password.length < 8) || update.isPending}
             onClick={() => { setErr(''); update.mutate(edit); }}
             className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Save</button>
           <button onClick={() => setEdit(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
@@ -175,7 +185,7 @@ export function UsersPage() {
         <span className="inline-flex items-center gap-2.5 justify-end">
           {can('users:manage') && (
             <button
-              onClick={() => { setErr(''); setEdit({ id: u.id, full_name: u.full_name, role: u.role, branch_id: u.branch_id != null ? String(u.branch_id) : '', reports_to_user_id: u.reports_to_user_id != null ? String(u.reports_to_user_id) : '', is_active: u.is_active, password: '', code: u.code ?? '', is_staff: u.is_staff }); }}
+              onClick={() => { setErr(''); setEdit({ id: u.id, full_name: u.full_name, email: u.email, role: u.role, branch_id: u.branch_id != null ? String(u.branch_id) : '', reports_to_user_id: u.reports_to_user_id != null ? String(u.reports_to_user_id) : '', is_active: u.is_active, password: '', code: u.code ?? '', is_staff: u.is_staff }); }}
               className="text-xs text-primary hover:underline">Edit</button>
           )}
           {can('users:manage') && (

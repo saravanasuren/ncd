@@ -523,7 +523,13 @@ export async function todayBook(db: Db, actor: AuthUser, today: string) {
 export async function applicationsFlat(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   const w = appWhere(actor, filters);
   const { rows } = await db.query(
-    `SELECT a.application_no, c.customer_code, c.full_name AS customer, s.code AS series_code,
+    // DISTINCT ON (a.id): one row per application. A clubbed investment has
+    // several application_lines (parts of ONE NCD at one scheme — same rate /
+    // tenure), e.g. APP-2026-001055 = ₹50k+₹25k+₹25k; without this the LEFT JOIN
+    // fans that single ₹1L investment into 3 rows and over-counts the total
+    // (Notwo 2026-08-12). ORDER a.id, l.id takes the first line's rate/tenure.
+    `SELECT DISTINCT ON (a.id)
+            a.application_no, c.customer_code, c.full_name AS customer, s.code AS series_code,
             a.status, a.total_amount, a.date_money_received, a.allotment_date, a.maturity_date, a.redemption_date,
             l.coupon_rate_pct, l.tenure_months, l.payout_frequency,
             a.source,
@@ -531,7 +537,7 @@ export async function applicationsFlat(db: Db, actor: AuthUser, filters: BookFil
                  WHEN a.source IN ('dhanamfin','lockerhub') THEN 'DhanamFin app'
                  ELSE 'Physical' END AS channel
      ${FROM} LEFT JOIN application_lines l ON l.application_id = a.id
-     WHERE ${w.sql} ORDER BY a.application_no`, w.params);
+     WHERE ${w.sql} ORDER BY a.id, l.id`, w.params);
   return rows;
 }
 

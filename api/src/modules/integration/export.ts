@@ -87,34 +87,44 @@ export const exportRouter = Router();
  * null for resources with no updated_at column (full-snapshot / live). */
 exportRouter.get('/manifest', asyncHandler(async (_req, res) => {
   const db = getDb();
-  const r = (await db.query<Record<string, string | null>>(
-    `SELECT
-       (SELECT max(updated_at) FROM customers)       AS customers_max,
-       (SELECT count(*) FROM customers WHERE is_active = TRUE AND archived_at IS NULL) AS customers_n,
-       (SELECT max(updated_at) FROM applications)     AS investments_max,
-       (SELECT count(*) FROM applications)            AS investments_n,
-       (SELECT count(*) FROM series)                  AS series_n,
-       (SELECT count(*) FROM redemptions WHERE status IN ('Approved','Paid')) AS redemptions_n,
-       (SELECT count(*) FROM users)                   AS staff_n,
-       (SELECT count(*) FROM agents)                  AS agents_n,
-       (SELECT count(*) FROM incentive_accruals)      AS incentives_n,
-       (SELECT count(*) FROM disbursement_schedule)   AS interest_n,
-       (SELECT max(updated_at) FROM locker_cheques WHERE leg = 'rent') AS cheques_max,
-       (SELECT count(*) FROM locker_cheques WHERE leg = 'rent')        AS cheques_n`)).rows[0]!;
-  const R = (max: string | null | undefined, count: string | null | undefined) => ({ max_updated_at: ts(max), count: Number(count ?? 0) });
+  const a = SYSTEM_ACTOR;
+  // Each count MUST equal its list endpoint's total row count — Notwo reconciles
+  // on these (a raw count(*) that includes leads / draft rows disagrees with the
+  // report-function list and flags a false gap). So for the resources whose list
+  // uses a FILTERED report fn, the count is that fn's own length (drift-proof);
+  // raw count(*) is used only where the list endpoint is itself a raw query
+  // (staff, agents, interest, locker-cheques). All parallel; the book is small.
+  const [maxes, customers, apps, series, reds, incs, rawCounts] = await Promise.all([
+    db.query<Record<string, string | null>>(
+      `SELECT (SELECT max(updated_at) FROM customers)     AS customers_max,
+              (SELECT max(updated_at) FROM applications)  AS investments_max,
+              (SELECT max(updated_at) FROM locker_cheques WHERE leg = 'rent') AS cheques_max`),
+    book.customerWiseReport(db, a),
+    book.applicationsFlat(db, a) as Promise<unknown[]>,
+    book.seriesSummary(db, a) as Promise<unknown[]>,
+    book.redemptions(db, a) as Promise<unknown[]>,
+    incentives.accrualsForExtract(db),
+    db.query<Record<string, string | null>>(
+      `SELECT (SELECT count(*) FROM users)                 AS staff_n,
+              (SELECT count(*) FROM agents)                AS agents_n,
+              (SELECT count(*) FROM disbursement_schedule) AS interest_n,
+              (SELECT count(*) FROM locker_cheques WHERE leg = 'rent') AS cheques_n`),
+  ]);
+  const m = maxes.rows[0]!; const rc = rawCounts.rows[0]!;
+  const R = (max: string | null | undefined, count: string | number | null | undefined) => ({ max_updated_at: ts(max), count: Number(count ?? 0) });
   res.json({
     api_version: 1,
     generated_at: new Date().toISOString(),
     resources: {
-      customers: R(r.customers_max, r.customers_n),
-      investments: R(r.investments_max, r.investments_n),
-      series: R(null, r.series_n),
-      redemptions: R(null, r.redemptions_n),
-      staff: R(null, r.staff_n),
-      agents: R(null, r.agents_n),
-      incentives: R(null, r.incentives_n),
-      interest: R(null, r.interest_n),
-      'locker-cheques': R(r.cheques_max, r.cheques_n),
+      customers: R(m.customers_max, customers.length),
+      investments: R(m.investments_max, apps.length),
+      series: R(null, series.length),
+      redemptions: R(null, reds.length),
+      staff: R(null, rc.staff_n),
+      agents: R(null, rc.agents_n),
+      incentives: R(null, incs.length),
+      interest: R(null, rc.interest_n),
+      'locker-cheques': R(m.cheques_max, rc.cheques_n),
     },
   });
 }));

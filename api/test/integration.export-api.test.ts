@@ -151,4 +151,16 @@ describe('export API — the contract', () => {
     expect(r.json.data.length).toBeLessThanOrEqual(1);
     expect(r.json.next_cursor === null || typeof r.json.next_cursor === 'number').toBe(true);
   });
+
+  // The bug Notwo hit: manifest used raw count(*) while the list uses a filtered
+  // report fn, so the two disagreed (585 vs 441) and the reconcile flagged a
+  // false gap. They must be equal for every resource.
+  it('manifest count equals each list endpoint total (reconcile invariant)', async () => {
+    const man = (await exp('/manifest')).json.resources;
+    for (const r of ['customers', 'investments', 'series', 'redemptions', 'staff', 'agents', 'incentives', 'locker-cheques']) {
+      const list = await exp(`/${r}?limit=2000`);
+      expect(list.json.next_cursor, `${r} fits one page in the test book`).toBeNull();
+      expect(man[r].count, `manifest.${r}.count must equal /${r} row count`).toBe(list.json.data.length);
+    }
+  });
 });

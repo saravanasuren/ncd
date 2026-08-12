@@ -177,16 +177,29 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
     const { buildApplicantBlock } = await import('./applicant.js');
     applicant = (await buildApplicantBlock(getDb(), customer_id)) ?? undefined;
   }
-  // NCD owns locker pricing (owner 2026-08-07): send our configured deposit/rent
-  // for this size. LockerHub honouring them is a pending contract change
-  // (LOCKERHUB-CR §7); until then they fall back to their own figures.
+  // NCD owns locker pricing (owner 2026-08-07): send our configured RENT for
+  // this size. Deposit is deliberately NOT sent — NCD lockers are RENT-ONLY
+  // (owner 2026-08-12), so we don't price or collect a deposit. LockerHub
+  // honouring rent is a pending contract change (LOCKERHUB-CR §7); until then
+  // they fall back to their own figure.
   const { lockerPricingFor } = await import('../products/service.js');
   const pricing = await lockerPricingFor(getDb(), b.locker_size);
   const priceFields: Record<string, number> = {};
-  if (pricing?.deposit_amount != null) priceFields.deposit_amount = pricing.deposit_amount;
   if (pricing?.annual_rent != null) priceFields.annual_rent = pricing.annual_rent;
 
-  res.status(201).json(await lh.createLockerApplication(staffOf(req), { ...input, ...priceFields, ...(applicant ? { applicant } : {}) }));
+  const created = await lh.createLockerApplication(staffOf(req), { ...input, ...priceFields, ...(applicant ? { applicant } : {}) }) as Record<string, unknown>;
+
+  // RENT-ONLY: auto-waive the deposit LockerHub priced for this size, so the
+  // tenant allots on rent alone (Prem 2026-08-12 — A21, after create/before
+  // allot). Best-effort; a LockerHub reject is recorded + retryable, never
+  // fails the enrolment.
+  const appId = String(created.id ?? created.application_id ?? '');
+  if (appId) {
+    const { autoWaiveDeposit } = await import('./feeWaivers.js');
+    await autoWaiveDeposit(getDb(), req.user!, appId);
+  }
+
+  res.status(201).json(created);
 }));
 
 lockersRouter.post('/applications/:id/payment-link', asyncHandler(async (req, res) => {

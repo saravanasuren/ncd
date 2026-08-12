@@ -132,6 +132,48 @@ async function applyToLockerHub(db: Db, approver: { id: number; fullName: string
   }
 }
 
+/**
+ * NCD lockers are RENT-ONLY (owner 2026-08-12): no deposit is ever collected.
+ * At enrolment we auto-apply a 100% deposit waiver so LockerHub allots on the
+ * rent leg alone (Prem 2026-08-12: effectiveDeposit<=0 satisfies the leg — no
+ * A20 override, nothing in the audit about outstanding money; and there IS a
+ * deposit to waive because LockerHub still prices its per-size deposit, so A21
+ * never 400s). This is POLICY, not a per-case decision, so it deliberately
+ * SKIPS the maker-checker the discretionary waiver uses — the row is written
+ * approved-on-creation and pushed straight to LockerHub.
+ *
+ * Must run AFTER A7 create and BEFORE A11 allocate / any deposit payment (A21's
+ * ordering rule) — the create handler calls this immediately after create.
+ * Failure-tolerant: a LockerHub reject is recorded on the row (retryable) and
+ * never throws, so it can't break enrolment; the standard retry re-applies it.
+ */
+export async function autoWaiveDeposit(db: Db, actor: AuthUser, lockerhubApplicationId: string) {
+  const appId = String(lockerhubApplicationId ?? '').trim();
+  if (!appId) return null;
+  const REASON = 'NCD locker — rent-only, no deposit collected (policy)';
+  const row = await db.withTx(async (tx) => {
+    const open = (await tx.query(
+      `SELECT 1 FROM locker_fee_waivers
+        WHERE lockerhub_application_id = $1 AND leg = 'deposit' AND status IN ('PendingApproval','Approved')`,
+      [appId])).rowCount;
+    if (open) return null; // already waived / in flight — don't duplicate
+    const { rows } = await tx.query<Record<string, unknown>>(
+      `INSERT INTO locker_fee_waivers
+         (lockerhub_application_id, leg, waiver_pct, reason, created_by_user_id, status, approved_by_user_id)
+       VALUES ($1,'deposit',100,$2,$3,'Approved',$3) RETURNING *`,
+      [appId, REASON, actor.id]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'locker.fee_waiver.auto-deposit', entityType: 'locker_fee_waivers', entityId: Number(rows[0]!.id),
+      after: { application: appId, leg: 'deposit', waiver_pct: 100, reason: REASON, policy: 'rent-only' },
+    });
+    return rows[0]!;
+  });
+  if (!row) return null;
+  // Push to LockerHub outside the tx (network); a failure is recorded, not thrown.
+  const r = await applyToLockerHub(db, { id: actor.id, fullName: actor.fullName, email: actor.email, role: actor.role }, row);
+  return { id: Number(row.id), ...r };
+}
+
 registerOnFinalApprove('locker_fee_waiver', async (tx, req) => {
   const id = req.metadata.waiver_id ? Number(req.metadata.waiver_id) : (req.entity_id ? Number(req.entity_id) : null);
   if (!id) return;

@@ -93,6 +93,7 @@ export async function createUser(db: Db, actor: AuthUser, input: CreateUserInput
 
 export interface UpdateUserInput {
   full_name?: string;
+  email?: string;       // the login address — changing it changes how they sign in
   role?: string;
   branch_id?: number | null;
   reports_to_user_id?: number | null;
@@ -117,6 +118,16 @@ export async function updateUser(db: Db, actor: AuthUser, id: number, input: Upd
     const params: unknown[] = [];
     let p = 0;
     if (input.full_name !== undefined) { sets.push(`full_name = $${++p}`); params.push(input.full_name); }
+    // The login address. Stored lowercase and compared the same way, because
+    // login itself is case-insensitive — letting 'Ravi@x' and 'ravi@x' coexist
+    // would make a sign-in match two accounts and pick one arbitrarily.
+    if (input.email !== undefined) {
+      const email = input.email.trim().toLowerCase();
+      if (!email) throw errors.badRequest('Email is required');
+      const dupe = await tx.query('SELECT 1 FROM users WHERE lower(email) = $1 AND id <> $2', [email, id]);
+      if (dupe.rowCount) throw errors.conflict('Email already in use');
+      sets.push(`email = $${++p}`); params.push(email);
+    }
     if (input.role !== undefined) {
       if (!isRole(input.role)) throw errors.badRequest('Unknown role');
       sets.push(`role_id = $${++p}`); params.push(await roleId(tx, input.role));

@@ -1,0 +1,12 @@
+-- 068_user_email_case_insensitive — one login address, one account.
+--
+-- Login matches CASE-INSENSITIVELY (`lower(u.email) = lower($1)`, users/repo.ts
+-- findByLoginWithSecret), but the only constraint was `email TEXT UNIQUE`, which
+-- is case-SENSITIVE. So 'Ravi@x.com' and 'ravi@x.com' could both exist as
+-- separate accounts, and a login as either would match both — the row returned
+-- decided by an ORDER BY, i.e. arbitrarily. Wrong account, wrong permissions.
+--
+-- Latent until now because nothing could change an address after creation. This
+-- migration ships alongside the edit, so the hole closes before it can be used.
+-- Verified on production first: 56 users, all lowercase, zero case-variants.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email));

@@ -163,4 +163,31 @@ describe('export API — the contract', () => {
       expect(man[r].count, `manifest.${r}.count must equal /${r} row count`).toBe(list.json.data.length);
     }
   });
+
+  // Notwo hit this: a clubbed investment (paid in parts → several application_
+  // lines) fanned out into N rows via the LEFT JOIN, over-counting the total.
+  it('a clubbed investment (multiple lines) returns exactly ONE row', async () => {
+    const a = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const ncd = await as('ncd@demo.local', 'Demo_1234');
+    const cust = await a.post('/api/customers', { full_name: 'Clubbed Cust', phone: '9701239999', pan: 'CLUBB1234C' });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '77779701239999', ifsc: 'ICIC0001111' });
+    const create = await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
+      amount: 100000, date_money_received: '2026-07-10',
+    });
+    const cAppId = Number(create.json.id);
+    await approveInvestment(ncd, create);
+    // Two extra lines (same scheme/rate) — like ₹50k + ₹25k + ₹25k = one ₹1L NCD.
+    for (let i = 0; i < 2; i++) {
+      await ctx.db.query(
+        `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status)
+         SELECT application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status
+           FROM application_lines WHERE application_id = $1 LIMIT 1`, [cAppId]);
+    }
+
+    const r = await exp('/investments?limit=2000');
+    expect(r.json.data.filter((x: any) => x.id === cAppId).length, 'clubbed investment appears once').toBe(1);
+    const ids = r.json.data.map((x: any) => x.id);
+    expect(new Set(ids).size, 'no duplicate ids across the whole feed').toBe(ids.length);
+  });
 });

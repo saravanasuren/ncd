@@ -126,16 +126,6 @@ async function startCrons(): Promise<void> {
     })().catch((e) => console.warn('[cron] transactions email:', (e as Error).message));
   }, 15 * 60_000).unref();
 
-  // On-change SharePoint extract publisher — refreshes the dashboard feed within
-  // ~1–2 min of any money event (debounced), on top of the nightly cron. No-ops
-  // when SharePoint is unconfigured. Checked every 30s; publishes rarely.
-  const { maybePublishExtract } = await import('./integrations/ncd-extract-publish.js');
-  setInterval(() => {
-    void maybePublishExtract(getDb())
-      .then((r) => { if (r.published) console.log(`[cron] extract publish: ${r.reason}`); })
-      .catch((e) => console.warn('[cron] extract publish:', (e as Error).message));
-  }, 30_000).unref();
-
   // Daily backup-check email (docs/08 §2) — once per IST day after 08:00 IST;
   // enqueue is per-day idempotent, and it degrades to "not configured" notes
   // until the SharePoint params land.

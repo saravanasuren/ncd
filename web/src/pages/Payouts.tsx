@@ -9,17 +9,22 @@ import { useConfirm } from '../components/Confirm.js';
 interface LastInterestSummary {
   batch_no: string; payout_date: string;
   customers: number; investments: number; gross: number; tds: number; net: number;
+  outstanding: number;
 }
 
 /** Last paid batch vs the batch about to be cut — each metric coloured green
  *  when this batch is higher, red when lower, muted when unchanged. */
 function BatchComparison({ last, now }: {
   last: LastInterestSummary;
-  now: { customers: number; investments: number; gross: number; tds: number; net: number };
+  now: { customers: number; investments: number; gross: number; tds: number; net: number; outstanding: number };
 }) {
   const rows: Array<{ label: string; last: number; now: number; money?: boolean }> = [
     { label: 'Customers', last: last.customers, now: now.customers },
     { label: 'Investments', last: last.investments, now: now.investments },
+    // The principal each batch's interest was earned on (owner 2026-08-16).
+    // Placed ABOVE Gross because it is the explanation for it: gross can fall
+    // while customers rise, and this is the row that says why.
+    { label: 'Outstanding', last: last.outstanding, now: now.outstanding, money: true },
     { label: 'Gross', last: last.gross, now: now.gross, money: true },
     { label: 'TDS', last: last.tds, now: now.tds, money: true },
     { label: 'Net', last: last.net, now: now.net, money: true },
@@ -206,7 +211,8 @@ export function PayoutsPage() {
             <BatchComparison
               last={lastBatch.data.summary}
               now={{ customers: preview.data.customers ?? 0, investments: preview.data.count,
-                     gross: sheetTotals.gross, tds: sheetTotals.tds, net: sheetTotals.net }}
+                     gross: sheetTotals.gross, tds: sheetTotals.tds, net: sheetTotals.net,
+                     outstanding: Number(preview.data.totals?.outstanding ?? 0) }}
             />
           )}
         </div>

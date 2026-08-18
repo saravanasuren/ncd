@@ -52,7 +52,12 @@ describe('TDS default rate applies even when the line has no scheme', () => {
     const p = await a.get('/api/payouts/preview?date=2026-07-11');
     const row = (p.json.rows as any[]).find((r) => Number(r.application_id) === appId);
     expect(row, 'accrual row for the schemeless line').toBeTruthy();
-    expect(Number(row.tds_amount)).toBeCloseTo(Number(row.gross_amount) * 0.1, 1);
+    // Precision 0 = within half a rupee. TDS is rounded to a whole rupee since
+    // 2026-08-16 (owner-approved), so 10% of ₹3,616 is deducted as ₹362 rather
+    // than ₹361.60. The point of this test — that the DEFAULT 10% applies to a
+    // line with no scheme, instead of 0% — is unaffected.
+    expect(Number(row.tds_amount)).toBeCloseTo(Number(row.gross_amount) * 0.1, 0);
+    expect(Number.isInteger(Number(row.tds_amount))).toBe(true);
     expect(Number(row.tds_amount)).toBeGreaterThan(0);
   });
 
@@ -64,7 +69,10 @@ describe('TDS default rate applies even when the line has no scheme', () => {
       [appId])).rows as any[];
     expect(rows.length).toBeGreaterThan(0);
     for (const r of rows) {
-      expect(Number(r.tds_amount)).toBeCloseTo(Number(r.gross_amount) * 0.1, 1);
+      // Within half a rupee — TDS on the materialised schedule is rounded to a
+      // whole rupee too, so the projection is in the same units it will be paid.
+      expect(Number(r.tds_amount)).toBeCloseTo(Number(r.gross_amount) * 0.1, 0);
+      expect(Number.isInteger(Number(r.tds_amount))).toBe(true);
     }
   });
 
@@ -88,7 +96,12 @@ describe('TDS default rate applies even when the line has no scheme', () => {
         WHERE application_id = $1 AND due_type = 'BrokenInterest' AND gross_amount > 0
         ORDER BY id DESC LIMIT 1`, [appId])).rows[0] as any;
     expect(row, 'broken-interest row from the redemption').toBeTruthy();
-    expect(Number(row.tds_amount)).toBeCloseTo(Number(row.gross_amount) * 0.1, 1);
+    // Precision 0 = within half a rupee. TDS is rounded to a whole rupee since
+    // 2026-08-16 (owner-approved), so 10% of ₹3,616 is deducted as ₹362 rather
+    // than ₹361.60. The point of this test — that the DEFAULT 10% applies to a
+    // line with no scheme, instead of 0% — is unaffected.
+    expect(Number(row.tds_amount)).toBeCloseTo(Number(row.gross_amount) * 0.1, 0);
+    expect(Number.isInteger(Number(row.tds_amount))).toBe(true);
     expect(Number(row.tds_amount)).toBeGreaterThan(0);
   });
 });

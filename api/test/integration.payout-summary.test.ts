@@ -606,8 +606,10 @@ describe('a new investment earns interest starting the day of investment', () =>
       .find((r) => r.customer_name === 'Day One Investor');
     expect(row).toBeTruthy();
     expect(row!.days).toBe(5); // 1,2,3,4,5 Sep — not 4 (which would drop the 1st)
-    // 500000 × 12% × 5/365 = ₹821.92
-    expect(Number(row!.gross_amount)).toBeCloseTo(821.92, 2);
+    // 500000 × 12% × 5/365 = ₹821.92 exactly, paid as ₹822 — interest is
+    // computed in WHOLE RUPEES since 2026-08-16 (owner-approved). The day count
+    // this test exists to pin is unchanged; only the precision of the result is.
+    expect(Number(row!.gross_amount)).toBe(822);
   });
 
   it('the same day-count shows up correctly on the saved batch sheet\'s "Days" column', async () => {

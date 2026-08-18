@@ -6,7 +6,7 @@
 import type { Db } from '../../db/types.js';
 import { generateSchedule, type PayoutFrequency, type DayCountConvention } from '../../lib/interest.js';
 import { computeTds, DEFAULT_TDS_RULE } from '../../lib/tds.js';
-import { round2, toISODate } from '../../lib/dates.js';
+import { round2, roundRupee, toISODate } from '../../lib/dates.js';
 import { getSettingsMap } from '../settings/service.js';
 
 /**
@@ -100,12 +100,21 @@ export async function materializeForApplication(tx: Db, applicationId: number): 
     }
 
     for (const r of rows) {
-      const tds = round2(computeTds(tdsRule, customer, line as never, r));
-      const net = round2(r.gross_amount - tds);
+      // 🔒 Whole rupees, owner-approved 2026-08-16. This is the PROJECTED
+      // schedule, and it must be projected in the same units it will actually
+      // be paid in — otherwise a customer's statement shows ₹821.92 due and the
+      // bank transfer says ₹822, and the two never reconcile.
+      //
+      // Same rule as the live run: gross and TDS round independently, net is
+      // the plain difference. A Redemption row's gross is principal, already
+      // whole, so rounding it is a no-op there.
+      const gross = roundRupee(r.gross_amount);
+      const tds = roundRupee(computeTds(tdsRule, customer, line as never, { ...r, gross_amount: gross }));
+      const net = gross - tds;
       await tx.query(
         `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status, payee_account, payee_ifsc)
          VALUES ($1,$2,$3,$4,$5,$6,$7,'Scheduled',$8,$9)`,
-        [line.id, applicationId, r.due_date, r.due_type, r.gross_amount, tds, net, bank?.account_number ?? null, bank?.ifsc ?? null]
+        [line.id, applicationId, r.due_date, r.due_type, gross, tds, net, bank?.account_number ?? null, bank?.ifsc ?? null]
       );
       count++;
     }

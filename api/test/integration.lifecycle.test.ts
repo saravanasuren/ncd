@@ -79,7 +79,10 @@ describe('build an Active investment', () => {
     expect(first.due_date).toBe('2026-07-28');
     // 15→28 Jul = 14 days: interest starts ON the day of investment (owner
     // 2026-07-25), so the 15th counts too — not just the 13 days after it.
-    expect(Number(first.gross_amount)).toBeCloseTo(500000 * 0.12 * 14 / 365, 1);
+    // Whole rupees since 2026-08-16 (owner-approved): 500000 × 12% × 14/365 =
+    // ₹2,301.37, scheduled and paid as ₹2,301. The day count this line pins is
+    // unchanged — only the precision of the amount.
+    expect(Number(first.gross_amount)).toBe(Math.round(500000 * 0.12 * 14 / 365));
   });
 
   it('allotment later just stamps allotment_date + locks the series', async () => {

@@ -94,6 +94,28 @@ export function round2(v: number): number {
   return Math.round(Number(v) * 100) / 100;
 }
 
+/**
+ * Round to a whole rupee, nearest (owner-approved 2026-08-16: "there should be
+ * no decimal. round off properly").
+ *
+ * 🔒 This is a deliberate, owner-approved change to the interest figures
+ * themselves — not a display tweak. It is applied to GROSS and to TDS
+ * independently, and net stays `gross − tds` with no further rounding, which is
+ * exactly the owner's existing rule moved one decimal place: "net = gross - tds
+ * only / no rounding because already in gross and tds we are rounding the
+ * figures". Because both inputs are whole, net comes out whole for free.
+ *
+ * Nearest, not floor: over ~700 investments the ups and downs cancel, where
+ * always-down would quietly keep back about ₹360 a month across the book.
+ *
+ * Math.round is half-UP for positives, which is what an accountant expects of
+ * ₹x.50. Interest is never negative, so the half-down-for-negatives asymmetry
+ * cannot arise here.
+ */
+export function roundRupee(v: number): number {
+  return Math.round(Number(v));
+}
+
 /** Day-of-month (UTC) of an ISO date. */
 export function dayOfMonth(dateStr: ISODate): number {
   return new Date(dateStr + 'T00:00:00Z').getUTCDate();

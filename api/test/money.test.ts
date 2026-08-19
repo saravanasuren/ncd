@@ -17,15 +17,27 @@ describe('money paise arithmetic', () => {
 });
 
 describe('Indian digit grouping', () => {
-  it('formats lakhs/crores', () => {
-    expect(formatINR('1234567.00')).toBe('₹12,34,567.00');
-    expect(formatINR('500000')).toBe('₹5,00,000.00');
+  // Trailing ".00" is not printed (owner 2026-08-16: "there should be no
+  // decimal"). Interest is now computed in whole rupees, so two zeroes on every
+  // figure is noise. Paise are still shown WHEN THERE ARE ANY — see below.
+  it('formats lakhs/crores, with no empty decimals', () => {
+    expect(formatINR('1234567.00')).toBe('₹12,34,567');
+    expect(formatINR('500000')).toBe('₹5,00,000');
+  });
+  it('STILL shows paise when the amount actually has them', () => {
+    // The important half. Batches paid before the whole-rupee change carry real
+    // paise and match the bank statement; blanket-stripping would misreport
+    // ₹56,78,842.03 as ₹56,78,842 — a different number from the one that left
+    // the account.
     expect(formatINR('999.5')).toBe('₹999.50');
+    expect(formatINR('5678842.03')).toBe('₹56,78,842.03');
+    expect(formatINR('0.01')).toBe('₹0.01');
   });
   it('handles negatives (money out)', () => {
-    expect(formatINR('-500000')).toBe('-₹5,00,000.00');
+    expect(formatINR('-500000')).toBe('-₹5,00,000');
+    expect(formatINR('-500000.25')).toBe('-₹5,00,000.25');
   });
   it('symbol can be suppressed for export cells', () => {
-    expect(formatINR('1234567', { symbol: false })).toBe('12,34,567.00');
+    expect(formatINR('1234567', { symbol: false })).toBe('12,34,567');
   });
 });

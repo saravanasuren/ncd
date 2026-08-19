@@ -136,6 +136,16 @@ export async function scanTdsThreshold(db: Db, actor?: AuthUser): Promise<TdsSca
        JOIN application_lines al ON al.application_id = a.id
       WHERE c.is_active = TRUE AND c.archived_at IS NULL
         AND COALESCE(c.tds_applicable, TRUE) = FALSE
+        -- Senior citizens are out of scope for the ₹30L alert entirely, however
+        -- large their book (owner 2026-08-11). 60+ is the SAME definition the
+        -- TDS report already uses to choose Form 15H over 15G (§194A) — reused
+        -- rather than restated, so the two can never drift apart.
+        --
+        -- A customer with NO date of birth is NOT treated as senior: we cannot
+        -- show that they are, and the two mistakes are not equal. Flagging
+        -- someone who turns out to be exempt is visible and reversible on this
+        -- screen; NOT flagging someone who is liable loses tax silently.
+        AND NOT (c.dob IS NOT NULL AND EXTRACT(YEAR FROM age(current_date, c.dob)) >= 60)
         AND NOT EXISTS (SELECT 1 FROM tds_threshold_events e
                          WHERE e.customer_id = c.id AND e.status IN ${SETTLED_SQL})
       GROUP BY c.id, c.pan

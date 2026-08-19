@@ -38,6 +38,9 @@ const updateSchema = createSchema.partial().extend({
   account_number: z.string().nullable().optional(),
   ifsc: z.string().nullable().optional(),
   account_holder_name: z.string().nullable().optional(),
+  // Attribution branch for this agent's business (owner 2026-08-19).
+  // Distinct from branch_name, which is their BANK branch.
+  branch_id: z.number().nullable().optional(),
 });
 
 agentsRouter.put('/:id', requirePermission('agents:manage'),

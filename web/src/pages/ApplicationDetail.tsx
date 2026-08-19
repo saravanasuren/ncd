@@ -249,11 +249,14 @@ export function ApplicationDetailPage() {
               .then((r) => setNote(r.ok ? `Acknowledgement sent on WhatsApp to ${r.phone}.` : `WhatsApp send ${r.status}${r.error ? ' — ' + r.error : ''}.`)))}
             className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg" title="Send the acknowledgement PDF to the customer over WhatsApp (ncd_akn)">📲 Ack on WhatsApp</button>
         )}
+        {/* No per-investment bond here (owner 2026-08-12). A customer holding
+            four investments in a series gets ONE certificate covering all of
+            them — the consolidated bond on their profile — so offering a
+            separate one per investment here produced a second, contradictory
+            document for the same money. The consolidated bond is now the only
+            bond staff issue: CustomerDetail → the series group. */}
         {a.allotment_date && (
-          <>
-            <a href={`/api/reports/bond/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Bond certificate</a>
-            <a href={`/api/reports/allotment/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Allotment letter</a>
-          </>
+          <a href={`/api/reports/allotment/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Allotment letter</a>
         )}
         {can('applications:update') && (
           <label className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg cursor-pointer">

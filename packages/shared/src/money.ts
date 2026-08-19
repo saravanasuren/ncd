@@ -65,7 +65,16 @@ export function formatINR(v: string | number | null | undefined, opts: { symbol?
     grouped = rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' + last3;
   }
   const sym = opts.symbol === false ? '' : '₹';
-  return `${neg ? '-' : ''}${sym}${grouped}.${p}`;
+  // No trailing ".00" (owner 2026-08-16: "there should be no decimal"). Payouts
+  // are now computed in whole rupees, so printing two zeroes on every figure is
+  // noise the owner asked to be rid of.
+  //
+  // Paise are still shown WHEN THERE ARE ANY. Batches paid before the change
+  // legitimately carry them and match the bank statement — blanket-stripping
+  // would silently misreport ₹56,78,842.03 as ₹56,78,842, which is a different
+  // number from the one that left the account.
+  const showPaise = abs % 100 !== 0;
+  return `${neg ? '-' : ''}${sym}${grouped}${showPaise ? `.${p}` : ''}`;
 }
 
 /**

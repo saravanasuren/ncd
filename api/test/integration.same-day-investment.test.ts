@@ -57,7 +57,10 @@ describe('an investment paid on the day it was made', () => {
     const row = await rowFor(await admin(), appId, START);
     expect(row, 'should now appear in the same-day preview').toBeTruthy();
     expect(Number(row.days)).toBe(1);
-    expect(Number(row.gross_amount)).toBeCloseTo(oneDay, 2);
+    // Interest is paid in WHOLE RUPEES since 2026-08-16 (owner-approved), so
+    // one day of ₹32.876… is paid as ₹33. The day COUNT this test exists to
+    // pin is unchanged — only the precision of the amount.
+    expect(Number(row.gross_amount)).toBe(Math.round(oneDay));
   });
 
   it('and two days by the next day — the day of investment still counts', async () => {
@@ -78,7 +81,20 @@ describe('an investment paid on the day it was made', () => {
 
     const later = Number((await rowFor(a, appId, '2026-08-28')).gross_amount);
     // 28 Jul→28 Aug inclusive = 32 days, however it is split across batches.
-    expect(sameDay + later).toBeCloseTo(oneDay * 32, 1);
+    //
+    // Whole-rupee rounding weakens this from an exact identity to a
+    // within-a-rupee one, and that is worth stating rather than hiding: each
+    // part is rounded on its own, so round(1 day) + round(31 days) can differ
+    // from round(32 days) by up to ₹1. The owner chose NEAREST rounding for
+    // exactly this reason — the error is bounded and unbiased, where
+    // always-down would systematically shortchange every split period.
+    const exact = oneDay * 32;
+    expect(sameDay + later).toBeGreaterThanOrEqual(Math.floor(exact) - 1);
+    expect(sameDay + later).toBeLessThanOrEqual(Math.ceil(exact) + 1);
+    // And both parts are themselves whole rupees — no paise sneak back in via
+    // a split period.
+    expect(Number.isInteger(sameDay)).toBe(true);
+    expect(Number.isInteger(later)).toBe(true);
   });
 });
 

@@ -2,9 +2,13 @@
  * Which branch earns an investment (owner 2026-08-04).
  *
  * The person who BROUGHT it decides: staff are linked to a branch, so a
- * referrer who resolves to a staff user hands over their branch. Everything
- * else — agent-sourced, unmatched, or a staff member with no branch recorded —
- * counts under HO, which is where agent relationships sit.
+ * referrer who resolves to a staff user hands over their branch. An AGENT may
+ * also be given a branch (owner 2026-08-19), and then theirs is used. Everything
+ * else — an agent with no branch, unmatched, or a staff member with no branch
+ * recorded — still counts under HO, which is where agent relationships sit.
+ *
+ * Staff win over agents when both match the same text, because a staff member's
+ * branch is their posting, whereas an agent's is an attribution choice.
  *
  * Stamped onto the application at creation and never recomputed, so a staff
  * transfer cannot silently rewrite last month's branch report.
@@ -34,6 +38,19 @@ export async function branchForReferrer(db: Db, referredByText: string | null | 
         ORDER BY (upper(btrim(u.code)) = upper($1)) DESC
         LIMIT 1`, [ref]);
     if (rows[0]?.branch_id) return Number(rows[0].branch_id);
+
+    // Then an agent who has been given one. Matched on code first and name
+    // second, the same order and the same fields resolveReferrer uses, so the
+    // branch an investment lands in cannot disagree with the agent the rest of
+    // the app says referred it.
+    const ag = await db.query<{ branch_id: string }>(
+      `SELECT a.branch_id
+         FROM agents a
+        WHERE a.deleted_at IS NULL AND a.branch_id IS NOT NULL
+          AND (upper(btrim(a.agent_code)) = upper($1) OR lower(btrim(a.full_name)) = lower($1))
+        ORDER BY (upper(btrim(a.agent_code)) = upper($1)) DESC
+        LIMIT 1`, [ref]);
+    if (ag.rows[0]?.branch_id) return Number(ag.rows[0].branch_id);
   }
   return headOfficeId(db);
 }

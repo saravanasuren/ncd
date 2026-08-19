@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "build": "npm run build -w @new-wealth/shared && npm run build -w @new-wealth/api && npm run build -w @new-wealth/web",
-    "dev": "npm run dev -w @new-wealth/api & npm run dev -w @new-wealth/web",
+    "dev": "bash ops/dev.sh",
     "test": "npm run test -w @new-wealth/api",
     "prebuild:shared": "npm run build -w @new-wealth/shared",
     "typecheck": "npm run build -w @new-wealth/shared && npm run typecheck -w @new-wealth/api && npm run typecheck -w @new-wealth/web",

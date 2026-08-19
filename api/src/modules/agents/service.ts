@@ -96,6 +96,12 @@ export interface UpdateAgentInput {
   ifsc?: string | null;
   account_holder_name?: string | null;
   is_active?: boolean;
+  /**
+   * Which branch this agent's business is attributed to (owner 2026-08-19).
+   * NULL keeps the long-standing default — agent business counts under HO.
+   * Note this is NOT branch_name, which is the agent's BANK branch for payouts.
+   */
+  branch_id?: number | null;
 }
 
 export async function updateAgent(db: Db, actor: AuthUser, id: number, input: UpdateAgentInput) {
@@ -108,6 +114,7 @@ export async function updateAgent(db: Db, actor: AuthUser, id: number, input: Up
       ['user_id', input.user_id], ['bank_name', input.bank_name], ['branch_name', input.branch_name],
       ['account_number', input.account_number], ['ifsc', input.ifsc],
       ['account_holder_name', input.account_holder_name], ['is_active', input.is_active],
+      ['branch_id', input.branch_id],
     ];
     for (const [col, val] of fields) {
       if (val !== undefined) { sets.push(`${col} = $${++p}`); params.push(val); }
@@ -298,6 +305,37 @@ export async function resolveReferrer(db: Db, text: string): Promise<{ kind: 'st
  * existing agent_registration final-approve handler (integration/agents.ts)
  * activates it. Returns the agent id.
  */
+/**
+ * One entry point for "somebody typed a referrer" — resolve it, and if it
+ * matches nobody, raise a new agent for approval.
+ *
+ * Owner, 2026-08-19: "IF I TYPE IN A FRESH AGENT WHO IS NOT IN OUR DB - THEN IT
+ * SHOULD ACCEPT THEM AND CREATE THEM AS A AGENT UPON APPROVAL."
+ *
+ * That behaviour existed, but only on customer CREATION. A referrer can also be
+ * typed on the investment approval screen and on a customer correction, and both
+ * of those merely UPDATEd the text — so the same typing produced a new agent on
+ * one screen and nothing on two others, with no way for staff to tell which was
+ * which. This exists so all three call one thing and cannot drift again.
+ *
+ * Never throws: a referral is a note about who introduced the customer, and
+ * failing to register an agent must not throw away the customer, the approval or
+ * the correction that carried it.
+ */
+export async function ensureAgentForReferrerText(
+  tx: Db, actor: AuthUser, text: string | null | undefined,
+): Promise<number | null> {
+  const t = String(text ?? '').trim();
+  if (!t) return null;
+  try {
+    if (await resolveReferrer(tx, t)) return null;   // a known agent or staff member
+    return await ensurePendingAgentForName(tx, actor, t);
+  } catch (e) {
+    console.warn(`[agents] could not register referrer "${t}": ${(e as Error).message}`);
+    return null;
+  }
+}
+
 export async function ensurePendingAgentForName(tx: Db, actor: AuthUser, name: string): Promise<number> {
   const norm = name.trim().replace(/\s+/g, ' ');
   const existing = (await tx.query<{ id: string }>(

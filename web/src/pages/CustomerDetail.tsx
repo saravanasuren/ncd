@@ -21,16 +21,35 @@ function docLabel(t: string): string {
  * Returns null (renders as '—') when there is no DOB on record: 106 of 580
  * customers have none, mostly wealth-migrated ones.
  */
-function dobLabel(dob: unknown): string | null {
-  const iso = String(dob ?? '').slice(0, 10);
-  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+/** Completed years today, or null when there is no usable date of birth. */
+function ageFromDob(dob: unknown): number | null {
+  const m = String(dob ?? '').slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return null;
   const now = new Date();
   let age = now.getFullYear() - Number(m[1]);
   const md = (now.getMonth() + 1) * 100 + now.getDate();
   if (md < Number(m[2]) * 100 + Number(m[3])) age--;
+  return age >= 0 && age < 130 ? age : null;
+}
+
+/**
+ * Senior citizen — 60 or more completed years. The SAME line §194A draws for
+ * Form 15H vs 15G, and the same one the TDS threshold scan now uses server-side.
+ * No date of birth means NOT senior: we cannot show that they are, and a
+ * wrongly-raised alert is visible and reversible where a silently-skipped one
+ * is neither.
+ */
+function isSeniorCitizen(dob: unknown): boolean {
+  const age = ageFromDob(dob);
+  return age != null && age >= 60;
+}
+
+function dobLabel(dob: unknown): string | null {
+  const m = String(dob ?? '').slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
   const pretty = `${m[3]}-${m[2]}-${m[1]}`;
-  return age >= 0 && age < 130 ? `${pretty} · ${age} yrs` : pretty;
+  const age = ageFromDob(dob);
+  return age != null ? `${pretty} · ${age} yrs` : pretty;
 }
 
 /** Field groups, in display order, derived from the shared field list. */
@@ -200,13 +219,26 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
   // `applications`, a key their API does not return — so an enrolment still in
   // progress showed nowhere on the customer, and there was no way back into it.
   const openApps = lh?.open_locker_applications ?? lh?.applications ?? [];
-  if (!pledges.length && !cheques.length && !lockers.length && !openApps.length && !data.lockerhub_error) return null;
+  // LockerHub holds a record on this customer's PHONE, but under a different
+  // name — so it is not shown as theirs (owner 2026-08-19). The card still
+  // appears, saying plainly what exists and whose it is.
+  const nameMismatch: string | null = data.lockerhub_name_mismatch ?? null;
+  if (!pledges.length && !cheques.length && !lockers.length && !openApps.length
+      && !data.lockerhub_error && !nameMismatch) return null;
   const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
   return (
     <div className={card}>
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Lockers</h2>
       {data.lockerhub_error && (
         <div className="text-xs text-warn mb-2">Couldn’t reach LockerHub — showing what NCD holds. ({String(data.lockerhub_error).slice(0, 80)})</div>
+      )}
+      {nameMismatch && (
+        <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-2">
+          LockerHub has a record on this phone number under the name{' '}
+          <span className="font-semibold">{nameMismatch}</span>, which does not match{' '}
+          <span className="font-semibold">{customerName}</span> — so nothing from it is shown as this
+          customer's. If they are the same person, link them from Locker Tenants.
+        </div>
       )}
       {lockers.length > 0 && (
         <div className="text-sm mb-3">
@@ -603,7 +635,14 @@ export function CustomerDetailPage() {
 
       <LockersCard customerId={Number(id)} customerName={c.full_name} />
 
-      {can('applications:create') && c.creation_status === 'Approved' && <NewInvestment customerId={Number(id)} custNoTds={c.tds_applicable === false} />}
+      {can('applications:create') && c.creation_status === 'Approved' && (
+        <NewInvestment customerId={Number(id)} custNoTds={c.tds_applicable === false}
+          // A senior citizen is out of scope for the ₹30L TDS question entirely
+          // (owner 2026-08-11), so the prompt must not appear for one. This is
+          // the OTHER door into a TDS flip — leaving it open would let staff
+          // flip a customer the nightly scan has been told to leave alone.
+          isSenior={isSeniorCitizen(c.dob)} />
+      )}
 
       <div className={card}>
         <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Bank accounts</h2>
@@ -852,7 +891,7 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
   );
 }
 
-function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTds: boolean }) {
+function NewInvestment({ customerId, custNoTds, isSenior }: { customerId: number; custNoTds: boolean; isSenior: boolean }) {
   const nav = useNavigate();
   const [seriesId, setSeriesId] = useState('');
   const [schemeId, setSchemeId] = useState('');
@@ -863,7 +902,8 @@ function NewInvestment({ customerId, custNoTds }: { customerId: number; custNoTd
   // No-TDS status is left untouched).
   const [applyTds, setApplyTds] = useState<'' | 'yes' | 'no'>('');
   const over30L = amount !== '' && Number(amount) > 30 * LAKH;
-  const tdsPrompt = custNoTds && over30L;
+  // Seniors (60+) are exempt from the ₹30L alert, so they are never asked.
+  const tdsPrompt = custNoTds && over30L && !isSenior;
   // NCDs are ISSUED in whole ₹1,00,000 units, but a single credit need not be
   // one (owner 2026-08-01): money arrives in parts and is clubbed. So this is a
   // WARNING, not a block — the server accepts any positive amount, and approval

@@ -14,7 +14,7 @@ import { assertTransition } from '../../lib/statusMachine.js';
 import { nextCode } from '../../lib/sequences.js';
 import { computeRedemption } from '../../lib/redemption.js';
 import { computeTds, DEFAULT_TDS_RULE } from '../../lib/tds.js';
-import { round2, toISODate } from '../../lib/dates.js';
+import { round2, roundRupee, toISODate } from '../../lib/dates.js';
 import type { RateSpec } from '../../lib/incentive.js';
 import { getSettingsMap } from '../settings/service.js';
 import { scopeFor, scopeWhere } from '../../lib/scope.js';
@@ -102,7 +102,11 @@ async function createRequest(
   // (For a full redemption the two bases are equal, so nothing changes.)
   const calc = computeRedemption({ principal, penalty });
   const accrued = computeRedemption({ principal: outstanding, penalty: { mode: 'flat', value: 0 }, ...brokenArgs });
-  calc.brokenInterest = accrued.brokenInterest;
+  // 🔒 Whole rupees, owner-approved 2026-08-16. A redemption's broken interest
+  // is paid on the monthly interest sheet as a 'Redemption' row and is taken
+  // there AS IS — never recomputed — so if it is not rounded HERE it arrives on
+  // an otherwise whole-rupee NEFT file carrying paise.
+  calc.brokenInterest = roundRupee(accrued.brokenInterest);
   // TDS on the broken interest (same rule the interest run uses), then fold the
   // net into the settlement. net_payment = (principal − penalty) + brokenNet.
   let brokenNet = 0;
@@ -111,14 +115,16 @@ async function createRequest(
     const tdsRule = brokenLine.scheme_id
       ? (await tx.query<{ rate_pct: number }>('SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [brokenLine.scheme_id])).rows[0] ?? DEFAULT_TDS_RULE
       : DEFAULT_TDS_RULE;
-    brokenTds = round2(computeTds(
+    brokenTds = roundRupee(computeTds(
       tdsRule,
       { is_nri: brokenLine.is_nri as boolean, tds_applicable: brokenLine.cust_tds as boolean,
         tax_form: brokenLine.tax_form as string | null, tax_form_expires_on: toISODate(brokenLine.tax_form_expires_on as string | null) },
       { payout_frequency: brokenLine.payout_frequency as string, amount: Number(brokenLine.line_amount) },
       { due_type: 'BrokenInterest', gross_amount: calc.brokenInterest, due_date: redDate },
     ));
-    brokenNet = round2(calc.brokenInterest - brokenTds);
+    // Both inputs whole ⇒ whole, and NOT re-rounded — same rule as the
+    // interest run: net = gross − tds, nothing more.
+    brokenNet = calc.brokenInterest - brokenTds;
   }
   // Owner 2026-07-24: the broken interest is NOT bundled into the redemption
   // transfer any more — it is paid in that month's interest batch as a

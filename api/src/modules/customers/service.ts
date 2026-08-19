@@ -107,9 +107,8 @@ export async function createCustomer(db: Db, actor: AuthUser, input: CreateCusto
     // (owner: free text "will be created as new agent upon approval").
     const refText = input.referred_by_text?.trim();
     if (refText) {
-      const { resolveReferrer, ensurePendingAgentForName } = await import('../agents/service.js');
-      const known = await resolveReferrer(tx, refText);
-      if (!known) await ensurePendingAgentForName(tx, actor, refText);
+      const { ensureAgentForReferrerText } = await import('../agents/service.js');
+      await ensureAgentForReferrerText(tx, actor, refText);
     }
     // Customer creation is NOT gated (owner 2026-07-21 — the customer is live on
     // creation; the investment is the only maker/checker gate). But it should be
@@ -700,6 +699,17 @@ registerOnFinalApprove('customer_correction', async (tx, req) => {
   if (sets.length && req.entity_id) {
     params.push(Number(req.entity_id));
     await tx.query(`UPDATE customers SET ${sets.join(', ')}, updated_at = now() WHERE id = $${++p}`, params);
+  }
+  // A correction can introduce a referrer nobody has heard of, and it used to
+  // just save the text — so the same name that raises an agent at customer
+  // creation raised nothing here (owner 2026-08-19). Same helper, same result.
+  if ('referred_by_text' in changes) {
+    const { ensureAgentForReferrerText } = await import('../agents/service.js');
+    const actorId = req.maker_user_id ?? null;
+    if (actorId != null) {
+      const actor = { id: actorId } as unknown as AuthUser;
+      await ensureAgentForReferrerText(tx, actor, String(changes.referred_by_text ?? ''));
+    }
   }
 });
 

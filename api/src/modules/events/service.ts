@@ -41,10 +41,18 @@ registerOnFinalApprove('rollover', async (tx, req) => {
   // New Active application for the rolled principal, fresh schedule from today.
   const appNo = await nextCode(tx, 'application', 'APP-{yyyy}-{seq:6}');
   const today = new Date().toISOString().slice(0, 10);
+  // A rollover is the SAME business continuing, so it INHERITS the branch
+  // rather than recomputing one — if the person who brought it has since moved,
+  // the rolled money must not silently move branch with them. Falls back to the
+  // referrer rule only when the source carries no branch (pre-058 rows).
+  const { branchForReferrer } = await import('../applications/branch.js');
+  const branchId = from.branch_id != null
+    ? Number(from.branch_id)
+    : await branchForReferrer(tx, String(from.referred_by_text ?? '') || null);
   const { rows } = await tx.query<{ id: string }>(
-    `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, interest_start_date, allotment_date, customer_was_new_at_creation, source, enrolled_by_user_id, enrolled_by_agent_id)
-     VALUES ($1,$2,$3,'Active',$4,$5,$5,FALSE,'rollover',$6,$7) RETURNING id`,
-    [appNo, from.customer_id, from.series_id, from.total_amount, today, from.enrolled_by_user_id, from.enrolled_by_agent_id]);
+    `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, interest_start_date, allotment_date, customer_was_new_at_creation, source, enrolled_by_user_id, enrolled_by_agent_id, branch_id)
+     VALUES ($1,$2,$3,'Active',$4,$5,$5,FALSE,'rollover',$6,$7,$8) RETURNING id`,
+    [appNo, from.customer_id, from.series_id, from.total_amount, today, from.enrolled_by_user_id, from.enrolled_by_agent_id, branchId]);
   const newId = Number(rows[0]!.id);
   const line = (await tx.query<Record<string, unknown>>('SELECT * FROM application_lines WHERE application_id = $1 ORDER BY id LIMIT 1', [fromId])).rows[0];
   if (line) {

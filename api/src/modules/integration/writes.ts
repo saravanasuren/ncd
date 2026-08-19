@@ -751,13 +751,24 @@ async function landFundedApplication(db: Db, b: LandInput): Promise<{ appId: num
       'SELECT count(*)::int AS n FROM applications WHERE customer_id = $1', [customerId]
     )).rows[0]!.n);
 
+    // Which branch earns this. Same rule as a staff-booked investment: the
+    // effective referrer — this payment's own referral code, else the
+    // customer's — with HO as the catch-all. Without it an app-sourced
+    // investment lands with NO branch at all and shows as "Unassigned" on
+    // every branch report (owner spotted 3 such rows, 2026-08-19).
+    const custRef = (await tx.query<{ referred_by_text: string | null }>(
+      'SELECT referred_by_text FROM customers WHERE id = $1', [customerId])).rows[0]?.referred_by_text ?? null;
+    const effRef = String(b.referredBy ?? '').trim() || String(custRef ?? '').trim() || null;
+    const { branchForReferrer } = await import('../applications/branch.js');
+    const branchId = await branchForReferrer(tx, effRef);
+
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, amount_received,
                                  date_money_received, interest_start_date, collection_method, collection_reference,
-                                 customer_was_new_at_creation, is_locker_deposit, lockerhub_intent_no, referred_by_text, source)
-       VALUES ($1,$2,$3,'PendingApproval',$4,$4,$5::date,$5::date,$6,$7,$8,$9,$10,$11,'dhanamfin') RETURNING id`,
+                                 customer_was_new_at_creation, is_locker_deposit, lockerhub_intent_no, referred_by_text, source, branch_id)
+       VALUES ($1,$2,$3,'PendingApproval',$4,$4,$5::date,$5::date,$6,$7,$8,$9,$10,$11,'dhanamfin',$12) RETURNING id`,
       [appNo, customerId, series.id, b.amount, b.paidAt, b.collectionMethod, b.collectionReference, priorCount === 0,
-       b.isLockerDeposit, b.intentNo, b.referredBy]
+       b.isLockerDeposit, b.intentNo, b.referredBy, branchId]
     );
     const appId = Number(rows[0]!.id);
     await tx.query(

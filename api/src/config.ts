@@ -23,10 +23,6 @@ const schema = z.object({
   KYC_PRIMARY_PROVIDER: z.string().default('stub'),
   PAYMENT_PRIMARY_PROVIDER: z.string().default('stub'),
   LOCKERHUB_INTEGRATION_KEY: z.string().default('dev-integration-key'),
-  // Separate key for the Notwo read-only export pull (docs/NOTWO_INTEGRATION_
-  // ARCHITECTURE.md). Kept distinct from LockerHub's so either can be rotated/
-  // revoked without cutting the other. Empty = not issued yet (rejected).
-  NOTWO_INTEGRATION_KEY: z.string().default(''),
 
   // ── Live provider credentials (SSM /dhanam/newwealth/*; docs/08) ──
   // Decentro (PAN verify + BAV-v3 penny drop). All optional: the adapter

@@ -526,8 +526,8 @@ export async function applicationsFlat(db: Db, actor: AuthUser, filters: BookFil
     // DISTINCT ON (a.id): one row per application. A clubbed investment has
     // several application_lines (parts of ONE NCD at one scheme — same rate /
     // tenure), e.g. APP-2026-001055 = ₹50k+₹25k+₹25k; without this the LEFT JOIN
-    // fans that single ₹1L investment into 3 rows and over-counts the total
-    // (Notwo 2026-08-12). ORDER a.id, l.id takes the first line's rate/tenure.
+    // fans that single ₹1L investment into 3 rows and over-counts the total.
+    // ORDER a.id, l.id takes the first line's rate/tenure.
     `SELECT DISTINCT ON (a.id)
             a.application_no, c.customer_code, c.full_name AS customer, s.code AS series_code,
             a.status, a.total_amount, a.date_money_received, a.allotment_date, a.maturity_date, a.redemption_date,
@@ -544,28 +544,17 @@ export async function applicationsFlat(db: Db, actor: AuthUser, filters: BookFil
 /** Full disbursement ledger (interest / broken-interest / redemption rows) for
  * in-scope applications — gross/TDS/net, status, paid date, UTR. For the NCD Book
  * "Interest Payouts" sheet + data backup. */
-export async function interestLedger(
-  db: Db, actor: AuthUser,
-  filters: { application_no?: string; from?: string; to?: string; status?: string } = {},
-) {
+export async function interestLedger(db: Db, actor: AuthUser) {
   const w = appWhere(actor, {});
-  const params = [...w.params];
-  let cond = '';
-  // Optional narrowing for the drill-down export endpoint. No filter = the full
-  // ledger, exactly as the backup sheet takes it (default behaviour unchanged).
-  if (filters.application_no) { params.push(filters.application_no); cond += ` AND a.application_no = $${params.length}`; }
-  if (filters.from) { params.push(filters.from); cond += ` AND ds.due_date >= $${params.length}`; }
-  if (filters.to) { params.push(filters.to); cond += ` AND ds.due_date <= $${params.length}`; }
-  if (filters.status) { params.push(filters.status); cond += ` AND ds.status = $${params.length}`; }
   const { rows } = await db.query(
-    `SELECT ds.due_date, a.id AS investment_id, a.application_no, c.customer_code, c.full_name AS customer, s.code AS series_code,
+    `SELECT ds.due_date, a.application_no, c.customer_code, c.full_name AS customer, s.code AS series_code,
             ds.due_type, ds.gross_amount, ds.tds_amount, ds.net_amount, ds.status, ds.paid_at, ds.utr
      FROM disbursement_schedule ds
      JOIN applications a ON a.id = ds.application_id
      JOIN customers c ON c.id = a.customer_id
      JOIN series s ON s.id = a.series_id
-     WHERE ${w.sql}${cond}
-     ORDER BY ds.due_date, a.application_no`, params);
+     WHERE ${w.sql}
+     ORDER BY ds.due_date, a.application_no`, w.params);
   return rows;
 }
 
@@ -764,8 +753,7 @@ export async function redemptions(db: Db, actor: AuthUser, filters: BookFilters 
   if (filters.from) { params.push(filters.from); dateCond += ` AND r.redemption_date >= $${params.length}`; }
   if (filters.to) { params.push(filters.to); dateCond += ` AND r.redemption_date <= $${params.length}`; }
   const { rows } = await db.query(
-    `SELECT r.id AS external_redemption_id, a.id AS investment_id, a.application_no, c.customer_code,
-            r.redemption_date, r.type, s.code AS series_code, c.full_name AS customer_name, r.net_payment
+    `SELECT r.redemption_date, r.type, s.code AS series_code, c.full_name AS customer_name, r.net_payment
      FROM redemptions r JOIN applications a ON a.id = r.application_id
      JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
      WHERE r.status IN ('Approved','Paid') AND ${w.sql}${dateCond}

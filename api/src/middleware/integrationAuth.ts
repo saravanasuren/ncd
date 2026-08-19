@@ -15,13 +15,8 @@ function safeEqual(a: string, b: string): boolean {
 
 export const requireIntegrationKey: RequestHandler = (req, _res, next) => {
   const key = req.get('X-Integration-Key');
-  // Accept either the LockerHub key or the Notwo export key, so the two rotate
-  // independently. NOTWO key is only honoured when it has actually been issued
-  // (a non-empty value) — the empty default never matches an empty header.
-  const ok = !!key && (
-    safeEqual(key, config.LOCKERHUB_INTEGRATION_KEY) ||
-    (config.NOTWO_INTEGRATION_KEY !== '' && safeEqual(key, config.NOTWO_INTEGRATION_KEY))
-  );
-  if (!ok) return next(errors.unauthorized('Invalid integration key'));
+  if (!key || !safeEqual(key, config.LOCKERHUB_INTEGRATION_KEY)) {
+    return next(errors.unauthorized('Invalid integration key'));
+  }
   next();
 };

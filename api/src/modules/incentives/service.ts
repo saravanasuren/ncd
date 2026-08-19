@@ -116,38 +116,6 @@ export async function incentiveTotals(db: Db) {
   return { staff: agg((r) => r.is_staff === true), agent: agg((r) => r.is_staff !== true) };
 }
 
-/**
- * One row per incentive accrual for the SharePoint dashboard extract, with the
- * payee resolved to code + name. Uses the SAME NOT_SELF filter as the tiles, so
- * summing these rows reconciles exactly with what the Incentives page shows; a
- * 'referrer' payee has no code and its name is the free-text referrer.
- */
-export async function accrualsForExtract(db: Db): Promise<Array<{
-  external_accrual_id: string; investment_id: string; application_no: string; payee_type: string; payee_id: string;
-  payee_code: string | null; payee_name: string | null;
-  incentive_amount: string; paid: boolean; paid_amount: string; accrual_date: string;
-}>> {
-  const { rows } = await db.query(
-    `SELECT ia.id AS external_accrual_id, a.id AS investment_id, a.application_no, ia.payee_type, ia.payee_id,
-            CASE ia.payee_type
-              WHEN 'staff' THEN (SELECT u.code FROM users u WHERE u.id = ia.payee_id)
-              WHEN 'agent' THEN (SELECT ag.agent_code FROM agents ag WHERE ag.id = ia.payee_id)
-            END AS payee_code,
-            CASE ia.payee_type
-              WHEN 'staff' THEN (SELECT u.full_name FROM users u WHERE u.id = ia.payee_id)
-              WHEN 'agent' THEN (SELECT ag.full_name FROM agents ag WHERE ag.id = ia.payee_id)
-              ELSE a.referred_by_text
-            END AS payee_name,
-            ia.amount AS incentive_amount,
-            (ia.paid_at IS NOT NULL) AS paid,
-            CASE WHEN ia.paid_at IS NOT NULL THEN ia.amount ELSE 0 END AS paid_amount,
-            ia.accrual_date
-     ${ACCRUAL_FROM}
-     WHERE ${NOT_SELF}
-     ORDER BY a.application_no, ia.payee_type`);
-  return rows as any;
-}
-
 /** Dashboard drill: every Staff (or Agent) payee with earned/paid/pending and
  * their per-customer breakdown as children. Self-investments already excluded. */
 export async function dashboardIncentives(db: Db, which: 'staff' | 'agent') {

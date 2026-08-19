@@ -49,10 +49,17 @@ export async function runBackdatedImport(db: Db, actor: AuthUser, rows: ImportRo
       }
 
       const appNo = await nextCode(tx, 'application', 'APP-{yyyy}-{seq:6}');
+      // Imported rows get a branch too, from the customer's referrer (an import
+      // row carries none of its own) — otherwise a bulk import silently adds
+      // "Unassigned" business to every branch report.
+      const impRef = (await tx.query<{ referred_by_text: string | null }>(
+        'SELECT referred_by_text FROM customers WHERE id = $1', [customer.id])).rows[0]?.referred_by_text ?? null;
+      const { branchForReferrer } = await import('../applications/branch.js');
+      const branchId = await branchForReferrer(tx, impRef);
       const { rows: ar } = await tx.query<{ id: string }>(
-        `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, source, allotment_date, interest_start_date, lockerhub_intent_no, enrolled_by_user_id)
-         VALUES ($1,$2,$3,'Active',$4,TRUE,'import',$5,$5,$6,$7) RETURNING id`,
-        [appNo, customer.id, series.id, row.amount, row.allotment_date, dedupKey, actor.id]);
+        `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, customer_was_new_at_creation, source, allotment_date, interest_start_date, lockerhub_intent_no, enrolled_by_user_id, branch_id)
+         VALUES ($1,$2,$3,'Active',$4,TRUE,'import',$5,$5,$6,$7,$8) RETURNING id`,
+        [appNo, customer.id, series.id, row.amount, row.allotment_date, dedupKey, actor.id, branchId]);
       const appId = Number(ar[0]!.id);
       await tx.query(
         `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status)

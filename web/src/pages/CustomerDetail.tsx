@@ -350,6 +350,9 @@ export function CustomerDetailPage() {
   const nav = useNavigate();
   const { can } = useAuth();
   const [msg, setMsg] = useState('');
+  // Positive feedback, separate from the red error line — a change that went to
+  // a checker succeeded, it just has not taken effect yet.
+  const [note, setNote] = useState('');
   const [panel, setPanel] = useState<'correction' | 'handover' | null>(null);
   const [corr, setCorr] = useState<Record<string, string | boolean>>({});
   const [corrReason, setCorrReason] = useState('');
@@ -373,6 +376,36 @@ export function CustomerDetailPage() {
   const c = data.customer;
   const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
   const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
+
+  /**
+   * Add a nominee. The FIRST one for a customer saves immediately; once a
+   * nominee exists, the server turns any change into an approval request
+   * (owner 2026-08-19) — so the message has to report which happened rather
+   * than always claiming "saved".
+   */
+  async function addNominee() {
+    const name = await promptText({ title: 'Add a nominee', label: 'Nominee full name', confirmLabel: 'Next' });
+    if (!name) return;
+    // Blank means "give them everything" — the server splits whatever is
+    // unallocated, so a sole nominee lands at 100%. Coercing blank to 0 here is
+    // what used to write 0% and say the opposite of what staff intended.
+    const typed = await promptText({ title: `Share for ${name}`, body: 'Leave blank to give this nominee the whole holding.', label: 'Share %', minLength: 0, confirmLabel: 'Add nominee' });
+    const share = typed != null && typed.trim() !== '' ? Number(typed) : undefined;
+    if (share != null && !(share > 0)) { setMsg('Share % must be a number above 0, or blank.'); return; }
+    const existing = (data.nominees ?? []).map((n: any) => ({ full_name: n.full_name, relationship: n.relationship, share_pct: Number(n.share_pct) || undefined }));
+    try {
+      const r = await api.put<{ applied?: boolean }>(`/api/customers/${id}/nominees`, {
+        nominees: [...existing, { full_name: name, ...(share != null ? { share_pct: share } : {}) }],
+      });
+      setMsg('');
+      setNote(r.applied === false
+        ? 'Nominee change sent to the approvals queue — it takes effect once a checker approves it.'
+        : '');
+      invalidate();
+    } catch (e) {
+      setMsg(e instanceof ApiError ? e.message : 'Failed');
+    }
+  }
 
   return (
     <div className="w-full">
@@ -413,6 +446,7 @@ export function CustomerDetailPage() {
         </div>
       )}
       {msg && <div className="text-xs text-danger mt-2">{msg}</div>}
+      {note && <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mt-2">{note}</div>}
 
       <div className="mt-4">
         <Holdings customerId={Number(id)} pan={c.pan ?? null} apps={data.applications ?? []}
@@ -427,32 +461,75 @@ export function CustomerDetailPage() {
         {/* Grouped, full detail — same field set as the quick-view popup, so the
             profile page shows everything in one place, plus the profile's richer
             Referred-by link and Form-15G/15H validity. */}
-        <div className="text-[11px] font-semibold text-text-label uppercase tracking-wide mb-1.5">Personal</div>
-        <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
-          <Field label="Phone" value={c.phone} />
-          <Field label="Alt. phone" value={c.phone_secondary} />
-          <Field label="Email" value={c.email} />
-          <Field label="PAN" value={c.pan} />
-          {/* Aadhaar shown masked to last 4 — the same posture as the popup. */}
-          <Field label="Aadhaar" value={c.aadhaar_last4 ? `XXXX XXXX ${c.aadhaar_last4}` : null} />
-          {/* DOB carries the age (drives the senior-citizen TDS slab); parsed as a
-              plain 'YYYY-MM-DD' string, so no timezone shift to guard against. */}
-          <Field label="Date of birth" value={dobLabel(c.dob)} />
-          <Field label="Gender" value={c.gender} />
-          <Field label="Father / spouse" value={c.father_name} />
-          <Field label="Occupation" value={c.occupation} />
-          <Field label="Category" value={c.investor_category} />
-          <Field label="NRI" value={c.is_nri ? 'Yes' : 'No'} />
-        </dl>
+        {/* Two columns rather than one long strip (owner 2026-08-19: personal
+            details "almost covers up a whole page"). Address, demat and
+            nominees ride alongside Personal instead of below it, roughly
+            halving the height. CSS grid with a gap — nothing is positioned
+            absolutely, so nothing can overlap; below `md` it stacks back into
+            one readable column on a narrow screen. */}
+        <div className="grid md:grid-cols-2 md:gap-x-8">
+          <div>
+            <div className="text-[11px] font-semibold text-text-label uppercase tracking-wide mb-1.5">Personal</div>
+            <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
+              <Field label="Phone" value={c.phone} />
+              <Field label="Alt. phone" value={c.phone_secondary} />
+              <Field label="Email" value={c.email} />
+              <Field label="PAN" value={c.pan} />
+              {/* Aadhaar shown masked to last 4 — the same posture as the popup. */}
+              <Field label="Aadhaar" value={c.aadhaar_last4 ? `XXXX XXXX ${c.aadhaar_last4}` : null} />
+              {/* DOB carries the age (drives the senior-citizen TDS slab); parsed as a
+                  plain 'YYYY-MM-DD' string, so no timezone shift to guard against. */}
+              <Field label="Date of birth" value={dobLabel(c.dob)} />
+              <Field label="Gender" value={c.gender} />
+              <Field label="Father / spouse" value={c.father_name} />
+              <Field label="Occupation" value={c.occupation} />
+              <Field label="Category" value={c.investor_category} />
+              <Field label="NRI" value={c.is_nri ? 'Yes' : 'No'} />
+            </dl>
+          </div>
 
-        <div className="text-[11px] font-semibold text-text-label uppercase tracking-wide mb-1.5">Address</div>
-        <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
-          <Field label="Address" value={c.address} />
-          <Field label="City" value={c.city} />
-          <Field label="District" value={c.district} />
-          <Field label="State" value={c.state} />
-          <Field label="Pincode" value={c.pincode} />
-        </dl>
+          <div>
+            <div className="text-[11px] font-semibold text-text-label uppercase tracking-wide mb-1.5">Address</div>
+            <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
+              <Field label="Address" value={c.address} />
+              <Field label="City" value={c.city} />
+              <Field label="District" value={c.district} />
+              <Field label="State" value={c.state} />
+              <Field label="Pincode" value={c.pincode} />
+            </dl>
+
+            {/* Demat and nominees live in the profile now (owner 2026-08-19), so
+                editing them goes through the same correction → approval road as
+                every other profile field instead of a direct save button. */}
+            <div className="text-[11px] font-semibold text-text-label uppercase tracking-wide mb-1.5">Demat</div>
+            <dl className="grid grid-cols-2 gap-y-2 text-sm mb-4">
+              <Field label="DP ID" value={c.demat_dp_id} />
+              <Field label="Client ID" value={c.demat_client_id} />
+              <Field label="Depository" value={c.depository} />
+            </dl>
+
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-semibold text-text-label uppercase tracking-wide">Nominees</span>
+              {can('customers:update') && (
+                <button onClick={addNominee} className="text-xs text-primary hover:underline"
+                  title={(data.nominees ?? []).length
+                    ? 'Nominee changes go to a checker before they take effect'
+                    : 'Record the first nominee for this customer'}>
+                  + Add
+                </button>
+              )}
+            </div>
+            <ul className="text-sm mb-4 mt-0.5">
+              {(data.nominees ?? []).map((n: any) => (
+                <li key={n.id}>
+                  <span className="font-medium">{n.full_name}</span>
+                  <span className="text-text-muted"> — {Number(n.share_pct) || 0}%{n.relationship ? ` · ${n.relationship}` : ''}</span>
+                </li>
+              ))}
+              {!(data.nominees ?? []).length && <li className="text-text-muted">—</li>}
+            </ul>
+          </div>
+        </div>
 
         <div className="text-[11px] font-semibold text-text-label uppercase tracking-wide mb-1.5">Status &amp; attribution</div>
         <dl className="grid grid-cols-2 gap-y-2 text-sm">
@@ -656,7 +733,6 @@ export function CustomerDetailPage() {
         />
       </div>
 
-      <Demat customerId={Number(id)} customer={c} canEdit={can('customers:update')} onChange={invalidate} onError={setMsg} />
 
       <RelationsKyc customerId={Number(id)} data={data} onChange={invalidate} can={can} />
     </div>
@@ -803,19 +879,6 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
   const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
   const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
 
-  async function addNominee() {
-    const name = await promptText({ title: 'Add a nominee', label: 'Nominee full name', confirmLabel: 'Next' }); if (!name) return;
-    // Blank means "give them everything" — the server splits whatever is
-    // unallocated, so a sole nominee lands at 100%. Coercing blank to 0 here is
-    // what used to write 0% and say the opposite of what staff intended.
-    const typed = await promptText({ title: `Share for ${name}`, body: 'Leave blank to give this nominee the whole holding.', label: 'Share %', minLength: 0, confirmLabel: 'Add nominee' });
-    const share = typed != null && typed.trim() !== '' ? Number(typed) : undefined;
-    if (share != null && !(share > 0)) { setMsg('Share % must be a number above 0, or blank.'); return; }
-    const existing = (data.nominees ?? []).map((n: any) => ({ full_name: n.full_name, relationship: n.relationship, share_pct: Number(n.share_pct) || undefined }));
-    await wrap(api.put(`/api/customers/${customerId}/nominees`, {
-      nominees: [...existing, { full_name: name, ...(share != null ? { share_pct: share } : {}) }],
-    }));
-  }
   async function addJoint() {
     const name = await promptText({ title: 'Add a joint holder', label: 'Joint holder full name', confirmLabel: 'Add' }); if (!name) return;
     const existing = (data.jointHolders ?? []).map((h: any) => ({ full_name: h.full_name, relationship: h.relationship, pan: h.pan, phone: h.phone }));
@@ -844,18 +907,14 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
     <>
       {msg && <div className="text-xs text-danger mb-2">{msg}</div>}
 
-      {/* Relations — nominees + joint holders */}
+      {/* Nominees moved up into the Profile card (owner 2026-08-19) — they are
+          profile detail, and having them there is what puts their edits on the
+          correction → approval road. Joint holders stay here. */}
       <div className={card}>
         <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Relations</h2>
-        <div className="grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <div className="flex items-center justify-between"><span className="font-semibold">Nominees</span>{can('customers:update') && <button onClick={addNominee} className="text-xs text-primary hover:underline">+ Add</button>}</div>
-            <ul className="mt-1 text-text-muted">{(data.nominees ?? []).map((n: any) => <li key={n.id}>{n.full_name} — {Number(n.share_pct) || 0}%</li>)}{!(data.nominees ?? []).length && <li>None</li>}</ul>
-          </div>
-          <div>
-            <div className="flex items-center justify-between"><span className="font-semibold">Joint holders</span>{can('customers:update') && <button onClick={addJoint} className="text-xs text-primary hover:underline">+ Add</button>}</div>
-            <ul className="mt-1 text-text-muted">{(data.jointHolders ?? []).map((h: any) => <li key={h.id}>{h.full_name}</li>)}{!(data.jointHolders ?? []).length && <li>None</li>}</ul>
-          </div>
+        <div className="text-sm">
+          <div className="flex items-center justify-between"><span className="font-semibold">Joint holders</span>{can('customers:update') && <button onClick={addJoint} className="text-xs text-primary hover:underline">+ Add</button>}</div>
+          <ul className="mt-1 text-text-muted">{(data.jointHolders ?? []).map((h: any) => <li key={h.id}>{h.full_name}</li>)}{!(data.jointHolders ?? []).length && <li>None</li>}</ul>
         </div>
       </div>
 
@@ -1125,65 +1184,6 @@ function NewInvestment({ customerId, custNoTds, isSenior }: { customerId: number
 
 function Field({ label, value }: { label: string; value: unknown }) {
   return (<><dt className="text-text-muted">{label}</dt><dd className="font-medium">{value ? String(value) : '—'}</dd></>);
-}
-
-/**
- * Demat account — the depository account the NCDs are credited to. Backed by the
- * customers table (demat_dp_id / demat_client_id / depository) via PUT /:id/demat.
- * DP ID + Client ID together form the 16-char BO ID.
- */
-function Demat({ customerId, customer, canEdit, onChange, onError }: {
-  customerId: number; customer: any; canEdit: boolean; onChange: () => void; onError: (m: string) => void;
-}) {
-  const [dpId, setDpId] = useState(customer.demat_dp_id ?? '');
-  const [clientId, setClientId] = useState(customer.demat_client_id ?? '');
-  const [depository, setDepository] = useState(customer.depository ?? '');
-  const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
-
-  const has = !!(customer.demat_dp_id || customer.demat_client_id);
-  const dirty = dpId.trim() !== (customer.demat_dp_id ?? '')
-    || clientId.trim() !== (customer.demat_client_id ?? '')
-    || (depository || '') !== (customer.depository ?? '');
-
-  const save = useMutation({
-    mutationFn: () => api.put(`/api/customers/${customerId}/demat`, {
-      dp_id: dpId.trim(), client_id: clientId.trim(), depository: depository.trim() || null,
-    }),
-    onSuccess: onChange,
-    onError: (e) => onError(e instanceof ApiError ? e.message : 'Failed'),
-  });
-
-  return (
-    <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
-      <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Demat account</h2>
-      {has ? (
-        <dl className="grid grid-cols-2 gap-y-2 text-sm mb-3">
-          <Field label="DP ID" value={customer.demat_dp_id} />
-          <Field label="Client ID" value={customer.demat_client_id} />
-          <Field label="Depository" value={customer.depository} />
-        </dl>
-      ) : (
-        <div className="text-sm text-text-muted mb-3">No demat details on file.</div>
-      )}
-      {canEdit && (
-        <div className="flex gap-2 items-center flex-wrap">
-          <input className={inp} placeholder="DP ID" value={dpId} maxLength={16}
-            onChange={(e) => setDpId(e.target.value.toUpperCase().replace(/\s/g, ''))} />
-          <input className={inp} placeholder="Client ID" value={clientId} maxLength={16}
-            onChange={(e) => setClientId(e.target.value.replace(/\s/g, ''))} />
-          <select className={inp} value={depository} onChange={(e) => setDepository(e.target.value)}>
-            <option value="">Depository…</option>
-            <option value="NSDL">NSDL</option>
-            <option value="CDSL">CDSL</option>
-          </select>
-          <button disabled={!dpId.trim() || !clientId.trim() || !dirty || save.isPending} onClick={() => save.mutate()}
-            className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
-            {has ? 'Update' : '+ Save'}
-          </button>
-        </div>
-      )}
-    </div>
-  );
 }
 
 /**

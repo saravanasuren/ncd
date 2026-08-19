@@ -68,6 +68,15 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Customer Correction',
     levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
+  // Owner 2026-08-19: a nominee change goes through approval like any other
+  // profile change. Its own type rather than customer_correction because
+  // nominees are ROWS in their own table — the correction applier writes a
+  // column diff and cannot express "replace this customer's nominee set".
+  customer_nominees: {
+    type: 'customer_nominees',
+    label: 'Nominee Change',
+    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
+  },
   customer_reassignment: {
     type: 'customer_reassignment',
     label: 'Customer Handover',

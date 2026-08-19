@@ -15,12 +15,24 @@ export interface CustomerField {
   key: string;
   label: string;
   kind: CustomerFieldKind;
-  group: 'Identity' | 'Contact' | 'Address' | 'Tax & category' | 'Referral';
+  group: 'Identity' | 'Contact' | 'Address' | 'Tax & category' | 'Referral' | 'Demat';
   options?: string[];
   /** Force-uppercase as the user types (PAN, CKYC). */
   uppercase?: boolean;
   maxLength?: number;
   hint?: string;
+  /**
+   * Format the value must match when non-empty, as a regex SOURCE string (the
+   * shared package is consumed by both sides; a source string survives JSON and
+   * builds a RegExp wherever it is needed).
+   *
+   * Checked when the correction is SUBMITTED, not at apply time — a maker who
+   * types a malformed DP ID must be told immediately, rather than having a
+   * checker approve something that then fails or, worse, saves rubbish.
+   */
+  pattern?: string;
+  /** Shown when `pattern` fails. Says the shape, not "invalid". */
+  patternHint?: string;
 }
 
 /**
@@ -31,8 +43,14 @@ export interface CustomerField {
  *    creation_status, is_active, is_deceased, archived_*, branch/enroller ids;
  *  - the full `aadhaar` column — only the last 4 are ever shown or edited
  *    (Aadhaar Act §29; the LockerHub contract says raw Aadhaar is never returned);
- *  - demat, nominees and joint holders — those have their own endpoints and
- *    edit controls on the customer page.
+ *  - nominees and joint holders — ROWS in their own tables rather than columns
+ *    here, so they cannot be expressed as a column diff. They go through
+ *    approval by their own route (customer_nominees).
+ *
+ * Demat WAS excluded for the same "it has its own endpoint" reason, until the
+ * owner asked (2026-08-19) for demat changes to go through approval like
+ * everything else on the profile. It is three plain columns, so it simply
+ * joins the list.
  */
 export const CORRECTABLE_CUSTOMER_FIELDS: CustomerField[] = [
   // Identity
@@ -67,6 +85,15 @@ export const CORRECTABLE_CUSTOMER_FIELDS: CustomerField[] = [
   // field. (Only future investments' attribution reads it; past accruals keep
   // whatever was stamped on their application at the time.)
   { key: 'referred_by_text', label: 'Referred by (code or name)', kind: 'text', group: 'Referral' },
+
+  // Demat (owner 2026-08-19) — where the customer's securities are held. Same
+  // shape rule the direct endpoint enforced (shared DP_ID_RE): two letters plus
+  // six digits for NSDL, or eight digits for CDSL.
+  { key: 'demat_dp_id', label: 'DP ID', kind: 'text', group: 'Demat', uppercase: true, maxLength: 8,
+    pattern: '^([A-Z]{2}[0-9]{6}|[0-9]{8})$',
+    patternHint: 'DP ID must be 8 characters — two letters + six digits (e.g. IN300456) or eight digits (CDSL)' },
+  { key: 'demat_client_id', label: 'Client ID', kind: 'text', group: 'Demat', uppercase: true },
+  { key: 'depository', label: 'Depository', kind: 'select', group: 'Demat', options: ['NSDL', 'CDSL'] },
 ];
 
 export const CORRECTABLE_CUSTOMER_KEYS: string[] = CORRECTABLE_CUSTOMER_FIELDS.map((f) => f.key);
@@ -82,6 +109,20 @@ export function isCorrectableCustomerField(key: string): boolean {
  * cleared field actually clears), booleans coerced, PAN/CKYC upper-cased.
  * Unknown keys return undefined — the caller skips them.
  */
+/**
+ * Why a submitted correction value is unacceptable, or null when it is fine.
+ * Empty clears the field, so it is always allowed — a customer may genuinely
+ * have no demat account.
+ */
+export function customerFieldError(key: string, value: unknown): string | null {
+  const field = FIELD_BY_KEY.get(key);
+  if (!field?.pattern) return null;
+  const s = String(value ?? '').trim();
+  if (s === '') return null;
+  const v = field.uppercase ? s.toUpperCase() : s;
+  return new RegExp(field.pattern).test(v) ? null : (field.patternHint ?? `${field.label} is not in the expected format`);
+}
+
 export function normaliseCustomerFieldValue(key: string, value: unknown): unknown | undefined {
   const field = FIELD_BY_KEY.get(key);
   if (!field) return undefined;

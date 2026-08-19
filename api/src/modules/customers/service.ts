@@ -13,6 +13,7 @@ import { getSettingsMap } from '../settings/service.js';
 import {
   OUTSTANDING_APPLICATION_STATUSES,
   CORRECTABLE_CUSTOMER_KEYS,
+  customerFieldError,
   isCorrectableCustomerField,
   normaliseCustomerFieldValue,
 } from '@new-wealth/shared';
@@ -588,31 +589,105 @@ export function withNomineeShares<T extends { share_pct?: number | null }>(nomin
   return nominees.map((n) => ({ ...n, share_pct: stated(n) ? Number(n.share_pct) : each }));
 }
 
-export async function setNominees(db: Db, actor: AuthUser, customerId: number, nomineesIn: NomineeInput[]) {
+/** Replace a customer's nominee set. INTERNAL — reached through the approval
+ *  applier below and through enrolment, never straight from a staff click:
+ *  the owner put nominee changes behind approval on 2026-08-19. */
+async function applyNominees(tx: Db, actorId: number | null, customerId: number, nomineesIn: NomineeInput[]) {
+  const nominees = withNomineeShares(nomineesIn);
+  await tx.query('DELETE FROM nominees WHERE customer_id = $1', [customerId]);
+  for (const n of nominees) {
+    await tx.query('INSERT INTO nominees (customer_id, full_name, relationship, share_pct, dob, pan, phone, address, guardian_name, guardian_pan, kyc_id_type, kyc_id_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
+      [customerId, n.full_name, n.relationship ?? null, n.share_pct, n.dob ?? null,
+       n.pan ?? null, n.phone ?? null, n.address ?? null, n.guardian_name ?? null, n.guardian_pan ?? null,
+       n.kyc_id_type ?? null, n.kyc_id_number ?? null]);
+  }
+  await writeAudit(tx, { actorId, action: 'customer.nominees', entityType: 'customers', entityId: customerId, after: { count: nominees.length } });
+}
+
+/**
+ * Ask to change a customer's nominees → approval (owner 2026-08-19: "when i
+ * make some changes in it will go through approval").
+ *
+ * Nominee decides who receives the money, so this is the last field that should
+ * have been changeable by one person alone. The whole SET is carried in the
+ * request rather than a per-row diff, because that is the shape the write has
+ * always taken — replace the set — and a diff would have to reconcile rows
+ * that may have moved underneath it while the request waited.
+ */
+export async function requestNomineeChange(db: Db, actor: AuthUser, customerId: number, nomineesIn: NomineeInput[], reason: string): Promise<ApprovalRow> {
   await assertVisible(db, actor, customerId);
   const stated = nomineesIn.reduce((s, n) => s + (Number(n.share_pct) > 0 ? Number(n.share_pct) : 0), 0);
   if (nomineesIn.length && stated > 100.01) throw errors.badRequest('Nominee shares exceed 100%');
-  const nominees = withNomineeShares(nomineesIn);
-  await db.withTx(async (tx) => {
-    await tx.query('DELETE FROM nominees WHERE customer_id = $1', [customerId]);
-    for (const n of nominees) {
-      await tx.query('INSERT INTO nominees (customer_id, full_name, relationship, share_pct, dob, pan, phone, address, guardian_name, guardian_pan, kyc_id_type, kyc_id_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
-        [customerId, n.full_name, n.relationship ?? null, n.share_pct, n.dob ?? null,
-         n.pan ?? null, n.phone ?? null, n.address ?? null, n.guardian_name ?? null, n.guardian_pan ?? null,
-         n.kyc_id_type ?? null, n.kyc_id_number ?? null]);
-    }
-    await writeAudit(tx, { actorId: actor.id, action: 'customer.nominees', entityType: 'customers', entityId: customerId, after: { count: nominees.length } });
-  });
-  return { ok: true };
+  return db.withTx(async (tx) => createApprovalRequest(tx, {
+    type: 'customer_nominees',
+    entityType: 'customers',
+    entityId: customerId,
+    makerUserId: actor.id,
+    // Shares are normalised NOW so the checker approves the exact split that
+    // will be saved, not one the applier quietly rebalances afterwards.
+    metadata: { nominees: withNomineeShares(nomineesIn), reason, count: nomineesIn.length },
+  }));
+}
+
+registerOnFinalApprove('customer_nominees', async (tx, req) => {
+  const nominees = (req.metadata.nominees ?? []) as NomineeInput[];
+  if (req.entity_id) await applyNominees(tx, req.maker_user_id ?? null, Number(req.entity_id), nominees);
+});
+
+/**
+ * Set nominees. FIRST capture applies straight away; every later CHANGE goes to
+ * approval (owner 2026-08-19: "when i make some changes in it will go through
+ * approval").
+ *
+ * The split is on the customer's state, not on who is calling: the enrolment
+ * wizard records a nominee through this same endpoint moments after creating
+ * the customer, and routing that first entry into a queue would leave brand-new
+ * customers with no nominee on file until a checker got to it. Once a nominee
+ * EXISTS, changing it is exactly what the owner asked to gate — nominee decides
+ * who receives the money.
+ */
+export async function setNominees(db: Db, actor: AuthUser, customerId: number, nomineesIn: NomineeInput[], reason?: string) {
+  await assertVisible(db, actor, customerId);
+  const stated = nomineesIn.reduce((s, n) => s + (Number(n.share_pct) > 0 ? Number(n.share_pct) : 0), 0);
+  if (nomineesIn.length && stated > 100.01) throw errors.badRequest('Nominee shares exceed 100%');
+
+  const existing = Number((await db.query<{ n: number }>(
+    'SELECT count(*)::int AS n FROM nominees WHERE customer_id = $1', [customerId])).rows[0]?.n ?? 0);
+  if (existing === 0) {
+    await db.withTx(async (tx) => applyNominees(tx, actor.id, customerId, nomineesIn));
+    return { ok: true, applied: true };
+  }
+  const req = await requestNomineeChange(db, actor, customerId, nomineesIn, reason ?? 'Nominee change');
+  return { ok: true, applied: false, approval_request: req };
 }
 
 // ── Demat ─────────────────────────────────────────────────────────────
+/**
+ * Set demat details. FIRST capture applies; a CHANGE to details already on file
+ * goes to approval (owner 2026-08-19) — the same rule as nominees, and for the
+ * same reason: the enrolment wizard fills these in moments after creating the
+ * customer, and queueing that would leave new customers blank.
+ *
+ * Demat is also one of the CORRECTABLE_CUSTOMER_FIELDS now, so the profile's
+ * "Request correction" form edits it too; both roads end at a checker.
+ */
 export async function setDemat(db: Db, actor: AuthUser, customerId: number, dpId: string, clientId: string, depository?: string | null) {
   await assertVisible(db, actor, customerId);
+  const before = (await db.query<{ demat_dp_id: string | null; demat_client_id: string | null }>(
+    'SELECT demat_dp_id, demat_client_id FROM customers WHERE id = $1', [customerId])).rows[0];
+  if (!before) throw errors.notFound('Customer not found');
+  const hadOne = !!(String(before.demat_dp_id ?? '').trim() || String(before.demat_client_id ?? '').trim());
+
+  if (hadOne) {
+    const changes: Record<string, unknown> = { demat_dp_id: dpId, demat_client_id: clientId };
+    if (depository != null) changes.depository = depository;
+    const req = await requestCorrection(db, actor, customerId, changes, 'Demat details change');
+    return { ok: true, applied: false, approval_request: req };
+  }
   await db.query('UPDATE customers SET demat_dp_id = $1, demat_client_id = $2, depository = COALESCE($3, depository), updated_at = now() WHERE id = $4',
     [dpId, clientId, depository ?? null, customerId]);
   await writeAudit(db, { actorId: actor.id, action: 'customer.demat', entityType: 'customers', entityId: customerId, after: { dpId, clientId, depository } });
-  return { ok: true };
+  return { ok: true, applied: true };
 }
 
 // ── Deceased flag ─────────────────────────────────────────────────────
@@ -669,6 +744,13 @@ export async function requestCorrection(db: Db, actor: AuthUser, customerId: num
     throw errors.badRequest(`Cannot correct: ${unknown.join(', ')}. Correctable fields are: ${CORRECTABLE_CUSTOMER_KEYS.join(', ')}`);
   }
   if (!Object.keys(changes).length) throw errors.badRequest('No changes to submit');
+  // Shape is checked NOW, not at apply time. A checker approving a malformed
+  // DP ID would either fail deep in the applier or save rubbish that looks
+  // approved — both worse than telling the maker while they are still typing.
+  for (const [k, v] of Object.entries(changes)) {
+    const err = customerFieldError(k, v);
+    if (err) throw errors.badRequest(err);
+  }
   return db.withTx(async (tx) => {
     const req = await createApprovalRequest(tx, {
       type: 'customer_correction',

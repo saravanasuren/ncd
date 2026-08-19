@@ -104,3 +104,54 @@ export async function tenantOverrides(db: Db): Promise<Record<string, unknown>[]
        LEFT JOIN customers c ON c.id = o.customer_id`);
   return rows;
 }
+
+/**
+ * Hide a locker APPLICATION from NCD's screens — Super Admin only
+ * (owner 2026-08-19: "get me delete option only for super admin for deleting
+ * any locker applicaation").
+ *
+ * ⚠️ This does NOT delete anything on LockerHub, and it deliberately does not
+ * pretend to. Their contract exposes no delete or cancel for an application at
+ * all (checked against LOCKERHUB-INTEGRATION-CONTRACT.md): applications reach
+ * `rejected`/`cancelled` on their side only, by their own flows. So the honest
+ * scope of a "delete" from here is our own view of it — exactly what
+ * removeTenant already does for an allotted tenancy, and the caller is told so
+ * in the same words on screen.
+ *
+ * Keyed on the LockerHub application id. The overrides table is keyed
+ * `lockerhub_tenant_id`, and an application that has never been allotted has no
+ * tenant id — the existing code already stores an application id in that column
+ * for exactly this reason (see overrideKey in deposits.ts), so the two share one
+ * mechanism rather than growing a second table that could disagree.
+ */
+export async function removeLockerApplication(
+  db: Db, actor: AuthUser, applicationId: string, reason: string,
+  snap: { tenant_name?: string | null; locker_no?: string | null; branch_id?: string | null } = {},
+) {
+  // Explicit role check rather than a permission: the owner asked for Super
+  // Admin specifically, and a permission could later be granted to someone else
+  // without anyone revisiting this decision.
+  if (actor.role !== 'super_admin') {
+    throw errors.forbidden('Only a Super Admin can remove a locker application');
+  }
+  if (!applicationId.trim()) throw errors.badRequest('application id required');
+  if (!reason?.trim() || reason.trim().length < 3) throw errors.badRequest('A reason is required');
+  return db.withTx(async (tx) => {
+    await tx.query(
+      `INSERT INTO locker_tenant_overrides
+         (lockerhub_tenant_id, removed_at, removed_reason, removed_by_user_id, tenant_name, locker_no, branch_id)
+       VALUES ($1, now(), $2, $3, $4, $5, $6)
+       ON CONFLICT (lockerhub_tenant_id) DO UPDATE
+         SET removed_at = now(), removed_reason = EXCLUDED.removed_reason,
+             removed_by_user_id = EXCLUDED.removed_by_user_id,
+             updated_at = now()`,
+      [applicationId.trim(), reason.trim(), actor.id,
+       snap.tenant_name ?? null, snap.locker_no ?? null, snap.branch_id ?? null]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'locker.application.remove',
+      entityType: 'locker_applications', entityId: applicationId.trim(),
+      after: { reason: reason.trim(), note: 'Hidden from NCD only — LockerHub still holds this application' },
+    });
+    return { application_id: applicationId.trim(), hidden: true };
+  });
+}

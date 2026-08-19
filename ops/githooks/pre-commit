@@ -1,0 +1,62 @@
+#!/bin/sh
+# Refuse commits made from the SHARED main checkout.
+#
+# Several Claude Code sessions run against /Users/eashwarram/tools/ncd at once.
+# A git checkout has exactly one branch, one index and one working tree, so when
+# two sessions share it they are not "working in parallel" — they are editing one
+# set of files and one staging area. Three things went wrong on 2026-08-12 alone:
+#
+#   1. Another session ran `git add` while this one had files in the tree, and
+#      merged them under its own PR (#291). The change went live under a commit
+#      message that never mentioned it.
+#   2. A `git checkout -b` did not take, because another session moved HEAD in
+#      between, so a commit intended for a feature branch landed on main.
+#   3. Two dev servers fought over port 3030.
+#
+# (1) and (2) are silent — nobody notices until the history is already wrong.
+# So the main checkout is now for pulling, reading and deploying; all editing
+# happens in a worktree, which has its own branch, index and working tree.
+#
+#   ops/cowork.sh new <name>     create an isolated worktree and cd into it
+#   ops/cowork.sh list           show what exists
+#
+# Escape hatch for a deliberate one-off (a hotfix when no session is running):
+#
+#   NCD_ALLOW_ROOT_COMMIT=1 git commit ...
+#
+# A worktree's private git dir is .git/worktrees/<name>; the main checkout's is
+# the common dir itself. That equality is what identifies the shared checkout.
+
+[ -n "$NCD_ALLOW_ROOT_COMMIT" ] && exit 0
+
+git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) || exit 0
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+[ "$git_dir" != "$common_dir" ] && exit 0   # in a worktree — allowed
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo 'detached HEAD')
+cat >&2 <<EOF
+
+  ✋ Commit blocked — this is the SHARED main checkout (on '$branch').
+
+  Several sessions use this directory at once. They share one branch, one
+  staging area and one working tree, so a commit here can sweep up another
+  session's files, or land on main when you meant a feature branch. Both have
+  happened, and both are silent.
+
+  Work in your own worktree instead:
+
+      ops/cowork.sh new my-task     # isolated branch + tree + dev ports
+      ops/cowork.sh list            # what already exists
+
+  Your changes are safe — nothing was staged or lost. Move them across with:
+
+      git stash && cd <worktree> && git stash pop
+
+  Deliberate one-off, with no other session running?
+
+      NCD_ALLOW_ROOT_COMMIT=1 git commit ...
+
+  Why: ops/COWORK.md
+
+EOF
+exit 1

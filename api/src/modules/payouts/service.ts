@@ -7,7 +7,7 @@ import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
-import { round2, toISODate, daysBetween, addDays } from '../../lib/dates.js';
+import { round2, roundRupee, toISODate, daysBetween, addDays } from '../../lib/dates.js';
 import { denominatorFor, type DayCountConvention } from '../../lib/interest.js';
 import { computeTds, DEFAULT_TDS_RULE } from '../../lib/tds.js';
 import { OUTSTANDING_APPLICATION_STATUSES, payoutRupees } from '@new-wealth/shared';
@@ -78,7 +78,12 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
       ORDER BY c.full_name`, [productType]);
 
   const out: Record<string, unknown>[] = [];
-  const totals = { gross: 0, tds: 0, net: 0 };
+  // `outstanding` = the principal this interest was earned on (owner
+  // 2026-08-16, to explain why gross can fall while customer count rises).
+  // Same definition the summary sheet already prints as "investment amount":
+  // a redemption slice brings its own principal_basis, everything else is the
+  // line's outstanding — so the two screens agree by construction.
+  const totals = { gross: 0, tds: 0, net: 0, outstanding: 0 };
   for (const l of lines) {
     const paidThrough = toISODate(l.paid_through as string | null);
     if (!paidThrough || payoutDate < paidThrough) continue;    // nothing accrued yet
@@ -107,7 +112,11 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
     if (!(principal > 0)) continue;
 
     const denom = denominatorFor(l.day_count_convention as DayCountConvention, paidThrough);
-    const gross = round2((principal * Number(l.coupon_rate_pct)) / 100 * days / denom);
+    // 🔒 Whole rupees, owner-approved 2026-08-16 ("there should be no decimal.
+    // round off properly"). The FORMULA is untouched — same principal, rate,
+    // days and day-count denominator as before; only the precision of the
+    // result changed, from paise to rupees.
+    const gross = roundRupee((principal * Number(l.coupon_rate_pct)) / 100 * days / denom);
     if (gross <= 0) continue;
 
     // The owner confirmed subordinate bonds follow the SAME TDS rules. A sub
@@ -121,16 +130,23 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
         ? (await db.query<{ rate_pct: number }>(
             'SELECT tr.* FROM sob_products p JOIN tds_rules tr ON tr.id = p.tds_rule_id WHERE p.id = $1', [l.sob_product_id])).rows[0] ?? DEFAULT_TDS_RULE
         : DEFAULT_TDS_RULE;
-    const tds = computeTds(
+    // TDS is rounded to a whole rupee INDEPENDENTLY of gross — the owner's rule
+    // is "net = gross - tds only / no rounding because already in gross and tds
+    // we are rounding the figures", and that shape is preserved exactly; only
+    // the precision moved. TDS in whole rupees is also ordinary practice.
+    const tds = roundRupee(computeTds(
       tdsRule,
       { is_nri: l.is_nri as boolean, tds_applicable: l.cust_tds as boolean,
         tax_form: l.tax_form as string | null, tax_form_expires_on: toISODate(l.tax_form_expires_on as string | null) },
       { payout_frequency: l.payout_frequency as string, amount: Number(l.line_amount) },
       { due_type: 'Interest', gross_amount: gross, due_date: payoutDate }
-    );
-    const net = round2(gross - tds);
+    ));
+    // Plain subtraction, NOT re-rounded: both inputs are already whole, so this
+    // is whole for free. Wrapping it in a rounder would only mask a bug.
+    const net = gross - tds;
 
     totals.gross += gross; totals.tds += tds; totals.net += net;
+    totals.outstanding += principal;
     out.push({
       line_id: Number(l.line_id), application_id: Number(l.application_id),
       customer_id: Number(l.customer_id),
@@ -177,6 +193,9 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
     const due = toISODate(r.due_date as string | null)!;
     const basis = r.principal_basis != null ? Number(r.principal_basis) : null;
     totals.gross += gross; totals.tds += Number(r.tds_amount); totals.net += Number(r.net_amount);
+    // A redemption slice earned on its own basis, not the line's live figure —
+    // the line may already be reduced or closed by that redemption.
+    totals.outstanding += basis ?? 0;
     out.push({
       schedule_id: Number(r.schedule_id),
       line_id: Number(r.line_id), application_id: Number(r.application_id),
@@ -252,6 +271,9 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
       gross: round2(totals.gross), tds: round2(totals.tds), net: round2(totals.net),
       addition: round2(addTotal), deduction: round2(dedTotal),
       total: round2(totals.net + addTotal - dedTotal),
+      // The principal all of the above was earned on — the new Outstanding row
+      // in the last-batch-vs-this-batch comparison (owner 2026-08-16).
+      outstanding: round2(totals.outstanding),
     },
     count: out.length,
     // Distinct people behind the rows — a customer with several debentures is
@@ -263,6 +285,8 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
 export interface LastInterestBatchSummary {
   batch_no: string; payout_date: string;
   customers: number; investments: number; gross: number; tds: number; net: number;
+  /** Principal the batch's interest was earned on — see previewDue's totals. */
+  outstanding: number;
 }
 
 /**
@@ -277,19 +301,25 @@ export async function lastPaidInterestSummary(db: Db): Promise<LastInterestBatch
       WHERE kind = 'interest' AND status = 'Paid'
       ORDER BY payout_date DESC, id DESC LIMIT 1`)).rows[0];
   if (!batch) return null;
-  const agg = (await db.query<{ customers: string; investments: string; gross: string; tds: string; net: string }>(
+  const agg = (await db.query<{ customers: string; investments: string; gross: string; tds: string; net: string; outstanding: string }>(
     `SELECT count(DISTINCT a.customer_id) AS customers,
             count(DISTINCT ds.application_id) AS investments,
             COALESCE(sum(ds.gross_amount), 0) AS gross,
             COALESCE(sum(ds.tds_amount), 0)   AS tds,
-            COALESCE(sum(ds.net_amount), 0)   AS net
+            COALESCE(sum(ds.net_amount), 0)   AS net,
+            -- COALESCE(principal_basis, line outstanding): the SAME expression
+            -- the summary sheet uses for "investment amount", so this row and
+            -- that column can never disagree about the same batch.
+            COALESCE(sum(COALESCE(ds.principal_basis, l.outstanding_amount)), 0) AS outstanding
        FROM disbursement_schedule ds
        JOIN applications a ON a.id = ds.application_id
+       LEFT JOIN application_lines l ON l.id = ds.line_id
       WHERE ds.batch_id = $1 AND ds.status = 'Paid' AND ds.due_type IN ${DUE_TYPES}`, [batch.id])).rows[0]!;
   return {
     batch_no: batch.batch_no, payout_date: String(batch.payout_date).slice(0, 10),
     customers: Number(agg.customers), investments: Number(agg.investments),
     gross: round2(Number(agg.gross)), tds: round2(Number(agg.tds)), net: round2(Number(agg.net)),
+    outstanding: round2(Number(agg.outstanding)),
   };
 }
 

@@ -258,6 +258,24 @@ export function ApplicationDetailPage() {
         {a.allotment_date && (
           <a href={`/api/reports/allotment/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Allotment letter</a>
         )}
+        {/* Has the customer actually RECEIVED their bond? (owner 2026-08-19).
+            Every other bond field says what we produced — generated, eSigned,
+            filed — none of them says it reached the customer's hands. */}
+        {can('applications:update') && (
+          <label className={`text-xs flex items-center gap-1.5 border rounded px-3 py-1.5 cursor-pointer ${a.bond_distributed_at ? 'border-[color:var(--success)] text-success' : 'border-border hover:bg-bg'}`}
+            title={a.bond_distributed_at
+              ? `Marked by ${a.bond_distributed_by_name ?? 'someone'} on ${String(a.bond_distributed_at).slice(0, 10)}`
+              : 'Tick once the bond certificate has been handed to the customer'}>
+            <input type="checkbox" checked={!!a.bond_distributed_at}
+              onChange={(e) => run(api.post(`/api/applications/${id}/bond-distributed`, { distributed: e.target.checked }))} />
+            Bond given to customer
+            {a.bond_distributed_at && (
+              <span className="text-text-muted">
+                · {String(a.bond_distributed_at).slice(0, 10)}{a.bond_distributed_by_name ? ` · ${a.bond_distributed_by_name}` : ''}
+              </span>
+            )}
+          </label>
+        )}
         {can('applications:update') && (
           <label className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg cursor-pointer">
             {a.receipt_file_path ? 'Replace receipt…' : 'Upload receipt…'}

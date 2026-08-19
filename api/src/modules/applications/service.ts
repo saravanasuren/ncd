@@ -400,6 +400,30 @@ export async function setLockerDeposit(db: Db, actor: AuthUser, appId: number, v
   return { ok: true };
 }
 
+/** Mark whether the bond certificate has been handed to the customer (owner
+ * 2026-08-19). Records WHO marked it and WHEN, because the question this
+ * answers months later is "who says this customer got their bond".
+ *
+ * Un-marking clears both, so the record never claims a handover happened at a
+ * time nobody stands behind. Deliberately not gated on status: a bond can be
+ * handed over late, and refusing to record a fact that already happened would
+ * just leave the book wrong. */
+export async function setBondDistributed(db: Db, actor: AuthUser, appId: number, value: boolean) {
+  const upd = await db.query(
+    `UPDATE applications
+        SET bond_distributed_at = CASE WHEN $1 THEN now() ELSE NULL END,
+            bond_distributed_by = CASE WHEN $1 THEN $2::bigint ELSE NULL END,
+            updated_at = now()
+      WHERE id = $3
+      RETURNING bond_distributed_at`, [value, actor.id, appId]);
+  if (!upd.rowCount) throw errors.notFound('Application not found');
+  await writeAudit(db, {
+    actorId: actor.id, action: 'application.bond-distributed', entityType: 'applications', entityId: appId,
+    after: { distributed: value, at: upd.rows[0]?.bond_distributed_at ?? null },
+  });
+  return { ok: true, bond_distributed_at: upd.rows[0]?.bond_distributed_at ?? null };
+}
+
 /** Record eSign completion. Non-gating: it stamps esigned_at and does not
  * change the lifecycle status (eSign no longer sits on the critical path). */
 export async function markESigned(db: Db, actor: AuthUser, appId: number) {
@@ -440,9 +464,13 @@ export async function getApplicationDetail(db: Db, actor: AuthUser, appId: numbe
   const app = (await db.query(
     `SELECT a.*, c.full_name AS customer_name, c.customer_code, s.code AS series_code,
             -- Which Dhanam account received the money (label for display).
-            cb.account_label AS collection_bank_label, cb.bank_name AS collection_bank_name, cb.account_number AS collection_bank_account
+            cb.account_label AS collection_bank_label, cb.bank_name AS collection_bank_name, cb.account_number AS collection_bank_account,
+            -- Who marked the bond as handed to the customer; the page shows the
+            -- name rather than a user id nobody can read.
+            bd.full_name AS bond_distributed_by_name
      FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
      LEFT JOIN banks cb ON cb.id = a.collection_bank_id
+     LEFT JOIN users bd ON bd.id = a.bond_distributed_by
      WHERE a.id = $1 AND ${sc.sql}`, [appId, ...sc.params])).rows[0];
   if (!app) throw errors.notFound('Application not found');
   const lines = (await db.query('SELECT * FROM application_lines WHERE application_id = $1', [appId])).rows;

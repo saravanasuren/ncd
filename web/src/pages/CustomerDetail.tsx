@@ -219,13 +219,26 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
   // `applications`, a key their API does not return — so an enrolment still in
   // progress showed nowhere on the customer, and there was no way back into it.
   const openApps = lh?.open_locker_applications ?? lh?.applications ?? [];
-  if (!pledges.length && !cheques.length && !lockers.length && !openApps.length && !data.lockerhub_error) return null;
+  // LockerHub holds a record on this customer's PHONE, but under a different
+  // name — so it is not shown as theirs (owner 2026-08-19). The card still
+  // appears, saying plainly what exists and whose it is.
+  const nameMismatch: string | null = data.lockerhub_name_mismatch ?? null;
+  if (!pledges.length && !cheques.length && !lockers.length && !openApps.length
+      && !data.lockerhub_error && !nameMismatch) return null;
   const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
   return (
     <div className={card}>
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Lockers</h2>
       {data.lockerhub_error && (
         <div className="text-xs text-warn mb-2">Couldn’t reach LockerHub — showing what NCD holds. ({String(data.lockerhub_error).slice(0, 80)})</div>
+      )}
+      {nameMismatch && (
+        <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-2">
+          LockerHub has a record on this phone number under the name{' '}
+          <span className="font-semibold">{nameMismatch}</span>, which does not match{' '}
+          <span className="font-semibold">{customerName}</span> — so nothing from it is shown as this
+          customer's. If they are the same person, link them from Locker Tenants.
+        </div>
       )}
       {lockers.length > 0 && (
         <div className="text-sm mb-3">

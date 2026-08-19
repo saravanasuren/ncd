@@ -299,8 +299,8 @@ export async function linkCandidates(db: Db, customerId: number) {
  * plus OUR pledges and cheques, which are ours alone and always shown.
  */
 export async function customerLockers(db: Db, customerId: number) {
-  const c = (await db.query<{ phone: string | null }>(
-    'SELECT phone FROM customers WHERE id = $1', [customerId])).rows[0];
+  const c = (await db.query<{ phone: string | null; full_name: string }>(
+    'SELECT phone, full_name FROM customers WHERE id = $1', [customerId])).rows[0];
   if (!c) throw errors.notFound('Customer not found');
 
   const pledges = (await db.query<Record<string, unknown>>(
@@ -314,14 +314,59 @@ export async function customerLockers(db: Db, customerId: number) {
 
   let lockerhub: Record<string, unknown> | null = null;
   let lockerhub_error: string | null = null;
+  // LockerHub is keyed on PHONE ALONE, so this lookup answers "what is on this
+  // number", not "what belongs to this person". Those are different questions
+  // whenever a number is shared — and a locker application carries a ₹3,00,000
+  // deposit, so attributing one to the wrong customer is not a small error.
+  //
+  // Owner, 2026-08-19: a brand-new customer EASHWAR showed a locker application
+  // APP-2026-01122 raised on 7 Aug, because LockerHub holds "Eashwar ram" on the
+  // same number. Nothing had been created; it was simply presented as theirs.
+  //
+  // So the SAME guard the tenants roster already applies is applied here: the
+  // names must agree in FULL, not merely overlap. Its own comment says why — "a
+  // shared phone plus one shared token is the signature of a family, not of one
+  // person". EASHWAR vs "Eashwar ram" fails that, correctly.
+  let lockerhub_name_mismatch: string | null = null;
   if (c.phone) {
-    try { lockerhub = await lh.getCustomer(String(c.phone)) as Record<string, unknown>; }
-    catch (e) { lockerhub_error = (e as Error).message; }
+    try {
+      const found = await lh.getCustomer(String(c.phone)) as Record<string, any>;
+      const theirName = found?.profile?.name ?? null;
+      if (found?.found && theirName && !namesMatch(c.full_name, theirName)) {
+        // NOT silently dropped: the record is real, and staff may well want to
+        // link it deliberately. It is reported as unmatched so the screen can
+        // say whose it is, instead of passing it off as this customer's.
+        lockerhub_name_mismatch = String(theirName);
+      } else {
+        lockerhub = found as Record<string, unknown>;
+      }
+    } catch (e) { lockerhub_error = (e as Error).message; }
+  }
+
+  // A Super Admin may hide a locker application from NCD (owner 2026-08-19).
+  // Applied HERE as well as on the tenants roster — otherwise "removed" would
+  // mean removed from one screen and still present on the customer's own page,
+  // which is worse than not offering the button.
+  const hidden = new Set(
+    (await db.query<{ lockerhub_tenant_id: string }>(
+      'SELECT lockerhub_tenant_id FROM locker_tenant_overrides WHERE removed_at IS NOT NULL')
+    ).rows.map((r) => String(r.lockerhub_tenant_id)));
+  const visible = (arr: unknown): unknown[] =>
+    (Array.isArray(arr) ? arr : []).filter((x: any) => !hidden.has(String(x?.id ?? x?.application_id ?? '')));
+  if (lockerhub) {
+    lockerhub = {
+      ...lockerhub,
+      open_locker_applications: visible((lockerhub as any).open_locker_applications),
+      lockers: visible((lockerhub as any).lockers),
+    };
   }
 
   return {
     lockerhub,        // their tenant/locker record (null if unknown or unreachable)
     lockerhub_error,  // surfaced so staff know it's a fetch failure, not "no lockers"
+    // Set when LockerHub HAS a record on this phone but under a different name.
+    // Shown as an unlinked note; never counted as this customer's.
+    lockerhub_name_mismatch,
     pledges: pledges.map((p) => ({
       id: Number(p.id), application_id: Number(p.application_id), application_no: p.application_no,
       lockerhub_application_id: p.lockerhub_application_id, locker_no: p.locker_no, locker_size: p.locker_size,

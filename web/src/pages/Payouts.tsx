@@ -20,7 +20,9 @@ function BatchComparison({ last, now }: {
 }) {
   const rows: Array<{ label: string; last: number; now: number; money?: boolean }> = [
     { label: 'Customers', last: last.customers, now: now.customers },
-    { label: 'Investments', last: last.investments, now: now.investments },
+    // No Investments row (owner 2026-08-19). Outstanding already says how much
+    // principal each batch earned on, which is the number that explains gross;
+    // a count of investments moved with it and added nothing.
     // The principal each batch's interest was earned on (owner 2026-08-16).
     // Placed ABOVE Gross because it is the explanation for it: gross can fall
     // while customers rise, and this is the row that says why.

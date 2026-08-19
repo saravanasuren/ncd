@@ -96,6 +96,12 @@ export interface UpdateAgentInput {
   ifsc?: string | null;
   account_holder_name?: string | null;
   is_active?: boolean;
+  /**
+   * Which branch this agent's business is attributed to (owner 2026-08-19).
+   * NULL keeps the long-standing default — agent business counts under HO.
+   * Note this is NOT branch_name, which is the agent's BANK branch for payouts.
+   */
+  branch_id?: number | null;
 }
 
 export async function updateAgent(db: Db, actor: AuthUser, id: number, input: UpdateAgentInput) {
@@ -108,6 +114,7 @@ export async function updateAgent(db: Db, actor: AuthUser, id: number, input: Up
       ['user_id', input.user_id], ['bank_name', input.bank_name], ['branch_name', input.branch_name],
       ['account_number', input.account_number], ['ifsc', input.ifsc],
       ['account_holder_name', input.account_holder_name], ['is_active', input.is_active],
+      ['branch_id', input.branch_id],
     ];
     for (const [col, val] of fields) {
       if (val !== undefined) { sets.push(`${col} = $${++p}`); params.push(val); }

@@ -223,6 +223,10 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
   // name — so it is not shown as theirs (owner 2026-08-19). The card still
   // appears, saying plainly what exists and whose it is.
   const nameMismatch: string | null = data.lockerhub_name_mismatch ?? null;
+  // The mismatched phone-record's own open applications / lockers, so the note
+  // can link straight to a pending application (it is NOT on the tenants roster).
+  const unmatchedApps: any[] = data.unmatched?.applications ?? [];
+  const unmatchedLockers: any[] = data.unmatched?.lockers ?? [];
   if (!pledges.length && !cheques.length && !lockers.length && !openApps.length
       && !data.lockerhub_error && !nameMismatch) return null;
   const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
@@ -233,11 +237,36 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
         <div className="text-xs text-warn mb-2">Couldn’t reach LockerHub — showing what NCD holds. ({String(data.lockerhub_error).slice(0, 80)})</div>
       )}
       {nameMismatch && (
-        <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-2">
-          LockerHub has a record on this phone number under the name{' '}
-          <span className="font-semibold">{nameMismatch}</span>, which does not match{' '}
-          <span className="font-semibold">{customerName}</span> — so nothing from it is shown as this
-          customer's. If they are the same person, link them from Locker Tenants.
+        <div className="text-xs bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-2">
+          <div className="text-warn">
+            LockerHub has a record on this phone number under the name{' '}
+            <span className="font-semibold">{nameMismatch}</span>, which does not match{' '}
+            <span className="font-semibold">{customerName}</span> — so nothing from it is counted as this
+            customer's.
+          </div>
+          {/* A pending application is NOT on the tenants roster, so link straight
+              to it here — this is the route to review/allot it if it IS them. */}
+          {unmatchedApps.length > 0 && (
+            <div className="mt-1.5 text-text-muted">
+              Locker application{unmatchedApps.length > 1 ? 's' : ''} in progress under that name — open to review, take payment, or allot:
+              <div className="mt-1 flex flex-col gap-1">
+                {unmatchedApps.map((a: any, i: number) => (
+                  <span key={a.id ?? i} className="flex flex-wrap gap-x-2 items-center">
+                    {a.id
+                      ? <Link to={`/app/locker-enrollment?application_id=${encodeURIComponent(String(a.id))}`} className="text-primary hover:underline font-mono text-xs" title="Open this locker application">{a.application_no ?? a.id}</Link>
+                      : <span className="font-mono text-xs">{a.application_no ?? '—'}</span>}
+                    {a.status && <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{a.status}</span>}
+                    {a.locker_size && <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{a.locker_size}</span>}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {unmatchedLockers.length > 0 && (
+            <div className="mt-1.5 text-text-muted">
+              An allotted locker under that name is on the <Link to="/app/locker-tenants" className="text-primary hover:underline">Locker Tenants</Link> list — link it there if it's the same person.
+            </div>
+          )}
         </div>
       )}
       {lockers.length > 0 && (

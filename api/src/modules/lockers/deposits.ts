@@ -328,6 +328,7 @@ export async function customerLockers(db: Db, customerId: number) {
   // shared phone plus one shared token is the signature of a family, not of one
   // person". EASHWAR vs "Eashwar ram" fails that, correctly.
   let lockerhub_name_mismatch: string | null = null;
+  let unmatchedRaw: Record<string, any> | null = null;
   if (c.phone) {
     try {
       const found = await lh.getCustomer(String(c.phone)) as Record<string, any>;
@@ -335,8 +336,12 @@ export async function customerLockers(db: Db, customerId: number) {
       if (found?.found && theirName && !namesMatch(c.full_name, theirName)) {
         // NOT silently dropped: the record is real, and staff may well want to
         // link it deliberately. It is reported as unmatched so the screen can
-        // say whose it is, instead of passing it off as this customer's.
+        // say whose it is — AND its open applications / lockers are carried so
+        // the profile can link straight to them (a pending application is NOT on
+        // the tenants roster, so it was otherwise unreachable). Never counted as
+        // this customer's — just made findable.
         lockerhub_name_mismatch = String(theirName);
+        unmatchedRaw = found;
       } else {
         lockerhub = found as Record<string, unknown>;
       }
@@ -361,12 +366,21 @@ export async function customerLockers(db: Db, customerId: number) {
     };
   }
 
+  // When the phone-record name doesn't match, carry its (visible) open
+  // applications + lockers so the profile can link to them directly.
+  const unmatched = unmatchedRaw ? {
+    name: lockerhub_name_mismatch,
+    applications: visible(unmatchedRaw.open_locker_applications ?? unmatchedRaw.applications),
+    lockers: visible(unmatchedRaw.lockers),
+  } : null;
+
   return {
     lockerhub,        // their tenant/locker record (null if unknown or unreachable)
     lockerhub_error,  // surfaced so staff know it's a fetch failure, not "no lockers"
     // Set when LockerHub HAS a record on this phone but under a different name.
     // Shown as an unlinked note; never counted as this customer's.
     lockerhub_name_mismatch,
+    unmatched,        // the mismatched record's open applications / lockers (findable, not counted)
     pledges: pledges.map((p) => ({
       id: Number(p.id), application_id: Number(p.application_id), application_no: p.application_no,
       lockerhub_application_id: p.lockerhub_application_id, locker_no: p.locker_no, locker_size: p.locker_size,

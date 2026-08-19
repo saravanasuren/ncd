@@ -27,7 +27,7 @@ import './feeWaivers.js';
 // hooks at boot, so approving a cheque clearance works on a fresh restart even
 // before any cheque route is hit.
 import './cheques.js';
-import { linkTenant, removeTenant, restoreTenant } from './tenantOverrides.js';
+import { linkTenant, removeTenant, restoreTenant, removeLockerApplication } from './tenantOverrides.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 
@@ -534,6 +534,18 @@ lockersRouter.post('/tenants/:tenantId/link', requirePermission('lockers:waive')
 
 // Remove from NCD's roster — super_admin only. LockerHub owns the tenancy and
 // has no close endpoint, so this hides OUR row; the locker stays allotted there.
+// Remove a locker APPLICATION from NCD's view — Super Admin only (owner
+// 2026-08-19). Hides it here; LockerHub still holds it, and the service says so
+// in its audit entry because their API has no delete at all.
+lockersRouter.post('/applications/:id/remove', asyncHandler(async (req, res) => {
+  const { reason, tenant_name, locker_no, branch_id } = z.object({
+    reason: z.string().min(3),
+    tenant_name: z.string().optional(), locker_no: z.string().optional(), branch_id: z.string().optional(),
+  }).parse(req.body ?? {});
+  res.json(await removeLockerApplication(getDb(), req.user!, String(req.params.id), reason,
+    { tenant_name, locker_no, branch_id }));
+}));
+
 lockersRouter.post('/tenants/:tenantId/remove', requirePermission('lockers:remove-tenant'), asyncHandler(async (req, res) => {
   const b = TENANT_SNAP.extend({ reason: z.string().trim().min(3, 'A reason is required') }).parse(req.body ?? {});
   res.json(await removeTenant(getDb(), req.user!, String(req.params.tenantId), b.reason, b));

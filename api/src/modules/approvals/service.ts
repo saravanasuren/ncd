@@ -170,6 +170,15 @@ export async function approve(
           entityType: 'applications', entityId: Number(req.entity_id), after: edits,
         });
       }
+      // A checker may type a referrer nobody has heard of. Until now that only
+      // saved the text, so the name sat as "(unmatched)" for ever and no agent
+      // was ever raised — while the SAME name typed at customer creation did
+      // raise one (owner 2026-08-19). Dynamic import: agents/service imports
+      // this module for createApprovalRequest, so a static one would cycle.
+      if ('referred_by_text' in edits) {
+        const { ensureAgentForReferrerText } = await import('../agents/service.js');
+        await ensureAgentForReferrerText(tx, user, String(edits.referred_by_text ?? ''));
+      }
     }
     // Nothing goes LIVE off-denomination, whatever created it — the checker
     // corrects the amount here (the approval form already lets them edit it).

@@ -138,6 +138,33 @@ export async function createBank(db: Db, actor: AuthUser, b: Record<string, unkn
   return { id };
 }
 
+// ── Branches ──
+export async function listBranchesMaster(db: Db) {
+  return (await db.query('SELECT id, code, name, city, district, state, is_active FROM branches ORDER BY name')).rows;
+}
+export async function createBranch(db: Db, actor: AuthUser, b: Record<string, unknown>) {
+  const code = String(b.code ?? '').trim().toUpperCase();
+  const name = String(b.name ?? '').trim();
+  if (!code) throw errors.badRequest('A branch code is required');
+  if (!name) throw errors.badRequest('A branch name is required');
+  const dupe = await db.query('SELECT 1 FROM branches WHERE upper(code) = $1', [code]);
+  if (dupe.rowCount) throw errors.conflict('A branch with this code already exists');
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO branches (code, name, city, district, state) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+    [code, name, String(b.city ?? '').trim() || null, String(b.district ?? '').trim() || null, String(b.state ?? '').trim() || 'Tamil Nadu']);
+  const id = Number(rows[0]!.id);
+  await writeAudit(db, { actorId: actor.id, action: 'branch.create', entityType: 'branches', entityId: id, after: { code, name } });
+  return { id, code, name };
+}
+/** Deactivate/reactivate a branch. Existing customers/users keep their branch;
+ * this just controls whether it's offered for new assignments going forward. */
+export async function setBranchActive(db: Db, actor: AuthUser, id: number, isActive: boolean) {
+  const r = await db.query('UPDATE branches SET is_active = $1 WHERE id = $2', [isActive, id]);
+  if (!r.rowCount) throw errors.notFound('Branch not found');
+  await writeAudit(db, { actorId: actor.id, action: 'branch.set-active', entityType: 'branches', entityId: id, after: { is_active: isActive } });
+  return { ok: true };
+}
+
 // ── Holidays ──
 export async function listHolidays(db: Db) {
   return (await db.query('SELECT * FROM holidays ORDER BY d')).rows;

@@ -471,6 +471,46 @@ function LockerPricing() {
   );
 }
 
+function Branches() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ['branches-master'], queryFn: () => api.get<{ rows: any[] }>('/api/branches') });
+  const [f, setF] = useState({ code: '', name: '', city: '', district: '' });
+  const [err, setErr] = useState('');
+  const create = useMutation({
+    mutationFn: () => api.post('/api/branches', f),
+    onSuccess: () => { setF({ code: '', name: '', city: '', district: '' }); qc.invalidateQueries({ queryKey: ['branches-master'] }); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  const toggle = useMutation({
+    mutationFn: (v: { id: number; is_active: boolean }) => api.put(`/api/branches/${v.id}/active`, { is_active: v.is_active }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['branches-master'] }),
+  });
+  const columns: Column<any>[] = [
+    { key: 'code', header: 'Code', tdClassName: 'font-mono text-xs' },
+    { key: 'name', header: 'Name' },
+    { key: 'city', header: 'City', value: (b) => b.city ?? '', render: (b) => b.city ?? '—' },
+    { key: 'district', header: 'District', value: (b) => b.district ?? '', render: (b) => b.district ?? '—' },
+    { key: 'is_active', header: 'Status', value: (b) => (b.is_active ? 'Active' : 'Disabled'),
+      render: (b) => (
+        <button className={`text-xs hover:underline ${b.is_active ? 'text-success' : 'text-text-muted'}`} disabled={toggle.isPending}
+          onClick={() => toggle.mutate({ id: b.id, is_active: !b.is_active })} title="Click to toggle">
+          {b.is_active ? 'Active' : 'Disabled'}
+        </button>
+      ) },
+  ];
+  return (
+    <TableBlock title="Branches" columns={columns} rows={data?.rows ?? []} rowKey={(b) => b.id} defaultSort={{ key: 'name', dir: 'asc' }} empty="No branches yet."
+      form={<>
+        <input className={`${inp} w-28`} placeholder="Code (e.g. CBE)" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />
+        <input className={inp} placeholder="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+        <input className={inp} placeholder="City" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} />
+        <input className={inp} placeholder="District" value={f.district} onChange={(e) => setF({ ...f, district: e.target.value })} />
+        <button className={btn} disabled={!f.code.trim() || !f.name.trim() || create.isPending} onClick={() => { setErr(''); create.mutate(); }}>+ Branch</button>
+        {err && <span className="text-xs text-danger">{err}</span>}
+      </>} />
+  );
+}
+
 export function MastersPage() {
   return (
     <div className="w-full">
@@ -480,6 +520,7 @@ export function MastersPage() {
       <SeriesSection />
       <TdsRules />
       <Banks />
+      <Branches />
       <LockerPricing />
       <Holidays />
       <CompanyProfile />

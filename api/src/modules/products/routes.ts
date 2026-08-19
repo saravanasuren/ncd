@@ -46,6 +46,11 @@ productsRouter.post('/tds-rules', manage, asyncHandler(async (req, res) => res.s
 productsRouter.get('/banks', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listBanks(getDb()) })));
 productsRouter.post('/banks', manage, asyncHandler(async (req, res) => res.status(201).json(await s.createBank(getDb(), req.user!, req.body))));
 
+// Branches (add/manage the office branches used for user & customer scoping)
+productsRouter.get('/branches', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listBranchesMaster(getDb()) })));
+productsRouter.post('/branches', manage, asyncHandler(async (req, res) => res.status(201).json(await s.createBranch(getDb(), req.user!, req.body))));
+productsRouter.put('/branches/:id/active', manage, asyncHandler(async (req, res) => { await s.setBranchActive(getDb(), req.user!, Number(req.params.id), !!req.body?.is_active); res.json({ ok: true }); }));
+
 // Holidays
 // Locker pricing — NCD-owned deposit + rent per size (UI-configurable).
 productsRouter.get('/locker-pricing', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listLockerPricing(getDb()) })));

@@ -125,33 +125,57 @@ function Holdings({ customerId, pan, apps, approved, onAddNcd }: {
 
   const tile = 'flex-1 min-w-[150px] px-4 py-3 rounded-lg border border-border bg-bg';
   const label = 'text-[11px] font-semibold text-text-label uppercase tracking-wide';
+  // A tile with something behind it becomes a button down to that section
+  // (owner 2026-08-19: "clicking on the tile … should get me the investment
+  // details and locker details"). Instant, not smooth — the same reason the
+  // "+ NCD investment" jump is instant: a long smooth scroll is slow and some
+  // renderers drop it silently. A tile with a count of zero stays inert rather
+  // than becoming a button that goes nowhere.
+  const jump = (anchor: string) => document.getElementById(anchor)?.scrollIntoView({ block: 'start' });
+  const tileBtn = `${tile} text-left hover:border-border-strong hover:bg-surface transition-colors cursor-pointer`;
   return (
     <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
       <div className="flex flex-wrap gap-3 items-stretch">
-        <div className={tile}>
-          <div className={label}>NCDs</div>
-          <div className="text-lg font-semibold leading-tight mt-0.5">{active.length} active</div>
-          <div className="text-xs text-text-muted mono">{formatINR(outstanding)} outstanding</div>
-          {unapproved > 0 && <div className="text-xs text-warn mt-0.5">+{unapproved} not approved yet</div>}
-        </div>
-        {can('lockers:enroll') && (
-          <div className={tile}>
-            <div className={label}>Lockers</div>
-            {lockers.isLoading
-              ? <div className="text-sm text-text-muted mt-1">Checking…</div>
-              : lockers.isError || lockers.data?.lockerhub_error
-                // Never claim "0 lockers" when we simply could not ask — a wrong
-                // zero here is what makes someone open a duplicate application.
-                ? <div className="text-sm text-warn mt-1">Couldn’t check</div>
-                : <>
-                    <div className="text-lg font-semibold leading-tight mt-0.5">{held.length}</div>
-                    <div className="text-xs text-text-muted truncate">
-                      {held.length === 0 ? 'none yet'
-                        : held.map((l) => l.locker_no ?? l.locker_number ?? l.status ?? '—').join(', ')}
-                    </div>
-                  </>}
-          </div>
-        )}
+        {(() => {
+          const body = (
+            <>
+              <div className={label}>NCDs</div>
+              <div className="text-lg font-semibold leading-tight mt-0.5">{active.length} active</div>
+              <div className="text-xs text-text-muted mono">{formatINR(outstanding)} outstanding</div>
+              {unapproved > 0 && <div className="text-xs text-warn mt-0.5">+{unapproved} not approved yet</div>}
+            </>
+          );
+          return open.length > 0
+            ? <button type="button" onClick={() => jump('investments')} title="Show this customer’s investments" className={tileBtn}>{body}</button>
+            : <div className={tile}>{body}</div>;
+        })()}
+        {can('lockers:enroll') && (() => {
+          const checking = lockers.isLoading;
+          const failed = lockers.isError || lockers.data?.lockerhub_error;
+          const body = (
+            <>
+              <div className={label}>Lockers</div>
+              {checking
+                ? <div className="text-sm text-text-muted mt-1">Checking…</div>
+                : failed
+                  // Never claim "0 lockers" when we simply could not ask — a wrong
+                  // zero here is what makes someone open a duplicate application.
+                  ? <div className="text-sm text-warn mt-1">Couldn’t check</div>
+                  : <>
+                      <div className="text-lg font-semibold leading-tight mt-0.5">{held.length}</div>
+                      <div className="text-xs text-text-muted truncate">
+                        {held.length === 0 ? 'none yet'
+                          : held.map((l) => l.locker_no ?? l.locker_number ?? l.status ?? '—').join(', ')}
+                      </div>
+                    </>}
+            </>
+          );
+          // Only a locker we actually confirmed has a section to jump to — the
+          // Lockers card renders nothing at all when there is nothing to show.
+          return !checking && !failed && held.length > 0
+            ? <button type="button" onClick={() => jump('lockers')} title="Show this customer’s locker details" className={tileBtn}>{body}</button>
+            : <div className={tile}>{body}</div>;
+        })()}
         <div className={tile}>
           <div className={label}>Waiting</div>
           {pending.length === 0
@@ -227,7 +251,8 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
       && !data.lockerhub_error && !nameMismatch) return null;
   const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
   return (
-    <div className={card}>
+    // id: the Lockers holdings tile jumps here.
+    <div id="lockers" className={`${card} scroll-mt-4`}>
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Lockers</h2>
       {data.lockerhub_error && (
         <div className="text-xs text-warn mb-2">Couldn’t reach LockerHub — showing what NCD holds. ({String(data.lockerhub_error).slice(0, 80)})</div>
@@ -739,7 +764,8 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
   );
 
   return (
-    <div className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4">
+    // id: the NCDs holdings tile jumps here.
+    <div id="investments" className="bg-surface border border-border rounded-lg shadow-card p-5 mb-4 scroll-mt-4">
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1">Investments</h2>
       {rows.length === 0 ? (
         <div className="py-2 text-text-muted text-sm">No investments yet.</div>

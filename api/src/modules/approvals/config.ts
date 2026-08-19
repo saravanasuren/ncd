@@ -58,6 +58,19 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Maturity Redemption',
     levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
+  // A new series cannot take investments until a checker approves it, and an
+  // edit to a live one needs the same second pair of eyes (owner 2026-08-19) —
+  // its deemed date and face value are printed on documents and feed interest.
+  series_creation: {
+    type: 'series_creation',
+    label: 'New Series',
+    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
+  },
+  series_change: {
+    type: 'series_change',
+    label: 'Series Change',
+    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
+  },
   customer_creation: {
     type: 'customer_creation',
     label: 'New Customer',

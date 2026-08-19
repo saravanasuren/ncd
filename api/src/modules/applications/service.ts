@@ -189,6 +189,13 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
       if (input.club_with_application_id && isSob) {
         throw errors.badRequest('Subordinate bonds cannot be clubbed — record the investment for its full amount');
       }
+      // A series awaiting its own approval takes no money (owner 2026-08-19).
+      // The enrolment dropdown already hides it; this is the actual gate, since
+      // a dropdown filter is a courtesy and not a control.
+      if (!isSob && input.series_id) {
+        const { assertSeriesTakesMoney } = await import('../products/service.js');
+        await assertSeriesTakesMoney(tx, input.series_id);
+      }
       if (input.club_with_application_id) {
         const target = (await tx.query<{ id: string; status: string; series_id: string; total_amount: string }>(
           'SELECT id, status, series_id, total_amount FROM applications WHERE id = $1', [input.club_with_application_id])).rows[0];

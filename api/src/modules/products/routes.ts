@@ -27,6 +27,17 @@ productsRouter.put('/sob-products/:id', manage, asyncHandler(async (req, res) =>
 // Series
 productsRouter.get('/series', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listSeries(getDb()) })));
 productsRouter.post('/series', manage, asyncHandler(async (req, res) => res.status(201).json(await s.createSeries(getDb(), req.user!, req.body))));
+// Edit a series → approval (owner 2026-08-19). Status and ISIN keep their own
+// dedicated actions below; this is the record itself.
+productsRouter.put('/series/:id', manage, asyncHandler(async (req, res) => {
+  const b = z.object({
+    code: z.string().trim().min(1).optional(),
+    name: z.string().trim().min(1).optional(),
+    face_value: z.number().nullable().optional(),
+    deemed_date: z.string().nullable().optional(),
+  }).parse(req.body ?? {});
+  res.json(await s.requestSeriesChange(getDb(), req.user!, Number(req.params.id), b));
+}));
 productsRouter.post('/series/:id/status', manage, asyncHandler(async (req, res) => {
   const { to } = z.object({ to: z.string() }).parse(req.body);
   await s.setSeriesStatus(getDb(), req.user!, Number(req.params.id), to);

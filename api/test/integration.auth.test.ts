@@ -115,6 +115,15 @@ describe('masters — a series can be configured end to end', () => {
       scheme_ids: [scheme.json.id],
     });
     expect(series.status).toBe(201);
+    // A new series lands PendingApproval (owner 2026-08-19) — it has no manual
+    // transitions at all until a checker opens it, which is the point of the
+    // gate. Approve it here so this test keeps checking what it is about: the
+    // status machine once the series is live.
+    expect(series.json.status).toBe('PendingApproval');
+    const approve = await c.post(`/api/approvals/${series.json.approval_request.id}/approve`,
+      { extra: { self_approval_reason: 'Test series; approving as super admin.' } });
+    expect(approve.status).toBe(200);
+
     // status transition Open → Closing is legal; Open → Closed is not
     const okT = await c.post(`/api/series/${series.json.id}/status`, { to: 'Closing' });
     expect(okT.status).toBe(200);

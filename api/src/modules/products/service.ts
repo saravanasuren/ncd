@@ -5,6 +5,7 @@ import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { assertTransition } from '../../lib/statusMachine.js';
+import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 
 // ── Schemes ──
 export async function listSchemes(db: Db) {
@@ -33,12 +34,26 @@ export async function updateScheme(db: Db, actor: AuthUser, id: number, s: Recor
 export async function listSeries(db: Db) {
   return (await db.query('SELECT * FROM series ORDER BY code')).rows;
 }
+/** A series that has not been approved yet. It exists, it is visible in
+ *  Masters, and it CANNOT take investments (owner 2026-08-19). */
+export const SERIES_PENDING = 'PendingApproval';
+
+/**
+ * Create a series → approval (owner 2026-08-19: "once a series is created it
+ * should go by approval").
+ *
+ * It lands in PendingApproval rather than Open. The enrolment dropdown only
+ * offers Open series and `assertSeriesTakesMoney` refuses a pending one, so a
+ * mistyped rate or deemed date cannot take a rupee before a second person has
+ * looked at it. Approval flips it to Open and stamps opened_at — the moment the
+ * series actually opened, not the moment someone typed it.
+ */
 export async function createSeries(db: Db, actor: AuthUser, s: Record<string, unknown>) {
   return db.withTx(async (tx) => {
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO series (code, name, status, face_value, deemed_date, opened_at)
-       VALUES ($1,$2,'Open',$3,$4, now()) RETURNING id`,
-      [s.code, s.name, s.face_value ?? null, s.deemed_date ?? null]
+       VALUES ($1,$2,$5,$3,$4, NULL) RETURNING id`,
+      [s.code, s.name, s.face_value ?? null, s.deemed_date ?? null, SERIES_PENDING]
     );
     const id = Number(rows[0]!.id);
     // link schemes if provided
@@ -47,9 +62,97 @@ export async function createSeries(db: Db, actor: AuthUser, s: Record<string, un
         await tx.query('INSERT INTO series_schemes (series_id, scheme_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [id, sid]);
       }
     }
-    await writeAudit(tx, { actorId: actor.id, action: 'series.create', entityType: 'series', entityId: id, after: s });
-    return { id };
+    const req = await createApprovalRequest(tx, {
+      type: 'series_creation', entityType: 'series', entityId: id, makerUserId: actor.id,
+      metadata: { code: s.code, name: s.name, deemed_date: s.deemed_date ?? null },
+    });
+    await writeAudit(tx, { actorId: actor.id, action: 'series.create', entityType: 'series', entityId: id, after: { ...s, status: SERIES_PENDING } });
+    return { id, status: SERIES_PENDING, approval_request: req };
   });
+}
+
+registerOnFinalApprove('series_creation', async (tx, req) => {
+  if (!req.entity_id) return;
+  await tx.query(
+    "UPDATE series SET status = 'Open', opened_at = COALESCE(opened_at, now()) WHERE id = $1 AND status = $2",
+    [Number(req.entity_id), SERIES_PENDING]);
+});
+
+registerOnReject('series_creation', async (tx, req) => {
+  // A rejected series is withdrawn, not deleted: the row is referenced by the
+  // approval trail, and a deleted one would leave a request pointing at nothing.
+  if (!req.entity_id) return;
+  await tx.query("UPDATE series SET status = 'Withdrawn' WHERE id = $1 AND status = $2",
+    [Number(req.entity_id), SERIES_PENDING]);
+});
+
+/** What a series edit may change. Status, ISIN and the timestamps have their
+ *  own dedicated actions and stay out of it. */
+const SERIES_EDITABLE = ['code', 'name', 'face_value', 'deemed_date'] as const;
+
+/**
+ * Edit a series → approval (owner 2026-08-19: edits need a checker too).
+ *
+ * A live series has money in it: its deemed date and face value are printed on
+ * documents and feed interest, so changing one on a whim is exactly the kind of
+ * thing a second pair of eyes exists for. The request carries only the fields
+ * that actually differ, so a checker sees the change and not the whole record.
+ */
+export async function requestSeriesChange(db: Db, actor: AuthUser, seriesId: number, input: Record<string, unknown>) {
+  const cur = (await db.query<Record<string, unknown>>(
+    'SELECT id, code, name, face_value, deemed_date, status FROM series WHERE id = $1', [seriesId])).rows[0];
+  if (!cur) throw errors.notFound('Series not found');
+
+  const changes: Record<string, unknown> = {};
+  const before: Record<string, unknown> = {};
+  for (const k of SERIES_EDITABLE) {
+    if (!(k in input)) continue;
+    const next = input[k] === '' ? null : input[k];
+    // Compare as strings: face_value comes back from the driver as '100000.00'
+    // and a numeric 100000 typed in the form is the same value, not an edit.
+    const same = String(cur[k] ?? '') === String(next ?? '')
+      || (k === 'deemed_date' && String(cur[k] ?? '').slice(0, 10) === String(next ?? '').slice(0, 10));
+    if (!same) { changes[k] = next; before[k] = cur[k] ?? null; }
+  }
+  if (!Object.keys(changes).length) throw errors.badRequest('No changes to submit');
+
+  return db.withTx(async (tx) => {
+    const req = await createApprovalRequest(tx, {
+      type: 'series_change', entityType: 'series', entityId: seriesId, makerUserId: actor.id,
+      metadata: { changes, before, code: cur.code },
+    });
+    await writeAudit(tx, { actorId: actor.id, action: 'series.change-request', entityType: 'series', entityId: seriesId, before, after: changes });
+    return { ok: true, applied: false, approval_request: req };
+  });
+}
+
+registerOnFinalApprove('series_change', async (tx, req) => {
+  const changes = (req.metadata.changes ?? {}) as Record<string, unknown>;
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  let p = 0;
+  for (const k of SERIES_EDITABLE) {
+    if (!(k in changes)) continue;
+    sets.push(`${k} = $${++p}`); // key comes from SERIES_EDITABLE, never the request
+    params.push(changes[k] ?? null);
+  }
+  if (sets.length && req.entity_id) {
+    params.push(Number(req.entity_id));
+    await tx.query(`UPDATE series SET ${sets.join(', ')} WHERE id = $${++p}`, params);
+  }
+});
+
+/**
+ * Refuse money into a series nobody has approved yet. Deliberately narrow: it
+ * bites ONLY on PendingApproval, so imports, rollovers and app-channel money
+ * still land in Closing/Allotted series exactly as before.
+ */
+export async function assertSeriesTakesMoney(db: Db, seriesId: number) {
+  const row = (await db.query<{ status: string; code: string }>(
+    'SELECT status, code FROM series WHERE id = $1', [seriesId])).rows[0];
+  if (row && row.status === SERIES_PENDING) {
+    throw errors.badRequest(`Series ${row.code} is waiting for approval — it cannot take investments until a checker approves it`);
+  }
 }
 export async function setSeriesStatus(db: Db, actor: AuthUser, id: number, to: string) {
   await db.withTx(async (tx) => {

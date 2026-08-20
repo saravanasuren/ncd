@@ -84,6 +84,11 @@ export const STATUS_MACHINES = {
   },
 
   series: {
+    // A new series waits for a checker before it can take investments (owner
+    // 2026-08-19). Its only moves are made BY the approval — approve → Open,
+    // reject → Withdrawn — so Masters offers no manual transition out of it and
+    // nobody can hand-wave a series into service.
+    PendingApproval: { label: 'Awaiting approval', next: [] },
     Open: { label: 'Open', next: ['Closing', 'Allotted', 'Withdrawn'] },
     Closing: { label: 'Closing', next: ['Open', 'Allotted', 'Withdrawn'] },
     Allotted: { label: 'Allotted', next: ['Open', 'Closed', 'Withdrawn'] },

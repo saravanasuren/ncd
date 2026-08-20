@@ -88,9 +88,23 @@ function SeriesSection() {
   const onErr = (e: unknown) => setErr(e instanceof ApiError ? e.message : 'Failed');
   const invalidate = () => qc.invalidateQueries({ queryKey: ['series'] });
 
+  const [note, setNote] = useState('');
   const create = useMutation({
     mutationFn: () => api.post('/api/series', { code: f.code, name: f.name, deemed_date: f.deemed_date || null, scheme_ids: f.scheme_ids }),
-    onSuccess: () => { setF({ code: '', name: '', deemed_date: '', scheme_ids: [] }); invalidate(); },
+    onSuccess: () => {
+      setF({ code: '', name: '', deemed_date: '', scheme_ids: [] });
+      setNote('Series created and sent for approval — it cannot take investments until a checker approves it.');
+      invalidate();
+    },
+    onError: onErr,
+  });
+  // Edit → approval too (owner 2026-08-19). Only the fields that differ are
+  // sent; the server refuses a no-op rather than queueing an empty request.
+  const [editFor, setEditFor] = useState<{ id: number; code: string; name: string; deemed_date: string } | null>(null);
+  const save = useMutation({
+    mutationFn: (v: { id: number; code: string; name: string; deemed_date: string }) =>
+      api.put(`/api/series/${v.id}`, { code: v.code, name: v.name, deemed_date: v.deemed_date || null }),
+    onSuccess: () => { setEditFor(null); setNote('Change sent for approval — it takes effect once a checker approves it.'); invalidate(); },
     onError: onErr,
   });
   const setStatus = useMutation({
@@ -103,9 +117,18 @@ function SeriesSection() {
   });
 
   const columns: Column<any>[] = [
-    { key: 'code', header: 'Code', tdClassName: 'font-mono text-xs' },
-    { key: 'name', header: 'Name' },
-    { key: 'deemed_date', header: 'Deemed date', value: (s) => s.deemed_date ?? '', render: (s) => s.deemed_date ?? '—' },
+    { key: 'code', header: 'Code', tdClassName: 'font-mono text-xs',
+      render: (s) => (editFor && editFor.id === s.id
+        ? <input className={`${inp} w-28`} value={editFor.code} onChange={(e) => setEditFor({ ...editFor, code: e.target.value })} />
+        : s.code) },
+    { key: 'name', header: 'Name',
+      render: (s) => (editFor && editFor.id === s.id
+        ? <input className={`${inp} w-40`} value={editFor.name} onChange={(e) => setEditFor({ ...editFor, name: e.target.value })} />
+        : s.name) },
+    { key: 'deemed_date', header: 'Deemed date', value: (s) => s.deemed_date ?? '',
+      render: (s) => (editFor && editFor.id === s.id
+        ? <input className={`${inp} w-36`} type="date" value={editFor.deemed_date} onChange={(e) => setEditFor({ ...editFor, deemed_date: e.target.value })} />
+        : s.deemed_date ?? '—') },
     { key: 'isin', header: 'ISIN', tdClassName: 'font-mono text-xs', filterable: false, sortable: false,
       render: (s) => (isinFor && isinFor.id === s.id ? (
         <span className="inline-flex gap-1.5">
@@ -115,16 +138,38 @@ function SeriesSection() {
       ) : (
         <button className="text-primary hover:underline" onClick={() => setIsinFor({ id: s.id, isin: s.isin ?? '' })}>{s.isin ?? 'set ISIN'}</button>
       )) },
-    { key: 'status', header: 'Status', render: (s) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{s.status}</span> },
+    { key: 'status', header: 'Status',
+      render: (s) => (
+        <span className={`text-xs rounded px-1.5 py-0.5 ${s.status === 'PendingApproval' ? 'bg-[color:var(--warn-bg)] text-warn' : 'bg-bg'}`}
+          title={s.status === 'PendingApproval' ? 'Waiting for a checker — this series cannot take investments yet' : undefined}>
+          {s.status === 'PendingApproval' ? 'Awaiting approval' : s.status}
+        </span>
+      ) },
     { key: 'actions', header: '', align: 'right', sortable: false, filterable: false, tdClassName: 'whitespace-nowrap',
-      render: (s) => validTransitions('series', s.status).map((to) => (
-        <button key={to} className="text-xs text-primary hover:underline ml-2"
-          onClick={async () => { setErr(''); if (await confirm({ title: `Move series ${s.code} to ${to}?`, confirmLabel: `Move to ${to}` })) setStatus.mutate({ id: s.id, to }); }}>→ {to}</button>
+      render: (s) => (editFor && editFor.id === s.id ? (
+        <>
+          <button className="text-xs text-primary hover:underline ml-2" disabled={!editFor.code || !editFor.name || save.isPending}
+            onClick={() => { setErr(''); save.mutate(editFor); }}>Send for approval</button>
+          <button className="text-xs text-text-muted hover:underline ml-2" onClick={() => setEditFor(null)}>Cancel</button>
+        </>
+      ) : (
+        <>
+          {/* The edit option the owner asked for (2026-08-19) — it did not exist
+              at all; a mistyped code or deemed date could only be fixed in the
+              database. Goes through a checker like everything else here. */}
+          <button className="text-xs text-primary hover:underline ml-2"
+            onClick={() => { setErr(''); setEditFor({ id: s.id, code: s.code ?? '', name: s.name ?? '', deemed_date: String(s.deemed_date ?? '').slice(0, 10) }); }}>Edit</button>
+          {validTransitions('series', s.status).map((to) => (
+            <button key={to} className="text-xs text-primary hover:underline ml-2"
+              onClick={async () => { setErr(''); if (await confirm({ title: `Move series ${s.code} to ${to}?`, confirmLabel: `Move to ${to}` })) setStatus.mutate({ id: s.id, to }); }}>→ {to}</button>
+          ))}
+        </>
       )) },
   ];
   return (
     <TableBlock title="Series" columns={columns} rows={data?.rows ?? []} rowKey={(s) => s.id} defaultSort={{ key: 'code', dir: 'desc' }} empty="No series yet."
       form={<>
+        {note && <span className="text-xs text-warn">{note}</span>}
         <input className={inp} placeholder="Code" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />
         <input className={inp} placeholder="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
         <input className={inp} type="date" value={f.deemed_date} onChange={(e) => setF({ ...f, deemed_date: e.target.value })} />
@@ -132,7 +177,9 @@ function SeriesSection() {
           onChange={(e) => setF({ ...f, scheme_ids: Array.from(e.target.selectedOptions, (o) => Number(o.value)) })}>
           {(schemes.data?.rows ?? []).map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
         </select>
-        <button className={btn} disabled={!f.code || !f.name || create.isPending} onClick={() => { setErr(''); create.mutate(); }}>+ Series (opens)</button>
+        <button className={btn} disabled={!f.code || !f.name || create.isPending}
+          title="The series is created awaiting approval; it can take investments once a checker approves it"
+          onClick={() => { setErr(''); setNote(''); create.mutate(); }}>+ Series (for approval)</button>
         {err && <span className="text-xs text-danger">{err}</span>}
       </>} />
   );

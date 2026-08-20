@@ -492,7 +492,20 @@ export async function getApplicationDetail(db: Db, actor: AuthUser, appId: numbe
   // The investment is never split — links are claims against it.
   const { depositSummary } = await import('../lockers/deposits.js');
   const locker = await depositSummary(db, appId);
-  return { application: app, lines, schedule, esign_pending: esignPending, locker };
+  // One-off deductions and additions applied to this investment's payouts
+  // (owner 2026-08-20). Without these the schedule cannot be reconciled: a
+  // consumed deduction makes net < gross - TDS, and the page gave no reason
+  // why. Three July payouts looked like a Rs 7,231 shortfall until the
+  // adjustment rows were read — the answer existed, just nowhere a person
+  // handling the customer would see it.
+  const adjustments = (await db.query(
+    `SELECT pa.id, pa.kind, pa.amount, pa.narration, pa.status, pa.batch_id,
+            pa.created_at, u.full_name AS created_by
+       FROM payout_adjustments pa
+       LEFT JOIN users u ON u.id = pa.created_by_user_id
+      WHERE pa.application_id = $1
+      ORDER BY pa.created_at`, [appId])).rows;
+  return { application: app, lines, schedule, esign_pending: esignPending, locker, adjustments };
 }
 
 /**

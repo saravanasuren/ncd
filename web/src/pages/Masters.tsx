@@ -218,6 +218,7 @@ function TdsRules() {
 
 function Banks() {
   const qc = useQueryClient();
+  const { confirm } = useConfirm();
   const { data } = useQuery({ queryKey: ['banks'], queryFn: () => api.get<{ rows: any[] }>('/api/banks') });
   const [f, setF] = useState({ account_label: '', bank_name: '', account_number: '', ifsc: '', is_collection_account: false, is_disbursement_account: false });
   const [err, setErr] = useState('');
@@ -226,6 +227,11 @@ function Banks() {
     onSuccess: () => { setF({ account_label: '', bank_name: '', account_number: '', ifsc: '', is_collection_account: false, is_disbursement_account: false }); qc.invalidateQueries({ queryKey: ['banks'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
+  const del = useMutation({
+    mutationFn: (id: number) => api.del(`/api/banks/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['banks'] }),
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to delete'),
+  });
   const columns: Column<any>[] = [
     { key: 'account_label', header: 'Label' },
     { key: 'bank_name', header: 'Bank' },
@@ -233,6 +239,15 @@ function Banks() {
     { key: 'ifsc', header: 'IFSC', tdClassName: 'font-mono text-xs', value: (b) => b.ifsc ?? '', render: (b) => b.ifsc ?? '—' },
     { key: 'is_collection_account', header: 'Collection', value: (b) => (b.is_collection_account ? 'Yes' : 'No'), render: (b) => (b.is_collection_account ? '✓' : '—') },
     { key: 'is_disbursement_account', header: 'Disbursement', value: (b) => (b.is_disbursement_account ? 'Yes' : 'No'), render: (b) => (b.is_disbursement_account ? '✓' : '—') },
+    { key: 'actions', header: '', align: 'right', sortable: false, filterable: false, tdClassName: 'whitespace-nowrap',
+      render: (b) => (
+        <button className="text-xs text-danger hover:underline ml-2" disabled={del.isPending}
+          onClick={async () => {
+            setErr('');
+            if (await confirm({ title: `Delete “${b.account_label}”?`, body: 'This removes the company bank account. Accounts used as an application’s collection bank can’t be deleted.', confirmLabel: 'Delete', danger: true }))
+              del.mutate(b.id);
+          }}>Delete</button>
+      ) },
   ];
   return (
     <TableBlock title="Company bank accounts" columns={columns} rows={data?.rows ?? []} rowKey={(b) => b.id} defaultSort={{ key: 'account_label', dir: 'asc' }} empty="No bank accounts yet."

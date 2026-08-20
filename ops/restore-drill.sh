@@ -99,12 +99,23 @@ note "tables restored: ${TABLES:-0}"
 for t in customers applications application_lines users nominees; do
   R=$(q "SELECT count(*) FROM $t"); L=$(live "SELECT count(*) FROM $t")
   if [ -z "$R" ] || [ -z "$L" ]; then fail "could not count $t (restored='$R' live='$L')"; continue; fi
-  # Live moves on after the backup was taken, so restored ≤ live is expected;
-  # restored ABOVE live, or a big shortfall, is not.
-  if [ "$R" -gt "$L" ]; then
-    fail "$t: restored $R > live $L — the backup does not match this database"
-  elif [ "$L" -gt 0 ] && [ "$R" -lt $(( L * 90 / 100 )) ]; then
+
+  # What this comparison is actually for: catching a dump that came back SHORT.
+  # A backup taken days ago legitimately differs from live in BOTH directions —
+  # rows are added, and rows are deleted. The first production run of this drill
+  # failed on `users: restored 59 > live 52` because seven users had been
+  # deliberately deleted that morning, which is not a backup problem at all. A
+  # drill that cries wolf on ordinary activity is one nobody reads.
+  #
+  # So: a shortfall beyond 10% fails (the truncated-dump signal). More rows than
+  # live is reported, not failed — unless it is so far out that this cannot be
+  # the same database at all.
+  if [ "$L" -gt 0 ] && [ "$R" -lt $(( L * 90 / 100 )) ]; then
     fail "$t: restored $R vs live $L — more than 10% missing"
+  elif [ "$L" -gt 0 ] && [ "$R" -gt $(( L * 3 / 2 )) ]; then
+    fail "$t: restored $R vs live $L — half again as many rows; this dump is probably not from this database"
+  elif [ "$R" -gt "$L" ]; then
+    note "$t: $R restored / $L live  ($(( R - L )) removed since the backup — normal)"
   else
     note "$t: $R restored / $L live"
   fi

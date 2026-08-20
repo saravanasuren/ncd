@@ -409,7 +409,18 @@ export function ApplicationDetailPage() {
                   <td className="px-4 py-1.5">{r.due_type}</td>
                   <td className="px-4 py-1.5 text-right mono">{formatINR(r.gross_amount)}</td>
                   <td className="px-4 py-1.5 text-right mono text-text-muted">{formatINR(r.tds_amount)}</td>
-                  <td className="px-4 py-1.5 text-right mono">{formatINR(r.net_amount)}</td>
+                  <td className="px-4 py-1.5 text-right mono">
+                    {formatINR(r.net_amount)}
+                    {/* net < gross - TDS means a one-off deduction was taken out
+                        of this payout. Without saying so the row looks like an
+                        underpayment — which is exactly how three July payouts
+                        read until someone dug into the adjustment table. */}
+                    {Number(r.gross_amount) - Number(r.tds_amount) - Number(r.net_amount) > 0.005 && (
+                      <span className="ml-1 text-xs text-warning" title={`Less a one-off adjustment of ${formatINR(Number(r.gross_amount) - Number(r.tds_amount) - Number(r.net_amount))} — see Adjustments below`}>
+                        −{formatINR(Number(r.gross_amount) - Number(r.tds_amount) - Number(r.net_amount))}
+                      </span>
+                    )}
+                  </td>
                   <td className={`px-4 py-1.5 text-xs ${rowPill[r.status] ?? ''}`}>
                     {r.status}
                     {can('payouts:mark-paid-manual') && r.status === 'Scheduled' && (
@@ -430,6 +441,48 @@ export function ApplicationDetailPage() {
           </table>
         )}
       </div>
+
+      {/* One-off deductions/additions on this investment's payouts (owner
+          2026-08-20: "in the customers investment application i should be able
+          to see this detection"). They were recorded and approved all along,
+          but only the Payouts page showed them — so the person answering the
+          customer could not see why a payout was short. */}
+      {(data.adjustments?.length ?? 0) > 0 && (
+        <div className="bg-surface border border-border rounded-lg shadow-card mt-4 overflow-hidden">
+          <div className="px-4 py-3 border-b border-border text-xs font-semibold text-text-label uppercase tracking-wide">
+            Adjustments on payouts
+          </div>
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs text-text-label border-b border-border">
+              <tr>
+                <th className="px-4 py-2">Raised</th><th className="px-4 py-2">Type</th>
+                <th className="px-4 py-2 text-right">Amount</th>
+                <th className="px-4 py-2">Reason</th><th className="px-4 py-2">By</th>
+                <th className="px-4 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {data.adjustments.map((x: any) => (
+                <tr key={x.id}>
+                  <td className="px-4 py-1.5 mono">{String(x.created_at).slice(0, 10)}</td>
+                  <td className={`px-4 py-1.5 ${x.kind === 'Deduction' ? 'text-danger' : 'text-success'}`}>{x.kind}</td>
+                  <td className="px-4 py-1.5 text-right mono">
+                    {x.kind === 'Deduction' ? '−' : '+'}{formatINR(x.amount)}
+                  </td>
+                  <td className="px-4 py-1.5 text-text-muted">{x.narration || '—'}</td>
+                  <td className="px-4 py-1.5 text-text-muted">{x.created_by ?? '—'}</td>
+                  <td className="px-4 py-1.5 text-xs">
+                    {x.status}
+                    {x.status === 'Consumed' && x.batch_id && (
+                      <span className="text-text-muted"> · batch {x.batch_id}</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

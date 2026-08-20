@@ -108,6 +108,12 @@ applicationsRouter.post('/:id/locker-deposit', requirePermission('applications:u
     res.json(await s.setLockerDeposit(getDb(), req.user!, Number(req.params.id), is_locker_deposit));
   }));
 
+applicationsRouter.post('/:id/bond-distributed', requirePermission('applications:update'),
+  asyncHandler(async (req, res) => {
+    const { distributed } = z.object({ distributed: z.boolean() }).parse(req.body);
+    res.json(await s.setBondDistributed(getDb(), req.user!, Number(req.params.id), distributed));
+  }));
+
 applicationsRouter.post('/:id/mark-esigned', requirePermission('applications:mark-esigned'),
   asyncHandler(async (req, res) => { await s.markESigned(getDb(), req.user!, Number(req.params.id)); res.json({ ok: true }); }));
 

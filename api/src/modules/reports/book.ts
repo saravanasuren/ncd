@@ -1192,6 +1192,7 @@ export interface SeriesHolderRow {
   pan: string | null;
   total_invested: number;
   investments: number;
+  referred_by: string | null;  // referrer name(s) — staff/agent resolved to name
   depository: string | null;   // NSDL | CDSL
   dp_id: string | null;
   client_id: string | null;
@@ -1205,8 +1206,11 @@ export async function seriesHoldersReport(db: Db, actor: AuthUser, seriesId: num
   const w = appWhere(actor, { seriesIds: [seriesId], status: 'active' }, ['c.is_active = TRUE', 'c.archived_at IS NULL']);
   const { rows } = await db.query<Record<string, unknown>>(
     `SELECT c.full_name, c.pan, c.depository, c.demat_dp_id, c.demat_client_id, c.is_dematerialised,
-            COALESCE(SUM(a.total_amount), 0) AS total_invested, COUNT(a.id)::int AS investments
-     ${FROM} WHERE ${w.sql}
+            COALESCE(SUM(a.total_amount), 0) AS total_invested, COUNT(a.id)::int AS investments,
+            -- Referrer NAME per holder (staff → agent → raw text). A holder with
+            -- investments from more than one referrer shows all, comma-separated.
+            NULLIF(string_agg(DISTINCT NULLIF(btrim(${REFERRER}), ''), ', '), '') AS referred_by
+     ${FROM_ATTR} WHERE ${w.sql}
      GROUP BY c.id, c.full_name, c.pan, c.depository, c.demat_dp_id, c.demat_client_id, c.is_dematerialised
      ORDER BY SUM(a.total_amount) DESC, c.full_name`, w.params);
   return rows.map((r) => ({
@@ -1214,6 +1218,7 @@ export async function seriesHoldersReport(db: Db, actor: AuthUser, seriesId: num
     pan: (r.pan as string) ?? null,
     total_invested: round2(Number(r.total_invested)),
     investments: Number(r.investments),
+    referred_by: (r.referred_by as string) ?? null,
     depository: (r.depository as string) ?? null,
     dp_id: (r.demat_dp_id as string) ?? null,
     client_id: (r.demat_client_id as string) ?? null,

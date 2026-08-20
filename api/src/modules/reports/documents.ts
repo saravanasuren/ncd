@@ -209,11 +209,11 @@ export async function seriesHoldersXlsx(seriesLabel: string, rows: import('./boo
   const ws = wb.addWorksheet('Holders');
   ws.addRow([`Series ${seriesLabel} — holders (demat)`]).eachCell((c) => { c.font = { bold: true, size: 13 }; });
   ws.addRow([]);
-  ws.addRow(['S.No', 'Name', 'PAN', 'Total Invested', 'No. of Investments', 'Depository', 'DP ID', 'Client ID', 'Dematerialised'])
+  ws.addRow(['S.No', 'Name', 'PAN', 'Total Invested', 'No. of Investments', 'Referred By', 'Depository', 'DP ID', 'Client ID', 'Dematerialised'])
     .eachCell((c) => { c.font = { bold: true }; });
   rows.forEach((r, i) => {
     ws.addRow([
-      i + 1, r.full_name, r.pan ?? '', r.total_invested, r.investments,
+      i + 1, r.full_name, r.pan ?? '', r.total_invested, r.investments, r.referred_by ?? '',
       r.depository ?? '', r.dp_id ?? '', r.client_id ?? '',
       r.is_dematerialised == null ? '' : (r.is_dematerialised ? 'Yes' : 'No'),
     ]);
@@ -221,7 +221,7 @@ export async function seriesHoldersXlsx(seriesLabel: string, rows: import('./boo
   ws.addRow([]);
   ws.addRow(['', 'TOTAL', '', rows.reduce((s, r) => s + r.total_invested, 0), rows.reduce((s, r) => s + r.investments, 0)])
     .eachCell((c) => { c.font = { bold: true }; });
-  ws.columns = [{ width: 6 }, { width: 28 }, { width: 14 }, { width: 16 }, { width: 18 }, { width: 12 }, { width: 16 }, { width: 18 }, { width: 14 }];
+  ws.columns = [{ width: 6 }, { width: 28 }, { width: 14 }, { width: 16 }, { width: 18 }, { width: 22 }, { width: 12 }, { width: 16 }, { width: 18 }, { width: 14 }];
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 

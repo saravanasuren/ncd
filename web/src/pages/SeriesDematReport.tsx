@@ -8,6 +8,7 @@ interface Holder {
   pan: string | null;
   total_invested: number;
   investments: number;
+  referred_by: string | null;
   depository: string | null;   // NSDL | CDSL
   dp_id: string | null;
   client_id: string | null;
@@ -69,6 +70,7 @@ export function SeriesDematReportPage() {
                 <tr className="border-b border-border">
                   <th className={th}>#</th><th className={th}>Name</th><th className={th}>PAN</th>
                   <th className={`${th} text-right`}>Total Invested</th><th className={`${th} text-right`}>Investments</th>
+                  <th className={th}>Referred By</th>
                   <th className={th}>Depository</th><th className={th}>DP ID</th><th className={th}>Client ID</th>
                 </tr>
               </thead>
@@ -80,13 +82,14 @@ export function SeriesDematReportPage() {
                     <td className={`${td} font-mono text-xs`}>{r.pan ?? '—'}</td>
                     <td className={`${td} text-right mono`}>{formatINR(r.total_invested)}</td>
                     <td className={`${td} text-right`}>{r.investments}</td>
+                    <td className={td}>{r.referred_by ?? '—'}</td>
                     <td className={td}>{r.depository ?? '—'}</td>
                     <td className={`${td} font-mono text-xs`}>{r.dp_id ?? '—'}</td>
                     <td className={`${td} font-mono text-xs`}>{r.client_id ?? '—'}</td>
                   </tr>
                 ))}
                 {rep.data.rows.length === 0 && (
-                  <tr><td className={`${td} text-text-muted`} colSpan={8}>No current holders in this series.</td></tr>
+                  <tr><td className={`${td} text-text-muted`} colSpan={9}>No current holders in this series.</td></tr>
                 )}
               </tbody>
             </table>

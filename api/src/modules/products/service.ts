@@ -240,6 +240,22 @@ export async function createBank(db: Db, actor: AuthUser, b: Record<string, unkn
   await writeAudit(db, { actorId: actor.id, action: 'bank.create', entityType: 'banks', entityId: id, after: b });
   return { id };
 }
+export async function deleteBank(db: Db, actor: AuthUser, id: number) {
+  const bank = (await db.query('SELECT * FROM banks WHERE id = $1', [id])).rows[0];
+  if (!bank) throw errors.notFound('Bank account not found');
+  // The only thing that pins to a company bank is an application's collection
+  // bank (applications.collection_bank_id). That's real financial history, so we
+  // refuse rather than wipe it — the owner can retire the account elsewhere. A
+  // disbursement account has no stored FK (payouts pick it live), so it's free
+  // to delete.
+  const used = Number((await db.query<{ n: string }>(
+    'SELECT COUNT(*)::int AS n FROM applications WHERE collection_bank_id = $1', [id])).rows[0]!.n);
+  if (used > 0) throw errors.conflict(
+    `This account is the collection bank on ${used} application${used === 1 ? '' : 's'} and can't be deleted.`);
+  await db.query('DELETE FROM banks WHERE id = $1', [id]);
+  await writeAudit(db, { actorId: actor.id, action: 'bank.delete', entityType: 'banks', entityId: id, before: bank });
+  return { ok: true };
+}
 
 // ── Branches ──
 export async function listBranchesMaster(db: Db) {

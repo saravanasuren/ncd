@@ -56,6 +56,7 @@ productsRouter.post('/tds-rules', manage, asyncHandler(async (req, res) => res.s
 // Banks
 productsRouter.get('/banks', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listBanks(getDb()) })));
 productsRouter.post('/banks', manage, asyncHandler(async (req, res) => res.status(201).json(await s.createBank(getDb(), req.user!, req.body))));
+productsRouter.delete('/banks/:id', manage, asyncHandler(async (req, res) => res.json(await s.deleteBank(getDb(), req.user!, Number(req.params.id)))));
 
 // Branches (add/manage the office branches used for user & customer scoping)
 productsRouter.get('/branches', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listBranchesMaster(getDb()) })));

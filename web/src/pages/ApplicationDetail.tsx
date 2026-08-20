@@ -416,7 +416,7 @@ export function ApplicationDetailPage() {
                         underpayment — which is exactly how three July payouts
                         read until someone dug into the adjustment table. */}
                     {Number(r.gross_amount) - Number(r.tds_amount) - Number(r.net_amount) > 0.005 && (
-                      <span className="ml-1 text-xs text-warning" title={`Less a one-off adjustment of ${formatINR(Number(r.gross_amount) - Number(r.tds_amount) - Number(r.net_amount))} — see Adjustments below`}>
+                      <span className="ml-1 text-xs text-warn" title={`Less a one-off adjustment of ${formatINR(Number(r.gross_amount) - Number(r.tds_amount) - Number(r.net_amount))} — see Adjustments below`}>
                         −{formatINR(Number(r.gross_amount) - Number(r.tds_amount) - Number(r.net_amount))}
                       </span>
                     )}

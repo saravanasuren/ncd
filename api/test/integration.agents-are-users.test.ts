@@ -150,15 +150,23 @@ describe('deleting the user retires the agent everywhere', () => {
     expect(attached.enrolled_by_agent_id).not.toBe(Number(created.json.id));
   });
 
-  it('a STAFF user with real records is still protected from deletion', async () => {
+  // Owner 2026-08-20 reversed this: a staff user with a customer base IS now
+  // deletable, and their customers fall back to "unknown" rather than blocking.
+  // What must never happen is the customer disappearing with them.
+  it('a STAFF user with real records is deleted, and their customers survive unattributed', async () => {
     const a = await admin();
     const u = await a.post('/api/users', {
       email: 'protected@demo.local', full_name: 'Protected Staff', role: 'branch_staff', password: 'Demo_1234',
     });
     const cust = await a.post('/api/customers', { full_name: 'Staff Customer', phone: '9770000103' });
     await ctx.db.query('UPDATE customers SET enrolled_by_user_id = $1 WHERE id = $2', [u.json.id, cust.json.id]);
+
     const r = await a.del(`/api/users/${u.json.id}`);
-    expect(r.status).toBe(409);
-    expect(String(r.json.error?.message ?? '')).toMatch(/disable the account instead/i);
+    expect(r.status).toBe(200);
+
+    const left = await ctx.db.query<{ enrolled_by_user_id: string | null }>(
+      'SELECT enrolled_by_user_id FROM customers WHERE id = $1', [cust.json.id]);
+    expect(left.rowCount).toBe(1);                       // the customer is NOT deleted
+    expect(left.rows[0]!.enrolled_by_user_id).toBeNull(); // just unknown now
   });
 });

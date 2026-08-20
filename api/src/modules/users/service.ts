@@ -196,63 +196,109 @@ export async function setUserBranches(db: Db, actor: AuthUser, id: number, branc
 }
 
 export async function deleteUser(db: Db, actor: AuthUser, id: number): Promise<void> {
-  const cur = await db.query('SELECT email FROM users WHERE id = $1', [id]);
-  if (!cur.rowCount) throw errors.notFound('User not found');
+  const cur = (await db.query<{ email: string; full_name: string }>(
+    'SELECT email, full_name FROM users WHERE id = $1', [id])).rows[0];
+  if (!cur) throw errors.notFound('User not found');
   if (id === actor.id) throw errors.badRequest('You cannot delete your own account');
 
-  // A STAFF user who owns real business records must NOT be hard-deleted — that
-  // would orphan those customers/applications and dangle their incentive
-  // accruals. Block with a clear message; the account can be disabled instead.
-  //
-  // An AGENT is different (owner 2026-07-24): deleting the user retires the
-  // agent, and the customers they brought in fall back to Direct referrals.
-  // So `agents WHERE user_id` is deliberately NOT part of this guard.
-  const n = Number((await db.query<{ n: string }>(
-    `SELECT (SELECT count(*) FROM customers WHERE enrolled_by_user_id = $1)
-          + (SELECT count(*) FROM applications WHERE enrolled_by_user_id = $1)
-          + (SELECT count(*) FROM investor_leads WHERE created_by_user_id = $1)
-          + (SELECT count(*) FROM approval_requests WHERE maker_user_id = $1) AS n`, [id])).rows[0]!.n);
-  if (n > 0) {
-    throw errors.conflict('This user is linked to customers, applications, leads or approvals — disable the account instead of deleting it.');
-  }
-
-  try {
-    await db.withTx(async (tx) => {
-      // Retire any agent record this user IS, and hand their customers back to
-      // Direct. The agent row survives as retired rather than deleted:
-      // incentive_accruals.payee_id is a plain BIGINT with no FK, so removing
-      // the row would orphan money already accrued/paid and lose the payee's
-      // name on it. Retired agents are filtered out of every list instead.
-      const agents = (await tx.query<{ id: string; full_name: string; agent_code: string }>(
-        'SELECT id, full_name, agent_code FROM agents WHERE user_id = $1 AND deleted_at IS NULL', [id])).rows;
-      let movedToDirect = 0;
-      for (const ag of agents) {
-        const agentId = Number(ag.id);
-        const c = await tx.query('UPDATE customers SET enrolled_by_agent_id = NULL, referred_by_text = NULL, updated_at = now() WHERE enrolled_by_agent_id = $1', [agentId]);
-        // created_by_agent_id lives on investor_leads, not customers.
-        await tx.query('UPDATE investor_leads SET created_by_agent_id = NULL WHERE created_by_agent_id = $1', [agentId]);
-        const a = await tx.query('UPDATE applications SET enrolled_by_agent_id = NULL WHERE enrolled_by_agent_id = $1', [agentId]);
-        movedToDirect += (c.rowCount ?? 0) + (a.rowCount ?? 0);
-        await tx.query(
-          "UPDATE agents SET deleted_at = now(), is_active = FALSE, commission_status = 'None', user_id = NULL WHERE id = $1",
-          [agentId]);
-        await writeAudit(tx, {
-          actorId: actor.id, action: 'agent.retire', entityType: 'agents', entityId: agentId,
-          after: { via: 'user.delete', agent_code: ag.agent_code, full_name: ag.full_name, rows_moved_to_direct: movedToDirect },
-        });
-      }
-      // Per-user auxiliary rows cascade (sessions, user_branches, …); delete the user.
-      await tx.query('DELETE FROM users WHERE id = $1', [id]);
+  await db.withTx(async (tx) => {
+    // Retire any agent record this user IS, and hand their customers back to
+    // Direct. The agent row survives as retired rather than deleted:
+    // incentive_accruals.payee_id is a plain BIGINT with no FK, so removing the
+    // row would orphan money already accrued/paid and lose the payee's name on
+    // it. Retired agents are filtered out of every list instead.
+    const agents = (await tx.query<{ id: string; full_name: string; agent_code: string }>(
+      'SELECT id, full_name, agent_code FROM agents WHERE user_id = $1 AND deleted_at IS NULL', [id])).rows;
+    let movedToDirect = 0;
+    for (const ag of agents) {
+      const agentId = Number(ag.id);
+      const c = await tx.query('UPDATE customers SET enrolled_by_agent_id = NULL, referred_by_text = NULL, updated_at = now() WHERE enrolled_by_agent_id = $1', [agentId]);
+      await tx.query('UPDATE investor_leads SET created_by_agent_id = NULL WHERE created_by_agent_id = $1', [agentId]);
+      const a = await tx.query('UPDATE applications SET enrolled_by_agent_id = NULL WHERE enrolled_by_agent_id = $1', [agentId]);
+      movedToDirect += (c.rowCount ?? 0) + (a.rowCount ?? 0);
+      await tx.query(
+        "UPDATE agents SET deleted_at = now(), is_active = FALSE, commission_status = 'None', user_id = NULL WHERE id = $1",
+        [agentId]);
       await writeAudit(tx, {
-        actorId: actor.id, action: 'user.delete', entityType: 'users', entityId: id,
-        before: cur.rows[0], after: { agents_retired: agents.length, rows_moved_to_direct: movedToDirect },
+        actorId: actor.id, action: 'agent.retire', entityType: 'agents', entityId: agentId,
+        after: { via: 'user.delete', agent_code: ag.agent_code, full_name: ag.full_name, rows_moved_to_direct: movedToDirect },
       });
-    });
-  } catch (e) {
-    // Safety net: any un-enumerated reference → a clear message, never a raw 500.
-    if ((e as { code?: string })?.code === '23503') {
-      throw errors.conflict('This user is still referenced elsewhere and cannot be deleted. Disable the account instead.');
     }
-    throw e;
-  }
+
+    // Owner 2026-08-20: "even if he is having a customer base ... that user
+    // should be deleted and that customers should go under unknown referred by".
+    // The customers and investments they brought in stay exactly where they are;
+    // they simply stop naming anybody. referred_by_text is cleared only where it
+    // actually named THIS person, so somebody else's referral is never wiped.
+    const orphaned = { customers: 0, applications: 0, leads: 0, referrals: 0 };
+    orphaned.customers = (await tx.query(
+      'UPDATE customers SET enrolled_by_user_id = NULL, updated_at = now() WHERE enrolled_by_user_id = $1', [id])).rowCount ?? 0;
+    orphaned.applications = (await tx.query(
+      'UPDATE applications SET enrolled_by_user_id = NULL, updated_at = now() WHERE enrolled_by_user_id = $1', [id])).rowCount ?? 0;
+    orphaned.leads = (await tx.query(
+      'UPDATE investor_leads SET created_by_user_id = NULL WHERE created_by_user_id = $1', [id])).rowCount ?? 0;
+    const named = await tx.query(
+      `UPDATE customers SET referred_by_text = NULL, updated_at = now()
+        WHERE nullif(btrim(coalesce(referred_by_text,'')),'') IS NOT NULL
+          AND EXISTS (SELECT 1 FROM users u WHERE u.id = $1
+                       AND (lower(btrim(customers.referred_by_text)) = lower(btrim(u.full_name))
+                            OR upper(btrim(customers.referred_by_text)) = upper(coalesce(u.code,'~none~'))))`, [id]);
+    const namedApps = await tx.query(
+      `UPDATE applications SET referred_by_text = NULL, updated_at = now()
+        WHERE nullif(btrim(coalesce(referred_by_text,'')),'') IS NOT NULL
+          AND EXISTS (SELECT 1 FROM users u WHERE u.id = $1
+                       AND (lower(btrim(applications.referred_by_text)) = lower(btrim(u.full_name))
+                            OR upper(btrim(applications.referred_by_text)) = upper(coalesce(u.code,'~none~'))))`, [id]);
+    orphaned.referrals = (named.rowCount ?? 0) + (namedApps.rowCount ?? 0);
+
+    // Commission: unpaid dies with the account — there is nobody left to pay.
+    // PAID rows are kept as the record that money really went out (owner
+    // 2026-08-20). incentive_accruals has no FK to users, so the paid history
+    // survives the row disappearing; the name is preserved in the audit below.
+    const dropped = await tx.query(
+      "DELETE FROM incentive_accruals WHERE payee_type = 'staff' AND payee_id = $1 AND paid_at IS NULL", [id]);
+    const keptPaid = Number((await tx.query<{ n: string }>(
+      "SELECT count(*)::text AS n FROM incentive_accruals WHERE payee_type = 'staff' AND payee_id = $1", [id])).rows[0]!.n);
+
+    // Every remaining reference to this user has to let go before the row can
+    // be removed — 42 columns across the schema, nearly all of them "who did
+    // this" stamps with no delete rule, which is what blocked deletion before.
+    // Discovered from the catalogue rather than listed by hand: a hardcoded
+    // list silently rots the moment somebody adds a table, and the failure mode
+    // is this same "delete does nothing" bug coming back.
+    const refs = (await tx.query<{ table_name: string; column_name: string }>(
+      `SELECT tc.table_name, kcu.column_name
+         FROM information_schema.table_constraints tc
+         JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
+         JOIN information_schema.referential_constraints rc ON rc.constraint_name = tc.constraint_name
+         JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name
+         JOIN information_schema.columns col
+           ON col.table_name = tc.table_name AND col.column_name = kcu.column_name
+        WHERE tc.constraint_type = 'FOREIGN KEY'
+          AND ccu.table_name = 'users'
+          AND rc.delete_rule = 'NO ACTION'
+          AND col.is_nullable = 'YES'`)).rows;
+    let detached = 0;
+    for (const r of refs) {
+      // Identifiers come from the catalogue, not from user input.
+      const res = await tx.query(`UPDATE "${r.table_name}" SET "${r.column_name}" = NULL WHERE "${r.column_name}" = $1`, [id]);
+      detached += res.rowCount ?? 0;
+    }
+
+    await tx.query('DELETE FROM users WHERE id = $1', [id]);
+    // The name is written into the audit row on purpose: once the user row is
+    // gone it is the only place left that can answer "who did this" for the
+    // history we just detached.
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'user.delete', entityType: 'users', entityId: id,
+      before: { email: cur.email, full_name: cur.full_name },
+      after: {
+        agents_retired: agents.length, rows_moved_to_direct: movedToDirect,
+        customers_to_unknown: orphaned.customers, applications_to_unknown: orphaned.applications,
+        leads_unassigned: orphaned.leads, referrals_cleared: orphaned.referrals,
+        unpaid_incentive_removed: dropped.rowCount ?? 0, paid_incentive_kept: keptPaid,
+        other_references_detached: detached,
+      },
+    });
+  });
 }

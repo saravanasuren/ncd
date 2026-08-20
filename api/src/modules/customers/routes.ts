@@ -174,8 +174,10 @@ customersRouter.put('/:id/nominees', requirePermission('customers:update'),
       full_name: personName('Nominee name'), relationship: z.string().nullish(), share_pct: z.number().nullish(), dob: z.string().nullish(),
       pan: z.string().nullish(), phone: z.string().nullish(), address: z.string().nullish(), guardian_name: z.string().nullish(), guardian_pan: z.string().nullish(),
       kyc_id_type: z.string().nullish(), kyc_id_number: z.string().nullish(),
-    })) }).parse(req.body);
-    res.json(await s.setNominees(getDb(), req.user!, Number(req.params.id), nominees));
+    })), reason: z.string().optional() }).parse(req.body);
+    // First capture applies; a change to an existing set comes back as an
+    // approval request instead (owner 2026-08-19) — see setNominees.
+    res.json(await s.setNominees(getDb(), req.user!, Number(req.params.id), nominees, req.body?.reason));
   }));
 customersRouter.put('/:id/demat', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {

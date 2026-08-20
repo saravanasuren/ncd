@@ -48,7 +48,7 @@ is not a tidiness problem.
 |---|---|---|
 | Branch, index, working tree | shared by every session | its own |
 | Dev ports | 3030 / 5173 | its own, derived from the name |
-| `node_modules` | real | symlink to the main one |
+| `node_modules` | real | third-party symlinked; `@new-wealth/*` point at ITS OWN packages |
 | Commits | **blocked by hook** | allowed |
 
 Ports come from the name, so the same worktree always gets the same pair and
@@ -90,6 +90,20 @@ For a deliberate one-off with no other session running:
 ```bash
 NCD_ALLOW_ROOT_COMMIT=1 git commit ...
 ```
+
+## The node_modules trap
+
+`ops/cowork.sh` does **not** symlink `node_modules` wholesale, though that is the
+obvious move. `node_modules/@new-wealth/shared` points at `../../packages/shared`
+— relative to the **main checkout**. Share the directory and a worktree editing
+`packages/shared` silently imports and tests the *main checkout's* copy.
+
+Found the hard way: a `statusMachine` change appeared to do nothing at all, and
+a stale `shared` build threw a typecheck error in a file nobody had touched. Both
+symptoms point anywhere except the real cause.
+
+So each worktree gets third-party packages by symlink (large, identical, safe)
+and its **own** `@new-wealth/*` links.
 
 ## Also fixed here
 

@@ -102,10 +102,30 @@ EOF
 }
 EOF
   git -C "$dir" update-index --skip-worktree .claude/launch.json
-  # node_modules is ~large and identical; share the main checkout's rather than
-  # reinstalling per worktree. npm workspaces resolve upward, but a worktree is
-  # outside the main tree's node_modules scope, so link it explicitly.
-  [ -d "$main_root/node_modules" ] && ln -sfn "$main_root/node_modules" "$dir/node_modules"
+  # Dependencies. Symlinking the whole node_modules would be the easy answer and
+  # is WRONG: node_modules/@new-wealth/shared points at ../../packages/shared,
+  # relative to the MAIN checkout — so a worktree editing packages/shared would
+  # silently import and test the main checkout's copy instead of its own. Caught
+  # the hard way: a statusMachine change appeared to do nothing, and a stale
+  # `shared` build produced a phantom typecheck error in an untouched file.
+  #
+  # So: link the third-party packages (large, identical, safe to share) one by
+  # one, then point the @new-wealth workspace packages at THIS tree.
+  if [ -d "$main_root/node_modules" ]; then
+    mkdir -p "$dir/node_modules"
+    for entry in "$main_root/node_modules"/* "$main_root/node_modules"/.bin; do
+      [ -e "$entry" ] || continue
+      ln -sfn "$entry" "$dir/node_modules/$(basename "$entry")"
+    done
+    rm -rf "$dir/node_modules/@new-wealth"
+    mkdir -p "$dir/node_modules/@new-wealth"
+    ln -sfn "$dir/packages/shared" "$dir/node_modules/@new-wealth/shared"
+    ln -sfn "$dir/api"             "$dir/node_modules/@new-wealth/api"
+    ln -sfn "$dir/web"             "$dir/node_modules/@new-wealth/web"
+    # A worktree starts with no build output, so the first import of `shared`
+    # would resolve to a dist that does not exist yet.
+    (cd "$dir" && npm run build -w @new-wealth/shared >/dev/null 2>&1) || true
+  fi
 
   cmd_install_hooks >/dev/null
   cat <<EOF
@@ -160,7 +180,10 @@ cmd_rm() {
 
   local branch
   branch=$(git -C "$dir" symbolic-ref --short HEAD 2>/dev/null || true)
-  rm -f "$dir/node_modules"                       # the symlink, not the target
+  # A directory of symlinks now, not a single symlink — rm -f leaves it behind
+  # and `git worktree remove` then refuses. Only the links go; the real
+  # packages live in the main checkout and are untouched.
+  rm -rf "$dir/node_modules"
   git -C "$main_root" worktree remove "$dir"
   # Remove the branch too, or `new` with the same name fails next time. Safe:
   # everything on it is already on the remote, checked above.

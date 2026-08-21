@@ -501,7 +501,7 @@ export function LockerEnrollmentPage() {
           settled" — untrue since LockerHub removed auto-allocation (§A11,
           2026-07-25). Staff reading that would wait for something that is never
           coming. */}
-      <p className="text-sm text-text-muted mt-1 mb-4">Enroll a customer for a locker end-to-end. Pricing is handled by LockerHub. Pick the locker number below; it is allotted once rent and deposit are both settled and a staff member confirms.</p>
+      <p className="text-sm text-text-muted mt-1 mb-4">Enroll a customer for a locker end-to-end. Pricing is handled by LockerHub. Pick the locker number below; it is allotted once the rent is settled and a staff member confirms.</p>
       {err && <div className="text-xs text-danger bg-[color:var(--danger-bg)] rounded px-3 py-2 mb-3">{err}</div>}
       {note && <div className="text-xs text-success bg-[color:var(--success-bg)] rounded px-3 py-2 mb-3">{note}</div>}
 

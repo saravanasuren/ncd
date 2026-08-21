@@ -56,21 +56,15 @@ interface Tenant {
 }
 
 export function LockerTenantsPage() {
-  const { confirm, promptText } = useConfirm();
+  const { promptText } = useConfirm();
   const { can } = useAuth();
   const qc = useQueryClient();
   const [branchId, setBranchId] = useState('');
   const [q, setQ] = useState('');
   const [ncdOnly, setNcdOnly] = useState(false);
-  const [waivedOnly, setWaivedOnly] = useState(false);
   const [msg, setMsg] = useState('');
 
   const refetchTenants = () => qc.invalidateQueries({ queryKey: ['locker-tenants'] });
-  const recordWaiver = useMutation({
-    mutationFn: (input: Record<string, unknown>) => api.post('/api/lockers/waivers', input),
-    onSuccess: (r: any) => { setMsg(`Waiver sent for approval (${r.request_no}) — an Admin/CXO confirms it, then the row is tagged.`); refetchTenants(); },
-    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
-  });
   // Link a tenant to an NCD customer by hand. LockerHub gives us no PAN to match
   // on (their profile is null for these tenants; where present the PAN is
   // masked), so an explicit human choice is the honest mechanism.
@@ -93,12 +87,6 @@ export function LockerTenantsPage() {
       reason: v.reason, tenant_name: v.t.tenant_name, locker_no: v.t.locker_no, branch_id: v.t.branch_id,
     }),
     onSuccess: () => { setMsg('Removed from the NCD roster. The locker is still allotted on LockerHub — close it there too if it has actually ended.'); refetchTenants(); },
-    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
-  });
-
-  const cancelWaiver = useMutation({
-    mutationFn: (id: number) => api.post(`/api/lockers/waivers/${id}/cancel`, {}),
-    onSuccess: () => { setMsg('Waiver cancelled.'); refetchTenants(); },
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
 
@@ -137,13 +125,11 @@ export function LockerTenantsPage() {
   const all = tenants.data?.rows ?? [];
   const rows = all.filter((r) => {
     if (ncdOnly && !r.ncd_backed) return false;
-    if (waivedOnly && !r.waiver_status) return false;
     if (!q.trim()) return true;
     const hay = `${r.tenant_name ?? ''} ${r.tenant_phone ?? ''} ${r.tenant_email ?? ''} ${r.customer_code ?? ''} ${r.locker_no ?? ''} ${r.application_no ?? ''}`.toLowerCase();
     return hay.includes(q.trim().toLowerCase());
   });
   const ncdCount = all.filter((r) => r.ncd_backed).length;
-  const waivedCount = all.filter((r) => r.waiver_status).length;
 
   return (
     <div className="w-full">
@@ -161,10 +147,6 @@ export function LockerTenantsPage() {
         <label className="flex items-center gap-1.5 text-sm text-text-muted select-none">
           <input type="checkbox" checked={ncdOnly} onChange={(e) => setNcdOnly(e.target.checked)} />
           NCD-backed only ({ncdCount})
-        </label>
-        <label className="flex items-center gap-1.5 text-sm text-text-muted select-none">
-          <input type="checkbox" checked={waivedOnly} onChange={(e) => setWaivedOnly(e.target.checked)} />
-          Waived only ({waivedCount})
         </label>
         {tenants.isFetching && <span className="text-xs text-text-muted">Loading…</span>}
       </div>
@@ -203,7 +185,10 @@ export function LockerTenantsPage() {
                 <span key={s.size} className={`border border-border rounded px-3 py-1.5 ${out ? 'text-text-muted bg-bg' : ''}`}>
                   <b>{s.size}</b> · {out ? <span className="text-danger">none left</span> : <>{s.vacant} of {s.total} vacant</>}
                   {s.reserved > 0 && <> · {s.reserved} reserved</>}
-                  {p && <> · rent {formatINR(p.rent_incl_gst)} · deposit {formatINR(p.deposit)}</>}
+                  {/* NCD lockers are rent-only (owner 2026-08-22) — deposit is
+                      never collected, so it isn't shown. LockerHub still prices
+                      one; we auto-waive it behind the scenes to allot on rent. */}
+                  {p && <> · rent {formatINR(p.rent_incl_gst)}</>}
                 </span>
               );
             })}
@@ -280,7 +265,6 @@ export function LockerTenantsPage() {
                 <th className="py-2 pr-3">Size</th>
                 <th className="py-2 pr-3">Status</th>
                 <th className="py-2 pr-3 text-right">Rent</th>
-                <th className="py-2 pr-3 text-right">Deposit</th>
                 <th className="py-2 pr-3">Lease</th>
                 <th className="py-2 pr-3 text-right">NCD pledged</th>
                 <th className="py-2 pr-3">Locker app</th>
@@ -313,38 +297,13 @@ export function LockerTenantsPage() {
                   <td className="py-2 pr-3">
                     <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{r.account_status ?? r.status ?? '—'}</span>
                     {r.cheque_pending && <span className="ml-1 text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">cheque pending</span>}
-                    {/* Exception/waiver cases: locker held with NO NCD backing, deliberately. */}
-                    {r.waiver_status === 'Approved' && (
-                      <span className="ml-1 text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn" title={r.waiver_reason ?? ''}>deposit waived</span>
-                    )}
-                    {r.waiver_status === 'PendingApproval' && (
-                      <span className="ml-1 text-xs rounded px-1.5 py-0.5 bg-bg text-text-muted" title={r.waiver_reason ?? ''}>waiver pending</span>
-                    )}
-                    {can('lockers:waive') && r.waiver_id && (r.waiver_status === 'Approved' || r.waiver_status === 'PendingApproval') && (
-                      <button className="ml-1 text-xs text-text-muted hover:text-danger align-middle" title="Cancel this waiver"
-                        onClick={async () => { if (await confirm({ title: `Cancel the deposit waiver for ${r.tenant_name ?? 'this tenant'}?`, body: 'The locker goes back to needing NCD backing.', confirmLabel: 'Cancel waiver', danger: true })) cancelWaiver.mutate(r.waiver_id!); }}>×</button>
-                    )}
-                    {can('lockers:waive') && r.tenant_id && !r.ncd_backed && !r.waiver_status && (
-                      <button className="ml-1 text-xs text-primary hover:underline"
-                        onClick={async () => {
-                          const reason = await promptText({
-                            title: `Waive the NCD deposit for ${r.tenant_name ?? 'this tenant'}?`,
-                            body: `Locker ${r.locker_no ?? '—'}. It is held with no NCD backing, deliberately, and goes to a checker.`,
-                            label: 'Reason', minLength: 3, confirmLabel: 'Request waiver',
-                          });
-                          if (reason) {
-                            recordWaiver.mutate({
-                              lockerhub_tenant_id: r.tenant_id, reason,
-                              locker_no: r.locker_no, branch_id: r.branch_id,
-                              tenant_name: r.tenant_name, tenant_phone: r.tenant_phone,
-                              ...(r.customer_id ? { customer_id: r.customer_id } : {}),
-                            });
-                          }
-                        }}>waive…</button>
-                    )}
+                    {/* NCD lockers are rent-only (owner 2026-08-22): the deposit is
+                        auto-waived behind the scenes so LockerHub allots on rent
+                        alone, but it is never shown — no deposit, no waiver on
+                        screen. The auto-waive plumbing (feeWaivers.autoWaiveDeposit)
+                        and the waiver records are untouched. */}
                   </td>
                   <td className="py-2 pr-3 text-right mono">{r.annual_rent != null ? formatINR(r.annual_rent) : '—'}</td>
-                  <td className="py-2 pr-3 text-right mono">{r.deposit_amount != null ? formatINR(r.deposit_amount) : '—'}</td>
                   <td className="py-2 pr-3 text-xs text-text-muted whitespace-nowrap">
                     {(r.lease_start ?? r.allotted_on) ? <>{r.lease_start ?? r.allotted_on}{r.lease_expires_on ? <> → {r.lease_expires_on}</> : null}</> : '—'}
                   </td>

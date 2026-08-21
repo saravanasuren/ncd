@@ -327,10 +327,11 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
                     </Link>
                   )}
                 </div>
-                {(l.annual_rent != null || l.deposit != null || ends) && (
+                {/* NCD lockers are rent-only (owner 2026-08-22) — deposit is
+                    never collected, so it isn't shown. */}
+                {(l.annual_rent != null || ends) && (
                   <div className="text-xs text-text-muted mt-0.5 flex flex-wrap gap-x-3">
                     {l.annual_rent != null && <span>Rent <span className="mono text-text">{formatINR(l.annual_rent)}</span>/yr</span>}
-                    {l.deposit != null && <span>Deposit <span className="mono text-text">{formatINR(l.deposit)}</span></span>}
                     {ends && <span>Lease {l.lease_start ? `${String(l.lease_start).slice(0, 10)} → ` : 'to '}{ends}</span>}
                   </div>
                 )}
@@ -357,7 +358,6 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
                 {a.status && <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">{a.status}</span>}
                 {a.locker_size && <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{a.locker_size}</span>}
                 {a.annual_fee != null && <span className="text-xs text-text-muted">Rent <span className="mono text-text">{formatINR(a.annual_fee)}</span></span>}
-                {a.deposit != null && <span className="text-xs text-text-muted">Deposit <span className="mono text-text">{formatINR(a.deposit)}</span></span>}
               </div>
             ))}
           </div>
@@ -365,7 +365,7 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
       )}
       {pledges.length > 0 && (
         <>
-          <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1">NCDs pledged as deposit</div>
+          <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1">NCDs pledged as locker backing</div>
           <div className="text-sm mb-3">
             {pledges.map((p: any) => (
               <div key={p.id} className="flex flex-wrap gap-x-3 items-center border-b border-border last:border-0 py-1.5">

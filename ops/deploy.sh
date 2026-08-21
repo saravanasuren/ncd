@@ -44,7 +44,9 @@ else
   exit 1
 fi
 
-# Verify all five co-tenants are still up.
-for s in lockers odpulse wealth reports cb ncd; do
+# Verify the co-tenants are still up. wealth is intentionally omitted — it's a
+# sunset app that no longer auto-restarts, so its 502 is expected noise, not a
+# deploy regression.
+for s in lockers odpulse reports cb ncd; do
   echo -n "$s: "; curl -sI "https://$s.dhanamfinance.com/" 2>/dev/null | head -1 || echo unreachable
 done

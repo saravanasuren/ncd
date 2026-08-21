@@ -43,7 +43,8 @@ export function LockerProfilePage() {
   if (error || !data) return <div className="text-danger">Couldn’t load this locker.</div>;
 
   const lh = data.lockerhub;
-  const deposit = legPayment(lh, 'deposit');
+  // NCD lockers are rent-only (owner 2026-08-22) — no deposit is ever collected,
+  // so the deposit leg (and its auto-waiver) is never shown here.
   const rent = legPayment(lh, 'rent');
   const lockerNo = pick(lh, 'locker_no', 'locker_number') ?? pick(lh?.allotment, 'locker_number', 'locker_no') ?? data.pledges[0]?.locker_no ?? '—';
   const size = pick(lh, 'locker_size', 'size') ?? data.pledges[0]?.locker_size ?? '—';
@@ -96,7 +97,7 @@ export function LockerProfilePage() {
       {/* Payments — reflected live from LockerHub */}
       <div className={card}>
         <h2 className={h2}>Payments</h2>
-        {[{ leg: 'Deposit', p: deposit }, { leg: 'Rent', p: rent }].map(({ leg, p }) => (
+        {[{ leg: 'Rent', p: rent }].map(({ leg, p }) => (
           <div key={leg} className="py-2 border-b border-border last:border-0">
             <div className="flex items-center gap-2 flex-wrap text-sm">
               <span className="w-40 shrink-0 text-text-muted">{leg}</span>
@@ -117,7 +118,7 @@ export function LockerProfilePage() {
       {/* NCD backing */}
       {data.pledges.length > 0 && (
         <div className={card}>
-          <h2 className={h2}>NCD backing the deposit</h2>
+          <h2 className={h2}>NCD backing</h2>
           {data.pledges.map((p: any) => (
             <div key={p.id} className="flex flex-wrap items-center gap-x-3 py-1.5 border-b border-border last:border-0 text-sm">
               <Link to={`/app/applications/${p.application_id}`} className="text-primary hover:underline font-mono text-xs">{p.application_no}</Link>
@@ -147,11 +148,13 @@ export function LockerProfilePage() {
         </div>
       )}
 
-      {/* Waivers */}
-      {data.fee_waivers.length > 0 && (
+      {/* Waivers — rent only. The deposit is auto-waived 100% behind the scenes
+          (rent-only policy) and is never surfaced: no deposit, no deposit waiver
+          on screen. */}
+      {data.fee_waivers.filter((w: any) => String(w.leg).toLowerCase() !== 'deposit').length > 0 && (
         <div className={card}>
           <h2 className={h2}>Fee waivers</h2>
-          {data.fee_waivers.map((w: any) => (
+          {data.fee_waivers.filter((w: any) => String(w.leg).toLowerCase() !== 'deposit').map((w: any) => (
             <div key={w.id} className="flex flex-wrap items-center gap-x-3 py-1.5 border-b border-border last:border-0 text-sm">
               <span className="text-xs text-text-muted">{w.leg}</span>
               <span className="mono">{w.waiver_pct != null ? `${w.waiver_pct}%` : w.waiver_amount != null ? formatINR(w.waiver_amount) : '—'}</span>

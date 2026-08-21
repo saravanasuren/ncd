@@ -109,9 +109,9 @@ export function LockerRenewalsPage() {
     { key: 'annual_rent', header: 'Annual rent', align: 'right',
       value: (r) => Number(r.annual_rent ?? 0),
       render: (r) => r.annual_rent != null ? <span className="mono">{formatINR(r.annual_rent)}</span> : <span className="text-text-muted">—</span> },
-    { key: 'ncd_backed', header: 'Deposit', sortable: false,
+    { key: 'ncd_backed', header: 'NCD backing', sortable: false,
       render: (r) => (r.pledged_amount > 0
-        ? <span className="text-xs" title="An NCD investment is pledged against this locker's deposit">NCD {formatINR(r.pledged_amount)}</span>
+        ? <span className="text-xs" title="An NCD investment is pledged as backing for this locker">NCD {formatINR(r.pledged_amount)}</span>
         : <span className="text-text-muted text-xs">—</span>) },
   ];
 

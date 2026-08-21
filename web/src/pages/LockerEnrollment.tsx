@@ -179,6 +179,35 @@ export function LockerEnrollmentPage() {
     const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}`));
     if (r) setApp((a: any) => ({ ...a, ...r }));
   };
+  /**
+   * Discard an application entered by mistake (owner 2026-08-20). Super-Admin
+   * only, and it mirrors the honest scope of the endpoint: it HIDES the
+   * application from NCD — from this page, the customer's profile note and the
+   * tenants roster — but does not delete it on LockerHub, which exposes no
+   * delete for an application at all. Offered only before allotment: an
+   * allotted locker is a live tenancy and is removed from the Tenants page.
+   */
+  const removeApp = async () => {
+    if (!app?.application_id) return;
+    const ok = await confirm({
+      title: `Delete application ${app.application_no ?? app.application_id}?`,
+      body: 'Removes it from NCD — this page, the customer’s profile and the tenants roster. It is NOT deleted on LockerHub (their system has no delete for an application), so it stays on their side. Use this for one entered by mistake.',
+      confirmLabel: 'Delete', danger: true,
+    });
+    if (!ok) return;
+    const reason = await promptText({
+      title: 'Why is it being deleted?', body: 'Recorded on the audit trail.',
+      label: 'Reason', minLength: 3, confirmLabel: 'Delete', danger: true,
+    });
+    if (!reason) return;
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/remove`, {
+      reason,
+      tenant_name: name.trim() || undefined,
+      locker_no: app.allotment?.locker_number || undefined,
+      branch_id: String(app.branch_id ?? branchId) || undefined,
+    }));
+    if (r?.hidden) { setApp(null); setLinks({}); setCheques([]); setFeeWaivers([]); setErr(''); }
+  };
   // ── Cheque register ────────────────────────────────────────────────────
   const loadCheques = async () => {
     if (!app?.application_id) return;
@@ -572,6 +601,11 @@ export function LockerEnrollmentPage() {
                 <span className="font-mono text-xs">{app.application_no ?? app.application_id}</span>
                 <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{app.status}</span>
                 <button className={`${btnGhost} ml-auto`} disabled={busy} onClick={refreshApp}>Refresh</button>
+                {/* Discard a mistaken entry — Super Admin only, before allotment
+                    (an allotted locker is removed from the Tenants page instead). */}
+                {user?.role === 'super_admin' && !app.allotment && (
+                  <button className={`${btnGhost} text-danger`} disabled={busy} onClick={removeApp}>Delete</button>
+                )}
               </div>
               {/* An application stuck on KYC is one created before the screen
                   started sending the customer id, so no profile went with it.

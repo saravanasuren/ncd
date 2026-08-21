@@ -21,9 +21,12 @@ beforeAll(async () => {
     const send = (code: number, obj: unknown) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
     if (!lockerHubUp) return send(503, { error: 'upstream unavailable' });
     if (/\/esign\/status$/.test(url.pathname)) return send(200, { status: 'completed', esign_id: 'es_77' });
+    // The real application record carries only branch_id — branch_name is resolved
+    // from this list, exactly as production does (that's the bug this pins).
+    if (/\/branches$/.test(url.pathname)) return send(200, { branches: [{ id: 'br_dindigul', name: 'Dindigul' }] });
     if (/\/locker-applications\//.test(url.pathname)) {
       return send(200, {
-        locker_size: 'XL', branch_name: 'Dindigul', account_status: 'active',
+        locker_size: 'XL', branch_id: 'br_dindigul', account_status: 'active',
         allotment: { locker_number: 'A-12', allotted_on: '2026-08-01' },
         lease_start: '2026-08-01', lease_expires_on: '2027-07-31',
         legs: { deposit: { amount: 300000, status: 'paid' }, rent: { amount: 23600, status: 'pending' } },
@@ -55,6 +58,9 @@ describe('locker profile', () => {
 
     // Resolved NCD customer.
     expect(p.json.customer.full_name).toBe('Locker Owner');
+    // Branch name resolved from branch_id (the record has no branch_name) — the
+    // profile showed "—" before this was wired.
+    expect(p.json.lockerhub.branch_name).toBe('Dindigul');
     // LockerHub-live locker facts passed through.
     expect(p.json.lockerhub.allotment.locker_number).toBe('A-12');
     expect(p.json.lockerhub.legs.deposit.status).toBe('paid');

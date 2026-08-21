@@ -513,6 +513,17 @@ lockersRouter.post('/applications/:id/fee-waivers', requirePermission('lockers:w
     res.status(201).json(await requestFeeWaiver(getDb(), req.user!, { lockerhub_application_id: String(req.params.id), ...b }));
   }));
 
+// The standard rent waiver (owner 2026-08-20): one click, no checker, so the
+// customer pays the rent inclusive of GST. gst_pct comes from the size the
+// caller is looking at, so the rate follows LockerHub's tax rather than a
+// hardcoded 18.
+lockersRouter.post('/applications/:id/apply-rent-waiver', requirePermission('lockers:waive'),
+  asyncHandler(async (req, res) => {
+    const b = z.object({ gst_pct: z.number().positive().max(100) }).parse(req.body ?? {});
+    const { autoWaiveRent } = await import('./feeWaivers.js');
+    res.json(await autoWaiveRent(getDb(), req.user!, String(req.params.id), b.gst_pct));
+  }));
+
 // Re-send an approved waiver LockerHub refused. Idempotent on their side.
 lockersRouter.post('/fee-waivers/:id/retry', requirePermission('lockers:waive'),
   asyncHandler(async (req, res) => {

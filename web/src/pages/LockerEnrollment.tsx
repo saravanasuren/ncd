@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { useConfirm } from '../components/Confirm.js';
+import { rentWaiverBreakdown } from '@new-wealth/shared';
 
 /**
  * Staff locker enrollment (NCD_INTEGRATION_CONTRACT.md Part A). Drives the
@@ -37,6 +38,9 @@ export function LockerEnrollmentPage() {
   // don't offer them the button in the first place.
   const canAllocate = user?.role !== 'agent';
   const [err, setErr] = useState('');
+  // Positive feedback, separate from the red error line — a waiver that went
+  // through is news worth showing, not an error.
+  const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const run = async <T,>(p: Promise<T>): Promise<T | undefined> => {
     setErr(''); setBusy(true);
@@ -328,6 +332,44 @@ export function LockerEnrollmentPage() {
    * Ask for a waiver. This does NOT waive anything yet — LockerHub applies our
    * call approved-on-arrival, so it only reaches them once a checker approves.
    */
+  /**
+   * The size this application is priced on — the source of the GST rate, and of
+   * the figures shown on the button. Falls back to the page's selected size for
+   * a brand-new application that has not been re-fetched yet.
+   */
+  const pricedSize = (avail.data?.sizes ?? []).find(
+    (s: Size) => String(s.size) === String(app?.locker_size ?? size));
+  const rentWaiverPreview = pricedSize && Number(pricedSize.gst_pct) > 0
+    ? rentWaiverBreakdown(Number(pricedSize.annual_fee), Number(pricedSize.gst_pct))
+    : null;
+
+  /**
+   * Apply the standard rent waiver. Unlike `requestWaiver` below this is POLICY
+   * and needs no checker (owner 2026-08-20), so it reaches LockerHub at once.
+   *
+   * Confirms with the actual rupees first, because it writes off real money and
+   * "Apply waiver" alone does not say how much.
+   */
+  const applyStandardRentWaiver = async () => {
+    if (!app?.application_id || !rentWaiverPreview || !pricedSize) return;
+    const p = rentWaiverPreview;
+    if (!await confirm({
+      title: 'Apply the standard rent waiver?',
+      body: `Bill now ${money(p.gross)} · waive ${money(p.waived)} (${p.waiverPct.toFixed(4)}% of the pre-tax rent) · customer pays ${money(p.payable)}.\n\n`
+        + 'This is policy, so it goes to LockerHub immediately — there is no approval step.',
+      confirmLabel: `Waive ${money(p.waived)}`,
+    })) return;
+    setErr('');
+    const r = await api.post<{ applied?: boolean; already?: boolean; error?: string }>(
+      `/api/lockers/applications/${app.application_id}/apply-rent-waiver`, { gst_pct: Number(pricedSize.gst_pct) },
+    ).catch((e) => { setErr(e instanceof ApiError ? e.message : 'Failed'); return null; });
+    if (!r) return;
+    if (r.already) setNote('This application already has a rent waiver — nothing changed.');
+    else if (r.applied === false) setNote(`Recorded, but LockerHub did not accept it yet${r.error ? ` — ${r.error}` : ''}. It can be retried.`);
+    else setNote(`Waived ${money(p.waived)} — the customer now pays ${money(p.payable)}.`);
+    await refreshApp();
+  };
+
   const requestWaiver = async (leg: 'rent' | 'deposit') => {
     if (!app?.application_id) return;
     const pct = await promptText({
@@ -456,6 +498,7 @@ export function LockerEnrollmentPage() {
           coming. */}
       <p className="text-sm text-text-muted mt-1 mb-4">Enroll a customer for a locker end-to-end. Pricing is handled by LockerHub. Pick the locker number below; it is allotted once rent and deposit are both settled and a staff member confirms.</p>
       {err && <div className="text-xs text-danger bg-[color:var(--danger-bg)] rounded px-3 py-2 mb-3">{err}</div>}
+      {note && <div className="text-xs text-success bg-[color:var(--success-bg)] rounded px-3 py-2 mb-3">{note}</div>}
 
       {/* Arrived from a customer's page. The flow is branch-first, so the
           customer step is still collapsed and a staff member would otherwise
@@ -721,6 +764,17 @@ export function LockerEnrollmentPage() {
                             straight to LockerHub (§A18). */}
                         <button className={btnGhost} disabled={busy} onClick={() => settleOffline(leg, 'cash')}>Cash…</button>
                         <button className={btnGhost} disabled={busy} onClick={() => settleOffline(leg, 'transfer')}>Transfer…</button>
+                        {/* The standard rent waiver (owner 2026-08-20) — one
+                            click, no checker, so the customer pays the rent
+                            inclusive of GST. Rent only: there is nothing
+                            standard about a deposit waiver. */}
+                        {can('lockers:waive') && leg === 'rent' && !feeWaivers.some((w) => w.leg === 'rent') && (
+                          <button className="text-xs border border-primary text-primary rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40"
+                            disabled={busy} onClick={applyStandardRentWaiver}
+                            title="Waives the GST portion so the customer pays the round rent figure">
+                            Apply waiver{rentWaiverPreview ? ` — ${money(rentWaiverPreview.waived)}` : ''}
+                          </button>
+                        )}
                         {can('lockers:waive') && !feeWaivers.some((w) => w.leg === leg) && (
                           <button className={btnGhost} disabled={busy} onClick={() => requestWaiver(leg)}>Waive…</button>
                         )}

@@ -349,6 +349,20 @@ export const esignStatus = (applicationId: string) =>
   lhFetch<Record<string, unknown>>('GET', `/locker-applications/${encodeURIComponent(applicationId)}/esign/status`);
 
 /**
+ * A22 — authorised users on the locker record. Upsert on `ncd_ref` (our stable
+ * id), so a re-push keeps them in sync with no duplicates and a blank field
+ * doesn't wipe a stored value. Aadhaar is LAST-4 ONLY (a full number is rejected,
+ * Aadhaar Act §29); post-allotment only (`409 not_allotted` before).
+ */
+export const pushAuthorisedUser = (staff: ActingStaff, applicationId: string, input: {
+  name: string; phone?: string | null; pan?: string | null; aadhaar_last4?: string | null;
+  relation?: string | null; consent_ref?: string | null; ncd_ref: string;
+}) => lhFetch<Record<string, unknown>>('POST', `/locker-applications/${encodeURIComponent(applicationId)}/authorised-users`, { body: { ...input, staff } });
+
+export const listLockerHubAuthorisedUsers = (applicationId: string) =>
+  lhFetch<{ authorised_users: Array<Record<string, unknown>> }>('GET', `/locker-applications/${encodeURIComponent(applicationId)}/authorised-users`);
+
+/**
  * A21 — waive rent or deposit on an application.
  *
  * LockerHub applies this **approved-on-arrival**: they do not re-check it, and

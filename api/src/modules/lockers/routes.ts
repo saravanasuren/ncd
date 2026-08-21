@@ -490,6 +490,35 @@ lockersRouter.get('/applications/:id/esign', asyncHandler(async (req, res) =>
 lockersRouter.post('/applications/:id/esign/initiate', asyncHandler(async (req, res) =>
   res.json(await lh.esignInitiate(staffOf(req), String(req.params.id)))));
 
+// ── Authorised users (owner 2026-08-22) ──────────────────────────────────
+// People the holder authorises to operate a locker. Not active until the holder
+// e-signs a consent letter (Digio, NCD's own account) — see authorisedUsers.ts.
+lockersRouter.get('/applications/:id/authorised-users', asyncHandler(async (req, res) => {
+  const { listAuthorisedUsers } = await import('./authorisedUsers.js');
+  res.json({ rows: await listAuthorisedUsers(getDb(), String(req.params.id)) });
+}));
+lockersRouter.post('/applications/:id/authorised-users', asyncHandler(async (req, res) => {
+  const b = z.object({
+    customer_id: z.number().int().positive().nullish(),
+    name: z.string().trim().min(2, "The authorised user's name is required"),
+    pan: z.string().trim().nullish(),
+    aadhaar: z.string().trim().nullish(),
+    phone: z.string().trim().nullish(),
+  }).parse(req.body ?? {});
+  const { addAuthorisedUser } = await import('./authorisedUsers.js');
+  res.status(201).json(await addAuthorisedUser(getDb(), req.user!, { lockerhub_application_id: String(req.params.id), ...b }));
+}));
+lockersRouter.post('/authorised-users/:id/revoke', asyncHandler(async (req, res) => {
+  const { reason } = z.object({ reason: z.string().trim().min(3, 'A reason is required') }).parse(req.body ?? {});
+  const { revokeAuthorisedUser } = await import('./authorisedUsers.js');
+  res.json(await revokeAuthorisedUser(getDb(), req.user!, Number(req.params.id), reason));
+}));
+// Re-push an active authorised user LockerHub didn't accept. Idempotent on ncd_ref.
+lockersRouter.post('/authorised-users/:id/sync-retry', asyncHandler(async (req, res) => {
+  const { syncAuthorisedUserToLockerHub } = await import('./authorisedUsers.js');
+  res.json(await syncAuthorisedUserToLockerHub(getDb(), Number(req.params.id)));
+}));
+
 // ── A21 fee waivers: waiving rent/deposit OWED on an application ──────────
 // Real money, unlike the informational deposit waiver above. Maker requests,
 // Admin/CXO approves, and only THEN does it reach LockerHub — they apply it

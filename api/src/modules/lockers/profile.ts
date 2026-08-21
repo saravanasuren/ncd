@@ -55,6 +55,16 @@ export async function lockerProfile(db: Db, lockerApplicationId: string) {
   if (lh.lockerHubConfigured()) {
     try { lockerhub = await lh.getLockerApplication(appId) as Record<string, unknown>; }
     catch (e) { lockerhub_error = (e as Error).message; }
+    // The application carries branch_id but no branch_name, so the profile showed
+    // "—" for the branch. Resolve it against the branches list (same as the tenant
+    // roster does) — best-effort, never fatal.
+    if (lockerhub && !lockerhub.branch_name && lockerhub.branch_id) {
+      try {
+        const { branches } = await lh.branches();
+        const b = branches.find((x) => String(x.id) === String(lockerhub!.branch_id));
+        if (b) lockerhub.branch_name = b.name;
+      } catch { /* branch lookup is cosmetic — leave it unresolved on failure */ }
+    }
     // e-sign status only exists after allotment — best-effort, never fatal.
     try { esign = await lh.esignStatus(appId) as Record<string, unknown>; } catch { /* not signed yet / unreachable */ }
   }

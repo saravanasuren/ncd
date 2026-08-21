@@ -27,6 +27,12 @@ export async function pendingBySeriesSummary(db: Db) {
             COALESCE(sum(a.total_amount) FILTER (WHERE ${READY_TO_ALLOT}),0) AS pending_amount,
             count(a.id) FILTER (WHERE a.status = 'Active')::int AS total_count,
             COALESCE(sum(a.total_amount) FILTER (WHERE a.status = 'Active'),0) AS total_amount,
+            -- How many PEOPLE, not how many investments (owner 2026-08-21). The
+            -- two differ a lot: one customer commonly holds two or three in the
+            -- same series, so an investment count reads as a bigger customer
+            -- base than the series actually has. DISTINCT on the same Active
+            -- filter, so all three figures describe the same set of rows.
+            count(DISTINCT a.customer_id) FILTER (WHERE a.status = 'Active')::int AS customer_count,
             -- the open allotment approval for this series (drives the "Pending
             -- approval" state + Revert on the Allotments page)
             (SELECT ab.approval_request_id FROM allotment_batches ab

@@ -40,36 +40,53 @@ export async function initiateSigning(db: Db, actor: AuthUser, applicationId: nu
 /** Mark a session signed (from the webhook or the poller). Idempotent. */
 export async function completeSigning(db: Db, digioRequestId: string, opts: { signedAt?: string; signedDocumentUrl?: string; payload?: unknown }): Promise<{ ok: boolean; applicationId?: number }> {
   const result = await db.withTx(async (tx) => {
-    const sess = (await tx.query<{ id: string; application_id: string; status: string }>(
-      'SELECT id, application_id, status FROM digio_signing_sessions WHERE digio_request_id = $1', [digioRequestId])).rows[0];
+    const sess = (await tx.query<{ id: string; application_id: string | null; status: string; document_type: string; locker_authorised_user_id: string | null }>(
+      'SELECT id, application_id, status, document_type, locker_authorised_user_id FROM digio_signing_sessions WHERE digio_request_id = $1', [digioRequestId])).rows[0];
     if (!sess) { console.warn(`[digio] webhook for unknown request_id=${digioRequestId} — ignored`); return { ok: false, fresh: false }; }
-    if (sess.status === 'signed') return { ok: true, applicationId: Number(sess.application_id), fresh: false }; // idempotent
+    const authorisedUserId = sess.locker_authorised_user_id ? Number(sess.locker_authorised_user_id) : undefined;
+    const applicationId = sess.application_id ? Number(sess.application_id) : undefined;
+    if (sess.status === 'signed') return { ok: true, applicationId, authorisedUserId, docType: sess.document_type, fresh: false }; // idempotent
     await tx.query(
       `UPDATE digio_signing_sessions SET status='signed', signed_at=COALESCE($2::timestamptz, now()), signed_document_url=$3, webhook_payload=$4::jsonb, updated_at=now() WHERE id=$1`,
       [sess.id, opts.signedAt ?? null, opts.signedDocumentUrl ?? null, JSON.stringify(opts.payload ?? {})]);
+    // A locker authorised-user consent letter — the application/bond logic does
+    // NOT apply; the authorised user is flipped to active after the commit.
+    if (sess.document_type === 'locker_authorised_user_consent') {
+      return { ok: true, authorisedUserId, docType: sess.document_type, fresh: true };
+    }
     // eSign is off the critical path — just stamp esigned_at if not already set.
-    await tx.query('UPDATE applications SET esigned_at = COALESCE(esigned_at, now()) WHERE id = $1', [sess.application_id]);
+    await tx.query('UPDATE applications SET esigned_at = COALESCE(esigned_at, now()) WHERE id = $1', [applicationId]);
     // Generate + store the Bond certificate right after eSign (owner spec).
     // Defensive — a PDF hiccup must not fail the signing webhook.
     try {
       const { bondCertificatePdf } = await import('../../modules/reports/forms/bond.js');
       const { saveBuffer } = await import('../../lib/storage.js');
-      const pdf = await bondCertificatePdf(tx, Number(sess.application_id));
-      const { path } = saveBuffer('bonds', `bond-${sess.application_id}.pdf`, pdf);
-      await tx.query('UPDATE applications SET bond_pdf_path = $1, bond_generated_at = now() WHERE id = $2', [path, sess.application_id]);
+      const pdf = await bondCertificatePdf(tx, Number(applicationId));
+      const { path } = saveBuffer('bonds', `bond-${applicationId}.pdf`, pdf);
+      await tx.query('UPDATE applications SET bond_pdf_path = $1, bond_generated_at = now() WHERE id = $2', [path, applicationId]);
     } catch (e) {
-      console.warn(`[documents] bond generation failed for app ${sess.application_id}: ${(e as Error).message}`);
+      console.warn(`[documents] bond generation failed for app ${applicationId}: ${(e as Error).message}`);
     }
-    await writeAudit(tx, { actorId: null, action: 'esign.complete', entityType: 'applications', entityId: Number(sess.application_id), after: { digioRequestId } });
-    return { ok: true, applicationId: Number(sess.application_id), fresh: true };
+    await writeAudit(tx, { actorId: null, action: 'esign.complete', entityType: 'applications', entityId: Number(applicationId), after: { digioRequestId } });
+    return { ok: true, applicationId, docType: sess.document_type, fresh: true };
   });
 
-  // Pull the SIGNED copy from Digio and store it so staff can open it from the
-  // application page. Deliberately AFTER the transaction commits — this is
-  // external network I/O (multi-second timeout) and must never hold a pool
-  // connection or row locks open. Best-effort: a failure leaves esigned_pdf_path
-  // NULL (the link just doesn't appear) and never undoes the completion.
-  if (result.ok && result.fresh && result.applicationId) {
+  // Pull the SIGNED copy from Digio and store it — AFTER the transaction commits
+  // (external network I/O must never hold a pool connection / row locks open).
+  // Best-effort: a failure leaves the signed-PDF path NULL and never undoes the
+  // completion.
+  if (result.ok && result.fresh && result.docType === 'locker_authorised_user_consent' && result.authorisedUserId) {
+    let signedPdfPath: string | null = null;
+    try {
+      const { downloadSignedDocument } = await import('./index.js');
+      const signed = await downloadSignedDocument(digioRequestId);
+      if (signed) { const { saveBuffer } = await import('../../lib/storage.js'); signedPdfPath = saveBuffer('locker-consent', `consent-${result.authorisedUserId}.pdf`, signed).path; }
+    } catch (e) {
+      console.warn(`[digio] consent signed-document download failed for authorised user ${result.authorisedUserId}: ${(e as Error).message}`);
+    }
+    const { completeAuthorisedUserConsent } = await import('../../modules/lockers/authorisedUsers.js');
+    await completeAuthorisedUserConsent(db, result.authorisedUserId, { signedAt: opts.signedAt, signedPdfPath });
+  } else if (result.ok && result.fresh && result.applicationId) {
     try {
       const { downloadSignedDocument } = await import('./index.js');
       const signed = await downloadSignedDocument(digioRequestId);

@@ -2,6 +2,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
+import { LockerAuthorisedUsers } from '../components/LockerAuthorisedUsers.js';
 
 /**
  * Complete locker profile (owner 2026-08-07) — everything about one locker in
@@ -180,6 +181,12 @@ export function LockerProfilePage() {
             Open in enrollment (payments, allotment, e-sign actions) →
           </Link>
         </div>
+      </div>
+
+      {/* Authorised users — add people the holder authorises to operate this
+          locker; each needs the holder's e-signed consent (owner 2026-08-22). */}
+      <div className={card}>
+        <LockerAuthorisedUsers applicationId={String(data.locker_application_id)} customerId={data.customer?.id ?? null} />
       </div>
     </div>
   );

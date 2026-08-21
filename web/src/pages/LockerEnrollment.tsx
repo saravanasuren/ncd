@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { useConfirm } from '../components/Confirm.js';
+import { LockerAuthorisedUsers } from '../components/LockerAuthorisedUsers.js';
 import { rentWaiverBreakdown } from '@new-wealth/shared';
 
 /**
@@ -945,6 +946,15 @@ export function LockerEnrollmentPage() {
             // button that cannot work.
             <div className="text-sm text-text-muted">Payments settled — allotment pending. A branch staff member needs to allot the locker.</div>
           )}
+        </div>
+      )}
+
+      {/* 6 — Authorised users (owner 2026-08-22). Add people the holder authorises
+          to operate the locker; each needs the holder's e-signed consent. */}
+      {app?.application_id && (
+        <div className={card}>
+          <h2 className={h2}>6 · Authorised users</h2>
+          <LockerAuthorisedUsers applicationId={String(app.application_id)} customerId={ncdCust?.id ?? null} />
         </div>
       )}
     </div>

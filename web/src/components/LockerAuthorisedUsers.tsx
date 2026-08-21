@@ -13,6 +13,7 @@ import { useConfirm } from './Confirm.js';
 interface AuthUser {
   id: number; name: string; pan: string | null; aadhaar: string | null; phone: string | null;
   status: string; consent_sign_url: string | null; consent_signed_at: string | null; consent_signed: boolean;
+  lockerhub_synced: boolean; lockerhub_error: string | null;
 }
 
 const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
@@ -42,6 +43,11 @@ export function LockerAuthorisedUsers({ applicationId, customerId }: { applicati
     onSuccess: () => qc.invalidateQueries({ queryKey: key }),
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed to revoke'),
   });
+  const retrySync = useMutation({
+    mutationFn: (id: number) => api.post(`/api/lockers/authorised-users/${id}/sync-retry`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: key }),
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Retry failed'),
+  });
   const rows = q.data?.rows ?? [];
 
   return (
@@ -61,6 +67,14 @@ export function LockerAuthorisedUsers({ applicationId, customerId }: { applicati
                 : <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">consent pending</span>}
               {!r.consent_signed && r.consent_sign_url && (
                 <a className="text-xs text-primary hover:underline" href={r.consent_sign_url} target="_blank" rel="noopener noreferrer">Open signing link</a>
+              )}
+              {/* LockerHub sync (A22) — only relevant once authorised. */}
+              {r.consent_signed && r.lockerhub_synced && <span className="text-xs text-text-muted">· synced to LockerHub</span>}
+              {r.consent_signed && !r.lockerhub_synced && r.lockerhub_error && (
+                <span className="text-xs">
+                  <span className="text-danger" title={r.lockerhub_error}>· not synced to LockerHub</span>
+                  <button className="ml-1 text-primary hover:underline" disabled={retrySync.isPending} onClick={() => { setErr(''); retrySync.mutate(r.id); }}>Retry</button>
+                </span>
               )}
               <button className="ml-auto text-xs text-text-muted hover:text-danger" title="Remove this authorised user"
                 onClick={async () => {

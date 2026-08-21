@@ -6,8 +6,10 @@
  * same path the webhook/poller use) to prove the consent branch flips it active.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { createServer, type Server } from 'node:http';
 import { startTestServer, Client, requiredInvestmentFields, type TestCtx } from './helpers/server.js';
 import { completeSigning } from '../src/integrations/digio/service.js';
+import { config } from '../src/config.js';
 
 let ctx: TestCtx;
 const APP = 'la_auth_users_1';
@@ -60,6 +62,51 @@ describe('locker authorised users', () => {
     expect(rev.status).toBe(200);
     list = await a.get(`/api/lockers/applications/${APP}/authorised-users`);
     expect(list.json.rows).toHaveLength(0);
+  });
+
+  describe('LockerHub sync (A22)', () => {
+    let mock: Server; let captured: Record<string, any> | null = null;
+    beforeAll(async () => {
+      mock = createServer((req, res) => {
+        let body = ''; req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          if (req.method === 'POST' && /\/authorised-users$/.test(req.url ?? '')) {
+            captured = JSON.parse(body || '{}');
+            res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ id: 'lh_au_1', ncd_ref: captured!.ncd_ref })); return;
+          }
+          res.writeHead(404); res.end('{}');
+        });
+      });
+      await new Promise<void>((r) => mock.listen(0, '127.0.0.1', r));
+      const addr = mock.address();
+      config.LOCKERHUB_API_URL = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
+    });
+    afterAll(async () => { config.LOCKERHUB_API_URL = ''; await new Promise<void>((r) => mock.close(() => r())); });
+
+    it('pushes on consent — LAST-4 Aadhaar only, upsert on ncd_ref', async () => {
+      const a = await admin();
+      const owner = await a.post('/api/customers', { full_name: 'Sync Holder', phone: '9871200050' });
+      const add = await a.post('/api/lockers/applications/la_sync_1/authorised-users', {
+        customer_id: owner.json.id, name: 'Sync Person', pan: 'ABCDE1234F', aadhaar: '123456789012', phone: '9871200051',
+      });
+      const sess = (await ctx.db.query('SELECT digio_request_id FROM digio_signing_sessions WHERE locker_authorised_user_id = $1', [add.json.id])).rows[0] as any;
+      await completeSigning(ctx.db, sess.digio_request_id, {});
+
+      // The push landed on LockerHub with the compliant shape.
+      expect(captured, 'LockerHub received the push').toBeTruthy();
+      expect(captured!.name).toBe('Sync Person');
+      expect(captured!.aadhaar_last4).toBe('9012');       // last 4 only
+      expect(captured!.aadhaar).toBeUndefined();          // never the full number
+      expect(String(JSON.stringify(captured))).not.toContain('123456789012');
+      expect(captured!.pan).toBe('ABCDE1234F');
+      expect(captured!.ncd_ref).toBe(`au_${add.json.id}`);
+      expect(captured!.consent_ref).toBeTruthy();
+      expect(captured!.staff).toBeTruthy();
+
+      // And the row is marked synced.
+      const list = await a.get('/api/lockers/applications/la_sync_1/authorised-users');
+      expect(list.json.rows[0].lockerhub_synced).toBe(true);
+    });
   });
 
   it('rejects a nameless authorised user', async () => {

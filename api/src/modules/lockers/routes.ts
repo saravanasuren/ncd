@@ -513,6 +513,11 @@ lockersRouter.post('/authorised-users/:id/revoke', asyncHandler(async (req, res)
   const { revokeAuthorisedUser } = await import('./authorisedUsers.js');
   res.json(await revokeAuthorisedUser(getDb(), req.user!, Number(req.params.id), reason));
 }));
+// Re-push an active authorised user LockerHub didn't accept. Idempotent on ncd_ref.
+lockersRouter.post('/authorised-users/:id/sync-retry', asyncHandler(async (req, res) => {
+  const { syncAuthorisedUserToLockerHub } = await import('./authorisedUsers.js');
+  res.json(await syncAuthorisedUserToLockerHub(getDb(), Number(req.params.id)));
+}));
 
 // ── A21 fee waivers: waiving rent/deposit OWED on an application ──────────
 // Real money, unlike the informational deposit waiver above. Maker requests,

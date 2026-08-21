@@ -23,6 +23,7 @@ export interface AuthorisedUserRow {
   id: number; name: string; pan: string | null; aadhaar: string | null; phone: string | null;
   status: string; consent_sign_url: string | null; consent_signed_at: string | null;
   consent_signed: boolean; created_at: string | null;
+  lockerhub_synced: boolean; lockerhub_error: string | null;
 }
 
 const shape = (r: Record<string, unknown>): AuthorisedUserRow => ({
@@ -33,16 +34,57 @@ const shape = (r: Record<string, unknown>): AuthorisedUserRow => ({
   consent_signed_at: (r.consent_signed_at as string) ?? null,
   consent_signed: r.status === 'active',
   created_at: (r.created_at as string) ?? null,
+  lockerhub_synced: r.lockerhub_synced_at != null,
+  lockerhub_error: (r.lockerhub_error as string) ?? null,
 });
+
+/** Last 4 digits of an Aadhaar — the only form LockerHub accepts (Aadhaar Act). */
+const aadhaarLast4 = (a: unknown): string | undefined => {
+  const d = String(a ?? '').replace(/\D/g, '');
+  return d.length >= 4 ? d.slice(-4) : undefined;
+};
 
 /** Authorised users on a locker — active first, then those awaiting consent. */
 export async function listAuthorisedUsers(db: Db, lockerhubApplicationId: string): Promise<AuthorisedUserRow[]> {
   const { rows } = await db.query<Record<string, unknown>>(
-    `SELECT id, name, pan, aadhaar, phone, status, consent_sign_url, consent_signed_at, created_at
+    `SELECT id, name, pan, aadhaar, phone, status, consent_sign_url, consent_signed_at, created_at,
+            lockerhub_synced_at, lockerhub_error
        FROM locker_authorised_users
       WHERE lockerhub_application_id = $1 AND status <> 'revoked'
       ORDER BY (status = 'active') DESC, id DESC`, [lockerhubApplicationId]);
   return rows.map(shape);
+}
+
+/**
+ * Push an active authorised user to LockerHub (A22). Best-effort and idempotent
+ * (upsert on ncd_ref) — never throws to the caller; a failure is stored and
+ * stays retryable. Only pushes once consent is signed (status 'active'), and
+ * only the LAST 4 of the Aadhaar ever leaves NCD.
+ */
+export async function syncAuthorisedUserToLockerHub(db: Db, id: number): Promise<{ synced: boolean; error?: string; skipped?: string }> {
+  const r = (await db.query<Record<string, unknown>>(
+    `SELECT au.*, u.full_name AS creator_name, ro.name AS creator_role
+       FROM locker_authorised_users au
+       LEFT JOIN users u ON u.id = au.created_by_user_id
+       LEFT JOIN roles ro ON ro.id = u.role_id
+      WHERE au.id = $1`, [id])).rows[0];
+  if (!r) return { synced: false, skipped: 'not found' };
+  if (r.status !== 'active') return { synced: false, skipped: 'consent not signed yet' };
+  if (!lh.lockerHubConfigured()) return { synced: false, skipped: 'LockerHub not configured' };
+  const staff = { id: (r.created_by_user_id as string) ?? 0, name: (r.creator_name as string) ?? 'NCD', staff_role: (r.creator_role as string) ?? undefined };
+  try {
+    await lh.pushAuthorisedUser(staff, String(r.lockerhub_application_id), {
+      name: String(r.name), phone: (r.phone as string) ?? undefined, pan: (r.pan as string) ?? undefined,
+      aadhaar_last4: aadhaarLast4(r.aadhaar), consent_ref: (r.consent_digio_request_id as string) ?? undefined,
+      ncd_ref: `au_${id}`,
+    });
+    await db.query('UPDATE locker_authorised_users SET lockerhub_synced_at = now(), lockerhub_error = NULL, updated_at = now() WHERE id = $1', [id]);
+    return { synced: true };
+  } catch (e) {
+    const msg = (e as Error).message || 'LockerHub did not accept the authorised user';
+    await db.query('UPDATE locker_authorised_users SET lockerhub_error = $2, updated_at = now() WHERE id = $1', [id, msg]);
+    return { synced: false, error: msg };
+  }
 }
 
 interface AddInput { lockerhub_application_id: string; customer_id?: number | null; name: string; pan?: string | null; aadhaar?: string | null; phone?: string | null; }
@@ -133,6 +175,10 @@ export async function completeAuthorisedUserConsent(
     actorId: null, action: 'locker.authorised_user.consent-signed',
     entityType: 'locker_authorised_users', entityId: authorisedUserId, after: {},
   });
+  // Now that consent is signed (and the locker is allotted — the UI only lets you
+  // add post-allotment), push to LockerHub. Best-effort: a failure is stored and
+  // retryable, and must never undo the signed status.
+  await syncAuthorisedUserToLockerHub(db, authorisedUserId).catch(() => undefined);
 }
 
 /** Withdraw an authorised user (owner can revoke in writing). */

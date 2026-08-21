@@ -361,12 +361,17 @@ export function LockerEnrollmentPage() {
     })) return;
     setErr('');
     const r = await api.post<{ applied?: boolean; already?: boolean; error?: string }>(
-      `/api/lockers/applications/${app.application_id}/apply-rent-waiver`, { gst_pct: Number(pricedSize.gst_pct) },
+      `/api/lockers/applications/${app.application_id}/apply-rent-waiver`,
+      { gst_pct: Number(pricedSize.gst_pct), annual_rent: Number(pricedSize.annual_fee) },
     ).catch((e) => { setErr(e instanceof ApiError ? e.message : 'Failed'); return null; });
     if (!r) return;
     if (r.already) setNote('This application already has a rent waiver — nothing changed.');
     else if (r.applied === false) setNote(`Recorded, but LockerHub did not accept it yet${r.error ? ` — ${r.error}` : ''}. It can be retried.`);
     else setNote(`Waived ${money(p.waived)} — the customer now pays ${money(p.payable)}.`);
+    // BOTH: refreshApp reloads the legs, but the button hides on the WAIVER
+    // list, so without this it stays on screen offering to waive again on an
+    // application that is already waived.
+    await loadFeeWaivers();
     await refreshApp();
   };
 

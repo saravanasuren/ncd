@@ -519,9 +519,15 @@ lockersRouter.post('/applications/:id/fee-waivers', requirePermission('lockers:w
 // hardcoded 18.
 lockersRouter.post('/applications/:id/apply-rent-waiver', requirePermission('lockers:waive'),
   asyncHandler(async (req, res) => {
-    const b = z.object({ gst_pct: z.number().positive().max(100) }).parse(req.body ?? {});
+    // annual_rent is the PRE-TAX price of the size this application is on —
+    // the waiver is derived from it, so it travels with the request rather than
+    // being guessed server-side.
+    const b = z.object({
+      gst_pct: z.number().positive().max(100),
+      annual_rent: z.number().positive(),
+    }).parse(req.body ?? {});
     const { autoWaiveRent } = await import('./feeWaivers.js');
-    res.json(await autoWaiveRent(getDb(), req.user!, String(req.params.id), b.gst_pct));
+    res.json(await autoWaiveRent(getDb(), req.user!, String(req.params.id), b.gst_pct, b.annual_rent));
   }));
 
 // Re-send an approved waiver LockerHub refused. Idempotent on their side.

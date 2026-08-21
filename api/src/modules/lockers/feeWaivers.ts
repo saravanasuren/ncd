@@ -30,6 +30,7 @@ import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 import * as lh from '../../integrations/lockerhub/client.js';
+import { rentWaiverPctForGst } from '@new-wealth/shared';
 
 export type WaiverLeg = 'rent' | 'deposit';
 
@@ -172,6 +173,56 @@ export async function autoWaiveDeposit(db: Db, actor: AuthUser, lockerhubApplica
   // Push to LockerHub outside the tx (network); a failure is recorded, not thrown.
   const r = await applyToLockerHub(db, { id: actor.id, fullName: actor.fullName, email: actor.email, role: actor.role }, row);
   return { id: Number(row.id), ...r };
+}
+
+/**
+ * The standard rent waiver (owner 2026-08-20) — after it, the customer pays the
+ * pre-tax rent as their whole GST-inclusive bill: M 6,000, L 12,000, XL 20,000.
+ *
+ * A PERCENTAGE, never an amount. LockerHub applies our waiver to the pre-tax
+ * rent and recomputes GST on the discounted base (§A21), so handing them the
+ * GST figure bills 5,805.60 on a 6,000 locker instead of the round 6,000 —
+ * see rentWaiverPctForGst for the algebra. The rate comes from the SIZE's own
+ * gst_pct, so if LockerHub ever changes the tax the waiver follows it rather
+ * than silently drifting off a hardcoded 18.
+ *
+ * POLICY, not a per-case decision (owner: no checker), so the row is written
+ * approved-on-creation and pushed straight to LockerHub — the same shape as the
+ * rent-only deposit waiver above.
+ *
+ * Ordering, from §A21: pre-allotment only, and a leg already settled BY PAYMENT
+ * is a 409. So this can never touch rent that has already been collected — the
+ * failure is recorded on the row and never thrown.
+ */
+export async function autoWaiveRent(
+  db: Db, actor: AuthUser, lockerhubApplicationId: string, gstPct: number,
+) {
+  const appId = String(lockerhubApplicationId ?? '').trim();
+  if (!appId) return null;
+  const pct = rentWaiverPctForGst(gstPct);
+  if (!(pct > 0)) throw errors.badRequest('Cannot work out the waiver: this locker size has no GST rate.');
+
+  const REASON = `Standard rent waiver — customer pays the rent inclusive of GST (${pct.toFixed(4)}% of the pre-tax rent)`;
+  const row = await db.withTx(async (tx) => {
+    const open = (await tx.query(
+      `SELECT 1 FROM locker_fee_waivers
+        WHERE lockerhub_application_id = $1 AND leg = 'rent' AND status IN ('PendingApproval','Approved')`,
+      [appId])).rowCount;
+    if (open) return null; // already waived / in flight — never stack two
+    const { rows } = await tx.query<Record<string, unknown>>(
+      `INSERT INTO locker_fee_waivers
+         (lockerhub_application_id, leg, waiver_pct, reason, created_by_user_id, status, approved_by_user_id)
+       VALUES ($1,'rent',$2,$3,$4,'Approved',$4) RETURNING *`,
+      [appId, pct, REASON, actor.id]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'locker.fee_waiver.auto-rent', entityType: 'locker_fee_waivers', entityId: Number(rows[0]!.id),
+      after: { application: appId, leg: 'rent', waiver_pct: pct, gst_pct: Number(gstPct), reason: REASON, policy: 'standard-rent' },
+    });
+    return rows[0]!;
+  });
+  if (!row) return { id: null, already: true as const };
+  const r = await applyToLockerHub(db, { id: actor.id, fullName: actor.fullName, email: actor.email, role: actor.role }, row);
+  return { id: Number(row.id), waiver_pct: pct, ...r };
 }
 
 registerOnFinalApprove('locker_fee_waiver', async (tx, req) => {

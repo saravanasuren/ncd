@@ -30,7 +30,7 @@ import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 import * as lh from '../../integrations/lockerhub/client.js';
-import { rentWaiverPctForGst } from '@new-wealth/shared';
+import { rentWaiverBreakdown, rentWaiverPctForGst } from '@new-wealth/shared';
 
 export type WaiverLeg = 'rent' | 'deposit';
 
@@ -195,14 +195,16 @@ export async function autoWaiveDeposit(db: Db, actor: AuthUser, lockerhubApplica
  * failure is recorded on the row and never thrown.
  */
 export async function autoWaiveRent(
-  db: Db, actor: AuthUser, lockerhubApplicationId: string, gstPct: number,
+  db: Db, actor: AuthUser, lockerhubApplicationId: string, gstPct: number, annualRent: number,
 ) {
   const appId = String(lockerhubApplicationId ?? '').trim();
   if (!appId) return null;
   const pct = rentWaiverPctForGst(gstPct);
   if (!(pct > 0)) throw errors.badRequest('Cannot work out the waiver: this locker size has no GST rate.');
+  const b = rentWaiverBreakdown(annualRent, gstPct);
+  if (!(b.baseWaiver > 0)) throw errors.badRequest('Cannot work out the waiver: this locker size has no rent priced.');
 
-  const REASON = `Standard rent waiver — customer pays the rent inclusive of GST (${pct.toFixed(4)}% of the pre-tax rent)`;
+  const REASON = `Standard rent waiver — customer pays the rent inclusive of GST (${b.payable} on a ${b.gross} bill)`;
   const row = await db.withTx(async (tx) => {
     const open = (await tx.query(
       `SELECT 1 FROM locker_fee_waivers
@@ -210,19 +212,22 @@ export async function autoWaiveRent(
       [appId])).rowCount;
     if (open) return null; // already waived / in flight — never stack two
     const { rows } = await tx.query<Record<string, unknown>>(
+      // AMOUNT, not percentage — see rentWaiverBreakdown. A percentage is
+      // rounded to 2dp by LockerHub and bills a rupee over the round figure.
       `INSERT INTO locker_fee_waivers
-         (lockerhub_application_id, leg, waiver_pct, reason, created_by_user_id, status, approved_by_user_id)
+         (lockerhub_application_id, leg, waiver_amount, reason, created_by_user_id, status, approved_by_user_id)
        VALUES ($1,'rent',$2,$3,$4,'Approved',$4) RETURNING *`,
-      [appId, pct, REASON, actor.id]);
+      [appId, b.baseWaiver, REASON, actor.id]);
     await writeAudit(tx, {
       actorId: actor.id, action: 'locker.fee_waiver.auto-rent', entityType: 'locker_fee_waivers', entityId: Number(rows[0]!.id),
-      after: { application: appId, leg: 'rent', waiver_pct: pct, gst_pct: Number(gstPct), reason: REASON, policy: 'standard-rent' },
+      after: { application: appId, leg: 'rent', waiver_amount: b.baseWaiver, annual_rent: Number(annualRent),
+               gst_pct: Number(gstPct), payable: b.payable, reason: REASON, policy: 'standard-rent' },
     });
     return rows[0]!;
   });
   if (!row) return { id: null, already: true as const };
   const r = await applyToLockerHub(db, { id: actor.id, fullName: actor.fullName, email: actor.email, role: actor.role }, row);
-  return { id: Number(row.id), waiver_pct: pct, ...r };
+  return { id: Number(row.id), waiver_amount: b.baseWaiver, payable: b.payable, ...r };
 }
 
 registerOnFinalApprove('locker_fee_waiver', async (tx, req) => {

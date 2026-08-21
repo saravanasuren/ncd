@@ -45,6 +45,31 @@ describe('standard rent waiver', () => {
     expect(lockerHubBills(rent as number, 18, b.waiverPct)).toBeCloseTo(rent as number, 6);
   });
 
+  it.each([
+    ['M', 6000, 915.25],
+    ['L', 12000, 1830.51],
+    ['XL', 20000, 3050.85],
+  ])('%s: the AMOUNT we send lands the bill on the round figure to the paisa', (_s, rent, expected) => {
+    // Owner 2026-08-21 saw 12,001. Cause: LockerHub rounds a waiver PERCENTAGE
+    // to 2dp — 15.2542...% becomes 15.25%, which bills 12,000.60. An exact
+    // amount has no lossy step. This pins the amounts and the resulting bills.
+    const b = rentWaiverBreakdown(rent as number, 18);
+    expect(b.baseWaiver).toBe(expected);
+    const billed = ((rent as number) - b.baseWaiver) * 1.18;
+    expect(Math.round(billed)).toBe(rent);
+    expect(Math.abs(billed - (rent as number))).toBeLessThan(0.01); // within a paisa
+  });
+
+  it('a 2dp-rounded PERCENTAGE is what produced 12,001 — do not go back to it', () => {
+    // 15.25% of 12,000 = 1,830 -> base 10,170 -> x1.18 = 12,000.60 -> shown 12,001.
+    const roundedPct = Math.round(rentWaiverPctForGst(18) * 100) / 100;
+    const viaPct = (12000 - 12000 * (roundedPct / 100)) * 1.18;
+    expect(Math.round(viaPct)).toBe(12001);
+    // The amount path does not have this problem.
+    const viaAmount = (12000 - rentWaiverBreakdown(12000, 18).baseWaiver) * 1.18;
+    expect(Math.round(viaAmount)).toBe(12000);
+  });
+
   it('sending the GST AMOUNT instead would bill the wrong figure', () => {
     // The trap, stated as a test so nobody "simplifies" the percentage away.
     const wrong = (6000 - 1080) * 1.18;

@@ -37,7 +37,7 @@ export const STANDARD_RENT_WAIVER_PCT = rentWaiverPctForGst(18);
  * remains the authority on the figure actually collected.
  */
 export function rentWaiverBreakdown(annualRent: number, gstPct: number): {
-  gross: number; waived: number; payable: number; waiverPct: number;
+  gross: number; waived: number; payable: number; waiverPct: number; baseWaiver: number;
 } {
   const rent = Number(annualRent) || 0;
   const g = Number(gstPct) || 0;
@@ -47,5 +47,14 @@ export function rentWaiverBreakdown(annualRent: number, gstPct: number): {
   // factor, which lands the payable exactly on the pre-tax rent.
   const payable = rent;
   const round2 = (n: number) => Math.round(n * 100) / 100;
-  return { gross: round2(gross), waived: round2(gross - payable), payable: round2(payable), waiverPct: pct };
+  // What to SEND LockerHub: the reduction to the PRE-TAX base, not the
+  // GST-inclusive saving. rent - rent/(1+gst) — i.e. strip the tax component
+  // out of the rent so what is left, plus GST, is the rent again.
+  //
+  // Sent as an AMOUNT, never a percentage. LockerHub rounds a percentage to 2
+  // decimals: 15.2542…% becomes 15.25%, which bills 12,000.60 on a 12,000
+  // locker and shows as 12,001 (owner 2026-08-21). An exact amount has no such
+  // lossy step and lands on the round figure to the paisa.
+  const baseWaiver = round2(rent - rent / (1 + g / 100));
+  return { gross: round2(gross), waived: round2(gross - payable), payable: round2(payable), waiverPct: pct, baseWaiver };
 }

@@ -10,6 +10,9 @@ interface SeriesRow {
   series_id: number; code: string; name: string; status: string;
   pending_count: number; pending_amount: string;
   total_count: number; total_amount: string;
+  /** Distinct PEOPLE holding an Active investment — not the same as total_count,
+   *  since one customer often holds several in a series. */
+  customer_count: number;
   pending_request_id: number | null;   // an allotment approval awaiting a checker
 }
 
@@ -48,6 +51,9 @@ export function AllotmentsPage() {
   const columns: Column<SeriesRow>[] = [
     { key: 'code', header: 'Series', tdClassName: 'font-semibold' },
     { key: 'name', header: 'Name' },
+    // Customers before Investments: the smaller, human number reads first, and
+    // the pair together shows how concentrated a series is.
+    { key: 'customer_count', header: 'Customers', align: 'right', value: (s) => s.customer_count },
     { key: 'total_count', header: 'Investments', align: 'right', value: (s) => s.total_count },
     { key: 'total_amount', header: 'Investment amount', align: 'right',
       value: (s) => Number(s.total_amount),

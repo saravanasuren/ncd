@@ -184,9 +184,15 @@ export function LockerProfilePage() {
       </div>
 
       {/* Authorised users — add people the holder authorises to operate this
-          locker; each needs the holder's e-signed consent (owner 2026-08-22). */}
+          locker; each needs the holder's e-signed consent (owner 2026-08-22).
+          Post-allotment only: shown once the locker has a number. */}
       <div className={card}>
-        <LockerAuthorisedUsers applicationId={String(data.locker_application_id)} customerId={data.customer?.id ?? null} />
+        {String(lockerNo) !== '—'
+          ? <LockerAuthorisedUsers applicationId={String(data.locker_application_id)} customerId={data.customer?.id ?? null} />
+          : <>
+              <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">Authorised users</div>
+              <p className="text-sm text-text-muted m-0">Available once the locker is allotted.</p>
+            </>}
       </div>
     </div>
   );

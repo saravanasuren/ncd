@@ -950,11 +950,15 @@ export function LockerEnrollmentPage() {
       )}
 
       {/* 6 — Authorised users (owner 2026-08-22). Add people the holder authorises
-          to operate the locker; each needs the holder's e-signed consent. */}
+          to operate the locker; each needs the holder's e-signed consent.
+          POST-ALLOTMENT ONLY: an authorised person attaches to a physical locker,
+          so LockerHub (and this) only allow it once the locker is allotted. */}
       {app?.application_id && (
         <div className={card}>
           <h2 className={h2}>6 · Authorised users</h2>
-          <LockerAuthorisedUsers applicationId={String(app.application_id)} customerId={ncdCust?.id ?? null} />
+          {app.allotment
+            ? <LockerAuthorisedUsers applicationId={String(app.application_id)} customerId={ncdCust?.id ?? null} />
+            : <p className="text-sm text-text-muted m-0">Available once the locker is allotted — an authorised user attaches to a physical locker.</p>}
         </div>
       )}
     </div>

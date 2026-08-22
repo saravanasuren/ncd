@@ -672,6 +672,25 @@ export async function lockerTenants(db: Db, opts: { branchId?: string | string[]
   rows.length = 0;
   rows.push(...visible);
 
+  // Rent status overlay (owner 2026-08-22): premium / waived / paid, from NCD's
+  // own RENT fee-waivers keyed on the application id. A roster tenant with no
+  // application_id cannot be ours, so it stays blank rather than guessing 'paid'.
+  const rentW = (await db.query<Record<string, any>>(
+    "SELECT lockerhub_application_id, category, waiver_pct FROM locker_fee_waivers WHERE leg = 'rent' AND status = 'Approved'")).rows;
+  const rentByApp = new Map<string, Array<Record<string, any>>>();
+  for (const w of rentW) {
+    const k = String(w.lockerhub_application_id);
+    if (!rentByApp.has(k)) rentByApp.set(k, []);
+    rentByApp.get(k)!.push(w);
+  }
+  for (const r of rows) {
+    const appId = r.lockerhub_application_id ? String(r.lockerhub_application_id) : '';
+    const ws = appId ? (rentByApp.get(appId) ?? []) : [];
+    r.rent_status = ws.some((w) => String(w.category) === 'premium') ? 'premium'
+      : ws.some((w) => Number(w.waiver_pct) === 100) ? 'waived'
+      : appId ? 'paid' : null;
+  }
+
   const { openWaivers } = await import('./waivers.js');
   const waivers = await openWaivers(db);
   const waiverByTenant = new Map(waivers.map((w) => [String(w.lockerhub_tenant_id), w]));

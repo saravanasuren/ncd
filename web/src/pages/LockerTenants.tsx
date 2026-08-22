@@ -51,6 +51,7 @@ interface Tenant {
   lease_start?: string | null; lockers_held?: number | null; open_applications?: number | null;
   customer_id: number | null; customer_code: string | null;
   pledged_amount: number; cheque_pending: boolean; ncd_backed: boolean; unresolved: boolean;
+  rent_status?: 'paid' | 'waived' | 'premium' | null;
   waiver_id: number | null; waiver_status: string | null; waiver_reason: string | null;
   linked_manually?: boolean; override_key?: string | null;
 }
@@ -265,6 +266,7 @@ export function LockerTenantsPage() {
                 <th className="py-2 pr-3">Size</th>
                 <th className="py-2 pr-3">Status</th>
                 <th className="py-2 pr-3 text-right">Rent</th>
+                <th className="py-2 pr-3">Rent status</th>
                 <th className="py-2 pr-3">Lease</th>
                 <th className="py-2 pr-3 text-right">NCD pledged</th>
                 <th className="py-2 pr-3">Locker app</th>
@@ -304,6 +306,12 @@ export function LockerTenantsPage() {
                         and the waiver records are untouched. */}
                   </td>
                   <td className="py-2 pr-3 text-right mono">{r.annual_rent != null ? formatINR(r.annual_rent) : '—'}</td>
+                  <td className="py-2 pr-3">
+                    {r.rent_status === 'premium' ? <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">★ Premium</span>
+                      : r.rent_status === 'waived' ? <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">Waived</span>
+                      : r.rent_status === 'paid' ? <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">Paid</span>
+                      : <span className="text-text-muted text-xs">—</span>}
+                  </td>
                   <td className="py-2 pr-3 text-xs text-text-muted whitespace-nowrap">
                     {(r.lease_start ?? r.allotted_on) ? <>{r.lease_start ?? r.allotted_on}{r.lease_expires_on ? <> → {r.lease_expires_on}</> : null}</> : '—'}
                   </td>
@@ -336,7 +344,7 @@ export function LockerTenantsPage() {
                 </tr>
               ))}
               {!rows.length && (
-                <tr><td colSpan={8} className="py-6 text-center text-text-muted">
+                <tr><td colSpan={9} className="py-6 text-center text-text-muted">
                   {tenants.isLoading ? 'Loading…' : ncdOnly ? 'No NCD-backed lockers match.' : branchId ? 'No tenants at this branch yet.' : 'No locker tenants found.'}
                 </td></tr>
               )}

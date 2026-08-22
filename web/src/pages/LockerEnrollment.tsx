@@ -150,6 +150,10 @@ export function LockerEnrollmentPage() {
       if (r.email) setEmail(String(r.email));
       if (r.branch_id) setBranchId(String(r.branch_id));
       if (r.locker_size) setSize(String(r.locker_size));
+      // Restore the locker chosen at enrolment (owner 2026-08-22) so allotment
+      // uses it instead of re-asking. If it was since taken, `preferred` won't
+      // resolve and the picker appears — the one case a re-pick is warranted.
+      if (r.intended_locker?.locker_id) setLockerId(String(r.intended_locker.locker_id));
       setCust({ found: true, phone: r.phone, profile: { name: r.name, email: r.email } });
     });
   }, [params]);
@@ -172,10 +176,13 @@ export function LockerEnrollmentPage() {
     // kyc_pending, and a staff member has to open LockerHub and key the
     // profile in by hand: the exact thing the applicant block exists to avoid
     // (owner, 29 Jul 2026). We already know who they are — send it.
+    const chosen = (vacant.data?.lockers ?? []).find((l) => l.id === lockerId);
     const r = await run(api.post<any>('/api/lockers/applications', {
       phone, name: name || undefined, email: email || undefined,
       branch_id: branchId, locker_size: size,
       ...(ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}),
+      // The chosen locker (now mandatory) — persisted so a resume allots it.
+      ...(lockerId ? { locker_id: lockerId, locker_number: chosen?.locker_number } : {}),
     }));
     if (r?.application_id) { setApp(r); setCheques([]); setFeeWaivers([]); }
   };

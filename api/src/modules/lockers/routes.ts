@@ -122,8 +122,15 @@ lockersRouter.get('/customers/by-pan/:pan', asyncHandler(async (req, res) => {
 
 lockersRouter.get('/customers/:phone', asyncHandler(async (req, res) =>
   res.json(await lh.getCustomer(String(req.params.phone)))));
-lockersRouter.get('/applications/:id', asyncHandler(async (req, res) =>
-  res.json(await lh.getLockerApplication(String(req.params.id)))));
+lockersRouter.get('/applications/:id', asyncHandler(async (req, res) => {
+  const app = await lh.getLockerApplication(String(req.params.id)) as Record<string, unknown>;
+  // Restore the locker chosen at enrolment (owner 2026-08-22), so a resumed
+  // application allots the same number instead of re-asking.
+  const intended = (await getDb().query<{ locker_id: string; locker_number: string | null }>(
+    'SELECT locker_id, locker_number FROM locker_intended_locker WHERE lockerhub_application_id = $1', [String(req.params.id)])).rows[0];
+  if (intended) app.intended_locker = { locker_id: intended.locker_id, locker_number: intended.locker_number };
+  res.json(app);
+}));
 
 // Rent report — every NCD locker as paid / waived / premium (owner 2026-08-22).
 lockersRouter.get('/rent-report', asyncHandler(async (_req, res) => {
@@ -180,8 +187,12 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
     phone: z.string().min(10), name: z.string().optional(), email: z.string().optional(),
     branch_id: z.string().min(1), locker_size: z.string().min(1),
     customer_id: z.number().int().positive().nullish(),
+    // The locker chosen at step 1 (owner 2026-08-22) — LockerHub's A7 doesn't
+    // hold a preferred locker, so we remember it ourselves to allot it later.
+    locker_id: z.string().trim().nullish(),
+    locker_number: z.string().trim().nullish(),
   }).parse(req.body ?? {});
-  const { customer_id, ...input } = b;
+  const { customer_id, locker_id, locker_number, ...input } = b;
 
   let applicant: Record<string, unknown> | undefined;
   if (customer_id) {
@@ -210,6 +221,17 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
   if (appId) {
     const { autoWaiveDeposit } = await import('./feeWaivers.js');
     await autoWaiveDeposit(getDb(), req.user!, appId);
+    // Remember the chosen locker so a resume allots the same one (owner
+    // 2026-08-22). Upsert — re-creating for the same application keeps the pick.
+    if (locker_id) {
+      await getDb().query(
+        `INSERT INTO locker_intended_locker (lockerhub_application_id, locker_id, locker_number, created_by_user_id)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (lockerhub_application_id) DO UPDATE
+           SET locker_id = EXCLUDED.locker_id, locker_number = EXCLUDED.locker_number, updated_at = now()`,
+        [appId, locker_id, locker_number ?? null, req.user!.id]);
+      (created as Record<string, unknown>).intended_locker = { locker_id, locker_number: locker_number ?? null };
+    }
   }
 
   res.status(201).json(created);

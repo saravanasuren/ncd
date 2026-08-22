@@ -7,7 +7,7 @@
  * the row it writes (keyed on the LockerHub application id) is what those screens
  * filter on.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { startTestServer, Client, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
@@ -18,11 +18,19 @@ const as = async (email: string, password = 'Demo_1234') => { const c = new Clie
 const superAdmin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
 
 describe('removing a locker application', () => {
-  it('a Super Admin hides it — with the reason on the audit trail and an override row to filter on', async () => {
+  it('a Super Admin cancels it on LockerHub — reason on the audit trail, and an override row to filter on', async () => {
+    // Since A23 (2026-08-22) this is a REAL cancel, not a local hide: the call
+    // goes to LockerHub first and we only record it here if they accepted.
+    // LockerHub is not reachable from the test server, so stand in for it.
+    const lh = await import('../src/integrations/lockerhub/client.js');
+    const spy = vi.spyOn(lh, 'cancelLockerApplication')
+      .mockResolvedValue({ success: true, status: 'cancelled', locker_released: null });
+    try {
     const appId = 'APP-2026-01122';
     const r = await (await superAdmin()).post(`/api/lockers/applications/${appId}/remove`, { reason: 'entered by mistake' });
     expect(r.status).toBe(200);
-    expect(r.json.hidden).toBe(true);
+    expect(r.json.cancelled).toBe(true);
+    expect(spy).toHaveBeenCalled();
 
     // The row every screen filters on: keyed by the LockerHub application id, marked removed.
     const ov = (await ctx.db.query(
@@ -33,6 +41,8 @@ describe('removing a locker application', () => {
     const log = (await ctx.db.query(
       "SELECT after_data FROM audit_log WHERE action = 'locker.application.remove' AND entity_id = $1", [appId])).rows[0] as any;
     expect(log?.after_data?.reason).toBe('entered by mistake');
+    expect(log?.after_data?.cancelled_on_lockerhub).toBe(true);
+    } finally { spy.mockRestore(); }
   });
 
   it('a plain admin (not super) is refused', async () => {

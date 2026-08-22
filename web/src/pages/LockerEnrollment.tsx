@@ -207,7 +207,7 @@ export function LockerEnrollmentPage() {
     if (!app?.application_id) return;
     const ok = await confirm({
       title: `Delete application ${app.application_no ?? app.application_id}?`,
-      body: 'Removes it from NCD — this page, the customer’s profile and the tenants roster. It is NOT deleted on LockerHub (their system has no delete for an application), so it stays on their side. Use this for one entered by mistake.',
+      body: 'Cancels it on LockerHub too and releases any locker it was holding, so a fresh enrolment for this customer starts clean. Refused if money has already been collected, or if it is already a live tenancy. Use this for one entered by mistake.',
       confirmLabel: 'Delete', danger: true,
     });
     if (!ok) return;
@@ -222,7 +222,12 @@ export function LockerEnrollmentPage() {
       locker_no: app.allotment?.locker_number || undefined,
       branch_id: String(app.branch_id ?? branchId) || undefined,
     }));
-    if (r?.hidden) { setApp(null); setLinks({}); setCheques([]); setFeeWaivers([]); setErr(''); }
+    if (r?.cancelled) {
+      setApp(null); setLinks({}); setCheques([]); setFeeWaivers([]); setErr('');
+      setNote(r.locker_released
+        ? `Cancelled on LockerHub — locker ${r.locker_released} released back to vacant.`
+        : 'Cancelled on LockerHub. You can enrol this customer again from scratch.');
+    }
   };
   // ── Cheque register ────────────────────────────────────────────────────
   const loadCheques = async () => {

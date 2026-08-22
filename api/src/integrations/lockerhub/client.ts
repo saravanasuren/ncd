@@ -384,6 +384,26 @@ export const applyWaiver = (
   'POST', `/locker-applications/${encodeURIComponent(applicationId)}/waiver`, { body: { ...input, staff } });
 
 /**
+ * A23 — cancel a locker application (LockerHub, 2026-08-22, at our request).
+ *
+ * The one thing NCD could never do: void a mis-keyed enrolment. Before this our
+ * "Delete" could only hide the row locally, so the customer lookup kept
+ * returning the old application and a fresh enrolment was never clean.
+ *
+ * Their guarantees, which the caller relies on: idempotent (`already: true` on
+ * re-cancel), releases any held locker, and a WAIVED leg does not block —
+ * abandoned-with-a-waiver is the case this exists for. It refuses only where
+ * money was collected (409 payment_collected) or the application is already a
+ * live tenancy (409 live_tenancy).
+ */
+export const cancelLockerApplication = (
+  staff: ActingStaff,
+  applicationId: string,
+  reason: string,
+) => lhFetch<{ success?: boolean; status?: string; locker_released?: string | boolean | null; already?: boolean }>(
+  'POST', `/locker-applications/${encodeURIComponent(applicationId)}/cancel`, { body: { reason, staff } });
+
+/**
  * A11 — allocate. This is the APPROVAL step: it is what creates the tenant on
  * LockerHub, so `staff` is mandatory and lands in their audit log as
  * "<name> (NCD app)". Omit `locker_id` to let them auto-pick the lowest vacant

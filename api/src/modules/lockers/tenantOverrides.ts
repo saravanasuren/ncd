@@ -136,6 +136,33 @@ export async function removeLockerApplication(
   }
   if (!applicationId.trim()) throw errors.badRequest('application id required');
   if (!reason?.trim() || reason.trim().length < 3) throw errors.badRequest('A reason is required');
+
+  // Cancel it where it actually LIVES first (A23, shipped 2026-08-22 at our
+  // request). Until this existed we could only hide the row here, and the owner
+  // rightly called that out: "if i delete in here it should get deleted so that
+  // while i make a new enrollement the old traces doesnt affect in there".
+  //
+  // Their side is the source of truth, so it goes first — if they refuse, we
+  // must NOT write a local hide that would leave the two disagreeing. Their two
+  // refusals are the ones staff need in plain words, not a raw 409.
+  const lh = await import('../../integrations/lockerhub/client.js');
+  let released: unknown = null;
+  try {
+    const r = await lh.cancelLockerApplication(
+      { id: actor.id, name: actor.fullName, email: actor.email, staff_role: actor.role },
+      applicationId.trim(), reason.trim());
+    released = r?.locker_released ?? null;
+  } catch (e) {
+    const msg = (e as Error).message ?? '';
+    if (/payment_collected/i.test(msg)) {
+      throw errors.conflict('This locker has money already collected against it — cancelling would be a refund, which has to be handled with LockerHub.');
+    }
+    if (/live_tenancy/i.test(msg)) {
+      throw errors.conflict('This application is already a live tenancy — close or surrender the locker instead of cancelling the application.');
+    }
+    throw errors.upstream(502, `LockerHub would not cancel this application: ${msg.slice(0, 200)}`);
+  }
+
   return db.withTx(async (tx) => {
     await tx.query(
       `INSERT INTO locker_tenant_overrides
@@ -150,8 +177,9 @@ export async function removeLockerApplication(
     await writeAudit(tx, {
       actorId: actor.id, action: 'locker.application.remove',
       entityType: 'locker_applications', entityId: applicationId.trim(),
-      after: { reason: reason.trim(), note: 'Hidden from NCD only — LockerHub still holds this application' },
+      after: { reason: reason.trim(), cancelled_on_lockerhub: true, locker_released: released,
+               note: 'Cancelled on LockerHub via A23, and hidden here so no stale roster read resurfaces it' },
     });
-    return { application_id: applicationId.trim(), hidden: true };
+    return { application_id: applicationId.trim(), cancelled: true, locker_released: released };
   });
 }

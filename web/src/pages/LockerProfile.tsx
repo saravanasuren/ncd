@@ -158,6 +158,7 @@ export function LockerProfilePage() {
           {data.fee_waivers.filter((w: any) => String(w.leg).toLowerCase() !== 'deposit').map((w: any) => (
             <div key={w.id} className="flex flex-wrap items-center gap-x-3 py-1.5 border-b border-border last:border-0 text-sm">
               <span className="text-xs text-text-muted">{w.leg}</span>
+              {w.category === 'premium' && <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">★ Premium</span>}
               <span className="mono">{w.waiver_pct != null ? `${w.waiver_pct}%` : w.waiver_amount != null ? formatINR(w.waiver_amount) : '—'}</span>
               <span className={`text-xs rounded px-1.5 py-0.5 ${w.status === 'Approved' ? 'bg-[color:var(--success-bg)] text-success' : w.status === 'Rejected' ? 'bg-[color:var(--danger-bg)] text-danger' : 'bg-[color:var(--warn-bg)] text-warn'}`}>{w.status}</span>
               {w.reason && <span className="text-xs text-text-muted">{w.reason}</span>}

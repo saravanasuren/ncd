@@ -182,7 +182,11 @@ export function LockerEnrollmentPage() {
   const refreshApp = async () => {
     if (!app?.application_id) return;
     const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}`));
-    if (r) setApp((a: any) => ({ ...a, ...r }));
+    // Never let a refresh REMOVE the allotment — LockerHub's GET for an
+    // esign_pending application does not echo the allotment block, so a plain
+    // merge would blank it and the whole allotment + e-Sign card would vanish
+    // mid-signing (owner 2026-08-22). Keep the allotment we already have.
+    if (r) setApp((a: any) => ({ ...a, ...r, allotment: r.allotment ?? a.allotment }));
   };
   /**
    * Discard an application entered by mistake (owner 2026-08-20). Super-Admin
@@ -376,6 +380,26 @@ export function LockerEnrollmentPage() {
     await refreshApp();
   };
 
+  /**
+   * Premium customer — make the rent complimentary (owner 2026-08-22). Zeroes the
+   * rent, recorded as its OWN category 'premium' (not a waiver), so the rent
+   * report keeps the two apart. One click, no checker, like the standard waiver.
+   */
+  const premiumCustomer = async () => {
+    if (!app?.application_id) return;
+    if (!await confirm({
+      title: 'Premium customer — make the rent free?',
+      body: 'The rent for this locker is made complimentary (₹0) and recorded as a PREMIUM customer — kept separate from a waiver in the reports. One click, no approval step.',
+      confirmLabel: 'Make rent free',
+    })) return;
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/premium-rent`, {}));
+    if (r) {
+      setNote(r.already ? 'This locker already has a rent waiver — nothing changed.' : 'Premium customer — the rent is now complimentary (₹0).');
+      await loadFeeWaivers();
+      await refreshApp();
+    }
+  };
+
   const requestWaiver = async (leg: 'rent' | 'deposit') => {
     if (!app?.application_id) return;
     const pct = await promptText({
@@ -493,6 +517,9 @@ export function LockerEnrollmentPage() {
   const createBlocker =
     phone.length < 10 ? 'Look the customer up by PAN or phone first — LockerHub needs their 10-digit phone.'
     : !name.trim() ? "Enter the customer's full name."
+    // Locker number is now MANDATORY (owner 2026-08-22) — the customer is told
+    // their box at the counter, so it is chosen up front, not at allotment.
+    : !lockerId ? 'Pick a locker number in step 1 — it is required.'
     : '';
 
   return (
@@ -540,12 +567,12 @@ export function LockerEnrollmentPage() {
           </select>
           {/* Locker number, chosen here rather than at allotment (owner
               2026-07-29): the customer is standing at the counter now, and
-              "which box do I get?" is part of choosing branch and size — not an
-              afterthought once the money has cleared. Optional: leave it blank
-              and LockerHub auto-picks at allotment, exactly as before. */}
+              "which box do I get?" is part of choosing branch and size.
+              MANDATORY (owner 2026-08-22) — no more blank/auto-pick. The list is
+              LockerHub's vacant-only roster, so only available numbers appear. */}
           {branchId && size && (
-            <select className={inp} value={lockerId} disabled={vacant.isLoading} onChange={(e) => setLockerId(e.target.value)}>
-              <option value="">{vacant.isLoading ? 'Loading lockers…' : 'Locker number… (optional)'}</option>
+            <select className={`${inp} ${!lockerId ? 'border-primary' : ''}`} value={lockerId} disabled={vacant.isLoading} onChange={(e) => setLockerId(e.target.value)}>
+              <option value="">{vacant.isLoading ? 'Loading lockers…' : 'Locker number… (required)'}</option>
               {(vacant.data?.lockers ?? []).map((l) => (
                 <option key={l.id} value={l.id}>{l.locker_number}</option>
               ))}
@@ -563,7 +590,7 @@ export function LockerEnrollmentPage() {
           // this fall through quietly: staff have told the customer a number.
           : lockerId && !vacant.isLoading ? <div className="text-xs text-danger mt-2">The locker you picked is no longer vacant — choose another.</div>
           : !vacant.isLoading && !(vacant.data?.lockers ?? []).length ? <div className="text-xs text-warn mt-2">No vacant {size} lockers listed at this branch.</div>
-          : <div className="text-xs text-text-muted mt-2">Leave the locker number blank to let LockerHub pick one at allotment.</div>
+          : <div className="text-xs text-text-muted mt-2">Choose the locker number — it is required before you can create the application.</div>
         )}
         {chosen && (
           chosen.rent_payable != null ? (
@@ -614,16 +641,14 @@ export function LockerEnrollmentPage() {
                 <span className={`text-xs rounded px-1.5 py-0.5 ${cust.found ? 'bg-[color:var(--success-bg)] text-success' : 'bg-bg text-text-muted'}`}>{cust.found ? 'Known to LockerHub' : 'New to LockerHub — will be created'}</span>
                 {!cust.found
                   ? <button className={btnGhost} disabled={!name.trim() || busy} onClick={saveCustomer}>Save customer</button>
-                  // Known to them, but their profile is EMPTY: they only write
-                  // it on create and never backfill, so anyone enrolled before
-                  // that fix sits there as a bare name and phone. This is the
-                  // only way to fill it, and it was unreachable while the
-                  // button was hidden for known customers.
+                  // Known to LockerHub but the profile is bare (they write it on
+                  // create and never backfill). No manual "send to LockerHub"
+                  // button any more (owner 2026-08-22): the full profile —
+                  // address and all — is sent AUTOMATICALLY with the applicant
+                  // block when the application is created below, so it fills
+                  // itself with no extra click.
                   : !String(cust.profile?.address_line1 ?? cust.profile?.city ?? '').trim() && (
-                      <>
-                        <button className={btnGhost} disabled={!name.trim() || busy} onClick={saveCustomer}>Send their details to LockerHub</button>
-                        <span className="text-xs text-text-muted">LockerHub holds no address for them.</span>
-                      </>
+                      <span className="text-xs text-text-muted">Their details are sent to LockerHub automatically when you create the application.</span>
                     )}
               </div>
             </div>
@@ -719,6 +744,7 @@ export function LockerEnrollmentPage() {
                   {(() => {
                     const w = feeWaivers.find((x) => x.leg === leg);
                     if (!w) return null;
+                    const isPremium = w.category === 'premium';
                     const amount = w.waiver_pct != null ? `${w.waiver_pct}%` : money(w.waiver_amount);
                     if (w.status === 'PendingApproval') return (
                       <span className="text-xs rounded px-1.5 py-0.5 bg-bg text-text-muted" title={w.reason}>
@@ -727,7 +753,7 @@ export function LockerEnrollmentPage() {
                     );
                     return w.lockerhub_applied_at ? (
                       <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success" title={w.reason}>
-                        {amount} waived
+                        {isPremium ? '★ Premium — rent free' : `${amount} waived`}
                       </span>
                     ) : (
                       <span className="text-xs">
@@ -766,10 +792,20 @@ export function LockerEnrollmentPage() {
                     return (
                       <>
                         <button className={btnGhost} disabled={busy} onClick={() => { setChqLeg(leg); setChq((c) => ({ ...c, amount: String(st?.amount ?? '') })); }}>Record cheque…</button>
-                        {/* Cash and transfer have nothing to clear, so they go
-                            straight to LockerHub (§A18). */}
-                        <button className={btnGhost} disabled={busy} onClick={() => settleOffline(leg, 'cash')}>Cash…</button>
+                        {/* Cash removed (owner 2026-08-22); transfer has nothing
+                            to clear, so it goes straight to LockerHub (§A18). */}
                         <button className={btnGhost} disabled={busy} onClick={() => settleOffline(leg, 'transfer')}>Transfer…</button>
+                        {/* Premium customer — one click makes the rent free,
+                            recorded as its own category (not a waiver). Mutually
+                            exclusive with the waiver buttons: all three vanish
+                            once a rent waiver exists. */}
+                        {can('lockers:waive') && leg === 'rent' && !feeWaivers.some((w) => w.leg === 'rent') && (
+                          <button className="text-xs border border-primary text-primary rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40"
+                            disabled={busy} onClick={premiumCustomer}
+                            title="Makes the rent complimentary (₹0) and marks this a premium customer">
+                            Premium customer
+                          </button>
+                        )}
                         {/* The standard rent waiver (owner 2026-08-20) — one
                             click, no checker, so the customer pays the rent
                             inclusive of GST. Rent only: there is nothing
@@ -818,7 +854,12 @@ export function LockerEnrollmentPage() {
           card on 'approved' alone made the button unreachable the moment they
           shipped that — the application never reaches 'approved' until AFTER
           allocation. Their §A8 still documents the old lifecycle. */}
-      {app && (app.status === 'approved' || app.status === 'pending_allocation' || app.allotment
+      {app && (app.status === 'approved' || app.status === 'pending_allocation'
+               // `esign_pending` is post-allotment (allotted, awaiting the
+               // agreement signature) — the card MUST stay up so the e-Sign is
+               // reachable; leaving it out made a Refresh hide the e-Sign
+               // (owner 2026-08-22).
+               || app.status === 'esign_pending' || app.allotment
                // Unpaid, but a senior may override (§A20) — the one case the
                // panel has to appear BEFORE the obligations clear.
                || (!app.allotment && app.obligations_settled === false && can('lockers:allot-override'))) && (

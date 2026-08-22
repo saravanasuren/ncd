@@ -52,6 +52,9 @@ const shape = (r: Record<string, unknown>) => ({
   waiver_amount: r.waiver_amount == null ? null : Number(r.waiver_amount),
   reason: r.reason,
   status: r.status,
+  // 'waiver' (standard/discretionary) | 'premium' (complimentary rent). Lets the
+  // UI and the rent report keep a premium customer distinct from a waiver.
+  category: (r.category as string) ?? 'waiver',
   customer_id: r.customer_id == null ? null : Number(r.customer_id),
   applicant_name: r.applicant_name ?? null,
   /** Set once LockerHub has it. Approved + NULL = decided but not in force. */
@@ -228,6 +231,40 @@ export async function autoWaiveRent(
   if (!row) return { id: null, already: true as const };
   const r = await applyToLockerHub(db, { id: actor.id, fullName: actor.fullName, email: actor.email, role: actor.role }, row);
   return { id: Number(row.id), waiver_amount: b.baseWaiver, payable: b.payable, ...r };
+}
+
+/**
+ * Make the rent COMPLIMENTARY for a premium customer (owner 2026-08-22). Zeroes
+ * the rent on LockerHub via a 100% A21 waiver — their only zero mechanism — but
+ * records it as category 'premium', NOT a waiver, so the rent report keeps the
+ * two apart. One-click policy like the standard rent waiver: approved on
+ * creation, no maker-checker. Only ever ONE rent waiver at a time (the UI hides
+ * the other rent buttons once one exists), so it never stacks or conflicts.
+ */
+export async function premiumWaiveRent(db: Db, actor: AuthUser, lockerhubApplicationId: string) {
+  const appId = String(lockerhubApplicationId ?? '').trim();
+  if (!appId) throw errors.badRequest('lockerhub_application_id is required');
+  const REASON = 'Premium customer — rent made complimentary (owner policy)';
+  const row = await db.withTx(async (tx) => {
+    const open = (await tx.query(
+      `SELECT 1 FROM locker_fee_waivers
+        WHERE lockerhub_application_id = $1 AND leg = 'rent' AND status IN ('PendingApproval','Approved')`,
+      [appId])).rowCount;
+    if (open) return null; // a rent waiver already exists — never stack two
+    const { rows } = await tx.query<Record<string, unknown>>(
+      `INSERT INTO locker_fee_waivers
+         (lockerhub_application_id, leg, waiver_pct, reason, category, created_by_user_id, status, approved_by_user_id)
+       VALUES ($1,'rent',100,$2,'premium',$3,'Approved',$3) RETURNING *`,
+      [appId, REASON, actor.id]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'locker.fee_waiver.premium', entityType: 'locker_fee_waivers', entityId: Number(rows[0]!.id),
+      after: { application: appId, leg: 'rent', waiver_pct: 100, category: 'premium', reason: REASON },
+    });
+    return rows[0]!;
+  });
+  if (!row) return { id: null, already: true as const };
+  const r = await applyToLockerHub(db, { id: actor.id, fullName: actor.fullName, email: actor.email, role: actor.role }, row);
+  return { id: Number(row.id), category: 'premium' as const, ...r };
 }
 
 registerOnFinalApprove('locker_fee_waiver', async (tx, req) => {

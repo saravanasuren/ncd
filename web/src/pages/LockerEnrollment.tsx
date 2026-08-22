@@ -182,7 +182,11 @@ export function LockerEnrollmentPage() {
   const refreshApp = async () => {
     if (!app?.application_id) return;
     const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}`));
-    if (r) setApp((a: any) => ({ ...a, ...r }));
+    // Never let a refresh REMOVE the allotment — LockerHub's GET for an
+    // esign_pending application does not echo the allotment block, so a plain
+    // merge would blank it and the whole allotment + e-Sign card would vanish
+    // mid-signing (owner 2026-08-22). Keep the allotment we already have.
+    if (r) setApp((a: any) => ({ ...a, ...r, allotment: r.allotment ?? a.allotment }));
   };
   /**
    * Discard an application entered by mistake (owner 2026-08-20). Super-Admin
@@ -493,6 +497,9 @@ export function LockerEnrollmentPage() {
   const createBlocker =
     phone.length < 10 ? 'Look the customer up by PAN or phone first — LockerHub needs their 10-digit phone.'
     : !name.trim() ? "Enter the customer's full name."
+    // Locker number is now MANDATORY (owner 2026-08-22) — the customer is told
+    // their box at the counter, so it is chosen up front, not at allotment.
+    : !lockerId ? 'Pick a locker number in step 1 — it is required.'
     : '';
 
   return (
@@ -540,12 +547,12 @@ export function LockerEnrollmentPage() {
           </select>
           {/* Locker number, chosen here rather than at allotment (owner
               2026-07-29): the customer is standing at the counter now, and
-              "which box do I get?" is part of choosing branch and size — not an
-              afterthought once the money has cleared. Optional: leave it blank
-              and LockerHub auto-picks at allotment, exactly as before. */}
+              "which box do I get?" is part of choosing branch and size.
+              MANDATORY (owner 2026-08-22) — no more blank/auto-pick. The list is
+              LockerHub's vacant-only roster, so only available numbers appear. */}
           {branchId && size && (
-            <select className={inp} value={lockerId} disabled={vacant.isLoading} onChange={(e) => setLockerId(e.target.value)}>
-              <option value="">{vacant.isLoading ? 'Loading lockers…' : 'Locker number… (optional)'}</option>
+            <select className={`${inp} ${!lockerId ? 'border-primary' : ''}`} value={lockerId} disabled={vacant.isLoading} onChange={(e) => setLockerId(e.target.value)}>
+              <option value="">{vacant.isLoading ? 'Loading lockers…' : 'Locker number… (required)'}</option>
               {(vacant.data?.lockers ?? []).map((l) => (
                 <option key={l.id} value={l.id}>{l.locker_number}</option>
               ))}
@@ -563,7 +570,7 @@ export function LockerEnrollmentPage() {
           // this fall through quietly: staff have told the customer a number.
           : lockerId && !vacant.isLoading ? <div className="text-xs text-danger mt-2">The locker you picked is no longer vacant — choose another.</div>
           : !vacant.isLoading && !(vacant.data?.lockers ?? []).length ? <div className="text-xs text-warn mt-2">No vacant {size} lockers listed at this branch.</div>
-          : <div className="text-xs text-text-muted mt-2">Leave the locker number blank to let LockerHub pick one at allotment.</div>
+          : <div className="text-xs text-text-muted mt-2">Choose the locker number — it is required before you can create the application.</div>
         )}
         {chosen && (
           chosen.rent_payable != null ? (
@@ -614,16 +621,14 @@ export function LockerEnrollmentPage() {
                 <span className={`text-xs rounded px-1.5 py-0.5 ${cust.found ? 'bg-[color:var(--success-bg)] text-success' : 'bg-bg text-text-muted'}`}>{cust.found ? 'Known to LockerHub' : 'New to LockerHub — will be created'}</span>
                 {!cust.found
                   ? <button className={btnGhost} disabled={!name.trim() || busy} onClick={saveCustomer}>Save customer</button>
-                  // Known to them, but their profile is EMPTY: they only write
-                  // it on create and never backfill, so anyone enrolled before
-                  // that fix sits there as a bare name and phone. This is the
-                  // only way to fill it, and it was unreachable while the
-                  // button was hidden for known customers.
+                  // Known to LockerHub but the profile is bare (they write it on
+                  // create and never backfill). No manual "send to LockerHub"
+                  // button any more (owner 2026-08-22): the full profile —
+                  // address and all — is sent AUTOMATICALLY with the applicant
+                  // block when the application is created below, so it fills
+                  // itself with no extra click.
                   : !String(cust.profile?.address_line1 ?? cust.profile?.city ?? '').trim() && (
-                      <>
-                        <button className={btnGhost} disabled={!name.trim() || busy} onClick={saveCustomer}>Send their details to LockerHub</button>
-                        <span className="text-xs text-text-muted">LockerHub holds no address for them.</span>
-                      </>
+                      <span className="text-xs text-text-muted">Their details are sent to LockerHub automatically when you create the application.</span>
                     )}
               </div>
             </div>
@@ -818,7 +823,12 @@ export function LockerEnrollmentPage() {
           card on 'approved' alone made the button unreachable the moment they
           shipped that — the application never reaches 'approved' until AFTER
           allocation. Their §A8 still documents the old lifecycle. */}
-      {app && (app.status === 'approved' || app.status === 'pending_allocation' || app.allotment
+      {app && (app.status === 'approved' || app.status === 'pending_allocation'
+               // `esign_pending` is post-allotment (allotted, awaiting the
+               // agreement signature) — the card MUST stay up so the e-Sign is
+               // reachable; leaving it out made a Refresh hide the e-Sign
+               // (owner 2026-08-22).
+               || app.status === 'esign_pending' || app.allotment
                // Unpaid, but a senior may override (§A20) — the one case the
                // panel has to appear BEFORE the obligations clear.
                || (!app.allotment && app.obligations_settled === false && can('lockers:allot-override'))) && (

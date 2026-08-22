@@ -125,6 +125,19 @@ lockersRouter.get('/customers/:phone', asyncHandler(async (req, res) =>
 lockersRouter.get('/applications/:id', asyncHandler(async (req, res) =>
   res.json(await lh.getLockerApplication(String(req.params.id)))));
 
+// Rent report — every NCD locker as paid / waived / premium (owner 2026-08-22).
+lockersRouter.get('/rent-report', asyncHandler(async (_req, res) => {
+  const { lockerRentReport } = await import('./report.js');
+  res.json(await lockerRentReport(getDb()));
+}));
+lockersRouter.get('/rent-report.xlsx', asyncHandler(async (_req, res) => {
+  const { lockerRentReport, lockerRentReportXlsx } = await import('./report.js');
+  const buf = await lockerRentReportXlsx(await lockerRentReport(getDb()));
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="locker-rent-report.xlsx"');
+  res.send(buf);
+}));
+
 // ── Writes (staff injected from the session) ──────────────────────────────
 // Pass `customer_id` and the full profile is assembled HERE from our own book
 // — address, DOB, the lot. LockerHub writes the profile on locker-application

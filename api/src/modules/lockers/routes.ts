@@ -559,6 +559,14 @@ lockersRouter.post('/applications/:id/apply-rent-waiver', requirePermission('loc
     res.json(await autoWaiveRent(getDb(), req.user!, String(req.params.id), b.gst_pct, b.annual_rent));
   }));
 
+// Premium customer — rent made complimentary (owner 2026-08-22). One click, no
+// checker; recorded as category 'premium', distinct from a waiver.
+lockersRouter.post('/applications/:id/premium-rent', requirePermission('lockers:waive'),
+  asyncHandler(async (req, res) => {
+    const { premiumWaiveRent } = await import('./feeWaivers.js');
+    res.json(await premiumWaiveRent(getDb(), req.user!, String(req.params.id)));
+  }));
+
 // Re-send an approved waiver LockerHub refused. Idempotent on their side.
 lockersRouter.post('/fee-waivers/:id/retry', requirePermission('lockers:waive'),
   asyncHandler(async (req, res) => {

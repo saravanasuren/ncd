@@ -380,6 +380,26 @@ export function LockerEnrollmentPage() {
     await refreshApp();
   };
 
+  /**
+   * Premium customer — make the rent complimentary (owner 2026-08-22). Zeroes the
+   * rent, recorded as its OWN category 'premium' (not a waiver), so the rent
+   * report keeps the two apart. One click, no checker, like the standard waiver.
+   */
+  const premiumCustomer = async () => {
+    if (!app?.application_id) return;
+    if (!await confirm({
+      title: 'Premium customer — make the rent free?',
+      body: 'The rent for this locker is made complimentary (₹0) and recorded as a PREMIUM customer — kept separate from a waiver in the reports. One click, no approval step.',
+      confirmLabel: 'Make rent free',
+    })) return;
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/premium-rent`, {}));
+    if (r) {
+      setNote(r.already ? 'This locker already has a rent waiver — nothing changed.' : 'Premium customer — the rent is now complimentary (₹0).');
+      await loadFeeWaivers();
+      await refreshApp();
+    }
+  };
+
   const requestWaiver = async (leg: 'rent' | 'deposit') => {
     if (!app?.application_id) return;
     const pct = await promptText({
@@ -724,6 +744,7 @@ export function LockerEnrollmentPage() {
                   {(() => {
                     const w = feeWaivers.find((x) => x.leg === leg);
                     if (!w) return null;
+                    const isPremium = w.category === 'premium';
                     const amount = w.waiver_pct != null ? `${w.waiver_pct}%` : money(w.waiver_amount);
                     if (w.status === 'PendingApproval') return (
                       <span className="text-xs rounded px-1.5 py-0.5 bg-bg text-text-muted" title={w.reason}>
@@ -732,7 +753,7 @@ export function LockerEnrollmentPage() {
                     );
                     return w.lockerhub_applied_at ? (
                       <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success" title={w.reason}>
-                        {amount} waived
+                        {isPremium ? '★ Premium — rent free' : `${amount} waived`}
                       </span>
                     ) : (
                       <span className="text-xs">
@@ -771,10 +792,20 @@ export function LockerEnrollmentPage() {
                     return (
                       <>
                         <button className={btnGhost} disabled={busy} onClick={() => { setChqLeg(leg); setChq((c) => ({ ...c, amount: String(st?.amount ?? '') })); }}>Record cheque…</button>
-                        {/* Cash and transfer have nothing to clear, so they go
-                            straight to LockerHub (§A18). */}
-                        <button className={btnGhost} disabled={busy} onClick={() => settleOffline(leg, 'cash')}>Cash…</button>
+                        {/* Cash removed (owner 2026-08-22); transfer has nothing
+                            to clear, so it goes straight to LockerHub (§A18). */}
                         <button className={btnGhost} disabled={busy} onClick={() => settleOffline(leg, 'transfer')}>Transfer…</button>
+                        {/* Premium customer — one click makes the rent free,
+                            recorded as its own category (not a waiver). Mutually
+                            exclusive with the waiver buttons: all three vanish
+                            once a rent waiver exists. */}
+                        {can('lockers:waive') && leg === 'rent' && !feeWaivers.some((w) => w.leg === 'rent') && (
+                          <button className="text-xs border border-primary text-primary rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40"
+                            disabled={busy} onClick={premiumCustomer}
+                            title="Makes the rent complimentary (₹0) and marks this a premium customer">
+                            Premium customer
+                          </button>
+                        )}
                         {/* The standard rent waiver (owner 2026-08-20) — one
                             click, no checker, so the customer pays the rent
                             inclusive of GST. Rent only: there is nothing

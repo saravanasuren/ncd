@@ -34,7 +34,7 @@ export async function lockerProfile(db: Db, lockerApplicationId: string) {
        FROM locker_cheques WHERE lockerhub_application_id = $1 ORDER BY (status = 'Pending') DESC, id DESC`, [appId])).rows;
 
   const feeWaivers = (await db.query<Record<string, unknown>>(
-    `SELECT id, leg, waiver_pct, waiver_amount, reason, status, applicant_name,
+    `SELECT id, leg, waiver_pct, waiver_amount, reason, status, applicant_name, category,
             lockerhub_applied_at, lockerhub_error, created_at
        FROM locker_fee_waivers WHERE lockerhub_application_id = $1 ORDER BY id DESC`, [appId])).rows;
 
@@ -87,7 +87,7 @@ export async function lockerProfile(db: Db, lockerApplicationId: string) {
       lockerhub_settled_at: q.lockerhub_settled_at ?? null, lockerhub_error: q.lockerhub_error ?? null,
     })),
     fee_waivers: feeWaivers.map((w) => ({
-      id: Number(w.id), leg: w.leg,
+      id: Number(w.id), leg: w.leg, category: (w.category as string) ?? 'waiver',
       waiver_pct: w.waiver_pct == null ? null : Number(w.waiver_pct),
       waiver_amount: w.waiver_amount == null ? null : Number(w.waiver_amount),
       reason: w.reason, status: w.status,

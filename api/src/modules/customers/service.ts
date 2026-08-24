@@ -167,6 +167,45 @@ export async function listCustomers(db: Db, actor: AuthUser, filters: CustomerFi
   return { rows, total, truncated: total > rows.length };
 }
 
+// ── Draft customers: a half-finished enrolment, persisted server-side ───────
+// (owner 2026-08-22). One live draft per user. A user keeps their own; a
+// super-admin can see everyone's in-progress enrolments.
+export async function saveMyDraft(db: Db, actor: AuthUser, input: { draft?: unknown; display_name?: string | null; display_phone?: string | null }) {
+  await db.query(
+    `INSERT INTO customer_drafts (owner_user_id, draft, display_name, display_phone)
+     VALUES ($1,$2::jsonb,$3,$4)
+     ON CONFLICT (owner_user_id) DO UPDATE
+       SET draft = EXCLUDED.draft, display_name = EXCLUDED.display_name, display_phone = EXCLUDED.display_phone, updated_at = now()`,
+    [actor.id, JSON.stringify(input.draft ?? {}), input.display_name ?? null, input.display_phone ?? null]);
+  return { ok: true };
+}
+export async function getMyDraft(db: Db, actor: AuthUser) {
+  const r = (await db.query<Record<string, unknown>>(
+    'SELECT draft, updated_at FROM customer_drafts WHERE owner_user_id = $1', [actor.id])).rows[0];
+  return r ? { draft: r.draft, updated_at: r.updated_at } : null;
+}
+export async function discardMyDraft(db: Db, actor: AuthUser) {
+  await db.query('DELETE FROM customer_drafts WHERE owner_user_id = $1', [actor.id]);
+  return { ok: true };
+}
+export async function listDrafts(db: Db, actor: AuthUser) {
+  // A user sees only their own; a super-admin sees every user's draft.
+  const all = actor.role === 'super_admin';
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT d.owner_user_id, d.display_name, d.display_phone, d.updated_at, u.full_name AS owner_name
+       FROM customer_drafts d JOIN users u ON u.id = d.owner_user_id
+      ${all ? '' : 'WHERE d.owner_user_id = $1'}
+      ORDER BY d.updated_at DESC`, all ? [] : [actor.id]);
+  return {
+    all,
+    rows: rows.map((r) => ({
+      owner_user_id: Number(r.owner_user_id), owner_name: (r.owner_name as string) ?? null,
+      display_name: (r.display_name as string) ?? null, display_phone: (r.display_phone as string) ?? null,
+      updated_at: r.updated_at, mine: Number(r.owner_user_id) === actor.id,
+    })),
+  };
+}
+
 async function assertVisible(db: Db, actor: AuthUser, customerId: number): Promise<void> {
   const scope = scopeFor(actor);
   const sc = scopeWhere(scope, SCOPE_COLS, 1);

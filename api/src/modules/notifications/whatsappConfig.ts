@@ -5,7 +5,7 @@
  * {{n}} variable values, optional document header, and test-phone redirect the
  * WappCloud provider needs — see packages/shared/src/whatsapp.ts for the registry.
  */
-import { WHATSAPP_TYPES, whatsappSettingKey, defaultWhatsappConfig, WHATSAPP_TEST_PHONE_KEY, type WhatsappTypeConfig } from '@new-wealth/shared';
+import { WHATSAPP_TYPES, whatsappSettingKey, defaultWhatsappConfig, type WhatsappTypeConfig } from '@new-wealth/shared';
 import { config } from '../../config.js';
 
 const TYPE_BY_KEY = new Map(WHATSAPP_TYPES.map((d) => [d.type, d]));
@@ -24,7 +24,6 @@ export interface ResolvedWhatsapp {
   name: string;
   variables: Record<string, string>;
   document?: { url: string; filename: string };
-  testPhone: string | null;
 }
 
 /** null when the queue template is not a known WhatsApp type (caller falls back). */
@@ -45,8 +44,7 @@ export function resolveWhatsapp(
   const variables: Record<string, string> = {};
   order.forEach((field, i) => { if (known.has(field)) variables[String(i + 1)] = String(payload[field] ?? ''); });
 
-  const testPhone = (String(settings[WHATSAPP_TEST_PHONE_KEY] ?? '') || config.WHATSAPP_TEST_PHONE || '').trim() || null;
-  const res: ResolvedWhatsapp = { enabled: cfg.enabled !== false, name, variables, testPhone };
+  const res: ResolvedWhatsapp = { enabled: cfg.enabled !== false, name, variables };
   if (def.hasDocument && payload.documentUrl) {
     res.document = { url: String(payload.documentUrl), filename: String(payload.documentName ?? 'Document.pdf') };
   }

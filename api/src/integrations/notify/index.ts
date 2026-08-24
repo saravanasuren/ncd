@@ -47,7 +47,9 @@ export interface SendMeta {
     name: string;
     variables: Record<string, string>;
     document?: { url: string; filename: string };
-    testPhone?: string | null;
+    /** A "send test" goes to the number the operator typed — so it must ignore
+     *  the env test-phone redirect that protects normal customer sends. */
+    ignoreTestRedirect?: boolean;
   };
 }
 

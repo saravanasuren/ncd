@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { resolveWhatsapp } from '../src/modules/notifications/whatsappConfig.js';
-import { whatsappSettingKey, WHATSAPP_TEST_PHONE_KEY } from '@new-wealth/shared';
+import { whatsappSettingKey } from '@new-wealth/shared';
 
 describe('resolveWhatsapp', () => {
   it('uses the registry defaults when nothing is stored', () => {
@@ -31,11 +31,6 @@ describe('resolveWhatsapp', () => {
   it('attaches the PDF document header for the acknowledgement', () => {
     const r = resolveWhatsapp({}, 'acknowledgment', { name: 'X', documentUrl: 'https://x/y.pdf', documentName: 'Ack.pdf' })!;
     expect(r.document).toEqual({ url: 'https://x/y.pdf', filename: 'Ack.pdf' });
-  });
-
-  it('takes the test-phone redirect from Settings', () => {
-    const r = resolveWhatsapp({ [WHATSAPP_TEST_PHONE_KEY]: '9999999999' }, 'portal_otp', { otp: '123' })!;
-    expect(r.testPhone).toBe('9999999999');
   });
 
   it('drops a mapped field that is not valid for the type, rather than sending junk', () => {

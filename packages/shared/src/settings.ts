@@ -5,7 +5,7 @@
  * place these values live at runtime — NO hardcoded business values in code.
  */
 
-import { WHATSAPP_TYPES, whatsappSettingKey, defaultWhatsappConfig, WHATSAPP_TEST_PHONE_KEY } from './whatsapp.js';
+import { WHATSAPP_TYPES, whatsappSettingKey, defaultWhatsappConfig } from './whatsapp.js';
 
 export type SettingType = 'number' | 'string' | 'boolean' | 'rate' | 'enum' | 'list' | 'json' | 'date';
 export type EditableBy = 'admin' | 'workflow' | 'super_admin';
@@ -428,15 +428,6 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     default: defaultWhatsappConfig(def),
     editableBy: 'admin',
   })),
-  {
-    key: WHATSAPP_TEST_PHONE_KEY,
-    group: 'WhatsApp',
-    label: 'Test phone (redirect ALL WhatsApp)',
-    description: 'While set, EVERY WhatsApp message is redirected to this number instead of the real customer — for safe testing. MUST be blank in production.',
-    type: 'string',
-    default: '',
-    editableBy: 'admin',
-  },
 ];
 
 export function settingDefaults(): Record<string, unknown> {

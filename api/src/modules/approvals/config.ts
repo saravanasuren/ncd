@@ -158,6 +158,11 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Locker Cheque Clearance',
     levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
   },
+  locker_offline_payment: {
+    type: 'locker_offline_payment',
+    label: 'Locker Rent Payment',
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
+  },
   // Customer crossed the ₹30L outstanding threshold → becomes TDS-applicable and
   // TDS on already-paid interest is recovered once. Tax control → Admin/CXO.
   tds_threshold: {

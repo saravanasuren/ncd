@@ -68,8 +68,6 @@ export function LockerEnrollmentPage() {
   // Backing the deposit with one of the customer's existing NCDs.
   // Cheque register (NCD-side only — never settles the locker on LockerHub).
   const [cheques, setCheques] = useState<any[]>([]);
-  const [chqLeg, setChqLeg] = useState<'rent' | 'deposit' | null>(null);
-  const [chq, setChq] = useState({ cheque_no: '', bank_name: '', amount: '', received_on: new Date().toISOString().slice(0, 10) });
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
 
@@ -235,27 +233,6 @@ export function LockerEnrollmentPage() {
     const r = await run(api.get<any>(`/api/lockers/cheques?application_id=${encodeURIComponent(app.application_id)}`));
     if (r) setCheques(r.rows ?? []);
   };
-  const saveCheque = async () => {
-    if (!chqLeg || !app?.application_id) return;
-    const r = await run(api.post<any>('/api/lockers/cheques', {
-      lockerhub_application_id: String(app.application_id),
-      customer_id: ncdCust?.id ?? undefined,
-      // Carried for display when there's no NCD customer_id to join against —
-      // `name`/`phone` are already resolved on screen (LockerHub match, or typed).
-      applicant_name: name.trim() || undefined,
-      applicant_phone: phone || undefined,
-      leg: chqLeg,
-      amount: Number(chq.amount),
-      cheque_no: chq.cheque_no.trim(),
-      bank_name: chq.bank_name.trim() || undefined,
-      received_on: chq.received_on,
-    }));
-    if (r) {
-      setChqLeg(null);
-      setChq({ cheque_no: '', bank_name: '', amount: '', received_on: new Date().toISOString().slice(0, 10) });
-      await loadCheques();
-    }
-  };
   /** Push a cleared-but-unsettled cheque to LockerHub again. Safe to repeat.
    *  (Clearing a cheque now goes through Approvals — see the Approvals page.) */
   const retrySettlement = async (id: number) => {
@@ -265,45 +242,33 @@ export function LockerEnrollmentPage() {
       await loadCheques(); await refreshApp();
     }
   };
+  // ── Offline rent payment via approval (owner 2026-08-22) ──────────────────
+  // Pick a method (cheque/transfer) + reference; the rent is marked paid only
+  // when an Admin/CXO approves. Until then it reads "yet to be paid".
+  const [payForm, setPayForm] = useState<{ method: 'cheque' | 'transfer'; reference: string; amount: string } | null>(null);
+  const [offlinePayments, setOfflinePayments] = useState<any[]>([]);
+  const loadOfflinePayments = async () => {
+    if (!app?.application_id) return;
+    const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/offline-payments`));
+    if (r) setOfflinePayments(r.rows ?? []);
+  };
+  const recordPayment = async () => {
+    if (!payForm || !app?.application_id) return;
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/offline-payment`, {
+      leg: 'rent', method: payForm.method, reference: payForm.reference.trim(),
+      ...(Number(payForm.amount) > 0 ? { amount: Number(payForm.amount) } : {}),
+    }));
+    if (r) {
+      setNote(`Payment sent for approval${r.request_no ? ` (${r.request_no})` : ''} — the rent is marked paid once an Admin/CXO approves it.`);
+      setPayForm(null);
+      await loadOfflinePayments();
+    }
+  };
   /**
    * Allot with rent or deposit still outstanding (§A20). Senior-only, and it
    * hands over an asset against money not received — so it asks twice and
    * records who authorised it, not just who clicked.
    */
-  const allotOverride = async (chosen?: string) => {
-    const missing = [
-      app?.legs?.rent?.settled === false ? 'rent' : null,
-      app?.legs?.deposit?.settled === false ? 'deposit' : null,
-    ].filter(Boolean).join(' and ');
-    const ok = await confirm({
-      title: 'Hand over the locker with money outstanding?',
-      body: `The ${missing || 'outstanding'} leg is unpaid. The tenancy is created anyway and the customer gets the locker. LockerHub records this as an override, and so do we.`,
-      confirmLabel: 'Continue', danger: true,
-    });
-    if (!ok) return;
-    const reason = await promptText({
-      title: 'Why is it being handed over unpaid?',
-      label: 'Reason', minLength: 5, confirmLabel: 'Next', danger: true,
-    });
-    if (!reason) return;
-    const approvedBy = await promptText({
-      title: 'Who authorised this?',
-      body: 'The person taking responsibility for the decision — recorded in both systems.',
-      label: 'Authorised by', defaultValue: user?.fullName ?? '', minLength: 2,
-      confirmLabel: 'Allot anyway', danger: true,
-    });
-    if (!approvedBy) return;
-    setErr(''); setBusy(true);
-    try {
-      await api.post(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/allocate`, {
-        ...(chosen ? { locker_id: chosen } : {}), override: { reason, approved_by: approvedBy },
-      });
-      setPicking(false); setLockerId('');
-      await refreshApp();
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : 'Failed');
-    } finally { setBusy(false); }
-  };
   /**
    * Hand our KYC over for an application that reached LockerHub bare (§A17.1).
    * Only ever needed for ones created before the screen started sending the
@@ -439,28 +404,8 @@ export function LockerEnrollmentPage() {
     const r = await run(api.post<any>(`/api/lockers/fee-waivers/${id}/retry`, {}));
     if (r) { setErr(r.applied ? '' : (r.error ?? 'LockerHub still did not accept it.')); await loadFeeWaivers(); await refreshApp(); }
   };
-  /** Cash / transfer settle straight away — no instrument to clear first. */
-  const settleOffline = async (leg: 'rent' | 'deposit', method: 'cash' | 'transfer') => {
-    if (!app?.application_id) return;
-    const ok = await confirm({
-      title: `Record ${method} for the ${leg} leg?`,
-      body: `This tells LockerHub the money is in and settles the ${leg} leg. Only do it once the ${method === 'cash' ? 'cash is counted and in hand' : 'transfer has actually landed'}.`,
-      confirmLabel: `Record ${method}`,
-    });
-    if (!ok) return;
-    const reference = await promptText({
-      title: 'Reference', body: method === 'transfer' ? 'UTR or bank reference.' : 'Receipt number, if you have one.',
-      label: 'Reference (optional)', minLength: 0, confirmLabel: 'Settle',
-    });
-    if (reference === null) return;
-    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/settle-offline`, {
-      leg, method, ...(reference.trim() ? { reference: reference.trim() } : {}),
-      received_on: new Date().toISOString().slice(0, 10),
-    }));
-    if (r) await refreshApp();
-  };
   // Waivers belong to an application, so they follow it rather than the mount.
-  useEffect(() => { void loadFeeWaivers(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id]);
+  useEffect(() => { void loadFeeWaivers(); void loadOfflinePayments(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id]);
   // There is no agreement until there is a locker — §A19 is post-allotment.
   useEffect(() => { void loadEsign(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id, app?.allotment?.locker_number]);
   const chequeFor = (leg: string) => cheques.find((c) => c.leg === leg && c.status === 'Pending')
@@ -503,8 +448,14 @@ export function LockerEnrollmentPage() {
   const allocate = async (chosen?: string) => {
     setErr(''); setBusy(true);
     try {
-      await api.post(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/allocate`,
-        chosen ? { locker_id: chosen } : {});
+      // Rent still outstanding? Any enrolling staff may allot regardless (owner
+      // 2026-08-22) — send the §A20 override automatically, recorded against
+      // them. When the rent is settled, no override is sent (the normal path).
+      const outstanding = app?.obligations_settled === false;
+      await api.post(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/allocate`, {
+        ...(chosen ? { locker_id: chosen } : {}),
+        ...(outstanding ? { override: { reason: 'Rent yet to be paid — allotted per policy (owner 2026-08-22)', approved_by: user?.fullName ?? 'staff' } } : {}),
+      });
       setPicking(false); setLockerId('');
       await refreshApp();
     } catch (e) {
@@ -737,6 +688,19 @@ export function LockerEnrollmentPage() {
                   <button className={btnGhost} disabled={busy || settled} onClick={() => getPaymentLink(leg)}>
                     {settled ? `✓ ${leg} settled` : `${link ? 'New link' : 'Payment link'} · ${leg}${st?.amount ? ' · ' + money(st.amount) : ''}`}
                   </button>
+                  {/* Rent settlement status (owner 2026-08-22): an offline
+                      payment awaiting approval, or "yet to be paid". Once
+                      approved it settles on LockerHub and reads settled above. */}
+                  {leg === 'rent' && !settled && (() => {
+                    const p = offlinePayments.find((x) => x.leg === 'rent');
+                    if (p && p.status === 'PendingApproval') return <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn" title={p.reference}>{p.method} payment · awaiting Admin/CXO approval</span>;
+                    if (p && p.status === 'Approved' && !p.lockerhub_settled) return (
+                      <span className="text-xs"><span className="rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger">approved, not yet settled on LockerHub</span>
+                        <button className="ml-1 text-primary hover:underline" disabled={busy} onClick={async () => { await run(api.post(`/api/lockers/offline-payments/${p.id}/settle-retry`, {})); await loadOfflinePayments(); await refreshApp(); }}>Retry</button></span>
+                    );
+                    if (!feeWaivers.some((w) => w.leg === 'rent')) return <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">rent yet to be paid</span>;
+                    return null;
+                  })()}
                   {/* Rent-only waiver breakdown (LockerHub CR): legs.rent.amount IS the
                       payable; the original + waiver ride along for transparency. */}
                   {leg === 'rent' && !settled && st?.original_amount != null && (
@@ -803,10 +767,13 @@ export function LockerEnrollmentPage() {
                     );
                     return (
                       <>
-                        <button className={btnGhost} disabled={busy} onClick={() => { setChqLeg(leg); setChq((c) => ({ ...c, amount: String(st?.amount ?? '') })); }}>Record cheque…</button>
-                        {/* Cash removed (owner 2026-08-22); transfer has nothing
-                            to clear, so it goes straight to LockerHub (§A18). */}
-                        <button className={btnGhost} disabled={busy} onClick={() => settleOffline(leg, 'transfer')}>Transfer…</button>
+                        {/* Unified offline rent payment (owner 2026-08-22): pick
+                            a method + reference; the rent is marked paid only on
+                            Admin/CXO approval. Replaces the old immediate
+                            cheque/transfer buttons. Rent leg only. */}
+                        {leg === 'rent' && !offlinePayments.some((p) => p.leg === 'rent') && (
+                          <button className={btnGhost} disabled={busy} onClick={() => setPayForm({ method: 'transfer', reference: '', amount: String(st?.amount ?? '') })}>Record payment…</button>
+                        )}
                         {/* Premium customer — one click makes the rent free,
                             recorded as its own category (not a waiver). Mutually
                             exclusive with the waiver buttons: all three vanish
@@ -838,22 +805,26 @@ export function LockerEnrollmentPage() {
                 </div>
               );
             })}
-            {chqLeg && (
+            {payForm && (
               <div className="flex flex-wrap gap-2 items-end border-t border-border pt-3 mt-1">
-                <label className="text-xs text-text-muted">Cheque no<input className={`${inp} block mt-1 w-40`} value={chq.cheque_no} onChange={(e) => setChq({ ...chq, cheque_no: e.target.value })} autoFocus /></label>
-                <label className="text-xs text-text-muted">Bank<input className={`${inp} block mt-1 w-40`} value={chq.bank_name} onChange={(e) => setChq({ ...chq, bank_name: e.target.value })} /></label>
-                <label className="text-xs text-text-muted">Amount<input className={`${inp} block mt-1 w-32`} type="number" value={chq.amount} onChange={(e) => setChq({ ...chq, amount: e.target.value })} /></label>
-                <label className="text-xs text-text-muted">Received on<input className={`${inp} block mt-1`} type="date" value={chq.received_on} onChange={(e) => setChq({ ...chq, received_on: e.target.value })} /></label>
-                <button className={btn} disabled={busy || !chq.cheque_no.trim() || !(Number(chq.amount) > 0)} onClick={saveCheque}>Record {chqLeg} cheque</button>
-                <button className={btnGhost} onClick={() => setChqLeg(null)}>Cancel</button>
-                <p className="text-xs text-text-muted w-full m-0">Recorded in NCD for your books. The locker is <b>not</b> settled by this. Once the cheque clears, settle it in <b>LockerHub → Tenants</b> (mark the row Paid, method = cheque). <b>Do not open the payment link</b> for a cheque customer — it is a live payment page and would take a second real payment.</p>
+                <label className="text-xs text-text-muted">Method
+                  <select className={`${inp} block mt-1 w-32`} value={payForm.method} onChange={(e) => setPayForm({ ...payForm, method: e.target.value as 'cheque' | 'transfer' })}>
+                    <option value="transfer">Transfer</option>
+                    <option value="cheque">Cheque</option>
+                  </select>
+                </label>
+                <label className="text-xs text-text-muted">Reference<input className={`${inp} block mt-1 w-56`} placeholder={payForm.method === 'cheque' ? 'Cheque number' : 'UTR / bank reference'} value={payForm.reference} onChange={(e) => setPayForm({ ...payForm, reference: e.target.value })} autoFocus /></label>
+                <label className="text-xs text-text-muted">Amount<input className={`${inp} block mt-1 w-32`} type="number" value={payForm.amount} onChange={(e) => setPayForm({ ...payForm, amount: e.target.value })} /></label>
+                <button className={btn} disabled={busy || payForm.reference.trim().length < 2} onClick={recordPayment}>Send for approval</button>
+                <button className={btnGhost} onClick={() => setPayForm(null)}>Cancel</button>
+                <p className="text-xs text-text-muted w-full m-0">The rent is marked <b>paid</b> only once an Admin/CXO approves this — then it settles on LockerHub. The locker can still be allotted below while it is pending.</p>
               </div>
             )}
           </div>
           <div className="flex items-center gap-2 mt-3">
-            <button className={btnGhost} disabled={busy} onClick={refreshApp}>Check payment status</button>
+            <button className={btnGhost} disabled={busy} onClick={() => { void refreshApp(); void loadOfflinePayments(); }}>Check payment status</button>
             <p className="text-xs text-text-muted m-0">
-              Send the link to the customer and settlement lands automatically. Money taken at the branch is recorded here instead: cash and transfer settle straight away, a cheque settles when you mark it cleared. Once both legs are settled the application waits for a staff member to allot the locker below.
+              Send the link to the customer and settlement lands automatically. Money taken at the branch is recorded via <b>Record payment</b> (cheque or transfer + reference) and the rent is marked paid once an Admin/CXO approves it. The locker can be allotted below regardless of the rent clearance.
             </p>
           </div>
         </div>
@@ -872,9 +843,10 @@ export function LockerEnrollmentPage() {
                // reachable; leaving it out made a Refresh hide the e-Sign
                // (owner 2026-08-22).
                || app.status === 'esign_pending' || app.allotment
-               // Unpaid, but a senior may override (§A20) — the one case the
-               // panel has to appear BEFORE the obligations clear.
-               || (!app.allotment && app.obligations_settled === false && can('lockers:allot-override'))) && (
+               // Unpaid — ANY enrolling staff can allot regardless of the rent
+               // clearance now (owner 2026-08-22), so the panel appears BEFORE
+               // the obligations clear for everyone, not just seniors.
+               || (!app.allotment && app.obligations_settled === false)) && (
         <div className={`${card} ${app.allotment ? 'border-success' : 'border-warn'}`}>
           <h2 className={h2}>{app.allotment ? '✓ Allotted' : 'Awaiting allotment'}</h2>
           {app.allotment ? (
@@ -917,38 +889,15 @@ export function LockerEnrollmentPage() {
                 })()}
               </div>
             </>
-          ) : app.obligations_settled === false ? (
-            /* Money still outstanding. The normal answer is to collect or waive
-               it — the override is the exception, so it reads as one. */
-            <div className="text-sm">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-warn">
-                  Not paid yet{[
-                    app.legs?.rent?.settled === false ? 'rent' : null,
-                    app.legs?.deposit?.settled === false ? 'deposit' : null,
-                  ].filter(Boolean).length ? ` — ${[
-                    app.legs?.rent?.settled === false ? 'rent' : null,
-                    app.legs?.deposit?.settled === false ? 'deposit' : null,
-                  ].filter(Boolean).join(' and ')} outstanding` : ''}.
-                </span>
-                <span className="text-xs text-text-muted">Collect it above, or waive it — that is the normal route.</span>
-              </div>
-              {can('lockers:allot-override') && (
-                <div className="mt-2 flex items-center gap-2 flex-wrap">
-                  <button className={btnGhost} disabled={busy}
-                    onClick={() => allotOverride(preferred?.id)}>
-                    Allot anyway{preferred ? ` (${preferred.locker_number})` : ''}…
-                  </button>
-                  <span className="text-xs text-text-muted">
-                    Hands the locker over with money outstanding. Recorded against whoever authorises it, here and on LockerHub.
-                  </span>
-                </div>
-              )}
-            </div>
           ) : canAllocate ? (
             <div className="text-sm">
               <div className="flex items-center gap-2 flex-wrap">
-                <span>Payments settled — allotment pending.</span>
+                {/* Rent may still be outstanding — any staff can allot regardless
+                    (owner 2026-08-22); allocate() sends the §A20 override for
+                    them. When settled, it's the normal path. */}
+                {app.obligations_settled === false
+                  ? <span className="text-warn">Rent yet to be paid — you can still allot now (the rent is collected and approved separately).</span>
+                  : <span>Payments settled — allotment pending.</span>}
                 {!picking && (<>
                   {/* The number was already chosen in step 1, so the primary
                       action here is to confirm it, not to ask again. It can

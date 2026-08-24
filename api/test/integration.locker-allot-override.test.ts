@@ -74,18 +74,20 @@ describe('the obligations gate still stands', () => {
 });
 
 describe('who may override', () => {
-  it('an NCD Manager cannot — they request waivers, they do not grant them', async () => {
+  // Owner 2026-08-22 opened this up — ANY enrolling staff can allot regardless
+  // of the rent clearance, so the senior-only gate is gone.
+  it('an NCD Manager can now — any enrolling staff may allot regardless', async () => {
     seen = [];
     const r = await (await as('ncd@demo.local')).post(`/api/lockers/applications/${APP}/allocate`, { override: OVERRIDE });
-    expect(r.status).toBe(403);
-    expect(allocCalls()).toHaveLength(0);        // nothing reached LockerHub
+    expect(r.status).toBe(200);
+    expect(allocCalls()[0]!.body.override).toMatchObject(OVERRIDE);
   });
 
-  it('branch staff cannot', async () => {
+  it('branch staff can now too', async () => {
     seen = [];
     const r = await (await as('staff@demo.local')).post(`/api/lockers/applications/${APP}/allocate`, { override: OVERRIDE });
-    expect(r.status).toBe(403);
-    expect(allocCalls()).toHaveLength(0);
+    expect(r.status).toBe(200);
+    expect(allocCalls()[0]!.body.override).toMatchObject(OVERRIDE);
   });
 
   it('an admin can, and it gets through the unpaid gate', async () => {
@@ -136,12 +138,12 @@ describe('it must be attributable', () => {
     expect(row.after_data.approved_by).toBe(OVERRIDE.approved_by);
   });
 
-  it('records nothing when the attempt was refused for permission', async () => {
+  it('records the override for any enroller now (owner 2026-08-22)', async () => {
     const before = (await ctx.db.query(
       "SELECT count(*)::int n FROM audit_log WHERE action = 'locker.allot.override'")).rows[0] as any;
     await (await as('staff@demo.local')).post(`/api/lockers/applications/${APP}/allocate`, { override: OVERRIDE });
     const after = (await ctx.db.query(
       "SELECT count(*)::int n FROM audit_log WHERE action = 'locker.allot.override'")).rows[0] as any;
-    expect(Number(after.n)).toBe(Number(before.n));
+    expect(Number(after.n)).toBe(Number(before.n) + 1);
   });
 });

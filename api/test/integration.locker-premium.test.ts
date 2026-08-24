@@ -34,28 +34,34 @@ afterAll(async () => { config.LOCKERHUB_API_URL = ''; await new Promise<void>((r
 
 const as = async (email: string, password = 'Demo_1234') => { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; };
 const manager = () => as('ncd@demo.local');
+const admin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
 const waiverCalls = () => seen.filter((s) => /\/waiver$/.test(s.path));
 
 describe('premium customer — complimentary rent', () => {
-  it('zeroes the rent immediately (no checker) and records it as premium', async () => {
+  it('goes to Admin/CXO for approval — nothing reaches LockerHub until approved', async () => {
     const appId = 'la_premium_1';
     seen = [];
     const r = await (await manager()).post(`/api/lockers/applications/${appId}/premium-rent`, {});
     expect(r.status).toBe(200);
     expect(r.json.category).toBe('premium');
-    expect(r.json.applied).toBe(true);
+    expect(r.json.status).toBe('PendingApproval');
+    expect(waiverCalls()).toHaveLength(0);   // the control — nothing sent yet
 
-    // Applied straight to LockerHub as a 100% waiver — no approval round-trip.
-    const call = waiverCalls()[0]!;
-    expect(call.body).toMatchObject({ leg: 'rent', waiver_pct: 100 });
-
-    // Stored Approved-on-creation, in force, and tagged premium.
+    // Recorded PendingApproval, tagged premium, not yet in force.
     const row = (await ctx.db.query(
-      "SELECT category, status, waiver_pct, lockerhub_applied_at FROM locker_fee_waivers WHERE lockerhub_application_id = $1 AND leg = 'rent'", [appId])).rows[0] as any;
+      "SELECT id, category, status, waiver_pct, lockerhub_applied_at, approval_request_id FROM locker_fee_waivers WHERE lockerhub_application_id = $1 AND leg = 'rent'", [appId])).rows[0] as any;
     expect(row.category).toBe('premium');
-    expect(row.status).toBe('Approved');
-    expect(Number(row.waiver_pct)).toBe(100);
-    expect(row.lockerhub_applied_at).toBeTruthy();
+    expect(row.status).toBe('PendingApproval');
+    expect(row.lockerhub_applied_at).toBeNull();
+
+    // An Admin approves → the 100% waiver reaches LockerHub and it goes in force.
+    const reqId = (await ctx.db.query('SELECT id FROM approval_requests WHERE id = $1', [row.approval_request_id])).rows[0] as any;
+    const ok = await (await admin()).post(`/api/approvals/${reqId.id}/approve`);
+    expect(ok.status).toBe(200);
+    expect(waiverCalls()[0]!.body).toMatchObject({ leg: 'rent', waiver_pct: 100 });
+    const after = (await ctx.db.query("SELECT status, lockerhub_applied_at FROM locker_fee_waivers WHERE id = $1", [row.id])).rows[0] as any;
+    expect(after.status).toBe('Approved');
+    expect(after.lockerhub_applied_at).toBeTruthy();
   });
 
   it('the enrolment screen sees the premium category on the waiver list', async () => {

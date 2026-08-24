@@ -1225,7 +1225,9 @@ function NewInvestment({ customerId, custNoTds, isSenior }: { customerId: number
           server refuses the combination outright. */}
       {!isSob && clubOptions.length > 0 && (
         <label className="flex items-center gap-2 text-xs text-text-muted mt-3">
-          Club into an in-flight application:
+          {/* Includes Active investments whose interest hasn't been paid yet
+              (owner 2026-08-24) — the added tranche gets its own broken period. */}
+          Club into an existing investment:
           <select className={sel} value={clubWith} onChange={(e) => setClubWith(e.target.value)}>
             <option value="">— new application —</option>
             {clubOptions.map((a) => <option key={a.id} value={a.id}>{a.application_no} (₹{Number(a.total_amount).toLocaleString('en-IN')}, {a.status})</option>)}

@@ -24,6 +24,7 @@ export interface AuthorisedUserRow {
   status: string; consent_sign_url: string | null; consent_signed_at: string | null;
   consent_signed: boolean; created_at: string | null;
   lockerhub_synced: boolean; lockerhub_error: string | null;
+  has_consent_pdf: boolean;
 }
 
 const shape = (r: Record<string, unknown>): AuthorisedUserRow => ({
@@ -36,6 +37,9 @@ const shape = (r: Record<string, unknown>): AuthorisedUserRow => ({
   created_at: (r.created_at as string) ?? null,
   lockerhub_synced: r.lockerhub_synced_at != null,
   lockerhub_error: (r.lockerhub_error as string) ?? null,
+  // A downloadable signed copy exists once stored, OR is fetchable from Digio
+  // for a signed consent — the route falls back to Digio when the path is empty.
+  has_consent_pdf: r.consent_pdf_path != null || (r.status === 'active' && r.consent_digio_request_id != null),
 });
 
 /** Last 4 digits of an Aadhaar — the only form LockerHub accepts (Aadhaar Act). */
@@ -48,11 +52,53 @@ const aadhaarLast4 = (a: unknown): string | undefined => {
 export async function listAuthorisedUsers(db: Db, lockerhubApplicationId: string): Promise<AuthorisedUserRow[]> {
   const { rows } = await db.query<Record<string, unknown>>(
     `SELECT id, name, pan, aadhaar, phone, status, consent_sign_url, consent_signed_at, created_at,
-            lockerhub_synced_at, lockerhub_error
+            lockerhub_synced_at, lockerhub_error, consent_pdf_path, consent_digio_request_id
        FROM locker_authorised_users
       WHERE lockerhub_application_id = $1 AND status <> 'revoked'
       ORDER BY (status = 'active') DESC, id DESC`, [lockerhubApplicationId]);
   return rows.map(shape);
+}
+
+/**
+ * Re-check the holder's consent against Digio on demand (owner 2026-08-22) — the
+ * webhook may not have arrived, so pull the live status and, if it's signed,
+ * complete it (flips the user active + stores the signed PDF). Returns the
+ * refreshed row.
+ */
+export async function refreshConsent(db: Db, id: number): Promise<AuthorisedUserRow | null> {
+  const r = (await db.query<Record<string, unknown>>(
+    'SELECT consent_digio_request_id, status FROM locker_authorised_users WHERE id = $1', [id])).rows[0];
+  if (!r) return null;
+  if (r.status !== 'active' && r.consent_digio_request_id) {
+    const { fetchStatus, isSignedStatus } = await import('../../integrations/digio/index.js');
+    const st = await fetchStatus(String(r.consent_digio_request_id)).catch(() => null);
+    if (isSignedStatus(st)) {
+      const { completeSigning } = await import('../../integrations/digio/service.js');
+      await completeSigning(db, String(r.consent_digio_request_id), {});
+    }
+  }
+  const row = (await db.query<Record<string, unknown>>(
+    `SELECT id, name, pan, aadhaar, phone, status, consent_sign_url, consent_signed_at, created_at,
+            lockerhub_synced_at, lockerhub_error, consent_pdf_path, consent_digio_request_id
+       FROM locker_authorised_users WHERE id = $1`, [id])).rows[0];
+  return row ? shape(row) : null;
+}
+
+/** The signed consent PDF — the stored copy, or fetched from Digio if not saved. */
+export async function consentPdf(db: Db, id: number): Promise<Buffer | null> {
+  const r = (await db.query<Record<string, unknown>>(
+    'SELECT consent_pdf_path, consent_digio_request_id FROM locker_authorised_users WHERE id = $1', [id])).rows[0];
+  if (!r) return null;
+  if (r.consent_pdf_path) {
+    const { readStored } = await import('../../lib/storage.js');
+    const buf = readStored(String(r.consent_pdf_path));
+    if (buf) return buf;
+  }
+  if (r.consent_digio_request_id) {
+    const { downloadSignedDocument } = await import('../../integrations/digio/index.js');
+    return downloadSignedDocument(String(r.consent_digio_request_id));
+  }
+  return null;
 }
 
 /**

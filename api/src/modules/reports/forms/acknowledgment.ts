@@ -26,6 +26,14 @@ export async function acknowledgmentPdf(db: Db, applicationId: number): Promise<
        FROM applications a JOIN customers c ON c.id = a.customer_id LEFT JOIN series s ON s.id = a.series_id
       WHERE a.id = $1`, [applicationId])).rows[0];
   if (!a) throw errors.notFound('Application not found');
+
+  // Every credit that makes up this investment. A clubbed investment has more
+  // than one — the ack must show ALL tranches, not just the application-level
+  // receipt, so the customer sees each part they paid (owner 2026-08-24).
+  const tranches = (await db.query<Record<string, unknown>>(
+    `SELECT amount, date_money_received, collection_method, collection_reference
+       FROM application_lines WHERE application_id = $1 ORDER BY id`, [applicationId])).rows;
+
   const co = companyHeader(await getCompanyProfile(db));
   // Uploaded from Masters → Company profile (migration 051). Read the bytes here,
   // before the synchronous PDF render below. Null when none is on file — the
@@ -65,9 +73,22 @@ export async function acknowledgmentPdf(db: Db, applicationId: number): Promise<
     y += 4;
 
     y = section(doc, y, '3. PAYMENT RECEIPT');
-    y = kv(doc, y, 'Date Money Received', fmtDate(a.date_money_received));
-    y = kv(doc, y, 'Payment Method', (a.collection_method as string) ?? '—');
-    if (a.collection_reference) y = kv(doc, y, 'UTR / Reference', a.collection_reference);
+    if (tranches.length > 1) {
+      // Clubbed investment — one line per tranche: amount · date · method · UTR.
+      tranches.forEach((t, i) => {
+        const parts = [
+          fmtINR(t.amount),
+          fmtDate(t.date_money_received),
+          (t.collection_method as string) || '—',
+          t.collection_reference ? `UTR ${t.collection_reference}` : null,
+        ].filter(Boolean).join('   ·   ');
+        y = kv(doc, y, `Tranche ${i + 1}`, parts);
+      });
+    } else {
+      y = kv(doc, y, 'Date Money Received', fmtDate(a.date_money_received));
+      y = kv(doc, y, 'Payment Method', (a.collection_method as string) ?? '—');
+      if (a.collection_reference) y = kv(doc, y, 'UTR / Reference', a.collection_reference);
+    }
     y += 8;
 
     doc.font('Helvetica-Oblique').fontSize(9).fillColor(COLORS.MUTED).text(

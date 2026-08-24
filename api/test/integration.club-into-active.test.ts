@@ -1,8 +1,11 @@
 /**
  * Club a new credit into an ALREADY-ACTIVE investment (owner 2026-08-24). Allowed
- * only while no interest has been paid. The schedule is rebuilt so each tranche
- * gets its OWN broken first period from its money-received date, the tranches
- * combine from the next batch, and they mature together (deemed date + tenure).
+ * only while no interest has been paid — and, because it adds money to a LIVE
+ * investment and rebuilds its schedule, it goes through an Admin/CXO approval:
+ * the live investment is UNCHANGED until a checker approves, and only then is the
+ * schedule rebuilt so each tranche gets its OWN broken first period from its
+ * money-received date, the tranches combine from the next batch, and they mature
+ * together (deemed date + tenure).
  *
  * Interest logic is LOCKED — this pins that the added tranche's broken period is
  * SMALLER (fewer days) than the earlier tranche's, and the maturity is shared.
@@ -23,7 +26,7 @@ const as = async (email: string, password = 'Demo_1234') => { const c = new Clie
 const admin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
 
 describe('clubbing into an active investment', () => {
-  it('rebuilds the schedule with a per-tranche broken period and a shared maturity', async () => {
+  it('holds for Admin/CXO approval, then rebuilds with a per-tranche broken period and shared maturity', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Club Active', phone: '9701230001' });
     // First tranche: money in on the 10th → activate so a schedule exists.
@@ -39,14 +42,27 @@ describe('clubbing into an active investment', () => {
     const cands = await a.get(`/api/applications/clubbing-candidates?customer_id=${cust.json.id}&series_id=${seriesId}`);
     expect(cands.json.rows.some((r: any) => Number(r.id) === appId)).toBe(true);
 
-    // Second tranche, SAME amount, later date (the 20th) → clubbed into the active one.
+    // Second tranche, SAME amount, later date (the 20th) → clubbed into the active
+    // one. This must NOT change the live investment yet — it raises an approval.
     const club = await a.post('/api/applications', {
       ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
       amount: 100000, date_money_received: '2026-07-20', club_with_application_id: appId,
     });
     expect(club.status).toBe(201);
     expect(club.json.clubbed).toBe(true);
+    expect(club.json.pending_approval).toBe(true);
     expect(club.json.id).toBe(appId);
+    const reqId = Number(club.json.approval_request.id);
+
+    // The live investment is UNCHANGED until a checker approves: still one line,
+    // still ₹1,00,000, schedule untouched.
+    expect((await ctx.db.query('SELECT count(*)::int n FROM application_lines WHERE application_id=$1', [appId])).rows[0]!.n).toBe(1);
+    expect(Number((await ctx.db.query('SELECT total_amount FROM applications WHERE id=$1', [appId])).rows[0]!.total_amount)).toBe(100000);
+
+    // The maker (admin) cannot approve their own club request.
+    expect((await a.post(`/api/approvals/${reqId}/approve`)).status).toBe(403);
+    // An Admin/CXO checker approves → the tranche is applied.
+    expect((await (await as('cxo@demo.local')).post(`/api/approvals/${reqId}/approve`)).status).toBe(200);
 
     // Two tranches, total doubled.
     const lines = (await ctx.db.query('SELECT id, date_money_received FROM application_lines WHERE application_id=$1 ORDER BY id', [appId])).rows as any[];

@@ -488,6 +488,32 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
   const id = req.entity_id ? Number(req.entity_id) : null;
   const meta = req.metadata ?? {};
 
+  // Clubbing a new credit into a LIVE investment: the entity is the existing
+  // investment, but what the checker is approving is the NEW tranche — so lead
+  // with the added amount, not the (unchanged-until-approval) current total.
+  if (req.request_type === 'club_into_active' && id) {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT a.application_no, a.total_amount, c.full_name AS customer, c.customer_code, s.code AS series_code
+         FROM applications a JOIN customers c ON c.id = a.customer_id
+         LEFT JOIN series s ON s.id = a.series_id WHERE a.id = $1`, [id])).rows[0];
+    const t = (meta.tranche ?? {}) as Record<string, unknown>;
+    const added = money(meta.added_amount ?? t.amount);
+    if (r) return {
+      subject: `${r.customer} · ${r.application_no}`,
+      amount: added,
+      facts: clean([
+        fact('Customer', `${r.customer} (${r.customer_code})`),
+        fact('Clubbing into', `${r.application_no}${r.series_code ? ` · ${r.series_code}` : ''}`),
+        fact('New credit', added),
+        fact('Money received', dateOnly(t.date_money_received)),
+        fact('Method', t.collection_method),
+        fact('Reference', t.collection_reference),
+        fact('Current investment', money(r.total_amount)),
+        fact('After clubbing', added != null ? Number(r.total_amount) + added : null),
+      ]),
+    };
+  }
+
   if (id && req.entity_type === 'applications') {
     const r = (await db.query<Record<string, unknown>>(
       `SELECT a.application_no, a.total_amount, a.status, a.date_money_received, a.referred_by_text,

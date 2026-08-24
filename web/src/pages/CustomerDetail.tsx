@@ -1042,6 +1042,7 @@ function NewInvestment({ customerId, custNoTds, isSenior }: { customerId: number
   const [creditedBank, setCreditedBank] = useState('');   // which Dhanam account received it (optional)
   const [receipt, setReceipt] = useState<File | null>(null);
   const [err, setErr] = useState('');
+  const [notice, setNotice] = useState('');
   // /api/banks, NOT /api/products/banks — productsRouter is mounted at `/api`,
   // so its /banks route is /api/banks. The old path 404'd, react-query left
   // `data` undefined, and `?? []` turned a broken request into an empty
@@ -1090,7 +1091,16 @@ function NewInvestment({ customerId, custNoTds, isSenior }: { customerId: number
         ...(tdsPrompt && applyTds === 'yes' ? { mark_customer_tds: true } : {}),
       });
     },
-    onSuccess: (r) => nav(`/app/applications/${r.id}`),
+    onSuccess: (r) => {
+      // Clubbing into a LIVE investment doesn't change it yet — it's queued for
+      // Admin/CXO approval. Tell the maker here (they can't see the Approvals
+      // page) rather than navigating to an unchanged investment.
+      if ((r as { pending_approval?: boolean }).pending_approval) {
+        setNotice('This credit has been sent for Admin/CXO approval. The investment stays unchanged until a checker approves it.');
+        return;
+      }
+      nav(`/app/applications/${r.id}`);
+    },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
   // Mandatory before Create is allowed — mirrors the API schema.
@@ -1235,6 +1245,7 @@ function NewInvestment({ customerId, custNoTds, isSenior }: { customerId: number
         </label>
       )}
       {err && <div className="text-xs text-danger mt-2">{err}</div>}
+      {notice && <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5 mt-2">{notice}</div>}
     </div>
   );
 }

@@ -163,6 +163,15 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Locker Rent Payment',
     levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
   },
+  // Clubbing a new credit into an ALREADY-LIVE investment is real money added to
+  // an approved NCD — it inflates the principal and rebuilds the live interest
+  // schedule. Same Admin/CXO gate as other post-go-live money events (owner
+  // 2026-08-24). The maker records the tranche; the checker takes it live.
+  club_into_active: {
+    type: 'club_into_active',
+    label: 'Club into Active Investment',
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
+  },
   // Customer crossed the ₹30L outstanding threshold → becomes TDS-applicable and
   // TDS on already-paid interest is recovered once. Tax control → Admin/CXO.
   tds_threshold: {

@@ -548,6 +548,22 @@ lockersRouter.post('/authorised-users/:id/revoke', asyncHandler(async (req, res)
   const { revokeAuthorisedUser } = await import('./authorisedUsers.js');
   res.json(await revokeAuthorisedUser(getDb(), req.user!, Number(req.params.id), reason));
 }));
+// Re-check the holder's consent against Digio on demand (owner 2026-08-22).
+lockersRouter.post('/authorised-users/:id/consent/refresh', asyncHandler(async (req, res) => {
+  const { refreshConsent } = await import('./authorisedUsers.js');
+  const row = await refreshConsent(getDb(), Number(req.params.id));
+  if (!row) throw errors.notFound('Authorised user not found');
+  res.json(row);
+}));
+// Download the signed consent letter.
+lockersRouter.get('/authorised-users/:id/consent.pdf', asyncHandler(async (req, res) => {
+  const { consentPdf } = await import('./authorisedUsers.js');
+  const buf = await consentPdf(getDb(), Number(req.params.id));
+  if (!buf) throw errors.notFound('No signed consent yet');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="locker-consent-${String(req.params.id)}.pdf"`);
+  res.end(buf);
+}));
 // Re-push an active authorised user LockerHub didn't accept. Idempotent on ncd_ref.
 lockersRouter.post('/authorised-users/:id/sync-retry', asyncHandler(async (req, res) => {
   const { syncAuthorisedUserToLockerHub } = await import('./authorisedUsers.js');

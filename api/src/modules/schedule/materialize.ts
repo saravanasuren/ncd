@@ -81,6 +81,14 @@ export async function materializeForApplication(tx: Db, applicationId: number): 
       ? (await tx.query<{ rate_pct: number }>('SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [line.scheme_id])).rows[0] ?? DEFAULT_TDS_RULE
       : DEFAULT_TDS_RULE;
 
+    // Each tranche's interest runs from ITS OWN money-received date (owner
+    // 2026-08-24) — so a clubbed second credit gets a broken first period from
+    // when its money actually arrived, not the first credit's date. For a normal
+    // single-line investment line.date_money_received equals the app's
+    // interest_start_date, so this is a no-op. Maturity stays keyed to the shared
+    // seriesDeemedDate + tenure, so the tranches still mature together.
+    const lineStart = toISODate(line.date_money_received as string | null) ?? interestStartDate;
+
     const rows = generateSchedule(
       {
         amount: Number(line.amount),
@@ -89,7 +97,7 @@ export async function materializeForApplication(tx: Db, applicationId: number): 
         tenure_months: Number(line.tenure_months),
         day_count_convention: line.day_count_convention as DayCountConvention,
       },
-      { interestStartDate, seriesDeemedDate, holidays, payoutDay }
+      { interestStartDate: lineStart, seriesDeemedDate, holidays, payoutDay }
     );
 
     // Stamp line maturity (last Redemption row date).

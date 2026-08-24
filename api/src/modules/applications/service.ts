@@ -201,7 +201,19 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
           'SELECT id, status, series_id, total_amount FROM applications WHERE id = $1', [input.club_with_application_id])).rows[0];
         if (!target) throw errors.notFound('Clubbing target not found');
         if (Number(target.series_id) !== input.series_id) throw errors.badRequest('Can only club within the same series');
-        if (!['PendingFundVerification', 'PendingEsign', 'PendingApproval'].includes(target.status)) throw errors.conflict('Target application is no longer in-flight');
+        // In-flight targets club freely. An ACTIVE target may be clubbed into
+        // too (owner 2026-08-24) — but ONLY while no interest has been paid: once
+        // a payout has run, the schedule can't be safely rebuilt. On an Active
+        // target we rematerialise the schedule afterwards so the added tranche
+        // gets its own broken period from its money-received date.
+        const inFlight = ['PendingFundVerification', 'PendingEsign', 'PendingApproval'].includes(target.status);
+        const activeUnpaid = target.status === 'Active'
+          && !(await tx.query("SELECT 1 FROM disbursement_schedule WHERE application_id = $1 AND status = 'Paid' LIMIT 1", [Number(target.id)])).rowCount;
+        if (!inFlight && !activeUnpaid) {
+          throw errors.conflict(target.status === 'Active'
+            ? 'This investment has already had an interest payout — it can no longer be clubbed into.'
+            : 'Target application is no longer in-flight');
+        }
         await addLine(tx, Number(target.id), scheme, input.amount, {
           date_money_received: input.date_money_received,
           collection_method: input.collection_method,
@@ -209,8 +221,18 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
           receipt: { ...storedReceipt, filename: input.receipt.filename },
         });
         await tx.query('UPDATE applications SET total_amount = total_amount + $1, updated_at = now() WHERE id = $2', [input.amount, Number(target.id)]);
+        // Active target: rebuild the (all-unpaid) schedule so the schedule and
+        // incentives reflect all tranches — each tranche's own broken period from
+        // its money-received date, one shared maturity (deemed date + tenure).
+        if (activeUnpaid) {
+          await tx.query("DELETE FROM disbursement_schedule WHERE application_id = $1 AND status <> 'Paid'", [Number(target.id)]);
+          const { materializeForApplication } = await import('../schedule/materialize.js');
+          await materializeForApplication(tx, Number(target.id));
+          const { accrueForApplication } = await import('../incentives/accrual.js');
+          await accrueForApplication(tx, Number(target.id));
+        }
         await writeAudit(tx, { actorId: actor.id, action: 'application.club', entityType: 'applications', entityId: Number(target.id),
-          after: { added: input.amount, reference: input.collection_reference, received: input.date_money_received } });
+          after: { added: input.amount, reference: input.collection_reference, received: input.date_money_received, into_active: !!activeUnpaid } });
         // The receipt stays on the LINE. It used to overwrite the application's,
         // which meant clubbing a second credit made the FIRST credit's receipt
         // unreachable — the paper trail for money already banked, gone.
@@ -321,9 +343,21 @@ export async function attributeReferrer(db: Db, actor: AuthUser, appId: number, 
 
 /** Clubbing candidates — in-flight apps in a series for a customer. */
 export async function clubbingCandidates(db: Db, customerId: number, seriesId: number) {
+  // In-flight applications, PLUS Active ones whose interest has NOT yet been
+  // paid (owner 2026-08-24): a new credit can club into an already-live
+  // investment as long as no payout has run, so the first batch carries a broken
+  // period per tranche and the rest combine. The series must still take money
+  // (not Pending) — enforced at create too.
   return (await db.query(
-    `SELECT id, application_no, total_amount, status FROM applications
-     WHERE customer_id = $1 AND series_id = $2 AND status IN ('PendingFundVerification','PendingEsign','PendingApproval') ORDER BY id`,
+    `SELECT a.id, a.application_no, a.total_amount, a.status
+       FROM applications a JOIN series s ON s.id = a.series_id
+      WHERE a.customer_id = $1 AND a.series_id = $2 AND s.status <> 'PendingApproval'
+        AND (
+          a.status IN ('PendingFundVerification','PendingEsign','PendingApproval')
+          OR (a.status = 'Active'
+              AND NOT EXISTS (SELECT 1 FROM disbursement_schedule d WHERE d.application_id = a.id AND d.status = 'Paid'))
+        )
+      ORDER BY a.id`,
     [customerId, seriesId])).rows;
 }
 

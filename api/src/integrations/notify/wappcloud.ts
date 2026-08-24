@@ -88,9 +88,17 @@ export function wappcloudProvider(): NotifyProvider {
   return {
     async send(to, _subject, _body, meta) {
       if (!wappcloudConfigured()) return { ok: false, error: 'wappcloud: not configured' };
-      const tpl = templateFor(meta);
-      if (!tpl) return { ok: false, error: `wappcloud: no approved WhatsApp template for '${meta?.template ?? 'unknown'}'` };
-      const override = config.WHATSAPP_TEST_PHONE ? formatPhone(config.WHATSAPP_TEST_PHONE) : null;
+      // Settings-resolved config (name + {{n}} + document) wins; otherwise fall
+      // back to the built-in template map (keeps unit tests + any un-resolved path
+      // working). A blank name means no approved template is configured.
+      const tpl: WappTemplate | null = meta?.wa
+        ? { name: meta.wa.name, variables: meta.wa.variables, ...(meta.wa.document ? { document: meta.wa.document } : {}) }
+        : templateFor(meta);
+      if (!tpl || !tpl.name) return { ok: false, error: `wappcloud: no approved WhatsApp template for '${meta?.template ?? 'unknown'}'` };
+      // Test-phone redirect: the Settings value (threaded via meta) wins over the
+      // env one, so a tester can flip it without a redeploy.
+      const testPhone = meta?.wa?.testPhone ?? config.WHATSAPP_TEST_PHONE;
+      const override = testPhone ? formatPhone(testPhone) : null;
       const contact = override || formatPhone(to);
       if (!contact) return { ok: false, error: `wappcloud: no valid phone (got "${to}")` };
       if (override) console.warn(`[wappcloud] TEST MODE — message for ${to} redirected to ${override}`);

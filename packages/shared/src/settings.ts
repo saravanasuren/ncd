@@ -5,6 +5,8 @@
  * place these values live at runtime — NO hardcoded business values in code.
  */
 
+import { WHATSAPP_TYPES, whatsappSettingKey, defaultWhatsappConfig, WHATSAPP_TEST_PHONE_KEY } from './whatsapp.js';
+
 export type SettingType = 'number' | 'string' | 'boolean' | 'rate' | 'enum' | 'list' | 'json' | 'date';
 export type EditableBy = 'admin' | 'workflow' | 'super_admin';
 
@@ -409,6 +411,30 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     description: 'Upper bound on list page size.',
     type: 'number',
     default: 500,
+    editableBy: 'admin',
+  },
+  // ── WhatsApp templates (owner 2026-08-25) ──
+  // One JSON config per message type: which approved WappCloud template it uses,
+  // whether it is on, and which data field feeds each {{n}}. Rendered by a
+  // dedicated editor on the Settings page, not the generic control. The message
+  // WORDING is not here — that is approved inside WappCloud/Meta and referenced
+  // by name. See packages/shared/src/whatsapp.ts.
+  ...WHATSAPP_TYPES.map((def): SettingDef => ({
+    key: whatsappSettingKey(def.type),
+    group: 'WhatsApp',
+    label: `${def.label} template`,
+    description: `Approved WappCloud template, on/off and {{n}} variable mapping for the ${def.label.toLowerCase()} message.`,
+    type: 'json',
+    default: defaultWhatsappConfig(def),
+    editableBy: 'admin',
+  })),
+  {
+    key: WHATSAPP_TEST_PHONE_KEY,
+    group: 'WhatsApp',
+    label: 'Test phone (redirect ALL WhatsApp)',
+    description: 'While set, EVERY WhatsApp message is redirected to this number instead of the real customer — for safe testing. MUST be blank in production.',
+    type: 'string',
+    default: '',
     editableBy: 'admin',
   },
 ];

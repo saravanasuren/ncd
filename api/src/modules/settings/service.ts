@@ -1,6 +1,6 @@
 /** Settings registry service (docs/07). */
 import type { Db } from '../../db/types.js';
-import { SETTINGS_CATALOG, type SettingDef } from '@new-wealth/shared';
+import { SETTINGS_CATALOG, type SettingDef, WHATSAPP_TYPES, WHATSAPP_SETTING_PREFIX, whatsappSettingKey, validateWhatsappConfig } from '@new-wealth/shared';
 import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
@@ -82,6 +82,14 @@ export async function updateSetting(
   if (!def) throw errors.notFound('Unknown setting');
   if (!canEdit(def, actor.role)) throw errors.forbidden('Not allowed to edit this setting');
   validateValue(def, value);
+  // A WhatsApp per-type config is a structured JSON blob — validate its shape and
+  // that every mapped {{n}} field is a real field for that message type, so a bad
+  // save can't quietly break a customer message at send time.
+  if (key.startsWith(WHATSAPP_SETTING_PREFIX)) {
+    const wtype = WHATSAPP_TYPES.find((d) => whatsappSettingKey(d.type) === key);
+    const err = wtype ? validateWhatsappConfig(wtype, value) : 'Unknown WhatsApp template';
+    if (err) throw errors.badRequest(err);
+  }
 
   const result = await db.withTx(async (tx) => {
     const prev = await tx.query<{ value: unknown }>('SELECT value FROM app_settings WHERE key = $1', [key]);

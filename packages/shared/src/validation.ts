@@ -17,7 +17,12 @@ export const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
  * junk value in the data ("1233344", "45678gda") contains a digit, which is
  * still refused.
  */
-export const ALPHA_SPACE_RE = /^[A-Za-z][A-Za-z .'()-]*$/;
+// Occupation, city, district, state. Starts with a letter and carries no
+// digits — that is what stops garbage — but the punctuation real answers use is
+// allowed: "Agriculture & Allied", "Business/Trade", "Salem, Tamil Nadu",
+// "Self-Employed", "Salem Dt.". Owner 2026-08-24: enrolment was 400ing on these
+// with only "Invalid request" to show for it.
+export const ALPHA_SPACE_RE = /^[A-Za-z][A-Za-z .,'()&/-]*$/;
 
 export const isAlphaSpace = (v: string): boolean => ALPHA_SPACE_RE.test(v);
 

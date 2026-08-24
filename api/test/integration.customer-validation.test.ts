@@ -22,7 +22,11 @@ describe('POST /api/customers — identity-field validation', () => {
       { full_name: 'Cust 123' },
       { full_name: 'Cust@Home' },
       { full_name: 'Valid Name', father_name: 'Father 1' },
-      { full_name: 'Valid Name', occupation: 'IT/Software' },
+      // Owner 2026-08-24: a slash is a legitimate occupation ("IT/Software",
+      // "Business/Trade") and used to 400 enrolment with only "Invalid request"
+      // on screen. Digits remain the real junk signal, so that is what this
+      // case now checks.
+      { full_name: 'Valid Name', occupation: 'Grade 2 Officer' },
       { full_name: 'Valid Name', city: 'Chennai 600001' },
       { full_name: 'Valid Name', district: 'Erode!' },
       // Digits are what actually mark a place value as junk — every bad one in

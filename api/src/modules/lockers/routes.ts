@@ -27,6 +27,8 @@ import './feeWaivers.js';
 // hooks at boot, so approving a cheque clearance works on a fresh restart even
 // before any cheque route is hit.
 import './cheques.js';
+// Registers the locker_offline_payment approval handlers at boot (owner 2026-08-22).
+import './offlinePayments.js';
 import { linkTenant, removeTenant, restoreTenant, removeLockerApplication } from './tenantOverrides.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
@@ -255,12 +257,11 @@ lockersRouter.post('/applications/:id/payment-link', asyncHandler(async (req, re
 // succeeded — reporting that as an error would send staff hunting a failure
 // that never happened.
 //
-// §A20 override (2026-07-29): allot with money still outstanding. LockerHub
-// asked us to gate it to a senior role, so it needs `lockers:allot-override` —
-// super_admin / admin / CXO, the people who APPROVE a waiver. There is no
-// second approver on this action, so it cannot sit with the role that merely
-// REQUESTS one. Both fields are mandatory and it is audited on our side too:
-// their log records it, but "who at NCD decided this" belongs in our book.
+// §A20 override (2026-07-29): allot with money still outstanding. Owner
+// 2026-08-22 opened this up — ANY enrolling staff can allot regardless of the
+// rent clearance (the rent is being collected/approved separately), so the
+// senior-only gate is gone. It is still recorded on our side (who allotted, and
+// why unpaid) and sent to LockerHub as an override.
 lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) => {
   const b = z.object({
     locker_id: z.string().optional(),
@@ -271,9 +272,6 @@ lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) =
     }).optional(),
   }).parse(req.body ?? {});
 
-  if (b.override && !req.user!.permissions.includes('lockers:allot-override')) {
-    throw errors.forbidden('Allotting with money outstanding needs an Admin or CXO.');
-  }
   if (b.override) {
     await writeAudit(getDb(), {
       actorId: req.user!.id, action: 'locker.allot.override', entityType: 'locker_applications',
@@ -740,6 +738,30 @@ lockersRouter.post('/applications/:id/settle-offline', requirePermission('applic
       reason: z.string().trim().max(500).optional(),
     }).parse(req.body ?? {});
     res.json(await lh.settleOffline(staffOf(req), String(req.params.id), b));
+  }));
+
+// ── Offline rent payment via approval (owner 2026-08-22) ───────────────────
+// Record a payment (cheque or transfer) + reference; the rent is marked PAID
+// only when an Admin/CXO approves it, at which point it settles on LockerHub.
+// Recording is enrolment-tier; the money decision is the approval.
+lockersRouter.get('/applications/:id/offline-payments', asyncHandler(async (req, res) => {
+  const { listOfflinePayments } = await import('./offlinePayments.js');
+  res.json({ rows: await listOfflinePayments(getDb(), String(req.params.id)) });
+}));
+lockersRouter.post('/applications/:id/offline-payment', asyncHandler(async (req, res) => {
+  const b = z.object({
+    leg: LEG.optional(),
+    method: z.enum(['cheque', 'transfer']),
+    reference: z.string().trim().min(2, 'Enter the payment reference').max(120),
+    amount: z.number().positive().optional(),
+  }).parse(req.body ?? {});
+  const { recordOfflinePayment } = await import('./offlinePayments.js');
+  res.status(201).json(await recordOfflinePayment(getDb(), req.user!, { lockerhub_application_id: String(req.params.id), ...b }));
+}));
+lockersRouter.post('/offline-payments/:id/settle-retry', requirePermission('applications:confirm-collection'),
+  asyncHandler(async (req, res) => {
+    const { retryOfflineSettlement } = await import('./offlinePayments.js');
+    res.json(await retryOfflineSettlement(getDb(), req.user!, Number(req.params.id)));
   }));
 
 lockersRouter.post('/cheques/:id/bounce', requirePermission('applications:confirm-collection'),

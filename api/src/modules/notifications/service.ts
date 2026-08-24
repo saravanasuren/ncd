@@ -10,9 +10,11 @@
  */
 import type { Db } from '../../db/types.js';
 import { renderTemplate } from './templates.js';
-import { providerFor } from '../../integrations/notify/index.js';
+import { providerFor, type SendMeta } from '../../integrations/notify/index.js';
 import { config } from '../../config.js';
 import { attachmentFor } from './attachments.js';
+import { getSettingsMap } from '../settings/service.js';
+import { resolveWhatsapp } from './whatsappConfig.js';
 
 export interface EnqueueInput {
   channel: 'email' | 'sms' | 'whatsapp';
@@ -67,6 +69,11 @@ export async function drainOnce(db: Db, limit = 25): Promise<{ sent: number; fai
   );
   let sent = 0, failed = 0, retrying = 0, stopped = false;
   const gap = Math.max(0, config.NOTIFY_SEND_GAP_MS);
+  // WhatsApp template config (names, {{n}} mapping, on/off, test-phone) is
+  // admin-editable in Settings — load it once for the whole cycle rather than
+  // per row. Lazy so a purely-email drain never touches app_settings.
+  let waSettings: Record<string, unknown> | null = null;
+  const whatsappSettings = async () => (waSettings ??= await getSettingsMap(db));
 
   for (const [i, r] of rows.entries()) {
     const id = Number(r.id);
@@ -80,8 +87,24 @@ export async function drainOnce(db: Db, limit = 25): Promise<{ sent: number; fai
       const attachment = String(r.channel) === 'email'
         ? await attachmentFor(db, String(r.template), payload)
         : null;
+      // WhatsApp: resolve the Settings-driven template + variables. A type turned
+      // OFF in Settings is not sent — it fails with a clear reason (final, so no
+      // retry) rather than reaching a customer. A known type with a resolved name
+      // is handed to the provider via meta.wa.
+      let wa: SendMeta['wa'] | undefined;
+      if (String(r.channel) === 'whatsapp') {
+        const resolved = resolveWhatsapp(await whatsappSettings(), String(r.template), payload);
+        if (resolved && !resolved.enabled) {
+          await db.query("UPDATE notifications_queue SET status='Failed', error=$1, attempts=$2 WHERE id=$3",
+            [`WhatsApp '${String(r.template)}' is turned off in Settings`, attempts, id]);
+          failed++;
+          if (gap && i < rows.length - 1) await sleep(gap);
+          continue;
+        }
+        if (resolved) wa = { name: resolved.name, variables: resolved.variables, document: resolved.document, testPhone: resolved.testPhone };
+      }
       const res = await providerFor(String(r.channel)).send(String(r.to_address), subject, body,
-        { template: String(r.template), payload, html, ...(attachment ? { attachment } : {}) });
+        { template: String(r.template), payload, html, ...(attachment ? { attachment } : {}), ...(wa ? { wa } : {}) });
 
       if (res.ok) {
         await db.query(

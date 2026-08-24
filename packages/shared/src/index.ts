@@ -3,6 +3,7 @@ export * from './permissions.js';
 export * from './statusMachine.js';
 export * from './money.js';
 export * from './settings.js';
+export * from './whatsapp.js';
 export * from './validation.js';
 export * from './customerFields.js';
 export * from './lockerRent.js';

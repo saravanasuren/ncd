@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { WHATSAPP_TYPES, WHATSAPP_SETTING_PREFIX, type WhatsappTypeConfig, type WhatsappTypeDef } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 
 interface SettingView {
@@ -38,9 +39,17 @@ export function SettingsPage() {
       {Object.entries(data!.groups).map(([group, items]) => (
         <section key={group} className="mb-6">
           <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">{group}</h2>
+          {group === 'WhatsApp' && (
+            <p className="text-xs text-text-muted mb-2 -mt-1">
+              The message <em>wording</em> is approved inside WappCloud — here you choose which approved template each
+              message uses, turn it on/off, and map each variable. A blank template name falls back to the built-in default.
+            </p>
+          )}
           <div className="bg-surface border border-border rounded-lg shadow-card divide-y divide-border">
             {items.map((s) => (
-              <SettingRow key={s.key} s={s} onSave={(value) => save.mutate({ key: s.key, value })} saving={save.isPending} />
+              s.type === 'json' && s.key.startsWith(WHATSAPP_SETTING_PREFIX)
+                ? <WhatsappTemplateRow key={s.key} s={s} onSave={(value) => save.mutate({ key: s.key, value })} saving={save.isPending} />
+                : <SettingRow key={s.key} s={s} onSave={(value) => save.mutate({ key: s.key, value })} saving={save.isPending} />
             ))}
           </div>
         </section>
@@ -114,6 +123,75 @@ function Editor({ s, val, setVal }: { s: SettingView; val: unknown; setVal: (v: 
     return <ListEditor val={(val as string[]) ?? []} setVal={setVal} />;
   }
   return <input className={`${cls} w-48`} value={String(val)} onChange={(e) => setVal(e.target.value)} />;
+}
+
+/**
+ * Editor for one WhatsApp message type: approved template name, on/off, and the
+ * {{n}} → data-field mapping. The available fields come from the shared registry
+ * keyed off the setting's type suffix (whatsapp.tpl.<type>).
+ */
+function WhatsappTemplateRow({ s, onSave, saving }: { s: SettingView; onSave: (v: unknown) => void; saving: boolean }) {
+  const type = s.key.slice(WHATSAPP_SETTING_PREFIX.length);
+  const def = WHATSAPP_TYPES.find((d: WhatsappTypeDef) => d.type === type);
+  const initial = s.value as WhatsappTypeConfig;
+  const [cfg, setCfg] = useState<WhatsappTypeConfig>(initial);
+  const dirty = JSON.stringify(cfg) !== JSON.stringify(s.value);
+  if (!def) return null;
+
+  const fieldLabel = (k: string) => def.fields.find((f) => f.key === k)?.label ?? k;
+  const setVar = (i: number, field: string) => setCfg({ ...cfg, variables: cfg.variables.map((v, j) => (j === i ? field : v)) });
+  const removeVar = (i: number) => setCfg({ ...cfg, variables: cfg.variables.filter((_, j) => j !== i) });
+  const addVar = () => setCfg({ ...cfg, variables: [...cfg.variables, def.fields[0]!.key] });
+
+  const cls = 'px-2 py-1 text-sm border border-border-strong rounded outline-none focus:border-primary';
+  return (
+    <div className="p-4">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">{def.label}</div>
+          <div className="mt-0.5 text-[11px] text-text-muted font-mono">{s.key}</div>
+        </div>
+        <label className="flex items-center gap-1.5 text-xs whitespace-nowrap">
+          <input type="checkbox" checked={cfg.enabled} onChange={(e) => setCfg({ ...cfg, enabled: e.target.checked })} />
+          {cfg.enabled ? 'On' : 'Off'}
+        </label>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-text-label w-28">Template name</span>
+        <input className={`${cls} w-56`} value={cfg.template_name} placeholder={def.defaultTemplateName || '(none)'}
+          onChange={(e) => setCfg({ ...cfg, template_name: e.target.value })} />
+        <span className="text-[11px] text-text-muted">must be an approved WappCloud template</span>
+      </div>
+
+      <div className="mt-3">
+        <div className="text-xs text-text-label mb-1.5">
+          Variables {def.hasDocument && <span className="text-text-muted">(the PDF is attached automatically)</span>}
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {cfg.variables.map((field, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <span className="text-xs font-mono text-text-muted w-10">{`{{${i + 1}}}`}</span>
+              <select className={cls} value={field} onChange={(e) => setVar(i, e.target.value)}>
+                {def.fields.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+              </select>
+              <button type="button" onClick={() => removeVar(i)} className="text-text-muted hover:text-danger text-xs" aria-label={`Remove {{${i + 1}}}`}>✕</button>
+            </div>
+          ))}
+          {cfg.variables.length === 0 && <span className="text-xs text-text-muted italic">No variables — this template takes only a name/header.</span>}
+          {cfg.variables.length < def.fields.length && (
+            <button type="button" onClick={addVar} className="text-xs text-primary hover:underline self-start mt-0.5">+ add variable</button>
+          )}
+        </div>
+        <div className="mt-1 text-[11px] text-text-muted">Available: {def.fields.map((f) => fieldLabel(f.key)).join(', ')}</div>
+      </div>
+
+      <div className="mt-3 flex justify-end">
+        <button disabled={!dirty || saving} onClick={() => onSave(cfg)}
+          className="text-xs bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-3 py-1.5">Save</button>
+      </div>
+    </div>
+  );
 }
 
 /** Add/remove-option editor for `list` settings (dropdown vocabularies). */

@@ -39,6 +39,16 @@ export interface SendMeta {
    *  no business sitting in a JSONB payload, and a retry should attach today's
    *  book rather than a stale copy. */
   attachment?: Attachment;
+  /** WhatsApp only: the template name, {{n}} variables, optional PDF header and
+   *  test-phone redirect already resolved from Settings by the drain loop. When
+   *  present the WappCloud provider uses it verbatim instead of its own hardcoded
+   *  template map — this is how the Settings-driven config reaches the send. */
+  wa?: {
+    name: string;
+    variables: Record<string, string>;
+    document?: { url: string; filename: string };
+    testPhone?: string | null;
+  };
 }
 
 export interface Attachment {

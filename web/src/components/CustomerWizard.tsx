@@ -136,6 +136,33 @@ function FilePick({ label, hint, file, onPick }: { label: string; hint?: string;
 }
 
 
+
+/** Pull a readable field reason out of an API error's `detail`.
+ *  The API sends zod's `flatten()` — `{ formErrors, fieldErrors }` — NOT the
+ *  raw issue list. Reading the wrong shape is why the first attempt at this
+ *  showed nothing; a test caught it. `issues` is kept as a fallback in case a
+ *  route ever returns the unflattened form. */
+function fieldReason(detail: unknown): string {
+  if (!detail || typeof detail !== 'object') return typeof detail === 'string' ? detail : '';
+  const d = detail as {
+    fieldErrors?: Record<string, string[] | undefined>;
+    formErrors?: string[];
+    issues?: Array<{ path?: unknown[]; message?: string }>;
+  };
+  const parts: string[] = [];
+  for (const [field, msgs] of Object.entries(d.fieldErrors ?? {})) {
+    if (msgs?.length) parts.push(`${field}: ${msgs[0]}`);
+  }
+  if (!parts.length && d.formErrors?.length) parts.push(d.formErrors[0]!);
+  if (!parts.length && Array.isArray(d.issues)) {
+    for (const i of d.issues) {
+      const f = Array.isArray(i.path) && i.path.length ? String(i.path[i.path.length - 1]) : '';
+      parts.push(f ? `${f}: ${i.message ?? 'invalid'}` : (i.message ?? 'invalid'));
+    }
+  }
+  return parts.join('; ');
+}
+
 export function CustomerWizard(
   { onClose, prefill, onCreated }: {
     onClose: () => void;
@@ -330,7 +357,13 @@ export function CustomerWizard(
     } catch (e) {
       const d = e instanceof ApiError ? (e.detail as { existing_customer?: { id: number; customer_code: string; full_name: string } } | undefined) : undefined;
       if (d?.existing_customer) setDup(d.existing_customer);
-      setErr(e instanceof ApiError ? e.message : 'Save failed');
+      // The API puts the FIELD-LEVEL reason in `detail` and leaves `message` as
+      // a generic "Invalid request". Showing only the message told the operator
+      // nothing — three identical 400s in a row, no way to know which field
+      // (owner 2026-08-24). Surface both, the way the locker page does.
+      setErr(e instanceof ApiError
+        ? [e.message, fieldReason(e.detail)].filter(Boolean).join(' — ')
+        : 'Save failed');
     } finally { setBusy(false); }
   }
 

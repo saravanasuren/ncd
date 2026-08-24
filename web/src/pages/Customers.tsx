@@ -9,9 +9,13 @@ import { Tabs, type TabDef } from '../components/Tabs.js';
 import { CustomerWizard } from '../components/CustomerWizard.js';
 import { statusLabel } from '../labels.js';
 
-type CustTab = 'all' | 'approved' | 'pending' | 'draft';
+type CustTab = 'all' | 'approved' | 'pending' | 'draft' | 'inprogress';
 const custMatch = (tab: CustTab, s: string) =>
   tab === 'all' ? true : tab === 'approved' ? s === 'Approved' : tab === 'pending' ? s === 'PendingApproval' : s === 'Draft';
+
+// A half-finished enrolment, persisted server-side (owner 2026-08-22). A user
+// sees their own; a super-admin sees every user's.
+interface DraftRow { owner_user_id: number; owner_name: string | null; display_name: string | null; display_phone: string | null; updated_at: string; mine: boolean }
 
 interface CustomerRow {
   id: number;
@@ -55,6 +59,12 @@ export function CustomersPage() {
     queryKey: ['customers', query],
     queryFn: () => api.get<CustomerListResp>(`/api/customers${query ? `?q=${encodeURIComponent(query)}` : ''}`),
   });
+  const draftsQ = useQuery({
+    queryKey: ['customer-drafts'],
+    queryFn: () => api.get<{ all: boolean; rows: DraftRow[] }>('/api/customers/drafts'),
+    enabled: can('customers:read'),
+  });
+  const drafts = draftsQ.data?.rows ?? [];
   if (error) return <div className="text-danger">Failed to load customers.</div>;
   const rows = Array.isArray(data) ? data : (data?.rows ?? []);
   const truncated = !!data && !Array.isArray(data) && data.truncated === true;
@@ -63,6 +73,7 @@ export function CustomersPage() {
     { key: 'approved', label: 'Approved', count: rows.filter((r) => custMatch('approved', r.creation_status)).length },
     { key: 'pending', label: 'Pending approval', count: rows.filter((r) => custMatch('pending', r.creation_status)).length },
     { key: 'draft', label: 'Draft', count: rows.filter((r) => custMatch('draft', r.creation_status)).length },
+    { key: 'inprogress', label: draftsQ.data?.all ? 'In progress (all users)' : 'In progress', count: drafts.length },
     { key: 'all', label: 'All', count: rows.length },
   ];
 
@@ -104,7 +115,42 @@ export function CustomersPage() {
 
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
-      {isLoading ? <div className="text-text-muted">Loading customers…</div> : (
+      {tab === 'inprogress' ? (
+        <div className="overflow-x-auto bg-surface border border-border rounded-lg shadow-card">
+          <p className="text-xs text-text-muted px-4 pt-3 m-0">
+            {draftsQ.data?.all
+              ? 'Half-finished customer enrolments across all users — not yet submitted.'
+              : 'Your half-finished customer enrolments — not yet submitted.'}
+          </p>
+          <table className="w-full text-sm border-collapse mt-2">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="py-2 px-4 text-left text-xs font-semibold text-text-label uppercase tracking-wide">Name</th>
+                <th className="py-2 px-4 text-left text-xs font-semibold text-text-label uppercase tracking-wide">Phone</th>
+                <th className="py-2 px-4 text-left text-xs font-semibold text-text-label uppercase tracking-wide">Started by</th>
+                <th className="py-2 px-4 text-left text-xs font-semibold text-text-label uppercase tracking-wide">Last edited</th>
+                <th className="py-2 px-4"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {drafts.map((d) => (
+                <tr key={d.owner_user_id} className="border-b border-border last:border-0 hover:bg-bg">
+                  <td className="py-2 px-4 font-medium">{d.display_name || <span className="text-text-muted">(no name yet)</span>}</td>
+                  <td className="py-2 px-4 font-mono text-xs">{d.display_phone ?? '—'}</td>
+                  <td className="py-2 px-4">{d.owner_name ?? '—'}{d.mine && <span className="text-xs text-text-muted"> · you</span>}</td>
+                  <td className="py-2 px-4 text-xs text-text-muted">{String(d.updated_at).slice(0, 16).replace('T', ' ')}</td>
+                  <td className="py-2 px-4 text-right">
+                    {d.mine && can('customers:create') && (
+                      <button className="text-xs text-primary hover:underline" onClick={() => setEnrolling(true)}>Resume</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {drafts.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-text-muted">No in-progress enrolments.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      ) : isLoading ? <div className="text-text-muted">Loading customers…</div> : (
         <DataTable
           columns={columns}
           rows={rows.filter((c) => custMatch(tab, c.creation_status))}

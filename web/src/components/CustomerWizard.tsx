@@ -222,15 +222,37 @@ export function CustomerWizard(
   // close never loses typed data; cleared on a successful save or "Start fresh".
   useEffect(() => {
     const t = setTimeout(() => {
+      const dirty = isDirty(f);
       try {
-        if (isDirty(f)) localStorage.setItem(DRAFT_KEY, JSON.stringify({ f, step }));
+        if (dirty) localStorage.setItem(DRAFT_KEY, JSON.stringify({ f, step }));
         else localStorage.removeItem(DRAFT_KEY);
       } catch { /* storage disabled / quota — best-effort */ }
+      // Mirror to the server (owner 2026-08-22) so the draft survives a browser
+      // change AND a super-admin can see every user's in-progress enrolment.
+      // Best-effort — a failed save must never interrupt typing.
+      if (dirty) void api.put('/api/customers/drafts', {
+        draft: { f, step }, display_name: f.full_name?.trim() || null, display_phone: f.phone?.trim() || null,
+      }).catch(() => { /* ignore */ });
     }, 500);
     return () => clearTimeout(t);
   }, [f, step]);
 
-  const clearDraft = () => { try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } };
+  // Restore a server-side draft when there's nothing local (a different machine,
+  // or localStorage cleared). Local/prefill still win when present.
+  useEffect(() => {
+    if (prefill || loadDraft()) return;
+    let cancelled = false;
+    void api.get<{ draft?: { f?: Partial<Form>; step?: number } } | null>('/api/customers/drafts/mine')
+      .then((r) => { if (!cancelled && r?.draft?.f) { setF({ ...EMPTY, ...r.draft.f }); setStep(r.draft.step ?? 0); setRestored(true); } })
+      .catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const clearDraft = () => {
+    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+    void api.del('/api/customers/drafts/mine').catch(() => { /* ignore */ });
+  };
   const startFresh = () => {
     clearDraft();
     setF(EMPTY); setStep(0); setRestored(false); setErr(''); setDup(null);

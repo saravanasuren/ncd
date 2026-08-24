@@ -66,6 +66,21 @@ customersRouter.post('/', requirePermission('customers:create'),
 customersRouter.get('/assignable-staff', requirePermission('customers:handover-request'),
   asyncHandler(async (_req, res) => res.json({ rows: await s.listAssignableStaff(getDb()) })));
 
+// ── Draft customers (owner 2026-08-22) — a half-finished enrolment, persisted
+// so it survives a browser change and a super-admin can see everyone's. BEFORE
+// '/:id' so these literal paths aren't captured by the param route.
+customersRouter.get('/drafts', requirePermission('customers:read'),
+  asyncHandler(async (req, res) => res.json(await s.listDrafts(getDb(), req.user!))));
+customersRouter.get('/drafts/mine', requirePermission('customers:create'),
+  asyncHandler(async (req, res) => res.json(await s.getMyDraft(getDb(), req.user!))));
+customersRouter.put('/drafts', requirePermission('customers:create'),
+  asyncHandler(async (req, res) => {
+    const b = z.object({ draft: z.unknown(), display_name: z.string().nullish(), display_phone: z.string().nullish() }).parse(req.body ?? {});
+    res.json(await s.saveMyDraft(getDb(), req.user!, b));
+  }));
+customersRouter.delete('/drafts/mine', requirePermission('customers:create'),
+  asyncHandler(async (req, res) => res.json(await s.discardMyDraft(getDb(), req.user!))));
+
 customersRouter.get('/:id', requirePermission('customers:read'),
   asyncHandler(async (req, res) => res.json(await s.getCustomerDetail(getDb(), req.user!, Number(req.params.id)))));
 

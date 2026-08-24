@@ -117,7 +117,14 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
     // days and day-count denominator as before; only the precision of the
     // result changed, from paise to rupees.
     const gross = roundRupee((principal * Number(l.coupon_rate_pct)) / 100 * days / denom);
-    if (gross <= 0) continue;
+    // A tranche whose accrual rounds to ₹0 (e.g. S.Priyanka's ₹100 leg earning
+    // ₹0.32 for its first 9 days) used to be DROPPED here — so the owner saw the
+    // investment "go missing" from the payout list. Owner 2026-08-24: keep it, so
+    // it SHOWS on the screen and Summary. It is filtered back out of the NEFT bank
+    // file downstream (a ₹0 wire is rejected by the bank). A ₹0 row adds nothing
+    // to gross/TDS/net, so the book's payout totals are unmoved — only the row
+    // count differs. (Only a truly negative figure, which cannot occur, is skipped.)
+    if (gross < 0) continue;
 
     // The owner confirmed subordinate bonds follow the SAME TDS rules. A sub
     // bond has no scheme, so its rule comes from the sob_product instead —
@@ -145,8 +152,10 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
     // is whole for free. Wrapping it in a rounder would only mask a bug.
     const net = gross - tds;
 
-    totals.gross += gross; totals.tds += tds; totals.net += net;
-    totals.outstanding += principal;
+    // Totals are summed AFTER consolidation (below), not here — a merged group's
+    // gross is computed once on the combined principal and can differ from the
+    // sum of its per-tranche rounded grosses by a rupee or two. `_`-prefixed
+    // fields carry what consolidation needs and are stripped before returning.
     out.push({
       line_id: Number(l.line_id), application_id: Number(l.application_id),
       customer_id: Number(l.customer_id),
@@ -155,7 +164,54 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
       from_date: paidThrough, days,
       gross_amount: gross, tds_amount: tds, net_amount: net,
       addition_amount: 0, deduction_amount: 0, total_amount: net,
+      _principal: principal, _denom: denom, _rate: Number(l.coupon_rate_pct),
+      _dayCount: l.day_count_convention, _foldable: !l.is_first_period,
+      _tdsRule: tdsRule,
+      _tdsCust: { is_nri: l.is_nri as boolean, tds_applicable: l.cust_tds as boolean,
+        tax_form: l.tax_form as string | null, tax_form_expires_on: toISODate(l.tax_form_expires_on as string | null) },
+      _payoutFrequency: l.payout_frequency,
     });
+  }
+
+  // ── Tranche consolidation (owner 2026-08-24, [[payout-tranche-consolidation]]) ─
+  // A clubbed investment's tranches each earn a broken first period from their own
+  // money-received date, so for the batch that settles those part-months they stay
+  // separate rows. From the NEXT batch — once every tranche has had its broken
+  // period paid (is_first_period=false, i.e. `_foldable`) and they share one
+  // accrual window/rate/day-count — they pay as ONE line: combine the principal
+  // first, then compute gross + TDS ONCE (rounded once), which is authoritative
+  // over the sum of per-tranche rounded figures. A single-tranche investment is a
+  // group of one and is left untouched, so nothing on the existing book moves.
+  const groups = new Map<string, Record<string, unknown>[]>();
+  for (const r of out) {
+    if (!r._foldable) continue;   // still in its own broken period → its own row
+    const k = `${r.application_id}|${r.from_date}|${r._rate}|${String(r._dayCount)}`;
+    const g = groups.get(k); if (g) g.push(r); else groups.set(k, [r]);
+  }
+  const dropped = new Set<Record<string, unknown>>();
+  for (const grp of groups.values()) {
+    if (grp.length < 2) continue;                 // group of one → unchanged
+    grp.sort((a, b) => Number(a.line_id) - Number(b.line_id));
+    const rep = grp[0]!;
+    const principal = grp.reduce((s, r) => s + Number(r._principal), 0);
+    const days = Number(rep.days), denom = Number(rep._denom), rate = Number(rep._rate);
+    const gross = roundRupee((principal * rate) / 100 * days / denom);
+    const tds = roundRupee(computeTds(
+      rep._tdsRule as never, rep._tdsCust as never,
+      { payout_frequency: rep._payoutFrequency as string, amount: principal },
+      { due_type: 'Interest', gross_amount: gross, due_date: payoutDate }));
+    rep.gross_amount = gross; rep.tds_amount = tds; rep.net_amount = gross - tds; rep.total_amount = gross - tds;
+    rep.investment_amount = principal;            // the Summary shows the combined ₹, not the lead tranche's
+    rep._principal = principal;                   // so the outstanding total still sums correctly
+    rep.merged_line_ids = grp.map((r) => Number(r.line_id));   // createInterestBatch advances every tranche's watermark
+    for (let i = 1; i < grp.length; i++) dropped.add(grp[i]!);
+  }
+  if (dropped.size) for (let i = out.length - 1; i >= 0; i--) if (dropped.has(out[i]!)) out.splice(i, 1);
+
+  // Interest totals, now over the consolidated rows.
+  for (const r of out) {
+    totals.gross += Number(r.gross_amount); totals.tds += Number(r.tds_amount); totals.net += Number(r.net_amount);
+    totals.outstanding += Number(r._principal ?? 0);
   }
 
   // Redemption slices (owner 2026-07-24): a redemption's broken-period interest
@@ -264,6 +320,10 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
     key(a).localeCompare(key(b))
     || (a.schedule_id ? 1 : 0) - (b.schedule_id ? 1 : 0)
     || String(a.due_date).localeCompare(String(b.due_date)));
+
+  // Drop the internal consolidation scratch fields (merged_line_ids stays — the
+  // batch builder needs it to advance every folded tranche's watermark).
+  for (const r of out) for (const k of Object.keys(r)) if (k.startsWith('_')) delete r[k];
 
   return {
     rows: out,
@@ -404,6 +464,31 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
         `UPDATE disbursement_schedule SET status = 'Skipped', batch_id = $3
           WHERE line_id = $1 AND due_type IN ${DUE_TYPES} AND status = 'Scheduled'
             AND batch_id IS NULL AND due_date <= $2`, [r.line_id, payoutDate, batchId]);
+
+      // Consolidated tranches (owner 2026-08-24): the combined interest rides on
+      // the representative row inserted above. Each FOLDED sibling tranche still
+      // needs its own row at this date so its paid-through watermark advances in
+      // lock-step — otherwise the next batch re-accrues it and DOUBLE-PAYS. The
+      // sibling settles at ₹0 (its money is on the representative row): the bank
+      // file drops it (net > 0) and the Summary folds it out. Same bank as the
+      // representative — one application, one payout account.
+      const merged = Array.isArray(r.merged_line_ids) ? (r.merged_line_ids as number[]) : [];
+      for (const sib of merged.filter((id) => id !== Number(r.line_id))) {
+        await tx.query(
+          `INSERT INTO disbursement_schedule
+             (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount,
+              adjustment_amount, status, batch_id, payee_account, payee_ifsc)
+           VALUES ($1,$2,$3,'Interest',0,0,0,0,'Scheduled',$4,$5,$6)
+           ON CONFLICT (line_id, due_date, due_type) DO UPDATE
+             SET gross_amount = 0, tds_amount = 0, net_amount = 0, adjustment_amount = 0,
+                 batch_id = EXCLUDED.batch_id,
+                 payee_account = EXCLUDED.payee_account, payee_ifsc = EXCLUDED.payee_ifsc`,
+          [sib, r.application_id, payoutDate, batchId, bank?.account_number ?? null, bank?.ifsc ?? null]);
+        await tx.query(
+          `UPDATE disbursement_schedule SET status = 'Skipped', batch_id = $3
+            WHERE line_id = $1 AND due_type IN ${DUE_TYPES} AND status = 'Scheduled'
+              AND batch_id IS NULL AND due_date <= $2`, [sib, payoutDate, batchId]);
+      }
     }
 
     // Consume the one-time adjustments this batch applied: they rode into the
@@ -882,7 +967,16 @@ export async function summaryForBatch(db: Db, batchId: number): Promise<{ buffer
     // Wealth's order: each application's rows sit together, its regular interest
     // first and its redemption slices under it. Ordering by name alone left a
     // customer's Redemption row detached from the interest row it belongs with.
+    // Fold out a consolidated tranche's ₹0 sibling rows: they exist only to carry
+    // the watermark forward (owner 2026-08-24). A folded sibling is a ₹0 Interest
+    // row on a line that has ALREADY had a broken period paid — as opposed to a
+    // genuinely-tiny first-period tranche (also ₹0, but with no prior paid row),
+    // which the owner wants KEPT on the Summary.
     `${SUMMARY_SELECT} WHERE ds.batch_id = $1 AND ds.status <> 'Skipped'
+        AND NOT (ds.due_type = 'Interest' AND ds.gross_amount = 0 AND ds.net_amount = 0
+                 AND EXISTS (SELECT 1 FROM disbursement_schedule p
+                              WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
+                                AND p.due_type IN ('Interest','BrokenInterest') AND p.status = 'Paid'))
       ORDER BY c.full_name, a.application_no, (ds.due_type = 'BrokenInterest'), ds.due_date`, [batchId]);
   const { buildSummarySheet } = await import('../../lib/payout-summary.js');
   return { buffer: await buildSummarySheet(rows as never[]), batchNo: batch.batch_no };

@@ -406,7 +406,16 @@ export function ApplicationDetailPage() {
               {data.schedule.map((r: any) => (
                 <tr key={r.id}>
                   <td className="px-4 py-1.5 mono">{r.due_date}</td>
-                  <td className="px-4 py-1.5">{r.due_type}</td>
+                  <td className="px-4 py-1.5">
+                    {r.due_type}
+                    {/* From the batch after the broken period, a clubbed
+                        investment's tranches pay as ONE combined line. */}
+                    {r.combined && (
+                      <span className="ml-1.5 text-xs text-text-muted" title={`Combined interest across ${r.tranche_count} tranches`}>
+                        · {r.tranche_count} tranches
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-1.5 text-right mono">{formatINR(r.gross_amount)}</td>
                   <td className="px-4 py-1.5 text-right mono text-text-muted">{formatINR(r.tds_amount)}</td>
                   <td className="px-4 py-1.5 text-right mono">
@@ -423,7 +432,10 @@ export function ApplicationDetailPage() {
                   </td>
                   <td className={`px-4 py-1.5 text-xs ${rowPill[r.status] ?? ''}`}>
                     {r.status}
-                    {can('payouts:mark-paid-manual') && r.status === 'Scheduled' && (
+                    {/* A combined row stands for several tranche rows — failing
+                        just one from here would be ambiguous, so mark-failed is
+                        offered only on single-tranche rows (use the Payouts screen). */}
+                    {can('payouts:mark-paid-manual') && r.status === 'Scheduled' && !r.combined && (
                       <button className="ml-2 text-danger hover:underline" title="Mark this row failed (e.g. NEFT bounce)"
                         onClick={async () => {
                           const reason = await promptText({

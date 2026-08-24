@@ -578,6 +578,64 @@ export async function listApplications(db: Db, actor: AuthUser, filters: { statu
   return { rows, total, truncated: total > rows.length };
 }
 
+/**
+ * Consolidate a clubbed investment's projected schedule for display (owner
+ * 2026-08-24, [[payout-tranche-consolidation]]). Each tranche's BROKEN first
+ * period (its earliest Interest row) stays its own line; from the next date on,
+ * a multi-tranche investment shows ONE combined row per date — the same view the
+ * payout run and NEFT file produce. Summing the per-tranche rows also absorbs the
+ * ₹0 sibling rows a settled batch leaves behind (the combined ₹ already sits on
+ * the representative row). A single-tranche investment is a group of one, so its
+ * schedule is unchanged.
+ */
+function consolidateSchedule(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  // Each line's earliest Interest date = that tranche's broken period → stays separate.
+  const brokenDate = new Map<number, string>();
+  for (const r of rows) {
+    if (r.due_type !== 'Interest') continue;
+    const line = Number(r.line_id), d = String(r.due_date);
+    const cur = brokenDate.get(line);
+    if (cur === undefined || d < cur) brokenDate.set(line, d);
+  }
+  const passthrough = (r: Record<string, unknown>) => ({
+    id: r.id, due_date: r.due_date, due_type: r.due_type, gross_amount: r.gross_amount,
+    tds_amount: r.tds_amount, net_amount: r.net_amount, status: r.status, paid_at: r.paid_at ?? null,
+  });
+  const out: Record<string, unknown>[] = [];
+  const combined = new Map<string, Record<string, unknown> & { _statuses: Set<string>; _n: number; _minLine: number }>();
+  for (const r of rows) {
+    const isBroken = r.due_type === 'Interest' && brokenDate.get(Number(r.line_id)) === String(r.due_date);
+    if (r.due_type !== 'Interest' || isBroken) { out.push(passthrough(r)); continue; }
+    const k = String(r.due_date);
+    const c = combined.get(k);
+    if (!c) {
+      combined.set(k, { id: r.id, due_date: r.due_date, due_type: 'Interest',
+        gross_amount: Number(r.gross_amount), tds_amount: Number(r.tds_amount), net_amount: Number(r.net_amount),
+        status: String(r.status), paid_at: (r.paid_at as unknown) ?? null,
+        _statuses: new Set([String(r.status)]), _n: 1, _minLine: Number(r.line_id) });
+    } else {
+      c.gross_amount = Number(c.gross_amount) + Number(r.gross_amount);
+      c.tds_amount = Number(c.tds_amount) + Number(r.tds_amount);
+      c.net_amount = Number(c.net_amount) + Number(r.net_amount);
+      c._statuses.add(String(r.status)); c._n += 1;
+      if (Number(r.line_id) < c._minLine) { c._minLine = Number(r.line_id); c.id = r.id; }  // stable key = lowest tranche's row
+      if (r.paid_at && (!c.paid_at || String(r.paid_at) > String(c.paid_at))) c.paid_at = r.paid_at;
+    }
+  }
+  for (const c of combined.values()) {
+    // Uniform status when the tranches agree; otherwise the least-settled wins so
+    // a part-settled date never reads as fully Paid.
+    const s = c._statuses;
+    c.status = s.size === 1 ? [...s][0]! : s.has('Scheduled') ? 'Scheduled' : s.has('Failed') ? 'Failed' : [...s][0]!;
+    c.combined = c._n > 1;          // the row is a real merge (used to label it + hide per-tranche mark-failed)
+    c.tranche_count = c._n;
+    delete (c as Partial<typeof c>)._statuses; delete (c as Partial<typeof c>)._n; delete (c as Partial<typeof c>)._minLine;
+    out.push(c);
+  }
+  out.sort((a, b) => String(a.due_date).localeCompare(String(b.due_date)));
+  return out;
+}
+
 export async function getApplicationDetail(db: Db, actor: AuthUser, appId: number) {
   const sc = scopeWhere(scopeFor(actor), SCOPE_COLS, 1);
   const app = (await db.query(
@@ -593,7 +651,9 @@ export async function getApplicationDetail(db: Db, actor: AuthUser, appId: numbe
      WHERE a.id = $1 AND ${sc.sql}`, [appId, ...sc.params])).rows[0];
   if (!app) throw errors.notFound('Application not found');
   const lines = (await db.query('SELECT * FROM application_lines WHERE application_id = $1', [appId])).rows;
-  const schedule = (await db.query('SELECT id, due_date, due_type, gross_amount, tds_amount, net_amount, status, paid_at FROM disbursement_schedule WHERE application_id = $1 ORDER BY due_date', [appId])).rows;
+  const schedule = consolidateSchedule((await db.query(
+    'SELECT id, line_id, due_date, due_type, gross_amount, tds_amount, net_amount, status, paid_at FROM disbursement_schedule WHERE application_id = $1 ORDER BY due_date, line_id',
+    [appId])).rows as Record<string, unknown>[]);
   // A signature is out with the customer — the UI polls while this is true so the
   // page flips to eSigned on its own once the Digio poller completes it.
   const pendingSessions = Number((await db.query<{ n: number }>(

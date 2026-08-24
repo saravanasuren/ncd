@@ -57,11 +57,14 @@ describe('decision 2 + 3 — clubbed tranches fold into ONE line, principal comb
     const a = await admin();
     // Clubbed investment: three ₹1,00,000 tranches → ₹3,00,000.
     const cust = await customerWithBank(a, 'Consol Clubbed', '9702000001', '600000001');
+    // Club the extra tranches while the app is still in-flight (immediate — no
+    // approval gate), then take it live so all three tranches are on one Active
+    // investment. (Clubbing INTO an already-active investment now needs Admin/CXO
+    // approval, tested separately — here we just need the 3-tranche shape.)
     const first = await a.post('/api/applications', {
       ...requiredInvestmentFields(), customer_id: cust, series_id: seriesId, scheme_id: schemeId,
       amount: 100000, date_money_received: '2026-07-05',
     });
-    await approveInvestment(await as('ncd@demo.local'), first);
     const appId = Number(first.json.id);
     for (const amt of [100000, 100000]) {
       const club = await a.post('/api/applications', {
@@ -70,6 +73,7 @@ describe('decision 2 + 3 — clubbed tranches fold into ONE line, principal comb
       });
       expect(club.json.clubbed).toBe(true);
     }
+    await approveInvestment(await as('ncd@demo.local'), first);
     const lines = await linesOf(appId);
     expect(lines).toHaveLength(3);
 
@@ -113,6 +117,9 @@ describe('decision 1 — a ₹0 tranche shows on the screen but not in the NEFT 
     // Credited close to the cut-off (13 days), the way S.Priyanka's ₹100 leg was —
     // previewDue accrues a never-paid tranche from the investment's interest-start
     // date, so ₹100 × 12% × 13/365 = ₹0.43 → ₹0, while the ₹1,00,000 leg pays ₹427.
+    // Take the whole ₹1,00,000 leg live FIRST — a ₹1,00,100 total would fail the
+    // whole-unit check on the subscription approval — then club the ₹100 leg into
+    // the ACTIVE investment, which now goes through Admin/CXO approval (#336).
     const first = await a.post('/api/applications', {
       ...requiredInvestmentFields(), customer_id: cust, series_id: seriesId, scheme_id: schemeId,
       amount: 100000, date_money_received: '2026-07-16',
@@ -123,7 +130,8 @@ describe('decision 1 — a ₹0 tranche shows on the screen but not in the NEFT 
       ...requiredInvestmentFields(), customer_id: cust, series_id: seriesId, scheme_id: schemeId,
       amount: 100, date_money_received: '2026-07-20', club_with_application_id: appId,
     });
-    expect(club.json.clubbed).toBe(true);
+    expect(club.json.pending_approval).toBe(true);
+    await (await as('cxo@demo.local')).post(`/api/approvals/${club.json.approval_request.id}/approve`);
 
     // First cut-off: both tranches are still in their own broken period.
     const p = await preview('2026-07-28');
@@ -151,7 +159,6 @@ describe('safety — the folded tranches advance in lock-step, so nothing is pai
       ...requiredInvestmentFields(), customer_id: cust, series_id: seriesId, scheme_id: schemeId,
       amount: 100000, date_money_received: '2026-07-05',
     });
-    await approveInvestment(ncd, first);
     const appId = Number(first.json.id);
     for (const amt of [100000, 100000]) {
       await a.post('/api/applications', {
@@ -159,6 +166,7 @@ describe('safety — the folded tranches advance in lock-step, so nothing is pai
         amount: amt, date_money_received: '2026-07-05', club_with_application_id: appId,
       });
     }
+    await approveInvestment(ncd, first);
     const lines = await linesOf(appId);
     expect(lines).toHaveLength(3);
     await payBrokenPeriod(lines);

@@ -203,9 +203,7 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
         if (Number(target.series_id) !== input.series_id) throw errors.badRequest('Can only club within the same series');
         // In-flight targets club freely. An ACTIVE target may be clubbed into
         // too (owner 2026-08-24) — but ONLY while no interest has been paid: once
-        // a payout has run, the schedule can't be safely rebuilt. On an Active
-        // target we rematerialise the schedule afterwards so the added tranche
-        // gets its own broken period from its money-received date.
+        // a payout has run, the schedule can't be safely rebuilt.
         const inFlight = ['PendingFundVerification', 'PendingEsign', 'PendingApproval'].includes(target.status);
         const activeUnpaid = target.status === 'Active'
           && !(await tx.query("SELECT 1 FROM disbursement_schedule WHERE application_id = $1 AND status = 'Paid' LIMIT 1", [Number(target.id)])).rowCount;
@@ -214,6 +212,46 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
             ? 'This investment has already had an interest payout — it can no longer be clubbed into.'
             : 'Target application is no longer in-flight');
         }
+        const no = (await tx.query<{ application_no: string }>('SELECT application_no FROM applications WHERE id = $1', [Number(target.id)])).rows[0]!.application_no;
+
+        // ACTIVE target → this is a LIVE, already-approved investment. Adding money
+        // to it inflates the principal AND rebuilds the live interest schedule —
+        // that is a maker/checker event, not a silent edit (owner 2026-08-24). So
+        // we touch nothing now: the tranche (with its receipt) is held on an
+        // Admin/CXO approval and the investment stays exactly as-is until a checker
+        // approves. The apply — addLine + rematerialise + accrue — happens in the
+        // 'club_into_active' final-approve handler below.
+        if (activeUnpaid) {
+          const clubReq = await createApprovalRequest(tx, {
+            type: 'club_into_active', entityType: 'applications', entityId: Number(target.id), makerUserId: actor.id,
+            metadata: {
+              application_no: no,
+              added_amount: input.amount,
+              // Snapshot the tranche + its priced scheme so the credit the customer
+              // was quoted is exactly what materialises on approval (no later drift).
+              tranche: {
+                amount: input.amount,
+                scheme: {
+                  id: scheme.id ?? null, coupon_rate_pct: scheme.coupon_rate_pct, tenure_months: scheme.tenure_months,
+                  payout_frequency: scheme.payout_frequency, day_count_convention: scheme.day_count_convention,
+                },
+                date_money_received: input.date_money_received ?? null,
+                collection_method: input.collection_method ?? null,
+                collection_reference: input.collection_reference ?? null,
+                receipt: { file_path: storedReceipt.file_path, filename: input.receipt.filename, mime: storedReceipt.mime },
+              },
+            },
+          });
+          await writeAudit(tx, { actorId: actor.id, action: 'application.club.pending-approval', entityType: 'applications', entityId: Number(target.id),
+            after: { added: input.amount, reference: input.collection_reference, received: input.date_money_received } });
+          // Receipt file is retained (referenced from the approval metadata); the
+          // reject handler removes it if the clubbing is turned down.
+          return { id: Number(target.id), application_no: no, clubbed: true, pending_approval: true, approval_request: clubReq };
+        }
+
+        // IN-FLIGHT target → the whole application is still awaiting its own
+        // subscription approval, which takes the clubbed total live in one go.
+        // Gathering the credit onto it now needs no separate gate.
         await addLine(tx, Number(target.id), scheme, input.amount, {
           date_money_received: input.date_money_received,
           collection_method: input.collection_method,
@@ -221,22 +259,11 @@ export async function createApplication(db: Db, actor: AuthUser, input: CreateAp
           receipt: { ...storedReceipt, filename: input.receipt.filename },
         });
         await tx.query('UPDATE applications SET total_amount = total_amount + $1, updated_at = now() WHERE id = $2', [input.amount, Number(target.id)]);
-        // Active target: rebuild the (all-unpaid) schedule so the schedule and
-        // incentives reflect all tranches — each tranche's own broken period from
-        // its money-received date, one shared maturity (deemed date + tenure).
-        if (activeUnpaid) {
-          await tx.query("DELETE FROM disbursement_schedule WHERE application_id = $1 AND status <> 'Paid'", [Number(target.id)]);
-          const { materializeForApplication } = await import('../schedule/materialize.js');
-          await materializeForApplication(tx, Number(target.id));
-          const { accrueForApplication } = await import('../incentives/accrual.js');
-          await accrueForApplication(tx, Number(target.id));
-        }
         await writeAudit(tx, { actorId: actor.id, action: 'application.club', entityType: 'applications', entityId: Number(target.id),
-          after: { added: input.amount, reference: input.collection_reference, received: input.date_money_received, into_active: !!activeUnpaid } });
+          after: { added: input.amount, reference: input.collection_reference, received: input.date_money_received, into_active: false } });
         // The receipt stays on the LINE. It used to overwrite the application's,
         // which meant clubbing a second credit made the FIRST credit's receipt
         // unreachable — the paper trail for money already banked, gone.
-        const no = (await tx.query<{ application_no: string }>('SELECT application_no FROM applications WHERE id = $1', [Number(target.id)])).rows[0]!.application_no;
         return { id: Number(target.id), application_no: no, clubbed: true };
       }
 
@@ -310,6 +337,57 @@ registerOnFinalApprove('subscription', async (tx, req) => {
 registerOnReject('subscription', async (tx, req) => {
   if (!req.entity_id) return;
   await emitForApplication(tx, 'subscription.cancelled', Number(req.entity_id));
+});
+
+// Club a held tranche into a LIVE investment (owner 2026-08-24). The maker
+// recorded a new credit against an already-Active NCD; a checker (Admin/CXO)
+// has now approved it. Only here do we mutate the live investment: add the
+// tranche, bump the total, and rebuild the (all-unpaid) schedule so each tranche
+// earns from its own money-received date and they mature together.
+registerOnFinalApprove('club_into_active', async (tx, req) => {
+  if (!req.entity_id) return;
+  const appId = Number(req.entity_id);
+  const t = req.metadata.tranche as {
+    amount: number; scheme: Record<string, unknown>;
+    date_money_received: string | null; collection_method: string | null; collection_reference: string | null;
+    receipt: { file_path: string; filename: string; mime: string };
+  } | undefined;
+  if (!t) return;
+
+  // Re-assert the target is still Active with NO paid interest. An interest batch
+  // could in principle have run between the request and this approval; rebuilding
+  // a schedule that already has Paid rows would double-count, so refuse loudly
+  // rather than corrupt the live schedule.
+  const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [appId])).rows[0];
+  if (!app || app.status !== 'Active') throw errors.conflict('This investment is no longer active — the clubbing cannot be applied.');
+  if ((await tx.query("SELECT 1 FROM disbursement_schedule WHERE application_id = $1 AND status = 'Paid' LIMIT 1", [appId])).rowCount) {
+    throw errors.conflict('This investment has since had an interest payout — the clubbing can no longer be applied.');
+  }
+
+  await addLine(tx, appId, t.scheme, Number(t.amount), {
+    date_money_received: t.date_money_received ?? undefined,
+    collection_method: t.collection_method ?? undefined,
+    collection_reference: t.collection_reference ?? undefined,
+    receipt: t.receipt,
+  });
+  await tx.query('UPDATE applications SET total_amount = total_amount + $1, updated_at = now() WHERE id = $2', [Number(t.amount), appId]);
+  await tx.query("DELETE FROM disbursement_schedule WHERE application_id = $1 AND status <> 'Paid'", [appId]);
+  const { materializeForApplication } = await import('../schedule/materialize.js');
+  await materializeForApplication(tx, appId);
+  const { accrueForApplication } = await import('../incentives/accrual.js');
+  await accrueForApplication(tx, appId);
+  await writeAudit(tx, { actorId: req.maker_user_id, action: 'application.club.approved', entityType: 'applications', entityId: appId,
+    after: { added: Number(t.amount), via: 'approval', request_id: req.id } });
+});
+
+// A rejected club — the held credit is abandoned. Remove its stored receipt
+// (nothing on the live investment ever changed, so there is nothing else to undo).
+registerOnReject('club_into_active', async (_tx, req) => {
+  const t = req.metadata.tranche as { receipt?: { file_path?: string } } | undefined;
+  if (t?.receipt?.file_path) {
+    const { removeStored } = await import('../../lib/storage.js');
+    removeStored(t.receipt.file_path);
+  }
 });
 
 /**

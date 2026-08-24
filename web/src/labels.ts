@@ -56,6 +56,7 @@ export const APPROVAL_TYPE_LABELS: Record<string, string> = {
   customer_correction: 'Customer Correction',
   customer_reassignment: 'Customer Handover',
   subscription: 'Investment',
+  club_into_active: 'Club into Active Investment',
   premature_redemption: 'Premature Redemption',
   redemption: 'Redemption',
   rollover: 'Rollover',

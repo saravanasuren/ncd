@@ -208,63 +208,69 @@ export async function autoWaiveRent(
   if (!(b.baseWaiver > 0)) throw errors.badRequest('Cannot work out the waiver: this locker size has no rent priced.');
 
   const REASON = `Standard rent waiver — customer pays the rent inclusive of GST (${b.payable} on a ${b.gross} bill)`;
-  const row = await db.withTx(async (tx) => {
+  // Maker-checker (owner 2026-08-22): even the standard rent waiver now goes to
+  // Admin/CXO and only reaches LockerHub on approval.
+  return db.withTx(async (tx) => {
     const open = (await tx.query(
       `SELECT 1 FROM locker_fee_waivers
         WHERE lockerhub_application_id = $1 AND leg = 'rent' AND status IN ('PendingApproval','Approved')`,
       [appId])).rowCount;
-    if (open) return null; // already waived / in flight — never stack two
-    const { rows } = await tx.query<Record<string, unknown>>(
+    if (open) return { id: null, already: true as const }; // already waived / in flight — never stack two
+    const { rows } = await tx.query<{ id: string }>(
       // AMOUNT, not percentage — see rentWaiverBreakdown. A percentage is
       // rounded to 2dp by LockerHub and bills a rupee over the round figure.
-      `INSERT INTO locker_fee_waivers
-         (lockerhub_application_id, leg, waiver_amount, reason, created_by_user_id, status, approved_by_user_id)
-       VALUES ($1,'rent',$2,$3,$4,'Approved',$4) RETURNING *`,
+      `INSERT INTO locker_fee_waivers (lockerhub_application_id, leg, waiver_amount, reason, created_by_user_id)
+       VALUES ($1,'rent',$2,$3,$4) RETURNING id`,
       [appId, b.baseWaiver, REASON, actor.id]);
+    const id = Number(rows[0]!.id);
+    const req = await createApprovalRequest(tx, {
+      type: 'locker_fee_waiver', entityType: 'locker_fee_waivers', entityId: id, makerUserId: actor.id,
+      metadata: { waiver_id: id, lockerhub_application_id: appId, leg: 'rent', waiver_amount: b.baseWaiver, reason: REASON },
+    });
+    await tx.query('UPDATE locker_fee_waivers SET approval_request_id = $1 WHERE id = $2', [req.id, id]);
     await writeAudit(tx, {
-      actorId: actor.id, action: 'locker.fee_waiver.auto-rent', entityType: 'locker_fee_waivers', entityId: Number(rows[0]!.id),
+      actorId: actor.id, action: 'locker.fee_waiver.auto-rent-request', entityType: 'locker_fee_waivers', entityId: id,
       after: { application: appId, leg: 'rent', waiver_amount: b.baseWaiver, annual_rent: Number(annualRent),
                gst_pct: Number(gstPct), payable: b.payable, reason: REASON, policy: 'standard-rent' },
     });
-    return rows[0]!;
+    return { id, waiver_amount: b.baseWaiver, payable: b.payable, status: 'PendingApproval' as const, request_no: req.request_no };
   });
-  if (!row) return { id: null, already: true as const };
-  const r = await applyToLockerHub(db, { id: actor.id, fullName: actor.fullName, email: actor.email, role: actor.role }, row);
-  return { id: Number(row.id), waiver_amount: b.baseWaiver, payable: b.payable, ...r };
 }
 
 /**
  * Make the rent COMPLIMENTARY for a premium customer (owner 2026-08-22). Zeroes
  * the rent on LockerHub via a 100% A21 waiver — their only zero mechanism — but
  * records it as category 'premium', NOT a waiver, so the rent report keeps the
- * two apart. One-click policy like the standard rent waiver: approved on
- * creation, no maker-checker. Only ever ONE rent waiver at a time (the UI hides
- * the other rent buttons once one exists), so it never stacks or conflicts.
+ * two apart. Maker-checker (owner 2026-08-22): the request goes to Admin/CXO and
+ * only reaches LockerHub on approval. Only ever ONE rent waiver at a time (the UI
+ * hides the other rent buttons once one exists), so it never stacks or conflicts.
  */
 export async function premiumWaiveRent(db: Db, actor: AuthUser, lockerhubApplicationId: string) {
   const appId = String(lockerhubApplicationId ?? '').trim();
   if (!appId) throw errors.badRequest('lockerhub_application_id is required');
   const REASON = 'Premium customer — rent made complimentary (owner policy)';
-  const row = await db.withTx(async (tx) => {
+  return db.withTx(async (tx) => {
     const open = (await tx.query(
       `SELECT 1 FROM locker_fee_waivers
         WHERE lockerhub_application_id = $1 AND leg = 'rent' AND status IN ('PendingApproval','Approved')`,
       [appId])).rowCount;
-    if (open) return null; // a rent waiver already exists — never stack two
-    const { rows } = await tx.query<Record<string, unknown>>(
-      `INSERT INTO locker_fee_waivers
-         (lockerhub_application_id, leg, waiver_pct, reason, category, created_by_user_id, status, approved_by_user_id)
-       VALUES ($1,'rent',100,$2,'premium',$3,'Approved',$3) RETURNING *`,
+    if (open) return { id: null, already: true as const };
+    const { rows } = await tx.query<{ id: string }>(
+      `INSERT INTO locker_fee_waivers (lockerhub_application_id, leg, waiver_pct, reason, category, created_by_user_id)
+       VALUES ($1,'rent',100,$2,'premium',$3) RETURNING id`,
       [appId, REASON, actor.id]);
+    const id = Number(rows[0]!.id);
+    const req = await createApprovalRequest(tx, {
+      type: 'locker_fee_waiver', entityType: 'locker_fee_waivers', entityId: id, makerUserId: actor.id,
+      metadata: { waiver_id: id, lockerhub_application_id: appId, leg: 'rent', waiver_pct: 100, category: 'premium', reason: REASON },
+    });
+    await tx.query('UPDATE locker_fee_waivers SET approval_request_id = $1 WHERE id = $2', [req.id, id]);
     await writeAudit(tx, {
-      actorId: actor.id, action: 'locker.fee_waiver.premium', entityType: 'locker_fee_waivers', entityId: Number(rows[0]!.id),
+      actorId: actor.id, action: 'locker.fee_waiver.premium-request', entityType: 'locker_fee_waivers', entityId: id,
       after: { application: appId, leg: 'rent', waiver_pct: 100, category: 'premium', reason: REASON },
     });
-    return rows[0]!;
+    return { id, category: 'premium' as const, status: 'PendingApproval' as const, request_no: req.request_no };
   });
-  if (!row) return { id: null, already: true as const };
-  const r = await applyToLockerHub(db, { id: actor.id, fullName: actor.fullName, email: actor.email, role: actor.role }, row);
-  return { id: Number(row.id), category: 'premium' as const, ...r };
 }
 
 registerOnFinalApprove('locker_fee_waiver', async (tx, req) => {

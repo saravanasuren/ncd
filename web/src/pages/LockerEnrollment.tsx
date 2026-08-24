@@ -373,18 +373,17 @@ export function LockerEnrollmentPage() {
     if (!await confirm({
       title: 'Apply the standard rent waiver?',
       body: `Bill now ${money(p.gross)} · waive ${money(p.waived)} (${p.waiverPct.toFixed(4)}% of the pre-tax rent) · customer pays ${money(p.payable)}.\n\n`
-        + 'This is policy, so it goes to LockerHub immediately — there is no approval step.',
-      confirmLabel: `Waive ${money(p.waived)}`,
+        + 'This goes to Admin/CXO for approval — it reaches LockerHub only once approved.',
+      confirmLabel: 'Send for approval',
     })) return;
     setErr('');
-    const r = await api.post<{ applied?: boolean; already?: boolean; error?: string }>(
+    const r = await api.post<{ already?: boolean; status?: string; request_no?: string }>(
       `/api/lockers/applications/${app.application_id}/apply-rent-waiver`,
       { gst_pct: Number(pricedSize.gst_pct), annual_rent: Number(pricedSize.annual_fee) },
     ).catch((e) => { setErr(e instanceof ApiError ? e.message : 'Failed'); return null; });
     if (!r) return;
     if (r.already) setNote('This application already has a rent waiver — nothing changed.');
-    else if (r.applied === false) setNote(`Recorded, but LockerHub did not accept it yet${r.error ? ` — ${r.error}` : ''}. It can be retried.`);
-    else setNote(`Waived ${money(p.waived)} — the customer now pays ${money(p.payable)}.`);
+    else setNote(`Waiver sent for approval${r.request_no ? ` (${r.request_no})` : ''} — the rent is marked waived once an Admin/CXO approves it.`);
     // BOTH: refreshApp reloads the legs, but the button hides on the WAIVER
     // list, so without this it stays on screen offering to waive again on an
     // application that is already waived.
@@ -395,18 +394,19 @@ export function LockerEnrollmentPage() {
   /**
    * Premium customer — make the rent complimentary (owner 2026-08-22). Zeroes the
    * rent, recorded as its OWN category 'premium' (not a waiver), so the rent
-   * report keeps the two apart. One click, no checker, like the standard waiver.
+   * report keeps the two apart. Goes to Admin/CXO for approval — as all rent
+   * waivers do now (owner 2026-08-22).
    */
   const premiumCustomer = async () => {
     if (!app?.application_id) return;
     if (!await confirm({
       title: 'Premium customer — make the rent free?',
-      body: 'The rent for this locker is made complimentary (₹0) and recorded as a PREMIUM customer — kept separate from a waiver in the reports. One click, no approval step.',
-      confirmLabel: 'Make rent free',
+      body: 'Marks this a PREMIUM customer and zeroes the rent (₹0), kept separate from a waiver in the reports. This goes to Admin/CXO for approval — the rent is marked premium only once approved.',
+      confirmLabel: 'Send for approval',
     })) return;
     const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/premium-rent`, {}));
     if (r) {
-      setNote(r.already ? 'This locker already has a rent waiver — nothing changed.' : 'Premium customer — the rent is now complimentary (₹0).');
+      setNote(r.already ? 'This locker already has a rent waiver — nothing changed.' : `Premium request sent for approval${r.request_no ? ` (${r.request_no})` : ''} — the rent is marked premium once an Admin/CXO approves it.`);
       await loadFeeWaivers();
       await refreshApp();
     }

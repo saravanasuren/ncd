@@ -31,6 +31,30 @@ describe('saving a WhatsApp template config', () => {
   });
 });
 
+describe('per-template "send test"', () => {
+  it('sends a sample to the chosen number for a type with a template name', async () => {
+    const a = await admin();
+    // acknowledgment has a default template name → the test send goes through
+    // (stub provider in tests) and reports ok.
+    const r = await a.post('/api/settings/whatsapp/test', { type: 'acknowledgment', phone: '9700000009' });
+    expect(r.status).toBe(200);
+    expect(r.json.ok).toBe(true);
+  });
+
+  it('refuses when no template name is set yet', async () => {
+    const a = await admin();
+    // locker_booked ships with a blank name → the test asks you to set one first.
+    const r = await a.post('/api/settings/whatsapp/test', { type: 'locker_booked', phone: '9700000009' });
+    expect(r.status).toBe(400);
+  });
+
+  it('rejects a blank phone number', async () => {
+    const a = await admin();
+    const r = await a.post('/api/settings/whatsapp/test', { type: 'interest_paid', phone: '  ' });
+    expect(r.status).toBe(400);
+  });
+});
+
 describe('the on/off toggle gates the actual send', () => {
   it('sends an enabled type but not a disabled one', async () => {
     const a = await admin();

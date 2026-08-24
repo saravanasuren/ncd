@@ -136,6 +136,13 @@ function WhatsappTemplateRow({ s, onSave, saving }: { s: SettingView; onSave: (v
   const initial = s.value as WhatsappTypeConfig;
   const [cfg, setCfg] = useState<WhatsappTypeConfig>(initial);
   const dirty = JSON.stringify(cfg) !== JSON.stringify(s.value);
+  const [testPhone, setTestPhone] = useState('');
+  const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const test = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; error?: string }>('/api/settings/whatsapp/test', { type, phone: testPhone.trim() }),
+    onSuccess: (r) => setTestMsg(r.ok ? { ok: true, text: `Test sent to ${testPhone.trim()}` } : { ok: false, text: r.error || 'Send failed' }),
+    onError: (e) => setTestMsg({ ok: false, text: e instanceof ApiError ? e.message : 'Send failed' }),
+  });
   if (!def) return null;
 
   const fieldLabel = (k: string) => def.fields.find((f) => f.key === k)?.label ?? k;
@@ -186,7 +193,21 @@ function WhatsappTemplateRow({ s, onSave, saving }: { s: SettingView; onSave: (v
         <div className="mt-1 text-[11px] text-text-muted">Available: {def.fields.map((f) => fieldLabel(f.key)).join(', ')}</div>
       </div>
 
-      <div className="mt-3 flex justify-end">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+        {/* Send a real sample of THIS template to a chosen number — verify wiring
+            without touching a customer. Uses the saved config, so Save first if
+            you just changed the name/mapping. */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-text-label">Send test to</span>
+          <input className={`${cls} w-40`} placeholder="phone number" value={testPhone}
+            onChange={(e) => { setTestPhone(e.target.value); setTestMsg(null); }} />
+          <button type="button" disabled={!testPhone.trim() || test.isPending}
+            onClick={() => { setTestMsg(null); test.mutate(); }}
+            className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40">
+            {test.isPending ? 'Sending…' : 'Send test'}
+          </button>
+          {testMsg && <span className={`text-xs ${testMsg.ok ? 'text-success' : 'text-danger'}`}>{testMsg.text}</span>}
+        </div>
         <button disabled={!dirty || saving} onClick={() => onSave(cfg)}
           className="text-xs bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-3 py-1.5">Save</button>
       </div>

@@ -80,11 +80,28 @@ export const WHATSAPP_TYPES: WhatsappTypeDef[] = [
 ];
 
 export const WHATSAPP_SETTING_PREFIX = 'whatsapp.tpl.';
-export const WHATSAPP_TEST_PHONE_KEY = 'whatsapp.test_phone';
 export const whatsappSettingKey = (type: string) => `${WHATSAPP_SETTING_PREFIX}${type}`;
 
 export function defaultWhatsappConfig(def: WhatsappTypeDef): WhatsappTypeConfig {
   return { template_name: def.defaultTemplateName, enabled: def.defaultEnabled, variables: [...def.defaultVariables] };
+}
+
+/** Placeholder values used to fill {{n}} on a "send test" (owner 2026-08-25).
+ *  Falls back to the field label so a test always shows SOMETHING in each slot. */
+export const WHATSAPP_SAMPLE: Record<string, string> = {
+  name: 'Test Customer',
+  amount: '1,234',
+  month: 'August',
+  date: '25-Aug-2026',
+  application_no: 'APP-2026-000000',
+  otp: '123456',
+  locker_no: 'A-101',
+  branch: 'Coimbatore',
+};
+export function sampleWhatsappPayload(def: WhatsappTypeDef): Record<string, string> {
+  const p: Record<string, string> = {};
+  for (const f of def.fields) p[f.key] = WHATSAPP_SAMPLE[f.key] ?? f.label;
+  return p;
 }
 
 /** Validate a stored per-type config against its registry entry (used on save). */

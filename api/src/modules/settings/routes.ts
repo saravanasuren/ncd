@@ -5,8 +5,21 @@ import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requireAuth, requirePermission } from '../../middleware/auth.js';
 import * as service from './service.js';
+import { sendWhatsappTest } from '../notifications/service.js';
 
 export const settingsRouter = Router();
+
+// Send a sample WhatsApp of one message type to a chosen number — the per-template
+// "send test" (owner 2026-08-25). Admin-gated, same as editing the config.
+const testSchema = z.object({ type: z.string(), phone: z.string() });
+settingsRouter.post(
+  '/whatsapp/test',
+  requirePermission('settings:manage'),
+  asyncHandler(async (req, res) => {
+    const { type, phone } = testSchema.parse(req.body);
+    res.json(await sendWhatsappTest(getDb(), type, phone));
+  })
+);
 
 // Safe, non-secret vocabularies the staff UI needs (lead form dropdowns etc.).
 // Any authed user may read these; the full registry stays admin-gated below.

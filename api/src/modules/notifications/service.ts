@@ -15,6 +15,8 @@ import { config } from '../../config.js';
 import { attachmentFor } from './attachments.js';
 import { getSettingsMap } from '../settings/service.js';
 import { resolveWhatsapp } from './whatsappConfig.js';
+import { errors } from '../../lib/errors.js';
+import { WHATSAPP_TYPES, sampleWhatsappPayload } from '@new-wealth/shared';
 
 export interface EnqueueInput {
   channel: 'email' | 'sms' | 'whatsapp';
@@ -69,9 +71,9 @@ export async function drainOnce(db: Db, limit = 25): Promise<{ sent: number; fai
   );
   let sent = 0, failed = 0, retrying = 0, stopped = false;
   const gap = Math.max(0, config.NOTIFY_SEND_GAP_MS);
-  // WhatsApp template config (names, {{n}} mapping, on/off, test-phone) is
-  // admin-editable in Settings — load it once for the whole cycle rather than
-  // per row. Lazy so a purely-email drain never touches app_settings.
+  // WhatsApp template config (names, {{n}} mapping, on/off) is admin-editable in
+  // Settings — load it once for the whole cycle rather than per row. Lazy so a
+  // purely-email drain never touches app_settings.
   let waSettings: Record<string, unknown> | null = null;
   const whatsappSettings = async () => (waSettings ??= await getSettingsMap(db));
 
@@ -101,7 +103,7 @@ export async function drainOnce(db: Db, limit = 25): Promise<{ sent: number; fai
           if (gap && i < rows.length - 1) await sleep(gap);
           continue;
         }
-        if (resolved) wa = { name: resolved.name, variables: resolved.variables, document: resolved.document, testPhone: resolved.testPhone };
+        if (resolved) wa = { name: resolved.name, variables: resolved.variables, document: resolved.document };
       }
       const res = await providerFor(String(r.channel)).send(String(r.to_address), subject, body,
         { template: String(r.template), payload, html, ...(attachment ? { attachment } : {}), ...(wa ? { wa } : {}) });
@@ -173,4 +175,29 @@ export async function deliveryFor(db: Db, kind: string, id: number) {
       WHERE nq.ref_kind = $1 AND nq.ref_id = $2
       ORDER BY (nq.status = 'Sent'), c.full_name NULLS LAST, nq.id`,
     [kind, id])).rows;
+}
+
+/**
+ * Send ONE sample WhatsApp of a given message type to a chosen number (owner
+ * 2026-08-25) — the per-template "send test" that replaced the global test-phone
+ * redirect. Uses the type's configured template + variable mapping with
+ * placeholder values, ignores the enabled toggle (you test before turning it on)
+ * and the env test-phone redirect (it goes to the number the operator typed).
+ */
+export async function sendWhatsappTest(db: Db, type: string, phone: string): Promise<{ ok: boolean; error?: string }> {
+  const def = WHATSAPP_TYPES.find((d) => d.type === type);
+  if (!def) throw errors.badRequest('Unknown WhatsApp message type');
+  const to = (phone ?? '').trim();
+  if (!to) throw errors.badRequest('Enter a phone number to send the test to');
+  const settings = await getSettingsMap(db);
+  const sample = sampleWhatsappPayload(def);
+  const resolved = resolveWhatsapp(settings, type, sample);
+  if (!resolved) throw errors.badRequest('Unknown WhatsApp message type');
+  if (!resolved.name) throw errors.badRequest('Set an approved template name first, then send a test.');
+  const res = await providerFor('whatsapp').send(to, '', '', {
+    template: type,
+    payload: sample,
+    wa: { name: resolved.name, variables: resolved.variables, document: resolved.document, ignoreTestRedirect: true },
+  });
+  return { ok: res.ok, error: res.error };
 }

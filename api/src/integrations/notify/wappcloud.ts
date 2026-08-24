@@ -95,10 +95,9 @@ export function wappcloudProvider(): NotifyProvider {
         ? { name: meta.wa.name, variables: meta.wa.variables, ...(meta.wa.document ? { document: meta.wa.document } : {}) }
         : templateFor(meta);
       if (!tpl || !tpl.name) return { ok: false, error: `wappcloud: no approved WhatsApp template for '${meta?.template ?? 'unknown'}'` };
-      // Test-phone redirect: the Settings value (threaded via meta) wins over the
-      // env one, so a tester can flip it without a redeploy.
-      const testPhone = meta?.wa?.testPhone ?? config.WHATSAPP_TEST_PHONE;
-      const override = testPhone ? formatPhone(testPhone) : null;
+      // Env test-phone redirect protects normal customer sends. A deliberate
+      // "send test" (ignoreTestRedirect) goes to the number the operator typed.
+      const override = !meta?.wa?.ignoreTestRedirect && config.WHATSAPP_TEST_PHONE ? formatPhone(config.WHATSAPP_TEST_PHONE) : null;
       const contact = override || formatPhone(to);
       if (!contact) return { ok: false, error: `wappcloud: no valid phone (got "${to}")` };
       if (override) console.warn(`[wappcloud] TEST MODE — message for ${to} redirected to ${override}`);

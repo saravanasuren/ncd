@@ -127,6 +127,7 @@ export async function tenantOverrides(db: Db): Promise<Record<string, unknown>[]
 export async function removeLockerApplication(
   db: Db, actor: AuthUser, applicationId: string, reason: string,
   snap: { tenant_name?: string | null; locker_no?: string | null; branch_id?: string | null } = {},
+  opts: { forceLocal?: boolean } = {},
 ) {
   // Explicit role check rather than a permission: the owner asked for Super
   // Admin specifically, and a permission could later be granted to someone else
@@ -147,6 +148,7 @@ export async function removeLockerApplication(
   // refusals are the ones staff need in plain words, not a raw 409.
   const lh = await import('../../integrations/lockerhub/client.js');
   let released: unknown = null;
+  let cancelledOnLockerhub = true;
   try {
     const r = await lh.cancelLockerApplication(
       { id: actor.id, name: actor.fullName, email: actor.email, staff_role: actor.role },
@@ -154,13 +156,24 @@ export async function removeLockerApplication(
     released = r?.locker_released ?? null;
   } catch (e) {
     const msg = (e as Error).message ?? '';
-    if (/payment_collected/i.test(msg)) {
-      throw errors.conflict('This locker has money already collected against it — cancelling would be a refund, which has to be handled with LockerHub.');
+    const blocked = /payment_collected/i.test(msg) || /live_tenancy/i.test(msg);
+    // LockerHub refuses to cancel a PAID or live-tenancy application — cancelling
+    // would be a refund/surrender that only they can do. Normally we stop here
+    // rather than let the two disagree. But the money can be genuinely test data,
+    // or has to be settled with LockerHub out-of-band, and the owner still needs
+    // it off NCD's screens (owner 2026-08-25). So a Super Admin may FORCE a
+    // NCD-view-only removal: LockerHub keeps the record and the money, and both
+    // the returned flag and the audit note say so in plain words. Any OTHER
+    // failure is a real upstream error and still hard-fails.
+    if (blocked && opts.forceLocal) {
+      cancelledOnLockerhub = false;
+    } else if (/payment_collected/i.test(msg)) {
+      throw errors.conflict('This locker has money already collected against it — cancelling would be a refund, which has to be handled with LockerHub. (A Super Admin can still remove it from NCD only.)');
+    } else if (/live_tenancy/i.test(msg)) {
+      throw errors.conflict('This application is already a live tenancy — close or surrender the locker instead of cancelling. (A Super Admin can still remove it from NCD only.)');
+    } else {
+      throw errors.upstream(502, `LockerHub would not cancel this application: ${msg.slice(0, 200)}`);
     }
-    if (/live_tenancy/i.test(msg)) {
-      throw errors.conflict('This application is already a live tenancy — close or surrender the locker instead of cancelling the application.');
-    }
-    throw errors.upstream(502, `LockerHub would not cancel this application: ${msg.slice(0, 200)}`);
   }
 
   return db.withTx(async (tx) => {
@@ -177,9 +190,11 @@ export async function removeLockerApplication(
     await writeAudit(tx, {
       actorId: actor.id, action: 'locker.application.remove',
       entityType: 'locker_applications', entityId: applicationId.trim(),
-      after: { reason: reason.trim(), cancelled_on_lockerhub: true, locker_released: released,
-               note: 'Cancelled on LockerHub via A23, and hidden here so no stale roster read resurfaces it' },
+      after: { reason: reason.trim(), cancelled_on_lockerhub: cancelledOnLockerhub, locker_released: released,
+               note: cancelledOnLockerhub
+                 ? 'Cancelled on LockerHub via A23, and hidden here so no stale roster read resurfaces it'
+                 : 'LockerHub REFUSED cancel (payment collected / live tenancy). Super Admin removed it from NCD VIEW ONLY — LockerHub STILL holds the record and any collected money must be settled with LockerHub separately.' },
     });
-    return { application_id: applicationId.trim(), cancelled: true, locker_released: released };
+    return { application_id: applicationId.trim(), cancelled: cancelledOnLockerhub, lockerhub_kept: !cancelledOnLockerhub, locker_released: released };
   });
 }

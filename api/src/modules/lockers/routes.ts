@@ -641,12 +641,15 @@ lockersRouter.post('/tenants/:tenantId/link', requirePermission('lockers:waive')
 // 2026-08-19). Hides it here; LockerHub still holds it, and the service says so
 // in its audit entry because their API has no delete at all.
 lockersRouter.post('/applications/:id/remove', asyncHandler(async (req, res) => {
-  const { reason, tenant_name, locker_no, branch_id } = z.object({
+  const { reason, tenant_name, locker_no, branch_id, force_local } = z.object({
     reason: z.string().min(3),
     tenant_name: z.string().optional(), locker_no: z.string().optional(), branch_id: z.string().optional(),
+    // Super Admin: remove from NCD's view even when LockerHub refuses to cancel
+    // (payment collected / live tenancy). LockerHub keeps the record.
+    force_local: z.boolean().optional(),
   }).parse(req.body ?? {});
   res.json(await removeLockerApplication(getDb(), req.user!, String(req.params.id), reason,
-    { tenant_name, locker_no, branch_id }));
+    { tenant_name, locker_no, branch_id }, { forceLocal: force_local }));
 }));
 
 lockersRouter.post('/tenants/:tenantId/remove', requirePermission('lockers:remove-tenant'), asyncHandler(async (req, res) => {

@@ -201,6 +201,22 @@ export function LockerEnrollmentPage() {
    * delete for an application at all. Offered only before allotment: an
    * allotted locker is a live tenancy and is removed from the Tenants page.
    */
+  const submitRemove = (reason: string, forceLocal: boolean) =>
+    api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/remove`, {
+      reason,
+      ...(forceLocal ? { force_local: true } : {}),
+      tenant_name: name.trim() || undefined,
+      locker_no: app.allotment?.locker_number || undefined,
+      branch_id: String(app.branch_id ?? branchId) || undefined,
+    });
+  const afterRemoved = (r: any) => {
+    setApp(null); setLinks({}); setCheques([]); setFeeWaivers([]); setErr('');
+    setNote(r?.lockerhub_kept
+      ? 'Removed from NCD’s view. LockerHub STILL holds this application — any money collected on it must be settled with LockerHub separately.'
+      : r?.locker_released
+        ? `Cancelled on LockerHub — locker ${r.locker_released} released back to vacant.`
+        : 'Cancelled on LockerHub. You can enrol this customer again from scratch.');
+  };
   const removeApp = async () => {
     if (!app?.application_id) return;
     const ok = await confirm({
@@ -214,17 +230,29 @@ export function LockerEnrollmentPage() {
       label: 'Reason', minLength: 3, confirmLabel: 'Delete', danger: true,
     });
     if (!reason) return;
-    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/remove`, {
-      reason,
-      tenant_name: name.trim() || undefined,
-      locker_no: app.allotment?.locker_number || undefined,
-      branch_id: String(app.branch_id ?? branchId) || undefined,
-    }));
-    if (r?.cancelled) {
-      setApp(null); setLinks({}); setCheques([]); setFeeWaivers([]); setErr('');
-      setNote(r.locker_released
-        ? `Cancelled on LockerHub — locker ${r.locker_released} released back to vacant.`
-        : 'Cancelled on LockerHub. You can enrol this customer again from scratch.');
+    setErr(''); setBusy(true);
+    try {
+      afterRemoved(await submitRemove(reason, false));
+    } catch (e) {
+      // LockerHub won't cancel a paid / live-tenancy application (409). A Super
+      // Admin can still remove it from NCD's view only — LockerHub keeps it.
+      if (e instanceof ApiError && e.status === 409 && user?.role === 'super_admin') {
+        setBusy(false);
+        const force = await confirm({
+          title: 'LockerHub won’t cancel this application',
+          body: `${e.message}\n\nAs Super Admin you can remove it from NCD’s view only. LockerHub will KEEP the record, and any money collected on it must be settled with LockerHub separately. Continue?`,
+          confirmLabel: 'Remove from NCD only', danger: true,
+        });
+        if (!force) return;
+        setBusy(true);
+        try { afterRemoved(await submitRemove(reason, true)); }
+        catch (e2) { setErr(e2 instanceof ApiError ? e2.message : 'Failed'); }
+        finally { setBusy(false); }
+      } else {
+        setErr(e instanceof ApiError ? e.message : 'Failed');
+      }
+    } finally {
+      setBusy(false);
     }
   };
   // ── Cheque register ────────────────────────────────────────────────────

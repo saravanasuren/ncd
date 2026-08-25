@@ -591,10 +591,12 @@ lockersRouter.post('/applications/:id/fee-waivers', requirePermission('lockers:w
     res.status(201).json(await requestFeeWaiver(getDb(), req.user!, { lockerhub_application_id: String(req.params.id), ...b }));
   }));
 
-// The standard rent waiver (owner 2026-08-20): one click, no checker, so the
-// customer pays the rent inclusive of GST. gst_pct comes from the size the
-// caller is looking at, so the rate follows LockerHub's tax rather than a
-// hardcoded 18.
+// The standard rent waiver (owner 2026-08-20, re-confirmed 2026-08-25): one
+// click, NO checker — the amount is a fixed formula off the size's gst_pct and
+// rent, so there is nothing for an approver to decide. gst_pct comes from the
+// size the caller is looking at, so the rate follows LockerHub's tax rather
+// than a hardcoded 18. See autoWaiveRent for why this deliberately has no
+// maker-checker while /premium-rent and /fee-waivers both do.
 lockersRouter.post('/applications/:id/apply-rent-waiver', requirePermission('lockers:waive'),
   asyncHandler(async (req, res) => {
     // annual_rent is the PRE-TAX price of the size this application is on —
@@ -608,8 +610,10 @@ lockersRouter.post('/applications/:id/apply-rent-waiver', requirePermission('loc
     res.json(await autoWaiveRent(getDb(), req.user!, String(req.params.id), b.gst_pct, b.annual_rent));
   }));
 
-// Premium customer — rent made complimentary (owner 2026-08-22). One click, no
-// checker; recorded as category 'premium', distinct from a waiver.
+// Premium customer — rent made complimentary (owner 2026-08-22). A 100% rent
+// write-off and a real judgement call, so it goes to Admin/CXO and reaches
+// LockerHub only on approval (#333); recorded as category 'premium', distinct
+// from a waiver.
 lockersRouter.post('/applications/:id/premium-rent', requirePermission('lockers:waive'),
   asyncHandler(async (req, res) => {
     const { premiumWaiveRent } = await import('./feeWaivers.js');

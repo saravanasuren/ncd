@@ -60,12 +60,20 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
                        WHERE ds.line_id = l.id AND ds.due_type IN ${DUE_TYPES}
                          AND (ds.status = 'Paid'
                               OR (ds.status = 'Scheduled' AND ds.batch_id IS NOT NULL))),
-                     a.interest_start_date) AS paid_through,
+                     -- THIS TRANCHE's own money-received date, not the
+                     -- application's single interest_start_date (owner 2026-08-25).
+                     -- A clubbed investment's credits arrive on different days and
+                     -- each earns from ITS OWN date for its first (broken) period —
+                     -- so a later credit is not over-paid for days before its money
+                     -- was in. Single-tranche investments have line date ==
+                     -- interest_start_date, so nothing there moves. Legacy lines
+                     -- with no date fall back to interest_start_date as before.
+                     l.date_money_received, a.interest_start_date) AS paid_through,
             -- True only when this line has never had a payout watermark — i.e.
-            -- paid_through fell back to interest_start_date itself, the day the
-            -- money arrived and has never been paid for. Every later watermark
-            -- is a prior due_date already compensated through end of that day,
-            -- where the usual exclusive-start day count is correct as-is.
+            -- paid_through fell back to the tranche's money-received date itself, a
+            -- day never yet paid for. Every later watermark is a prior due_date
+            -- already compensated through end of that day, where the usual
+            -- exclusive-start day count is correct as-is.
             NOT EXISTS (SELECT 1 FROM disbursement_schedule ds
                          WHERE ds.line_id = l.id AND ds.due_type IN ${DUE_TYPES}
                            AND (ds.status = 'Paid'
@@ -924,7 +932,11 @@ const SUMMARY_SELECT = `
             (SELECT max(p.due_date) FROM disbursement_schedule p
               WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
                 AND p.due_type IN ('Interest','BrokenInterest') AND p.status = 'Paid'),
-            a.interest_start_date)
+            -- Same per-tranche start as previewDue (owner 2026-08-25): a first
+            -- period counts from THIS tranche's money-received date, so the printed
+            -- days match the gross that was actually paid. Legacy no-date lines
+            -- fall back to interest_start_date.
+            l.date_money_received, a.interest_start_date)
           + CASE WHEN NOT EXISTS (SELECT 1 FROM disbursement_schedule p
                                     WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
                                       AND p.due_type IN ('Interest','BrokenInterest') AND p.status = 'Paid')

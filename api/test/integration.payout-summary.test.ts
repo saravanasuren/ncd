@@ -42,6 +42,9 @@ const HEADERS = [
   'Invested (Rs)', 'Rate %', 'Beneficiary Name', 'Bank A/C', 'IFSC',
   'Interest From', 'Interest To', 'Days', 'Gross (Rs)', 'TDS (Rs)', 'Net (Rs)',
   'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)', 'Phone', 'Payment Mode',
+  // The tranche's own cheque/UTR (owner 2026-08-26) — APPENDED, so no existing
+  // column moved. Its behaviour lives in integration.payout-summary-cheque-ref.
+  'Cheque / Ref No',
 ];
 
 /** Column index BY HEADER NAME. The sheet has had two columns inserted mid-way

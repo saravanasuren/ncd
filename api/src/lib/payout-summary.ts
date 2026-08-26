@@ -26,10 +26,17 @@ export interface SummaryRow {
   phone?: string | null;
   date_of_birth?: string | Date | null;
   pan?: string | null;
-  /** How the investment's own money was originally collected — NEFT/RTGS/
-   *  Cheque/Easebuzz/… (applications.collection_method), not how interest is
-   *  being paid out now. */
+  /** How the money on THIS row was collected — NEFT/RTGS/Cheque/Easebuzz/…,
+   *  not how interest is being paid out now. Sourced from the tranche's own
+   *  application_lines.collection_method (owner 2026-08-26), falling back to
+   *  applications.collection_method for legacy lines that predate per-line
+   *  payment detail. Reads 'Multiple tranches' on a consolidated row. */
   collection_method?: string | null;
+  /** The cheque number / UTR that brought THIS row's money in — the tranche's
+   *  own application_lines.collection_reference. Blank on a consolidated row,
+   *  which covers several tranches and so several references (owner
+   *  2026-08-26); that row's Payment Mode reads 'Multiple tranches' instead. */
+  collection_reference?: string | null;
   /** Raw stored value — normalised to Male/Female/Other for display. */
   gender?: string | null;
   /** investor_category: Individual / HUF / Trust / Company / … */
@@ -67,7 +74,7 @@ const COLUMNS = [
   'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)',
   // Appended, not inserted — ops reconcile this sheet against the Federal Net
   // file by column position, so every existing column keeps its index.
-  'Phone', 'Payment Mode',
+  'Phone', 'Payment Mode', 'Cheque / Ref No',
 ];
 
 /** Completed years at the payout date. Blank when either date is unusable. */
@@ -172,6 +179,7 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
       m.total,
       r.phone ?? '',
       r.collection_method ?? '',
+      r.collection_reference ?? '',
     ]);
     // Application No, PAN, Bank A/C, IFSC and Phone must stay TEXT — otherwise
     // Excel drops leading zeros and renders long numbers in scientific

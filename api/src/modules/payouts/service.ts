@@ -891,6 +891,25 @@ export async function markRowFailed(db: Db, actor: AuthUser, scheduleId: number,
 // The human companion to the bank NEFT file. Ops reconcile one against the
 // other, so it names the customer, the interest period and the gross/TDS/net
 // split that the bank sheet (net only) can't show.
+
+/** What Payment Mode reads on a row that speaks for several tranches. */
+const MULTI_TRANCHE_MODE = 'Multiple tranches';
+
+// A consolidated row's folded siblings: the ₹0 tranche rows summaryForBatch
+// strips out below. Defined here with the SAME predicate that strips them, so
+// "did this row absorb other tranches?" and "which rows got hidden?" can never
+// disagree. count > 0 ⇒ this row speaks for several tranches, and so for
+// several cheques — no single reference is truthful for it.
+const FOLDED_SIBLINGS = `(
+  SELECT count(*) FROM disbursement_schedule sib
+   WHERE sib.batch_id = ds.batch_id AND sib.application_id = ds.application_id
+     AND sib.due_date = ds.due_date AND sib.due_type = 'Interest'
+     AND sib.status <> 'Skipped' AND sib.line_id <> ds.line_id
+     AND sib.gross_amount = 0 AND sib.net_amount = 0
+     AND EXISTS (SELECT 1 FROM disbursement_schedule p
+                  WHERE p.line_id = sib.line_id AND p.due_date < sib.due_date
+                    AND p.due_type IN ('Interest','BrokenInterest') AND p.status = 'Paid'))`;
+
 const SUMMARY_SELECT = `
   SELECT a.application_no, c.full_name AS customer_name, ${REFERRER} AS referred_by,
          -- The branch that EARNED the investment, stamped on the application at
@@ -900,7 +919,16 @@ const SUMMARY_SELECT = `
          br.name AS branch,
          c.phone, c.dob AS date_of_birth, c.pan,
          c.gender, c.investor_category AS category,
-         s.name AS series_name, a.collection_method,
+         s.name AS series_name,
+         -- Payment mode and reference describe the money on THIS row. The line's
+         -- own values win over the application's, which only ever held the FIRST
+         -- credit's (migration 054) — so a clubbed second tranche used to show
+         -- the first tranche's method. Legacy pre-054 lines are NULL and fall
+         -- back to the application, leaving every existing row unchanged.
+         CASE WHEN ${FOLDED_SIBLINGS} > 0 THEN '${MULTI_TRANCHE_MODE}'
+              ELSE COALESCE(l.collection_method, a.collection_method) END AS collection_method,
+         CASE WHEN ${FOLDED_SIBLINGS} > 0 THEN NULL
+              ELSE COALESCE(l.collection_reference, a.collection_reference) END AS collection_reference,
          -- A redemption slice was earned on its own principal basis, not on the
          -- line's face amount (wealth's principal_basis); everything else shows
          -- what's actually still outstanding on the line — the face amount for
@@ -1018,7 +1046,12 @@ async function summaryRowsForDate(db: Db, payoutDate: string, productType: Produ
   const statics = (await db.query<Record<string, unknown>>(
     `SELECT l.id AS line_id, ${REFERRER} AS referred_by, br.name AS branch,
             c.phone, c.dob AS date_of_birth, c.pan, c.gender, c.investor_category AS category,
-            s.name AS series_name, a.collection_method, l.outstanding_amount AS investment_amount, l.coupon_rate_pct,
+            s.name AS series_name,
+            -- See SUMMARY_SELECT: the line's own payment detail wins, falling
+            -- back to the application for legacy pre-054 lines.
+            COALESCE(l.collection_method, a.collection_method) AS collection_method,
+            COALESCE(l.collection_reference, a.collection_reference) AS collection_reference,
+            l.outstanding_amount AS investment_amount, l.coupon_rate_pct,
             COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
             COALESCE(pb.account_number, cb.account_number) AS account_number,
             COALESCE(pb.ifsc, cb.ifsc) AS ifsc,
@@ -1036,8 +1069,16 @@ async function summaryRowsForDate(db: Db, payoutDate: string, productType: Produ
   const byLine = new Map(statics.map((r) => [Number(r.line_id), r]));
   return (due.rows as Record<string, unknown>[]).map((r) => {
     const st = byLine.get(Number(r.line_id)) ?? {};
+    // previewDue folds a clubbed investment's tranches into one row and marks the
+    // survivor with every line it now speaks for. Such a row covers several
+    // cheques, so it names none of them (owner 2026-08-26) — matching the
+    // saved-batch sheet, which reaches the same answer via FOLDED_SIBLINGS.
+    const merged = Array.isArray(r.merged_line_ids) && (r.merged_line_ids as unknown[]).length > 1;
+    const stat = st as Record<string, unknown>;
     return {
       ...st,
+      collection_method: merged ? MULTI_TRANCHE_MODE : stat.collection_method,
+      collection_reference: merged ? null : stat.collection_reference,
       application_no: r.application_no,
       customer_name: r.customer_name,
       row_type: r.row_type ?? ((st as Record<string, unknown>).paid_before ? 'Balance After Redemption' : 'Addition'),

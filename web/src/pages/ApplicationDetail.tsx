@@ -179,7 +179,7 @@ export function ApplicationDetailPage() {
   const back = (useLocation().state as { from?: { path: string; label: string } } | null)?.from
     ?? { path: '/app/applications', label: 'Applications' };
   const qc = useQueryClient();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const [msg, setMsg] = useState('');
   const [note, setNote] = useState('');
   const key = ['application', id];
@@ -205,6 +205,9 @@ export function ApplicationDetailPage() {
         <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{a.status}</span>
       </div>
       <p className="text-sm text-text-muted mt-1">{a.customer_name} · {a.series_code} · {formatINR(a.total_amount)}</p>
+      <InvestmentDate a={a} appId={Number(id)}
+        canEdit={user?.role === 'super_admin' && (data.lines?.length ?? 0) === 1}
+        onDone={invalidate} onErr={setMsg} />
       <CreditedTo app={a} appId={Number(id)} canEdit={can('applications:update')} onDone={invalidate} onErr={setMsg} />
       {msg && <div className="text-xs text-danger mt-2">{msg}</div>}
       {note && <div className="text-xs text-primary mt-2">{note}</div>}
@@ -496,6 +499,40 @@ export function ApplicationDetailPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/** The investment (money-received) date. Always shown under the header; a Super
+ * Admin can correct it on a single-credit investment while no interest has been
+ * paid — the API rebuilds the schedule and refuses once anything is paid/batched. */
+function InvestmentDate({ a, appId, canEdit, onDone, onErr }: {
+  a: any; appId: number; canEdit: boolean; onDone: () => void; onErr: (m: string) => void;
+}) {
+  const cur = a.date_money_received ? String(a.date_money_received).slice(0, 10) : null;
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(cur ?? '');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try { await api.patch(`/api/applications/${appId}/investment-date`, { date: val }); setEditing(false); onDone(); }
+    catch (e) { onErr(e instanceof ApiError ? e.message : 'Failed'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <p className="text-sm text-text-muted mt-0.5">
+      Investment date: <span className="text-text font-medium mono">{cur ?? '—'}</span>
+      {canEdit && !editing && (
+        <button className="ml-2 text-xs text-primary hover:underline" onClick={() => { setVal(cur ?? ''); setEditing(true); }}>edit</button>
+      )}
+      {editing && (
+        <span className="ml-2 inline-flex items-center gap-1">
+          <input type="date" className="text-xs border border-border-strong rounded px-1.5 py-0.5" value={val} onChange={(e) => setVal(e.target.value)} />
+          <button className="text-xs bg-primary hover:bg-primary-hover text-white rounded px-2 py-0.5 disabled:opacity-40"
+            disabled={busy || !val || val === cur} onClick={save}>Save</button>
+          <button className="text-xs text-text-muted hover:underline" onClick={() => setEditing(false)}>cancel</button>
+        </span>
+      )}
+    </p>
   );
 }
 

@@ -51,6 +51,34 @@ describe('cancelling a locker application', () => {
     spy.mockRestore();
   });
 
+  it('a Super Admin can force a NCD-view-only removal when LockerHub refuses a paid app', async () => {
+    // Owner 2026-08-25: the money can be test data or settled with LockerHub
+    // out-of-band, and it still has to leave NCD's screens. forceLocal writes the
+    // local hide anyway — and reports honestly that LockerHub kept the record.
+    const lh = await import('../src/integrations/lockerhub/client.js');
+    const spy = vi.spyOn(lh, 'cancelLockerApplication').mockRejectedValue(new Error('409 payment_collected'));
+    const { removeLockerApplication } = await import('../src/modules/lockers/tenantOverrides.js');
+    const actor = { id: 1, fullName: 'Admin', email: 'admin@dhanam.finance', role: 'super_admin' } as never;
+
+    const r = await removeLockerApplication(ctx.db, actor, 'lh-force-local', 'test cancel', {}, { forceLocal: true });
+    expect(r.cancelled).toBe(false);        // NOT cancelled on LockerHub
+    expect(r.lockerhub_kept).toBe(true);    // said plainly
+    expect(await hidden('lh-force-local')).toBe(1);   // but gone from NCD's view
+    spy.mockRestore();
+  });
+
+  it('force local ONLY bypasses the paid / live-tenancy block, never a real upstream error', async () => {
+    const lh = await import('../src/integrations/lockerhub/client.js');
+    const spy = vi.spyOn(lh, 'cancelLockerApplication').mockRejectedValue(new Error('500 boom'));
+    const { removeLockerApplication } = await import('../src/modules/lockers/tenantOverrides.js');
+    const actor = { id: 1, fullName: 'Admin', email: 'admin@dhanam.finance', role: 'super_admin' } as never;
+
+    await expect(removeLockerApplication(ctx.db, actor, 'lh-force-upstream', 'test', {}, { forceLocal: true }))
+      .rejects.toThrow(/would not cancel/i);
+    expect(await hidden('lh-force-upstream')).toBe(0);   // nothing hidden on a genuine error
+    spy.mockRestore();
+  });
+
   it('cancels on their side, reports the released locker, and hides it here', async () => {
     const lh = await import('../src/integrations/lockerhub/client.js');
     const spy = vi.spyOn(lh, 'cancelLockerApplication')

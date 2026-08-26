@@ -145,7 +145,7 @@ registerOnFinalApprove('series_change', async (tx, req) => {
 /**
  * Refuse money into a series nobody has approved yet. Deliberately narrow: it
  * bites ONLY on PendingApproval, so imports, rollovers and app-channel money
- * still land in Closing/Allotted series exactly as before.
+ * still land in Open/Allotted series exactly as before.
  */
 export async function assertSeriesTakesMoney(db: Db, seriesId: number) {
   const row = (await db.query<{ status: string; code: string }>(

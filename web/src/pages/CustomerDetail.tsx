@@ -834,6 +834,34 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
   const [open, setOpen] = useState<Set<string>>(() => new Set(groups.filter((g) => liveOf(g.rows).length > 0).map((g) => g.code)));
   const toggle = (c: string) => setOpen((s) => { const n = new Set(s); if (n.has(c)) n.delete(c); else n.add(c); return n; });
 
+  /**
+   * The received-date cell. One credit → its date, exactly as before. Several →
+   * every credit's own date, because that is what makes the tranches visible on
+   * the profile at all: a clubbed debenture is one investment paid for across
+   * several days, and each day is when that credit starts earning.
+   *
+   * DISTINCT dates only — two credits that landed the same day are one date, not
+   * the same date printed twice. Falls back to the application's date for legacy
+   * rows whose credits carry no date of their own.
+   */
+  const receivedDates = (r: any) => {
+    const credits: Array<{ date: string | null; amount: string | number }> = Array.isArray(r.credits) ? r.credits : [];
+    const dated = credits.filter((c) => c.date);
+    if (dated.length === 0) return r.date_money_received ? String(r.date_money_received).slice(0, 10) : '—';
+    const dates = Array.from(new Set(dated.map((c) => String(c.date).slice(0, 10))));
+    if (dates.length === 1) return dates[0];
+    const breakup = dated.map((c) => `${String(c.date).slice(0, 10)} — ${formatINR(Number(c.amount))}`).join('\n');
+    const shown = dates.slice(0, 3);
+    return (
+      <span className="inline-flex flex-col leading-tight" title={`Paid in ${dated.length} credits:\n${breakup}`}>
+        {shown.map((d) => <span key={d}>{d}</span>)}
+        {dates.length > shown.length && (
+          <span className="text-text-muted">+{dates.length - shown.length} more</span>
+        )}
+      </span>
+    );
+  };
+
   const investmentRow = (r: any) => (
     <tr key={r.id} className={`border-b border-border last:border-0 hover:bg-bg cursor-pointer ${r.archived_at ? 'opacity-50' : ''}`}
       onClick={() => nav(`/app/applications/${r.id}`, { state: { from: { path: `/app/customers/${customerId}`, label: customerName } } })}>
@@ -854,7 +882,13 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
              className="ml-1.5 text-[11px] text-primary hover:underline">view</a>
         )}
       </td>
-      <td className={`${td} text-xs whitespace-nowrap`}>{r.date_money_received ? String(r.date_money_received).slice(0, 10) : '—'}</td>
+      {/* Received date(s). A clubbed debenture is ONE investment paid for on
+          several days, and each of those days is real — it is when that credit
+          starts earning. Showing only the application's single date hid the
+          tranches entirely, so every credit's date is listed here (owner
+          2026-08-26). Up to three inline; beyond that the rest collapse into
+          "+N more", with the full breakup — date and amount — on hover. */}
+      <td className={`${td} text-xs whitespace-nowrap`}>{receivedDates(r)}</td>
       <td className={`${td} text-right mono`}>{formatINR(r.amount)}</td>
       <td className={`${td} text-right mono font-medium`}>{formatINR(r.outstanding ?? 0)}</td>
       {canDelete && (

@@ -295,7 +295,17 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
             a.esigned_at, (a.esigned_pdf_path IS NOT NULL) AS has_signed_copy,
             -- how many credits were clubbed into this investment (>1 = has a
             -- payment breakup), so the customer's list can flag it at a glance.
-            (SELECT count(*)::int FROM application_lines al2 WHERE al2.application_id = a.id) AS line_count
+            (SELECT count(*)::int FROM application_lines al2 WHERE al2.application_id = a.id) AS line_count,
+            -- Every credit's OWN money-received date and amount, oldest first.
+            -- A clubbed debenture is one investment paid for on several days
+            -- (owner 2026-08-26: "50,000 today, 50,000 tomorrow, 1,00,000 the day
+            -- after — clubbed as one debenture"), and each of those days is real:
+            -- it is the day that credit starts earning. So the received-date
+            -- column must show them all, not just the application's single date,
+            -- or the profile hides the fact that there are tranches at all.
+            (SELECT json_agg(json_build_object('date', al3.date_money_received, 'amount', al3.amount)
+                             ORDER BY al3.date_money_received NULLS LAST, al3.id)
+               FROM application_lines al3 WHERE al3.application_id = a.id) AS credits
      -- LEFT: subordinate bonds have no series and would otherwise vanish from
      -- the customer's own profile — the one place they must always appear.
      FROM applications a LEFT JOIN series s ON s.id = a.series_id

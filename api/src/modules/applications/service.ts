@@ -543,6 +543,45 @@ export async function setBondDistributed(db: Db, actor: AuthUser, appId: number,
   return { ok: true, bond_distributed_at: upd.rows[0]?.bond_distributed_at ?? null };
 }
 
+/**
+ * Correct an investment's date (owner 2026-08-25). Super Admin only, and ONLY
+ * while no interest has been paid or locked into a batch — it moves the money-
+ * received / interest-start date and REBUILDS the (all-unpaid) schedule, so a
+ * paid row would mean rewriting money already sent. 🔒 interest-logic-locked:
+ * this changes the first period's day count, so it is a deliberate, audited,
+ * Super-Admin correction. Refused for a clubbed investment — each of its credits
+ * has its own date, so there is no single "investment date" to move.
+ */
+export async function editInvestmentDate(db: Db, actor: AuthUser, appId: number, newDate: string) {
+  if (actor.role !== 'super_admin') throw errors.forbidden('Only a Super Admin can change an investment date');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) throw errors.badRequest('A valid date (YYYY-MM-DD) is required');
+  return db.withTx(async (tx) => {
+    const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [appId])).rows[0];
+    if (!app) throw errors.notFound('Application not found');
+    const lines = (await tx.query<{ id: string }>('SELECT id FROM application_lines WHERE application_id = $1', [appId])).rows;
+    if (lines.length !== 1) {
+      throw errors.badRequest('This investment has multiple credits, each with its own date — the investment date can only be changed on a single-credit investment.');
+    }
+    const locked = await tx.query(
+      "SELECT 1 FROM disbursement_schedule WHERE application_id = $1 AND (status = 'Paid' OR batch_id IS NOT NULL) LIMIT 1", [appId]);
+    if (locked.rowCount) {
+      throw errors.conflict('Interest has already been paid or locked into a batch on this investment — its date can no longer be changed.');
+    }
+
+    // The money-received date IS the interest-start date (owner rule 2026-07-27).
+    await tx.query('UPDATE applications SET date_money_received = $1, interest_start_date = $1, updated_at = now() WHERE id = $2', [newDate, appId]);
+    await tx.query('UPDATE application_lines SET date_money_received = $1 WHERE application_id = $2', [newDate, appId]);
+    // Rebuild the all-unpaid schedule from the corrected date, and re-accrue.
+    await tx.query("DELETE FROM disbursement_schedule WHERE application_id = $1 AND status <> 'Paid'", [appId]);
+    const { materializeForApplication } = await import('../schedule/materialize.js');
+    await materializeForApplication(tx, appId);
+    const { accrueForApplication } = await import('../incentives/accrual.js');
+    await accrueForApplication(tx, appId);
+    await writeAudit(tx, { actorId: actor.id, action: 'application.investment-date.edit', entityType: 'applications', entityId: appId, after: { date_money_received: newDate } });
+    return { ok: true, date_money_received: newDate };
+  });
+}
+
 /** Record eSign completion. Non-gating: it stamps esigned_at and does not
  * change the lifecycle status (eSign no longer sits on the critical path). */
 export async function markESigned(db: Db, actor: AuthUser, appId: number) {

@@ -117,6 +117,14 @@ applicationsRouter.post('/:id/bond-distributed', requirePermission('applications
 applicationsRouter.post('/:id/mark-esigned', requirePermission('applications:mark-esigned'),
   asyncHandler(async (req, res) => { await s.markESigned(getDb(), req.user!, Number(req.params.id)); res.json({ ok: true }); }));
 
+// Correct the investment (money-received) date — Super Admin only, enforced in
+// the service; refused once interest is paid/batched. Rebuilds the schedule.
+applicationsRouter.patch('/:id/investment-date', requirePermission('applications:update'),
+  asyncHandler(async (req, res) => {
+    const { date } = z.object({ date: z.string() }).parse(req.body);
+    res.json(await s.editInvestmentDate(getDb(), req.user!, Number(req.params.id), date));
+  }));
+
 // Send the acknowledgement PDF to the customer over WhatsApp (approved ncd_akn
 // template). Management-tier — same actors who confirm funds / update the app.
 // The receipt for ONE credit of a clubbed investment (the app-level one shows

@@ -340,6 +340,23 @@ export async function updateBankAccountName(db: Db, actor: AuthUser, customerId:
 }
 
 /**
+ * Beneficiary names carrying characters banks choke on — dot, comma, hyphen,
+ * slash (owner 2026-08-26). Listed so they can be cleaned by hand one by one on
+ * a dedicated page; the fix reuses updateBankAccountName (customer.bank.rename),
+ * so each edit is audited exactly like any other rename. Not scope-filtered —
+ * this is an admin cleanup over the whole book.
+ */
+export async function listBeneficiaryNamesToFix(db: Db) {
+  const { rows } = await db.query(
+    `SELECT cba.id, cba.customer_id, c.full_name AS customer_name, c.customer_code,
+            cba.account_number, cba.ifsc, cba.holder_name, cba.is_active
+       FROM customer_bank_accounts cba JOIN customers c ON c.id = cba.customer_id
+      WHERE cba.holder_name ~ '[.,/-]'
+      ORDER BY c.full_name, cba.id`);
+  return { rows, count: rows.length };
+}
+
+/**
  * A customer's tax position: whether TDS applies, and any 15G/15H on file.
  *
  * These drive computeTds on every payout, but were settable ONLY at enrolment —

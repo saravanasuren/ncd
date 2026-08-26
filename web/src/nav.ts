@@ -40,6 +40,7 @@ export const NAV: NavItem[] = [
   { to: '/app/agents', label: 'Agents', anyOf: ['agents:manage'], group: 'Periodic' },
   { to: '/app/my-earnings', label: 'My Earnings', anyOf: ['earnings:read-own'], group: 'Periodic' },
   { to: '/app/reports', label: 'Reports', anyOf: ['reports:download'], group: 'Periodic', hideForRoles: ['cxo'] },
+  { to: '/app/beneficiary-cleanup', label: 'Beneficiary Names', anyOf: ['customers:update'], group: 'Admin' },
   { to: '/app/masters', label: 'Masters', anyOf: ['products:manage'], group: 'Admin' },
   { to: '/app/system', label: 'System', anyOf: ['audit:read', 'notifications:admin'], group: 'Admin' },
   { to: '/app/settings', label: 'Settings', anyOf: ['settings:manage', 'settings:workflow-config'], group: 'Admin' },

@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext.js';
 import { LoginPage } from './pages/Login.js';
 import { ForgotPasswordPage } from './pages/ForgotPassword.js';
 import { SignupPage } from './pages/Signup.js';
+import { BeneficiaryCleanupPage } from './pages/BeneficiaryCleanup.js';
 import { ResetPasswordPage } from './pages/ResetPassword.js';
 import { AppShell } from './layouts/AppShell.js';
 // Lazy-loaded: the dashboard pulls in the (heavy) charting library, so it
@@ -129,6 +130,7 @@ export function App() {
           <Route path="redemptions" element={<RequirePerm perm="redemptions:initiate"><RedemptionsPage /></RequirePerm>} />
           <Route path="ncd-events" element={<RequirePerm perm="redemptions:initiate"><EventsPage /></RequirePerm>} />
           <Route path="maturity-alerts" element={<RequirePerm perm="dashboard:view"><MaturityAlertsPage /></RequirePerm>} />
+          <Route path="beneficiary-cleanup" element={<RequirePerm perm="customers:update"><BeneficiaryCleanupPage /></RequirePerm>} />
           <Route path="masters" element={<RequirePerm perm="products:manage"><MastersPage /></RequirePerm>} />
           <Route path="payouts" element={<RequirePerm perm="payouts:generate"><PayoutsPage /></RequirePerm>} />
           <Route path="escrow" element={<RequirePerm perm="escrow:reconcile"><EscrowPage /></RequirePerm>} />

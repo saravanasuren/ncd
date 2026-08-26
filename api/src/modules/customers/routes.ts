@@ -81,6 +81,11 @@ customersRouter.put('/drafts', requirePermission('customers:create'),
 customersRouter.delete('/drafts/mine', requirePermission('customers:create'),
   asyncHandler(async (req, res) => res.json(await s.discardMyDraft(getDb(), req.user!))));
 
+// Beneficiary names with bank-hostile characters (. , - /) to clean by hand.
+// Static path — declared BEFORE '/:id' so it isn't captured as a customer id.
+customersRouter.get('/beneficiary-cleanup', requirePermission('customers:update'),
+  asyncHandler(async (_req, res) => res.json(await s.listBeneficiaryNamesToFix(getDb()))));
+
 customersRouter.get('/:id', requirePermission('customers:read'),
   asyncHandler(async (req, res) => res.json(await s.getCustomerDetail(getDb(), req.user!, Number(req.params.id)))));
 

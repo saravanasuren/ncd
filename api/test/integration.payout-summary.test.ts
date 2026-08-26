@@ -36,11 +36,22 @@ beforeAll(async () => {
 afterAll(async () => { await ctx.close(); });
 
 const HEADERS = [
-  '#', 'Application No', 'Customer Name', 'Referred By', 'DOB', 'Age', 'PAN', 'Gender', 'Category', 'Series', 'Type',
+  // Branch sits beside Referred By (owner 2026-08-25) — inserted, so everything
+  // after it shifts one place right. This list IS the contract for that order.
+  '#', 'Application No', 'Customer Name', 'Referred By', 'Branch', 'DOB', 'Age', 'PAN', 'Gender', 'Category', 'Series', 'Type',
   'Invested (Rs)', 'Rate %', 'Beneficiary Name', 'Bank A/C', 'IFSC',
   'Interest From', 'Interest To', 'Days', 'Gross (Rs)', 'TDS (Rs)', 'Net (Rs)',
   'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)', 'Phone', 'Payment Mode',
 ];
+
+/** Column index BY HEADER NAME. The sheet has had two columns inserted mid-way
+ *  (Referred By, then Branch); indexing by number meant every insert silently
+ *  repointed these assertions at neighbouring data. Resolve by name instead. */
+const C = (name: string): number => {
+  const i = HEADERS.indexOf(name);
+  if (i < 0) throw new Error(`no such column: ${name}`);
+  return i + 1;
+};
 
 async function sheetOf(buffer: Buffer) {
   const wb = new ExcelJS.Workbook();
@@ -105,24 +116,66 @@ describe('payout summary sheet', () => {
     expect(ws.rowCount).toBeGreaterThan(1);
 
     const row = ws.getRow(2);
-    expect(String(row.getCell(2).value)).toMatch(/^APP-/);                     // Application No
-    expect(String(row.getCell(11).value)).toMatch(/^(Addition|Balance After Redemption|Redemption)$/); // Type ('Live' renamed, owner 2026-07-23)
-    expect(Number(row.getCell(19).value)).toBeGreaterThan(0);                  // Days
+    expect(String(row.getCell(C('Application No')).value)).toMatch(/^APP-/);                     // Application No
+    expect(String(row.getCell(C('Type')).value)).toMatch(/^(Addition|Balance After Redemption|Redemption)$/); // Type ('Live' renamed, owner 2026-07-23)
+    expect(Number(row.getCell(C('Days')).value)).toBeGreaterThan(0);                  // Days
     // Beneficiary Name comes from the BANK ACCOUNT's holder_name (owner #4),
     // not the customer record — joint/differently-named accounts must match.
-    expect(String(row.getCell(14).value)).toMatch(/^Summary Cust/);
+    expect(String(row.getCell(C('Beneficiary Name')).value)).toMatch(/^Summary Cust/);
     // Gross = TDS + Net, all whole rupees — Net stays PURE interest; the paid
     // figure with adjustments lives in Total.
-    expect(Number(row.getCell(20).value)).toBe(Number(row.getCell(21).value) + Number(row.getCell(22).value));
-    for (const c of [20, 21, 22, 25]) expect(Number(row.getCell(c).value) % 1).toBe(0);
+    expect(Number(row.getCell(C('Gross (Rs)')).value)).toBe(Number(row.getCell(C('TDS (Rs)')).value) + Number(row.getCell(C('Net (Rs)')).value));
+    for (const c of ['Gross (Rs)', 'TDS (Rs)', 'Net (Rs)', 'Total (Rs)'].map(C)) expect(Number(row.getCell(c).value) % 1).toBe(0);
     // No adjustments in play here: Total == Net, Addition/Deduction zero.
-    expect(Number(row.getCell(25).value)).toBe(Number(row.getCell(22).value));
-    expect(Number(row.getCell(23).value)).toBe(0);
-    expect(Number(row.getCell(24).value)).toBe(0);
+    expect(Number(row.getCell(C('Total (Rs)')).value)).toBe(Number(row.getCell(C('Net (Rs)')).value));
+    expect(Number(row.getCell(C('Addition (Rs)')).value)).toBe(0);
+    expect(Number(row.getCell(C('Deduction (Rs)')).value)).toBe(0);
     // Owner 2026-07-27: Phone + Payment Mode, appended (not inserted) so every
     // existing column keeps its position for Federal Net reconciliation.
-    expect(String(row.getCell(26).value)).toMatch(/^9600000\d{3}$/);
-    expect(String(row.getCell(27).value)).toBe('NEFT/RTGS');
+    expect(String(row.getCell(C('Phone')).value)).toMatch(/^9600000\d{3}$/);
+    expect(String(row.getCell(C('Payment Mode')).value)).toBe('NEFT/RTGS');
+  });
+
+  // Owner 2026-08-25: "bring in branch names in the payouts summary sheet as a
+  // column next to referred by". The branch comes from applications.branch_id —
+  // the branch that EARNED the investment, stamped at creation from the
+  // referrer's branch — NOT the customer's current branch, which moves if they
+  // are reassigned. Same source the Branch-wise report reads.
+  it('Branch sits next to Referred By and names the branch that earned it', async () => {
+    const a = await admin();
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    const branchId = Number((await ctx.db.query(
+      `INSERT INTO branches (code, name) VALUES ('BRSUM','Summary Branch') RETURNING id`)).rows[0]!.id);
+    const cust = await a.post('/api/customers', { full_name: 'Branch Investor', phone: '9600000077' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
+      customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId, amount: 200000, date_money_received: '2026-07-12',
+    });
+    await approveInvestment(await as('ncd@demo.local'), app);
+    // The branch is stamped on the APPLICATION at creation; set it directly so
+    // the test pins where the sheet reads from, not how it got there.
+    await ctx.db.query('UPDATE applications SET branch_id = $2 WHERE id = $1', [app.json.id, branchId]);
+
+    // The header lands immediately after Referred By — the position asked for.
+    expect(C('Branch')).toBe(C('Referred By') + 1);
+
+    const ws = await sheetOf((await a.raw(`/api/payouts/preview.summary.xlsx?date=${CUTOFF}`)).buffer);
+    let seen: unknown = undefined;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      if (String(row.getCell(C('Customer Name')).value) === 'Branch Investor') seen = row.getCell(C('Branch')).value;
+    }
+    expect(seen).toBe('Summary Branch');
+  });
+
+  it('an investment with no branch leaves the cell blank, never the word null', async () => {
+    const a = await admin();
+    const res = await a.raw(`/api/payouts/preview.summary.xlsx?date=${CUTOFF}`);
+    const ws = await sheetOf(res.buffer);
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const v = ws.getRow(r).getCell(C('Branch')).value;
+      expect(String(v ?? '')).not.toMatch(/^(null|undefined)$/);
+    }
   });
 
   // Owner 2026-07-27: Referred By sits right after Customer Name (inserted,
@@ -147,7 +200,7 @@ describe('payout summary sheet', () => {
     let referredBy: unknown = undefined;
     for (let r = 2; r <= ws.rowCount; r++) {
       const row = ws.getRow(r);
-      if (String(row.getCell(3).value) === 'Referred Investor') referredBy = row.getCell(4).value;
+      if (String(row.getCell(C('Customer Name')).value) === 'Referred Investor') referredBy = row.getCell(C('Referred By')).value;
     }
     expect(referredBy).toBe('Summary Referrer Agent'); // the agent's NAME, not the code 'AG-SUM1'
   });
@@ -159,8 +212,8 @@ describe('payout summary sheet', () => {
     // NEFT sheet's dd/mm/yyyy — do not "fix" this split back to '/'.
     const ymd = (v: unknown) => { const [d, m, y] = String(v).split('-').map(Number); return Date.UTC(y!, m! - 1, d!); };
     for (let r = 2; r <= Math.min(ws.rowCount, 12); r++) {
-      const from = ws.getRow(r).getCell(17).value;
-      const to = ws.getRow(r).getCell(18).value;
+      const from = ws.getRow(r).getCell(C('Interest From')).value;
+      const to = ws.getRow(r).getCell(C('Interest To')).value;
       if (!from || !to) continue;
       expect(ymd(from)).toBeLessThanOrEqual(ymd(to));
     }
@@ -323,9 +376,9 @@ describe('redemption interest lands in that month\'s payout sheet', () => {
     let found = null as null | { from: unknown; to: unknown; gross: number };
     for (let r = 2; r <= ws.rowCount; r++) {
       const row = ws.getRow(r);
-      types.add(String(row.getCell(11).value));
-      if (String(row.getCell(3).value) === 'Redeeming Investor' && String(row.getCell(11).value) === 'Redemption') {
-        found = { from: row.getCell(17).value, to: row.getCell(18).value, gross: Number(row.getCell(20).value) };
+      types.add(String(row.getCell(C('Type')).value));
+      if (String(row.getCell(C('Customer Name')).value) === 'Redeeming Investor' && String(row.getCell(C('Type')).value) === 'Redemption') {
+        found = { from: row.getCell(C('Interest From')).value, to: row.getCell(C('Interest To')).value, gross: Number(row.getCell(C('Gross (Rs)')).value) };
       }
     }
     expect(types.has('Redemption')).toBe(true);   // the third type finally appears
@@ -351,12 +404,12 @@ describe('redemption interest lands in that month\'s payout sheet', () => {
     const ws = await sheetOf((await a.raw(`/api/payouts/${batchId}/summary.xlsx`)).buffer);
     let row: ExcelJS.Row | null = null;
     for (let r = 2; r <= ws.rowCount; r++) {
-      if (String(ws.getRow(r).getCell(11).value) === 'Redemption'
-        && String(ws.getRow(r).getCell(3).value) === 'Redeeming Investor') row = ws.getRow(r);
+      if (String(ws.getRow(r).getCell(C('Type')).value) === 'Redemption'
+        && String(ws.getRow(r).getCell(C('Customer Name')).value) === 'Redeeming Investor') row = ws.getRow(r);
     }
     expect(row).toBeTruthy();
-    expect(Number(row!.getCell(12).value)).toBe(1000000);  // Invested = the basis, not the face amount
-    expect(String(row!.getCell(18).value)).toBe('14-09-2026'); // Interest To = redemption date − 1 (dd-mm-yyyy, owner 2026-07-27)
+    expect(Number(row!.getCell(C('Invested (Rs)')).value)).toBe(1000000);  // Invested = the basis, not the face amount
+    expect(String(row!.getCell(C('Interest To')).value)).toBe('14-09-2026'); // Interest To = redemption date − 1 (dd-mm-yyyy, owner 2026-07-27)
   });
 });
 
@@ -411,7 +464,7 @@ describe('a redemption slice\'s "Interest From" starts the day AFTER the line wa
     let from: unknown = null;
     for (let r = 2; r <= ws.rowCount; r++) {
       const row = ws.getRow(r);
-      if (String(row.getCell(3).value) === 'Gap Redeemer' && String(row.getCell(11).value) === 'Redemption') from = row.getCell(17).value;
+      if (String(row.getCell(C('Customer Name')).value) === 'Gap Redeemer' && String(row.getCell(C('Type')).value) === 'Redemption') from = row.getCell(C('Interest From')).value;
     }
     const expectedFrom = new Date(Date.UTC(y!, m! - 1, d! + 1)).toISOString().slice(0, 10); // day AFTER the paid cutoff
     const [ey, em, ed] = expectedFrom.split('-');
@@ -473,8 +526,8 @@ describe('a zero-interest redemption slice still shows on its month\'s sheet, no
     let found: { gross: unknown; net: unknown } | null = null;
     for (let r = 2; r <= ws.rowCount; r++) {
       const row = ws.getRow(r);
-      if (String(row.getCell(3).value) === 'Zero Gap Redeemer' && String(row.getCell(11).value) === 'Redemption') {
-        found = { gross: row.getCell(20).value, net: row.getCell(22).value };
+      if (String(row.getCell(C('Customer Name')).value) === 'Zero Gap Redeemer' && String(row.getCell(C('Type')).value) === 'Redemption') {
+        found = { gross: row.getCell(C('Gross (Rs)')).value, net: row.getCell(C('Net (Rs)')).value };
       }
     }
     expect(found).toBeTruthy(); // NOT dropped from the sheet
@@ -630,8 +683,8 @@ describe('a new investment earns interest starting the day of investment', () =>
     let found: { from: unknown; to: unknown; days: number } | null = null;
     for (let r = 2; r <= ws.rowCount; r++) {
       const row = ws.getRow(r);
-      if (String(row.getCell(3).value) === 'Day One Batch Investor') {
-        found = { from: row.getCell(17).value, to: row.getCell(18).value, days: Number(row.getCell(19).value) };
+      if (String(row.getCell(C('Customer Name')).value) === 'Day One Batch Investor') {
+        found = { from: row.getCell(C('Interest From')).value, to: row.getCell(C('Interest To')).value, days: Number(row.getCell(C('Days')).value) };
       }
     }
     expect(found).toBeTruthy();
@@ -677,8 +730,8 @@ describe('"Invested (Rs)" reflects the outstanding balance after a partial redem
     let invested: number | null = null;
     for (let r = 2; r <= ws.rowCount; r++) {
       const row = ws.getRow(r);
-      if (String(row.getCell(3).value) === 'Partial Preview Investor' && String(row.getCell(11).value) !== 'Redemption') {
-        invested = Number(row.getCell(12).value);
+      if (String(row.getCell(C('Customer Name')).value) === 'Partial Preview Investor' && String(row.getCell(C('Type')).value) !== 'Redemption') {
+        invested = Number(row.getCell(C('Invested (Rs)')).value);
       }
     }
     expect(invested).toBe(600000); // 1,000,000 − 400,000, not the original face amount
@@ -701,8 +754,8 @@ describe('"Invested (Rs)" reflects the outstanding balance after a partial redem
     let invested: number | null = null;
     for (let r = 2; r <= ws.rowCount; r++) {
       const row = ws.getRow(r);
-      if (String(row.getCell(3).value) === 'Partial Batch Investor' && String(row.getCell(11).value) !== 'Redemption') {
-        invested = Number(row.getCell(12).value);
+      if (String(row.getCell(C('Customer Name')).value) === 'Partial Batch Investor' && String(row.getCell(C('Type')).value) !== 'Redemption') {
+        invested = Number(row.getCell(C('Invested (Rs)')).value);
       }
     }
     expect(invested).toBe(600000);

@@ -893,6 +893,11 @@ export async function markRowFailed(db: Db, actor: AuthUser, scheduleId: number,
 // split that the bank sheet (net only) can't show.
 const SUMMARY_SELECT = `
   SELECT a.application_no, c.full_name AS customer_name, ${REFERRER} AS referred_by,
+         -- The branch that EARNED the investment, stamped on the application at
+         -- creation from the referrer's branch — not the customer's branch,
+         -- which drifts if they are reassigned. Same source the Branch-wise
+         -- report reads, so the two can never disagree.
+         br.name AS branch,
          c.phone, c.dob AS date_of_birth, c.pan,
          c.gender, c.investor_category AS category,
          s.name AS series_name, a.collection_method,
@@ -958,6 +963,7 @@ const SUMMARY_SELECT = `
     LEFT JOIN series s ON s.id = a.series_id
     LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
     LEFT JOIN customer_bank_accounts cb ON cb.customer_id = c.id AND cb.is_active = TRUE${REFERRER_LATERAL_JOINS}
+    LEFT JOIN branches br ON br.id = a.branch_id
     -- Adjustments consumed by this row's batch, shown ONLY on the application's
     -- first (lowest line_id) row — the row their amount was applied to.
     LEFT JOIN LATERAL (
@@ -1010,7 +1016,7 @@ async function summaryRowsForDate(db: Db, payoutDate: string, productType: Produ
   if (due.count === 0) throw errors.unprocessable(`No interest has accrued up to ${payoutDate} — every investment is already settled to that date or beyond. Pick a later date.`);
   const lineIds = (due.rows as Record<string, unknown>[]).map((r) => Number(r.line_id));
   const statics = (await db.query<Record<string, unknown>>(
-    `SELECT l.id AS line_id, ${REFERRER} AS referred_by,
+    `SELECT l.id AS line_id, ${REFERRER} AS referred_by, br.name AS branch,
             c.phone, c.dob AS date_of_birth, c.pan, c.gender, c.investor_category AS category,
             s.name AS series_name, a.collection_method, l.outstanding_amount AS investment_amount, l.coupon_rate_pct,
             COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
@@ -1025,6 +1031,7 @@ async function summaryRowsForDate(db: Db, payoutDate: string, productType: Produ
        LEFT JOIN series s ON s.id = a.series_id
        LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
        LEFT JOIN customer_bank_accounts cb ON cb.customer_id = c.id AND cb.is_active = TRUE${REFERRER_LATERAL_JOINS}
+       LEFT JOIN branches br ON br.id = a.branch_id
       WHERE l.id = ANY($1)`, [lineIds])).rows;
   const byLine = new Map(statics.map((r) => [Number(r.line_id), r]));
   return (due.rows as Record<string, unknown>[]).map((r) => {

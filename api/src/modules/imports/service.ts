@@ -61,10 +61,15 @@ export async function runBackdatedImport(db: Db, actor: AuthUser, rows: ImportRo
          VALUES ($1,$2,$3,'Active',$4,TRUE,'import',$5,$5,$6,$7,$8) RETURNING id`,
         [appNo, customer.id, series.id, row.amount, row.allotment_date, dedupKey, actor.id, branchId]);
       const appId = Number(ar[0]!.id);
+      // Stamp the line's own date, same value the accrual already falls back to
+      // (this row's interest_start_date IS allotment_date), so it is a no-op for
+      // the figures — it just stops the line relying on that fallback. Every
+      // line carrying its own date is what lets the payout health check treat a
+      // dateless line as a fault instead of normal.
       await tx.query(
-        `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active')`,
-        [appId, scheme.id, scheme.coupon_rate_pct, scheme.tenure_months, scheme.payout_frequency, scheme.day_count_convention, row.amount]);
+        `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status, date_money_received)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active',$8::date)`,
+        [appId, scheme.id, scheme.coupon_rate_pct, scheme.tenure_months, scheme.payout_frequency, scheme.day_count_convention, row.amount, row.allotment_date]);
       await materializeForApplication(tx, appId);
       // Mark past-due interest rows Paid (historic).
       await tx.query("UPDATE disbursement_schedule SET status = 'Paid', paid_at = due_date WHERE application_id = $1 AND due_date < now()::date AND due_type IN ('Interest','BrokenInterest')", [appId]);

@@ -56,10 +56,14 @@ registerOnFinalApprove('rollover', async (tx, req) => {
   const newId = Number(rows[0]!.id);
   const line = (await tx.query<Record<string, unknown>>('SELECT * FROM application_lines WHERE application_id = $1 ORDER BY id LIMIT 1', [fromId])).rows[0];
   if (line) {
+    // The rollover's line carries the same date the new investment starts from
+    // (`today`, which is also its interest_start_date), so the figures are
+    // unchanged — it just stops the line depending on that fallback. See the
+    // note in imports/service.ts.
     await tx.query(
-      `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active')`,
-      [newId, line.scheme_id, line.coupon_rate_pct, line.tenure_months, line.payout_frequency, line.day_count_convention, from.total_amount]);
+      `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status, date_money_received)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active',$8::date)`,
+      [newId, line.scheme_id, line.coupon_rate_pct, line.tenure_months, line.payout_frequency, line.day_count_convention, from.total_amount, today]);
   }
   await materializeForApplication(tx, newId);
   await tx.query('UPDATE rollovers SET to_application_id = $1, status = $2 WHERE id = $3', [newId, 'Approved', Number(req.metadata.rollover_id)]);

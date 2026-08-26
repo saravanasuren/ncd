@@ -1,0 +1,11 @@
+-- 078_series_drop_closing — the series 'Closing' status is retired.
+--
+-- Owner 2026-08-20: a series has Open, Allotted and Closed (plus Withdrawn,
+-- which the owner kept). 'Closing' was a staging state between Open and
+-- Allotted that nothing depended on.
+--
+-- Any series still sitting in it becomes Open, which is what Closing meant:
+-- still taking money, not yet allotted. Verified on production first — every
+-- series is Open or Allotted, so this matches nothing there and is a no-op.
+-- It exists for other environments and for a restore of an older dump.
+UPDATE series SET status = 'Open' WHERE status = 'Closing';

@@ -124,11 +124,13 @@ describe('masters — a series can be configured end to end', () => {
       { extra: { self_approval_reason: 'Test series; approving as super admin.' } });
     expect(approve.status).toBe(200);
 
-    // status transition Open → Closing is legal; Open → Closed is not
-    const okT = await c.post(`/api/series/${series.json.id}/status`, { to: 'Closing' });
+    // The machine still refuses an illegal jump. 'Closing' was retired (owner
+    // 2026-08-20), so the legal move off Open is Withdrawn; Open → Closed is
+    // still not a thing — a series has to be allotted before it can close.
+    const okT = await c.post(`/api/series/${series.json.id}/status`, { to: 'Withdrawn' });
     expect(okT.status).toBe(200);
-    const badT = await c.post(`/api/series/${series.json.id}/status`, { to: 'Closed' });
-    expect(badT.status).toBe(409);
+    const goneT = await c.post(`/api/series/${series.json.id}/status`, { to: 'Closing' });
+    expect(goneT.status).toBe(409);
   });
 
   it('users:manage lets admin create a user', async () => {

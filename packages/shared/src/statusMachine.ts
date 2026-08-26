@@ -89,8 +89,10 @@ export const STATUS_MACHINES = {
     // reject → Withdrawn — so Masters offers no manual transition out of it and
     // nobody can hand-wave a series into service.
     PendingApproval: { label: 'Awaiting approval', next: [] },
-    Open: { label: 'Open', next: ['Closing', 'Allotted', 'Withdrawn'] },
-    Closing: { label: 'Closing', next: ['Open', 'Allotted', 'Withdrawn'] },
+    // No 'Closing' (owner 2026-08-20): it was a staging state between Open and
+    // Allotted that nothing depended on, and every extra rung invites the
+    // shortcut that skipped NCD 28's allotment date. Withdrawn stays.
+    Open: { label: 'Open', next: ['Allotted', 'Withdrawn'] },
     Allotted: { label: 'Allotted', next: ['Open', 'Closed', 'Withdrawn'] },
     Closed: { label: 'Closed', next: ['Open', 'Allotted', 'Withdrawn'] },
     Withdrawn: { label: 'Withdrawn', next: [], terminal: true },

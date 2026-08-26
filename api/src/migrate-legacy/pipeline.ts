@@ -718,7 +718,9 @@ function mapAppStatus(s: string): string {
 function mapSeriesStatus(s: string): string {
   const v = (s ?? '').trim();
   if (v === 'Allotted' || v === 'Active') return 'Allotted';
-  const known = new Set(['Open', 'Closing', 'Closed', 'Allotted', 'Withdrawn']);
+  // 'Closing' was retired (owner 2026-08-20); a legacy row carrying it becomes
+  // Open, which is what it meant — still taking money, not yet allotted.
+  const known = new Set(['Open', 'Closed', 'Allotted', 'Withdrawn']);
   return known.has(v) ? v : 'Open';
 }
 

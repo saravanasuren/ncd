@@ -54,7 +54,7 @@ export async function createAllotmentBatch(db: Db, actor: AuthUser, input: { ser
     if (already.rowCount) throw errors.conflict('An allotment approval is already pending for this series');
     const n = Number((await tx.query<{ n: string }>(`SELECT count(*)::int AS n FROM applications a WHERE a.series_id = $1 AND ${READY_TO_ALLOT}`, [input.series_id])).rows[0]!.n);
     // Allow allotting a series that has nothing pending, as long as it can still
-    // be moved to Allotted (Open/Closing/Closed) — this just formally closes the
+    // be moved to Allotted (Open/Closed) — this just formally closes the
     // series to new money (e.g. a migrated series whose apps already carry an
     // allotment date). Only block when there's genuinely nothing to do: no
     // pending apps AND the series can't move to Allotted (already Allotted/Withdrawn).
@@ -90,7 +90,9 @@ export async function revertSeriesAllotment(db: Db, actor: AuthUser, seriesId: n
       [seriesId]
     );
     if (!upd.rowCount) throw errors.unprocessable('No allotted applications in this series');
-    await tx.query("UPDATE series SET status = 'Closing', allotted_at = NULL WHERE id = $1", [seriesId]);
+    // Back to Open, not the retired 'Closing' — a reverted series is exactly a
+    // series waiting to be allotted, and Closing no longer exists.
+    await tx.query("UPDATE series SET status = 'Open', allotted_at = NULL WHERE id = $1", [seriesId]);
     await writeAudit(tx, { actorId: actor.id, action: 'allotment.revert', entityType: 'series', entityId: seriesId, after: { reason, apps: upd.rowCount } });
     return { reverted: upd.rowCount };
   });
@@ -144,7 +146,7 @@ registerOnFinalApprove('allotment_batch', async (tx, req) => {
 
   if (batchId) await tx.query("UPDATE allotment_batches SET status = 'Approved' WHERE id = $1", [batchId]);
 
-  // Lock the series (Open/Closing → Allotted). Tolerate already-Allotted.
+  // Lock the series (Open → Allotted). Tolerate already-Allotted.
   const series = (await tx.query<{ status: string }>('SELECT status FROM series WHERE id = $1', [seriesId])).rows[0];
   if (series && canTransition('series', series.status, 'Allotted')) {
     await tx.query("UPDATE series SET status = 'Allotted', allotted_at = now()" + (isin ? ', isin = $2' : '') + ' WHERE id = $1', isin ? [seriesId, isin] : [seriesId]);

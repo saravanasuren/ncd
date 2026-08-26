@@ -67,6 +67,51 @@ describe('approval-time date correction reaches the credit line', () => {
     expect(Number(row.days)).toBe(9);
   });
 
+  it('already live before approval: interest_start_date moves and the schedule is rebuilt', async () => {
+    // Mythili D's shape (APP-2026-001083, 2026-08-26). A LockerHub payment link
+    // activates the investment on the credit itself, so it is ALREADY live —
+    // and its schedule already materialised — when the checker corrects the
+    // date. activateApplication never runs again, so without this fix
+    // interest_start_date stays on the old day and, because that date also
+    // feeds materialize, the STORED schedule stays wrong too.
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Already Live', phone: '9704100003' });
+    const create = await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
+      amount: 100000, date_money_received: '2026-07-05',
+    });
+    const appId = Number(create.json.id);
+
+    // Go live BEFORE approval, on the maker's date, and materialise from it.
+    await ctx.db.query("UPDATE applications SET status = 'Active', interest_start_date = '2026-07-05' WHERE id = $1", [appId]);
+    const { materializeForApplication } = await import('../src/modules/schedule/materialize.js');
+    await materializeForApplication(ctx.db, appId);
+    const before = (await ctx.db.query(
+      `SELECT due_date, gross_amount FROM disbursement_schedule
+        WHERE application_id = $1 AND due_type = 'Interest' ORDER BY due_date LIMIT 1`, [appId])).rows[0]! as any;
+    expect(before).toBeDefined();
+
+    // Checker corrects it to the 20th.
+    const reqId = create.json.subscription_request.id;
+    const ok = await (await as('ncd@demo.local')).post(`/api/approvals/${reqId}/approve`,
+      { extra: { edits: { date_money_received: '2026-07-20' } } });
+    expect(ok.status).toBe(200);
+
+    const app = (await ctx.db.query(
+      'SELECT date_money_received, interest_start_date FROM applications WHERE id = $1', [appId])).rows[0]! as any;
+    expect(String(app.date_money_received).slice(0, 10)).toBe('2026-07-20');
+    // THE FIX: without it this stayed 2026-07-05 and the stored schedule with it.
+    expect(String(app.interest_start_date).slice(0, 10)).toBe('2026-07-20');
+    expect(await lineDates(appId)).toEqual(['2026-07-20']);
+
+    // And the schedule was genuinely REBUILT, not left on the stale date: the
+    // first period must now be shorter than it was.
+    const after = (await ctx.db.query(
+      `SELECT due_date, gross_amount FROM disbursement_schedule
+        WHERE application_id = $1 AND due_type = 'Interest' ORDER BY due_date LIMIT 1`, [appId])).rows[0]! as any;
+    expect(Number(after.gross_amount)).toBeLessThan(Number(before.gross_amount));
+  });
+
   it('CONTROL: a clubbed investment keeps each tranche its own date', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'Clubbed Keeps', phone: '9704100002' });

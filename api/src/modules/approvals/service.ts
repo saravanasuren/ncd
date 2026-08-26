@@ -172,9 +172,7 @@ export async function approve(
         // day the money was not yet in. That over-paid 7 investments and
         // under-paid 1 before it was caught on 2026-08-26 (Senthamil Selvi
         // APP-2026-001030: sheet said 31 days from 29-07, the stored schedule
-        // said 28 from 01-08). The stored schedule was right because it is
-        // materialised AFTER approval from the corrected application date —
-        // which is also why nothing needs rebuilding here.
+        // said 28 from 01-08).
         //
         // Single-credit investments ONLY. A clubbed investment has a real,
         // different date per tranche; pushing one date down would destroy them
@@ -182,12 +180,45 @@ export async function approve(
         if ('date_money_received' in edits) {
           const d = edits.date_money_received === '' || edits.date_money_received === undefined
             ? null : edits.date_money_received;
-          if (d !== null) {
-            await tx.query(
-              `UPDATE application_lines SET date_money_received = $1
-                WHERE application_id = $2
-                  AND (SELECT count(*) FROM application_lines x WHERE x.application_id = $2) = 1`,
-              [d, Number(req.entity_id)]);
+          const appId = Number(req.entity_id);
+          const single = Number((await tx.query<{ n: string }>(
+            'SELECT count(*) AS n FROM application_lines WHERE application_id = $1', [appId])).rows[0]!.n) === 1;
+          if (d !== null && single) {
+            await tx.query('UPDATE application_lines SET date_money_received = $1 WHERE application_id = $2', [d, appId]);
+            // interest_start_date has to follow as well. activateApplication
+            // normally derives it from date_money_received at go-live — but an
+            // investment that went live BEFORE approval (a LockerHub payment
+            // link activates on the credit itself) never re-derives it, so the
+            // accrual stays on the old day. That date also feeds materialize,
+            // so in THAT case the stored schedule is wrong too, not just the
+            // sheet. Mythili D APP-2026-001083 (2026-08-26): money in 16-08,
+            // interest_start_date left on 15-08, first period Rs 3,490 instead
+            // of Rs 3,241.
+            //
+            // Only while nothing is settled: a paid or batched row would mean
+            // rewriting money already sent. Same guard as editInvestmentDate.
+            const settled = await tx.query(
+              "SELECT 1 FROM disbursement_schedule WHERE application_id = $1 AND (status = 'Paid' OR batch_id IS NOT NULL) LIMIT 1",
+              [appId]);
+            if (!settled.rowCount) {
+              await tx.query('UPDATE applications SET interest_start_date = $1 WHERE id = $2', [d, appId]);
+              // Rebuild ONLY if a schedule already exists. In the ordinary flow
+              // it does not — activation materialises straight after this, from
+              // the corrected dates — and tearing down nothing would be pointless
+              // churn inside the approval transaction. This branch exists purely
+              // for the already-live case above.
+              const existing = await tx.query('SELECT 1 FROM disbursement_schedule WHERE application_id = $1 LIMIT 1', [appId]);
+              if (existing.rowCount) {
+                await tx.query("DELETE FROM disbursement_schedule WHERE application_id = $1 AND status <> 'Paid'", [appId]);
+                const { materializeForApplication } = await import('../schedule/materialize.js');
+                await materializeForApplication(tx, appId);
+                // Idempotent per application (see scripts/recompute-accruals),
+                // and activation would have done it too — safe whether or not
+                // go-live has already happened.
+                const { accrueForApplication } = await import('../incentives/accrual.js');
+                await accrueForApplication(tx, appId);
+              }
+            }
           }
         }
         await writeAudit(tx, {

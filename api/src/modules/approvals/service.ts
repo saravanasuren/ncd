@@ -165,6 +165,31 @@ export async function approve(
       if (sets.length) {
         params.push(Number(req.entity_id));
         await tx.query(`UPDATE applications SET ${sets.join(', ')}, updated_at = now() WHERE id = $${params.length}`, params);
+        // The money-received date lives in TWO places — on the application AND
+        // on each credit line — and the payout sheet reads the LINE's copy
+        // (per-tranche accrual, PR #341). Correcting only the application left
+        // the line on the maker's original date, so the sheet accrued from a
+        // day the money was not yet in. That over-paid 7 investments and
+        // under-paid 1 before it was caught on 2026-08-26 (Senthamil Selvi
+        // APP-2026-001030: sheet said 31 days from 29-07, the stored schedule
+        // said 28 from 01-08). The stored schedule was right because it is
+        // materialised AFTER approval from the corrected application date —
+        // which is also why nothing needs rebuilding here.
+        //
+        // Single-credit investments ONLY. A clubbed investment has a real,
+        // different date per tranche; pushing one date down would destroy them
+        // and under-pay the customer. Same guard as editInvestmentDate.
+        if ('date_money_received' in edits) {
+          const d = edits.date_money_received === '' || edits.date_money_received === undefined
+            ? null : edits.date_money_received;
+          if (d !== null) {
+            await tx.query(
+              `UPDATE application_lines SET date_money_received = $1
+                WHERE application_id = $2
+                  AND (SELECT count(*) FROM application_lines x WHERE x.application_id = $2) = 1`,
+              [d, Number(req.entity_id)]);
+          }
+        }
         await writeAudit(tx, {
           actorId: user.id, action: 'approval.edit-on-approve',
           entityType: 'applications', entityId: Number(req.entity_id), after: edits,

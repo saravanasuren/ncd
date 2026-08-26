@@ -19,6 +19,10 @@ export interface SummaryRow {
    *  (reports/book.ts) used everywhere else in the app: matched by code then
    *  name, staff before agent, raw text as a last resort. */
   referred_by?: string | null;
+  /** The branch that EARNED the investment — applications.branch_id, stamped at
+   *  creation from the referrer's branch. Sits beside Referred By because the
+   *  two answer the same question: who brought this money in. */
+  branch?: string | null;
   phone?: string | null;
   date_of_birth?: string | Date | null;
   pan?: string | null;
@@ -52,7 +56,12 @@ export interface SummaryRow {
 }
 
 const COLUMNS = [
-  '#', 'Application No', 'Customer Name', 'Referred By', 'DOB', 'Age', 'PAN', 'Gender', 'Category', 'Series', 'Type',
+  // 'Branch' is INSERTED next to Referred By (owner 2026-08-25), not appended.
+  // That shifts every column after it one place right — including Bank A/C and
+  // Net (Rs). Anything that reads this sheet by column LETTER rather than by
+  // header needs re-pointing; the note below about appending applies to
+  // additions made without that instruction.
+  '#', 'Application No', 'Customer Name', 'Referred By', 'Branch', 'DOB', 'Age', 'PAN', 'Gender', 'Category', 'Series', 'Type',
   'Invested (Rs)', 'Rate %', 'Beneficiary Name', 'Bank A/C', 'IFSC',
   'Interest From', 'Interest To', 'Days', 'Gross (Rs)', 'TDS (Rs)', 'Net (Rs)',
   'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)',
@@ -139,6 +148,7 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
       r.application_no ?? '',
       r.customer_name ?? '',
       r.referred_by ?? '',
+      r.branch ?? '',
       ddmmyyyy(r.date_of_birth),
       ageAt(r.date_of_birth, r.period_to),
       r.pan ?? '',

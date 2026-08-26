@@ -1,8 +1,12 @@
 /**
- * Premium customer — rent made complimentary (owner 2026-08-22). One click, no
- * checker (like the standard rent waiver), applied to LockerHub as a 100% A21
- * waiver — but recorded as category 'premium', NOT a waiver, so the rent report
- * keeps a premium customer distinct from an ordinary waiver.
+ * Premium customer — rent made complimentary (owner 2026-08-22). A 100% rent
+ * write-off, so it is maker-checked (#333): Admin/CXO approves before it reaches
+ * LockerHub as a 100% A21 waiver — but it is recorded as category 'premium', NOT
+ * a waiver, so the rent report keeps a premium customer distinct from an
+ * ordinary waiver.
+ *
+ * Contrast integration.locker-standard-rent-waiver.test.ts: the STANDARD rent
+ * waiver deliberately has no checker, because its amount is a fixed formula.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';

@@ -354,8 +354,10 @@ export function LockerEnrollmentPage() {
     : null;
 
   /**
-   * Apply the standard rent waiver. Unlike `requestWaiver` below this is POLICY
-   * and needs no checker (owner 2026-08-20), so it reaches LockerHub at once.
+   * Apply the standard rent waiver. Unlike `requestWaiver` below — and unlike
+   * `premiumCustomer` — this is POLICY with no discretion in it, so it needs no
+   * checker (owner 2026-08-20, re-confirmed 2026-08-25) and reaches LockerHub
+   * at once.
    *
    * Confirms with the actual rupees first, because it writes off real money and
    * "Apply waiver" alone does not say how much.
@@ -366,17 +368,18 @@ export function LockerEnrollmentPage() {
     if (!await confirm({
       title: 'Apply the standard rent waiver?',
       body: `Bill now ${money(p.gross)} · waive ${money(p.waived)} (${p.waiverPct.toFixed(4)}% of the pre-tax rent) · customer pays ${money(p.payable)}.\n\n`
-        + 'This goes to Admin/CXO for approval — it reaches LockerHub only once approved.',
-      confirmLabel: 'Send for approval',
+        + 'This is policy, so it goes to LockerHub immediately — there is no approval step.',
+      confirmLabel: `Waive ${money(p.waived)}`,
     })) return;
     setErr('');
-    const r = await api.post<{ already?: boolean; status?: string; request_no?: string }>(
+    const r = await api.post<{ applied?: boolean; already?: boolean; error?: string }>(
       `/api/lockers/applications/${app.application_id}/apply-rent-waiver`,
       { gst_pct: Number(pricedSize.gst_pct), annual_rent: Number(pricedSize.annual_fee) },
     ).catch((e) => { setErr(e instanceof ApiError ? e.message : 'Failed'); return null; });
     if (!r) return;
     if (r.already) setNote('This application already has a rent waiver — nothing changed.');
-    else setNote(`Waiver sent for approval${r.request_no ? ` (${r.request_no})` : ''} — the rent is marked waived once an Admin/CXO approves it.`);
+    else if (r.applied === false) setNote(`Recorded, but LockerHub did not accept it yet${r.error ? ` — ${r.error}` : ''}. It can be retried.`);
+    else setNote(`Waived ${money(p.waived)} — the customer now pays ${money(p.payable)}.`);
     // BOTH: refreshApp reloads the legs, but the button hides on the WAIVER
     // list, so without this it stays on screen offering to waive again on an
     // application that is already waived.
@@ -802,14 +805,16 @@ export function LockerEnrollmentPage() {
                         {leg === 'rent' && !offlinePayments.some((p) => p.leg === 'rent') && (
                           <button className={btnGhost} disabled={busy} onClick={() => setPayForm({ method: 'transfer', reference: '', amount: String(st?.amount ?? '') })}>Record payment…</button>
                         )}
-                        {/* Premium customer — one click makes the rent free,
-                            recorded as its own category (not a waiver). Mutually
-                            exclusive with the waiver buttons: all three vanish
-                            once a rent waiver exists. */}
+                        {/* Premium customer — makes the rent free, recorded as
+                            its own category (not a waiver). Goes to Admin/CXO
+                            first (#333): a 100% write-off is a judgement call,
+                            unlike the formula-driven standard waiver below.
+                            Mutually exclusive with the waiver buttons: all three
+                            vanish once a rent waiver exists. */}
                         {can('lockers:waive') && leg === 'rent' && !feeWaivers.some((w) => w.leg === 'rent') && (
                           <button className="text-xs border border-primary text-primary rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40"
                             disabled={busy} onClick={premiumCustomer}
-                            title="Makes the rent complimentary (₹0) and marks this a premium customer">
+                            title="Sends a request to Admin/CXO to make the rent complimentary (₹0) and mark this a premium customer">
                             Premium customer
                           </button>
                         )}

@@ -1,8 +1,8 @@
 /**
- * Correcting an investment's date (owner 2026-08-25). Super Admin only, single-
- * credit only, and only while no interest is paid/batched — it moves the money-
- * received / interest-start date and rebuilds the schedule. 🔒 interest-lock:
- * pins that the first period follows the new date and that the guards hold.
+ * Correcting an investment's date now goes through maker/checker approval (owner
+ * 2026-08-27). Maker: NCD Manager+; Checker: Admin/CXO. Single-credit only, and
+ * only while no interest is paid/batched. 🔒 interest-lock: the change is HELD on
+ * the approval and applied — schedule rebuilt from the new date — only on approve.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, approveInvestment, requiredInvestmentFields, type TestCtx } from './helpers/server.js';
@@ -27,58 +27,61 @@ const mkActive = async (a: Client, phone: string, date = '2026-07-25') => {
   await approveInvestment(await as('ncd@demo.local'), app);
   return Number(app.json.id);
 };
-const firstInterest = async (appId: number) => (await ctx.db.query(
-  "SELECT due_date FROM disbursement_schedule WHERE application_id=$1 AND due_type='Interest' ORDER BY due_date LIMIT 1", [appId])).rows[0]?.due_date;
+const dateOf = async (appId: number) =>
+  String((await ctx.db.query('SELECT date_money_received FROM applications WHERE id=$1', [appId])).rows[0]!.date_money_received).slice(0, 10);
 
-describe('editing the investment date', () => {
-  it('a Super Admin moves the date and the schedule is rebuilt from it', async () => {
-    const a = await superAdmin();
-    const appId = await mkActive(a, '9706000001', '2026-07-25');
-    const before = String(await firstInterest(appId));
+describe('changing the investment date needs approval', () => {
+  it('an NCD Manager requests it, the change is HELD, and an Admin/CXO approval applies it', async () => {
+    const admin = await superAdmin();
+    const appId = await mkActive(admin, '9706000001', '2026-07-25');
 
-    const r = await a.patch(`/api/applications/${appId}/investment-date`, { date: '2026-07-20' });
+    // NCD Manager (maker) requests — nothing changes yet.
+    const ncd = await as('ncd@demo.local');
+    const r = await ncd.patch(`/api/applications/${appId}/investment-date`, { date: '2026-07-20' });
     expect(r.status).toBe(200);
+    expect(r.json.pending_approval).toBe(true);
+    const reqId = Number(r.json.approval_request.id);
+    expect(await dateOf(appId)).toBe('2026-07-25');   // unchanged until approved
 
-    // App + line dates moved together, interest_start follows.
+    // The maker cannot approve their own request.
+    expect((await ncd.post(`/api/approvals/${reqId}/approve`)).status).toBe(403);
+    // An Admin/CXO checker approves → applied.
+    expect((await (await as('cxo@demo.local')).post(`/api/approvals/${reqId}/approve`)).status).toBe(200);
+
+    // App + line dates moved together, interest_start follows, schedule rebuilt.
     const app = (await ctx.db.query('SELECT date_money_received, interest_start_date FROM applications WHERE id=$1', [appId])).rows[0]!;
     expect(String(app.date_money_received).slice(0, 10)).toBe('2026-07-20');
     expect(String(app.interest_start_date).slice(0, 10)).toBe('2026-07-20');
     expect(String((await ctx.db.query('SELECT date_money_received FROM application_lines WHERE application_id=$1', [appId])).rows[0]!.date_money_received).slice(0, 10)).toBe('2026-07-20');
-    // Schedule rebuilt (still one first-period row); nothing left half-updated.
-    expect(String(await firstInterest(appId)).length).toBeGreaterThan(0);
-    expect(before.length).toBeGreaterThan(0);
+    expect(Number((await ctx.db.query("SELECT count(*)::int n FROM disbursement_schedule WHERE application_id=$1 AND due_type='Interest'", [appId])).rows[0]!.n)).toBeGreaterThan(0);
   });
 
-  it('refuses once interest is locked into a batch', async () => {
-    const a = await superAdmin();
-    const appId = await mkActive(a, '9706000002');
-    // Simulate a batched row.
+  it('a branch staff (below NCD Manager) cannot request it', async () => {
+    const admin = await superAdmin();
+    const appId = await mkActive(admin, '9706000004');
+    const staff = await as('staff@demo.local');
+    expect((await staff.patch(`/api/applications/${appId}/investment-date`, { date: '2026-07-20' })).status).toBe(403);
+  });
+
+  it('refuses at request time once interest is locked into a batch', async () => {
+    const admin = await superAdmin();
+    const appId = await mkActive(admin, '9706000002');
     await ctx.db.query("UPDATE disbursement_schedule SET batch_id = 999999 WHERE application_id=$1 AND due_type='Interest' AND due_date=(SELECT min(due_date) FROM disbursement_schedule WHERE application_id=$1 AND due_type='Interest')", [appId]);
-    const r = await a.patch(`/api/applications/${appId}/investment-date`, { date: '2026-07-20' });
-    expect(r.status).toBe(409);
+    expect((await (await as('ncd@demo.local')).patch(`/api/applications/${appId}/investment-date`, { date: '2026-07-20' })).status).toBe(409);
   });
 
   it('refuses a clubbed (multi-credit) investment', async () => {
-    const a = await superAdmin();
-    const cust = await a.post('/api/customers', { full_name: 'InvDate club', phone: '9706000003' });
-    const first = await a.post('/api/applications', {
+    const admin = await superAdmin();
+    const cust = await admin.post('/api/customers', { full_name: 'InvDate club', phone: '9706000003' });
+    const first = await admin.post('/api/applications', {
       ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
       amount: 100000, date_money_received: '2026-07-25',
     });
-    await a.post('/api/applications', {
+    await admin.post('/api/applications', {
       ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
       amount: 100000, date_money_received: '2026-07-26', club_with_application_id: Number(first.json.id),
     });
     await approveInvestment(await as('ncd@demo.local'), first);
-    const r = await a.patch(`/api/applications/${first.json.id}/investment-date`, { date: '2026-07-20' });
-    expect(r.status).toBe(400);
-  });
-
-  it('a non-Super-Admin cannot change it', async () => {
-    const a = await superAdmin();
-    const appId = await mkActive(a, '9706000004');
-    const ncd = await as('ncd@demo.local');
-    const r = await ncd.patch(`/api/applications/${appId}/investment-date`, { date: '2026-07-20' });
-    expect(r.status).toBe(403);
+    expect((await (await as('ncd@demo.local')).patch(`/api/applications/${first.json.id}/investment-date`, { date: '2026-07-20' })).status).toBe(400);
   });
 });

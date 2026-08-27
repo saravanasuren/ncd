@@ -206,8 +206,8 @@ export function ApplicationDetailPage() {
       </div>
       <p className="text-sm text-text-muted mt-1">{a.customer_name} · {a.series_code} · {formatINR(a.total_amount)}</p>
       <InvestmentDate a={a} appId={Number(id)}
-        canEdit={user?.role === 'super_admin' && (data.lines?.length ?? 0) === 1}
-        onDone={invalidate} onErr={setMsg} />
+        canEdit={['ncd_manager', 'admin', 'super_admin'].includes(user?.role ?? '') && (data.lines?.length ?? 0) === 1}
+        onErr={setMsg} />
       <CreditedTo app={a} appId={Number(id)} canEdit={can('applications:update')} onDone={invalidate} onErr={setMsg} />
       {msg && <div className="text-xs text-danger mt-2">{msg}</div>}
       {note && <div className="text-xs text-primary mt-2">{note}</div>}
@@ -502,33 +502,36 @@ export function ApplicationDetailPage() {
   );
 }
 
-/** The investment (money-received) date. Always shown under the header; a Super
- * Admin can correct it on a single-credit investment while no interest has been
- * paid — the API rebuilds the schedule and refuses once anything is paid/batched. */
-function InvestmentDate({ a, appId, canEdit, onDone, onErr }: {
-  a: any; appId: number; canEdit: boolean; onDone: () => void; onErr: (m: string) => void;
+/** The investment (money-received) date. Always shown under the header; an NCD
+ * Manager+ can REQUEST a correction on a single-credit investment while no interest
+ * has been paid — it goes to Admin/CXO approval, and only on approval does the API
+ * rebuild the schedule. Refused once anything is paid/batched. */
+function InvestmentDate({ a, appId, canEdit, onErr }: {
+  a: any; appId: number; canEdit: boolean; onErr: (m: string) => void;
 }) {
   const cur = a.date_money_received ? String(a.date_money_received).slice(0, 10) : null;
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(cur ?? '');
   const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
   const save = async () => {
     setBusy(true);
-    try { await api.patch(`/api/applications/${appId}/investment-date`, { date: val }); setEditing(false); onDone(); }
+    try { await api.patch(`/api/applications/${appId}/investment-date`, { date: val }); setEditing(false); setSent(true); }
     catch (e) { onErr(e instanceof ApiError ? e.message : 'Failed'); }
     finally { setBusy(false); }
   };
   return (
     <p className="text-sm text-text-muted mt-0.5">
       Investment date: <span className="text-text font-medium mono">{cur ?? '—'}</span>
-      {canEdit && !editing && (
+      {canEdit && !editing && !sent && (
         <button className="ml-2 text-xs text-primary hover:underline" onClick={() => { setVal(cur ?? ''); setEditing(true); }}>edit</button>
       )}
+      {sent && <span className="ml-2 text-xs text-success">Sent for Admin/CXO approval — the date changes once approved.</span>}
       {editing && (
         <span className="ml-2 inline-flex items-center gap-1">
           <input type="date" className="text-xs border border-border-strong rounded px-1.5 py-0.5" value={val} onChange={(e) => setVal(e.target.value)} />
           <button className="text-xs bg-primary hover:bg-primary-hover text-white rounded px-2 py-0.5 disabled:opacity-40"
-            disabled={busy || !val || val === cur} onClick={save}>Save</button>
+            disabled={busy || !val || val === cur} onClick={save}>Request change</button>
           <button className="text-xs text-text-muted hover:underline" onClick={() => setEditing(false)}>cancel</button>
         </span>
       )}

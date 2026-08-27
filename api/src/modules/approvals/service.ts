@@ -570,6 +570,26 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
     };
   }
 
+  // Investment date correction: lead with old → new so the checker sees exactly
+  // what the schedule will be rebuilt around.
+  if (req.request_type === 'investment_date_change' && id) {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT a.application_no, a.total_amount, c.full_name AS customer, c.customer_code, s.code AS series_code
+         FROM applications a JOIN customers c ON c.id = a.customer_id
+         LEFT JOIN series s ON s.id = a.series_id WHERE a.id = $1`, [id])).rows[0];
+    if (r) return {
+      subject: `${r.customer} · ${r.application_no}`,
+      amount: money(r.total_amount),
+      facts: clean([
+        fact('Customer', `${r.customer} (${r.customer_code})`),
+        fact('Investment', `${r.application_no}${r.series_code ? ` · ${r.series_code}` : ''}`),
+        fact('Current date', dateOnly(meta.current_date)),
+        fact('New date', dateOnly(meta.new_date)),
+        fact('Note', 'On approval the schedule is rebuilt from the new date.'),
+      ]),
+    };
+  }
+
   if (id && req.entity_type === 'applications') {
     const r = (await db.query<Record<string, unknown>>(
       `SELECT a.application_no, a.total_amount, a.status, a.date_money_received, a.referred_by_text,

@@ -128,6 +128,14 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Agent Commission Eligibility',
     levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
   },
+  // Correcting an investment's money-received / interest-start date — it rebuilds
+  // the schedule and shifts the first period, so it is maker/checker (owner
+  // 2026-08-27). Maker: NCD Manager+. Checker: Admin/CXO.
+  investment_date_change: {
+    type: 'investment_date_change',
+    label: 'Investment Date Change',
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
+  },
   // One-time addition/deduction on an investment's next interest payout.
   // Maker: NCD Manager+ (payouts:adjust). Checker: Admin/CXO (owner 2026-07-23).
   payout_adjustment: {

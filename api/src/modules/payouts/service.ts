@@ -257,9 +257,10 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
     const due = toISODate(r.due_date as string | null)!;
     const basis = r.principal_basis != null ? Number(r.principal_basis) : null;
     totals.gross += gross; totals.tds += Number(r.tds_amount); totals.net += Number(r.net_amount);
-    // A redemption slice earned on its own basis, not the line's live figure —
-    // the line may already be reduced or closed by that redemption.
-    totals.outstanding += basis ?? 0;
+    // A redemption slice's principal is LEAVING the book (redeemed), so it is
+    // deliberately NOT added to `outstanding` — the comparison shows only the
+    // CURRENT outstanding of active investments (owner 2026-08-27). The `basis`
+    // is still carried on the row itself (below) for the summary sheet's column.
     out.push({
       schedule_id: Number(r.schedule_id),
       line_id: Number(r.line_id), application_id: Number(r.application_id),
@@ -344,9 +345,13 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
       outstanding: round2(totals.outstanding),
     },
     count: out.length,
-    // Distinct people behind the rows — a customer with several debentures is
-    // one customer but many investments (owner 2026-08-10).
-    customers: new Set(out.map((r) => Number(r.customer_id))).size,
+    // Distinct people/investments behind the CURRENT rows only — a redemption
+    // slice (schedule_id set) is a leaving investment, excluded from these
+    // "current" counts (owner 2026-08-27) while still counted in `count` so the
+    // download/pay gates still see it. A customer with several debentures is one
+    // customer but many investments (owner 2026-08-10).
+    customers: new Set(out.filter((r) => !r.schedule_id).map((r) => Number(r.customer_id))).size,
+    investments: new Set(out.filter((r) => !r.schedule_id).map((r) => Number(r.application_id))).size,
   };
 }
 
@@ -370,15 +375,17 @@ export async function lastPaidInterestSummary(db: Db): Promise<LastInterestBatch
       ORDER BY payout_date DESC, id DESC LIMIT 1`)).rows[0];
   if (!batch) return null;
   const agg = (await db.query<{ customers: string; investments: string; gross: string; tds: string; net: string; outstanding: string }>(
-    `SELECT count(DISTINCT a.customer_id) AS customers,
-            count(DISTINCT ds.application_id) AS investments,
+    // Current-only (owner 2026-08-27): a redemption slice carries a principal_basis
+    // and its principal is LEAVING — so it is excluded from the customer/investment
+    // counts and from outstanding, to match the "this batch" figures. Gross/TDS/net
+    // still cover every paid row.
+    `SELECT count(DISTINCT a.customer_id) FILTER (WHERE ds.principal_basis IS NULL) AS customers,
+            count(DISTINCT ds.application_id) FILTER (WHERE ds.principal_basis IS NULL) AS investments,
             COALESCE(sum(ds.gross_amount), 0) AS gross,
             COALESCE(sum(ds.tds_amount), 0)   AS tds,
             COALESCE(sum(ds.net_amount), 0)   AS net,
-            -- COALESCE(principal_basis, line outstanding): the SAME expression
-            -- the summary sheet uses for "investment amount", so this row and
-            -- that column can never disagree about the same batch.
-            COALESCE(sum(COALESCE(ds.principal_basis, l.outstanding_amount)), 0) AS outstanding
+            -- Only the live outstanding of the still-active (non-redemption) lines.
+            COALESCE(sum(l.outstanding_amount) FILTER (WHERE ds.principal_basis IS NULL), 0) AS outstanding
        FROM disbursement_schedule ds
        JOIN applications a ON a.id = ds.application_id
        LEFT JOIN application_lines l ON l.id = ds.line_id

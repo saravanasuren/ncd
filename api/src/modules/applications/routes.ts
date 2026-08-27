@@ -125,6 +125,16 @@ applicationsRouter.patch('/:id/investment-date', requirePermission('applications
     res.json(await s.editInvestmentDate(getDb(), req.user!, Number(req.params.id), date));
   }));
 
+// Correct ONE credit's date on a CLUBBED investment — Super Admin only, refused
+// once interest is paid/batched, and refused on a single-credit investment
+// (use /investment-date there, so the credit and the application stay in step).
+// Each credit earns from its own date, so there is no single date to move.
+applicationsRouter.patch('/:id/lines/:lineId/date', requirePermission('applications:update'),
+  asyncHandler(async (req, res) => {
+    const { date } = z.object({ date: z.string() }).parse(req.body);
+    res.json(await s.editCreditDate(getDb(), req.user!, Number(req.params.id), Number(req.params.lineId), date));
+  }));
+
 // Send the acknowledgement PDF to the customer over WhatsApp (approved ncd_akn
 // template). Management-tier — same actors who confirm funds / update the app.
 // The receipt for ONE credit of a clubbed investment (the app-level one shows

@@ -196,7 +196,7 @@ export function PayoutsPage() {
       {preview.data && (
         <div className="bg-surface border border-border rounded-lg shadow-card p-4 mb-5 text-sm">
           <span className="font-semibold">{preview.data.customers ?? 0}</span> customer{(preview.data.customers ?? 0) === 1 ? '' : 's'}
-          {' '}(<span className="font-semibold">{preview.data.count}</span> investment{preview.data.count === 1 ? '' : 's'}) with interest accrued to this date · gross <span className="mono font-semibold">{formatINR(sheetTotals.gross)}</span> · TDS <span className="mono">−{formatINR(sheetTotals.tds)}</span> · net <span className="mono font-semibold">{formatINR(sheetTotals.net)}</span>
+          {' '}(<span className="font-semibold">{preview.data.investments ?? preview.data.count}</span> investment{(preview.data.investments ?? preview.data.count) === 1 ? '' : 's'}) with interest accrued to this date · gross <span className="mono font-semibold">{formatINR(sheetTotals.gross)}</span> · TDS <span className="mono">−{formatINR(sheetTotals.tds)}</span> · net <span className="mono font-semibold">{formatINR(sheetTotals.net)}</span>
           {(sheetTotals.addition > 0 || sheetTotals.deduction > 0) && (
             <span className="text-text-muted"> · additions <span className="mono">+{formatINR(sheetTotals.addition)}</span> · deductions <span className="mono">−{formatINR(sheetTotals.deduction)}</span> · payable <span className="mono font-semibold">{formatINR(sheetTotals.total)}</span></span>
           )}
@@ -212,7 +212,7 @@ export function PayoutsPage() {
           {lastBatch.data?.summary && preview.data.count > 0 && (
             <BatchComparison
               last={lastBatch.data.summary}
-              now={{ customers: preview.data.customers ?? 0, investments: preview.data.count,
+              now={{ customers: preview.data.customers ?? 0, investments: preview.data.investments ?? preview.data.count,
                      gross: sheetTotals.gross, tds: sheetTotals.tds, net: sheetTotals.net,
                      outstanding: Number(preview.data.totals?.outstanding ?? 0) }}
             />

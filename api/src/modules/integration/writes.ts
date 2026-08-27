@@ -771,10 +771,19 @@ async function landFundedApplication(db: Db, b: LandInput): Promise<{ appId: num
        b.isLockerDeposit, b.intentNo, b.referredBy, branchId]
     );
     const appId = Number(rows[0]!.id);
+    // date_money_received on the LINE, not just the application. The payout
+    // sheet resolves a period start as
+    //   COALESCE(<paid watermark>, line.date_money_received, app.interest_start_date)
+    // so a line left NULL here silently falls through to the application's
+    // interest_start_date — and if that is ever stale the accrual is wrong with
+    // nothing on screen to show it. Mythili D APP-2026-001083 (2026-08-26): line
+    // NULL, interest_start_date left on 15-08 after the checker corrected the
+    // money date to 16-08, so she accrued a day early (Rs 3,490 vs Rs 3,241).
+    // Every other creation path stamps the line; this one did not.
     await tx.query(
-      `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active')`,
-      [appId, scheme.id, scheme.coupon_rate_pct, scheme.tenure_months, scheme.payout_frequency, scheme.day_count_convention, b.amount]
+      `INSERT INTO application_lines (application_id, scheme_id, coupon_rate_pct, tenure_months, payout_frequency, day_count_convention, amount, outstanding_amount, status, date_money_received)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$7,'Active',$8::date)`,
+      [appId, scheme.id, scheme.coupon_rate_pct, scheme.tenure_months, scheme.payout_frequency, scheme.day_count_convention, b.amount, b.paidAt]
     );
     const { createApprovalRequest } = await import('../approvals/service.js');
     if (b.instantLive) {

@@ -378,8 +378,9 @@ export function ApplicationDetailPage() {
                       touch it (it refuses a clubbed investment, since there is
                       no single date to move). Super Admin corrects it here. */}
                   <td className="py-2 px-3 whitespace-nowrap">
-                    <CreditDate line={l} appId={Number(id)} canEdit={user?.role === 'super_admin'}
-                      onDone={invalidate} onErr={setMsg} />
+                    <CreditDate line={l} appId={Number(id)}
+                      canEdit={['ncd_manager', 'admin', 'super_admin'].includes(user?.role ?? '')}
+                      onErr={setMsg} />
                   </td>
                   <td className="py-2 px-3">{l.collection_method ?? '—'}</td>
                   <td className="py-2 px-3 font-mono text-xs">{l.collection_reference ?? '—'}</td>
@@ -518,20 +519,24 @@ export function ApplicationDetailPage() {
  * investment, because there is no single date to move. Before this, fixing one
  * took a hand-written database repair.
  *
- * Super Admin only, and the API refuses once any interest is paid or batched —
- * that check lives server-side rather than being duplicated here, so there is
- * one source of truth and the reason comes back as a readable message.
+ * An NCD Manager+ can REQUEST a correction; it goes to Admin/CXO and the date
+ * changes only on approval — the same rule as the investment date above (owner
+ * 2026-08-27), because both rebuild the schedule and shift a first period. The
+ * API refuses once any interest is paid or batched; that check lives
+ * server-side rather than being duplicated here, so there is one source of
+ * truth and the reason comes back as a readable message.
  */
-function CreditDate({ line, appId, canEdit, onDone, onErr }: {
-  line: any; appId: number; canEdit: boolean; onDone: () => void; onErr: (m: string) => void;
+function CreditDate({ line, appId, canEdit, onErr }: {
+  line: any; appId: number; canEdit: boolean; onErr: (m: string) => void;
 }) {
   const cur = line.date_money_received ? String(line.date_money_received).slice(0, 10) : null;
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(cur ?? '');
   const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
   const save = async () => {
     setBusy(true);
-    try { await api.patch(`/api/applications/${appId}/lines/${line.id}/date`, { date: val }); setEditing(false); onErr(''); onDone(); }
+    try { await api.patch(`/api/applications/${appId}/lines/${line.id}/date`, { date: val }); setEditing(false); setSent(true); onErr(''); }
     catch (e) { onErr(e instanceof ApiError ? e.message : 'Failed'); }
     finally { setBusy(false); }
   };
@@ -540,7 +545,7 @@ function CreditDate({ line, appId, canEdit, onDone, onErr }: {
       <span className="inline-flex items-center gap-1">
         <input type="date" className="text-xs border border-border-strong rounded px-1.5 py-0.5" value={val} onChange={(e) => setVal(e.target.value)} />
         <button className="text-xs bg-primary hover:bg-primary-hover text-white rounded px-2 py-0.5 disabled:opacity-40"
-          disabled={busy || !val || val === cur} onClick={save}>Save</button>
+          disabled={busy || !val || val === cur} onClick={save}>Request change</button>
         <button className="text-xs text-text-muted hover:underline" onClick={() => setEditing(false)}>cancel</button>
       </span>
     );
@@ -548,11 +553,12 @@ function CreditDate({ line, appId, canEdit, onDone, onErr }: {
   return (
     <>
       {cur ?? '—'}
-      {canEdit && (
+      {canEdit && !sent && (
         <button className="ml-2 text-xs text-primary hover:underline"
-          title="Correct the day this credit's money arrived — it is the day this credit starts earning"
+          title="Correct the day this credit's money arrived — it is the day this credit starts earning. Goes to Admin/CXO for approval."
           onClick={() => { setVal(cur ?? ''); setEditing(true); }}>edit</button>
       )}
+      {sent && <span className="ml-2 text-xs text-success">Sent for approval</span>}
     </>
   );
 }

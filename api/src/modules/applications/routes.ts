@@ -125,10 +125,12 @@ applicationsRouter.patch('/:id/investment-date', requirePermission('applications
     res.json(await s.editInvestmentDate(getDb(), req.user!, Number(req.params.id), date));
   }));
 
-// Correct ONE credit's date on a CLUBBED investment — Super Admin only, refused
-// once interest is paid/batched, and refused on a single-credit investment
-// (use /investment-date there, so the credit and the application stay in step).
-// Each credit earns from its own date, so there is no single date to move.
+// REQUEST a correction to ONE credit's date on a CLUBBED investment. Like the
+// investment-date change it is maker/checker (owner 2026-08-27) — maker NCD
+// Manager+, checker Admin/CXO — because it rebuilds the schedule and shifts that
+// credit's first period; nothing changes until approved. Refused once interest
+// is paid/batched, and refused on a single-credit investment (use
+// /investment-date there, so the credit and the application stay in step).
 applicationsRouter.patch('/:id/lines/:lineId/date', requirePermission('applications:update'),
   asyncHandler(async (req, res) => {
     const { date } = z.object({ date: z.string() }).parse(req.body);

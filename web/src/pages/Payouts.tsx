@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR, payoutRupees } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
@@ -72,6 +73,71 @@ function BatchComparison({ last, now }: {
   );
 }
 
+/** One investment whose accrual start disagrees with its money-received date. */
+type DateHealthRow = {
+  application_id: number; application_no: string; customer_name: string;
+  issue: 'no_line_date' | 'interest_start_mismatch' | 'line_before_money';
+  accrual_start: string | null; expected_start: string | null;
+  days_wrong: number; rupees: number; tranches: number;
+};
+
+/**
+ * The warning shown above the payout controls when an investment's accrual start
+ * disagrees with the day its money arrived (owner 2026-08-26, after finding two
+ * of these by eye on a sheet: "from the system i should not see anything like
+ * what just happened").
+ *
+ * Deliberately does NOT disable any download — the owner chose warn-don't-block
+ * so a false positive can never hold up a whole month's payout. It names each
+ * one, both dates and the rupee effect, because "something looks wrong" without
+ * the number is not actionable.
+ */
+function DateHealthBanner({ rows }: { rows: DateHealthRow[] }) {
+  if (!rows.length) return null;
+  const over = rows.filter((r) => r.rupees > 0).reduce((s, r) => s + r.rupees, 0);
+  const under = rows.filter((r) => r.rupees < 0).reduce((s, r) => s + r.rupees, 0);
+  return (
+    <div className="mb-4 rounded border border-[color:var(--danger-bg)] bg-[color:var(--danger-bg)] p-3">
+      <div className="text-sm font-semibold text-danger">
+        ⚠️ {rows.length} investment{rows.length > 1 ? 's' : ''} may start earning on the wrong day
+      </div>
+      <p className="text-xs text-text-muted mt-1 mb-2">
+        The interest below is worked out from these dates. Check them before you mark this date paid —
+        nothing here stops you downloading or running the payout.
+        {over > 0 && <> Over-paying by about <span className="mono">₹{over.toLocaleString('en-IN')}</span>.</>}
+        {under < 0 && <> Under-paying by about <span className="mono">₹{Math.abs(under).toLocaleString('en-IN')}</span>.</>}
+      </p>
+      <table className="w-full text-xs">
+        <thead className="text-text-label">
+          <tr className="text-left">
+            <th className="py-1 pr-3 font-medium">Customer</th>
+            <th className="py-1 pr-3 font-medium">Investment</th>
+            <th className="py-1 pr-3 font-medium">Earning from</th>
+            <th className="py-1 pr-3 font-medium">Money received</th>
+            <th className="py-1 pr-3 font-medium text-right">Days</th>
+            <th className="py-1 font-medium text-right">Effect</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.application_id + '-' + r.application_no} className="border-t border-border">
+              <td className="py-1 pr-3">{r.customer_name}</td>
+              <td className="py-1 pr-3">
+                <Link to={`/app/applications/${r.application_id}`} className="mono text-primary hover:underline">{r.application_no}</Link>
+                {r.tranches > 1 && <span className="ml-1 text-text-muted">({r.tranches} credits)</span>}
+              </td>
+              <td className="py-1 pr-3 mono">{r.accrual_start ?? '—'}</td>
+              <td className="py-1 pr-3 mono">{r.expected_start ?? '—'}</td>
+              <td className="py-1 pr-3 text-right mono">{r.days_wrong > 0 ? `${r.days_wrong} early` : r.days_wrong < 0 ? `${Math.abs(r.days_wrong)} late` : '—'}</td>
+              <td className="py-1 text-right mono">{r.rupees === 0 ? '—' : `${r.rupees > 0 ? '+' : '−'}₹${Math.abs(r.rupees).toLocaleString('en-IN')}`}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function PayoutsPage() {
   const qc = useQueryClient();
   const { confirm, promptText } = useConfirm();
@@ -84,6 +150,10 @@ export function PayoutsPage() {
   const preview = useQuery({ queryKey: ['payout-preview', date], queryFn: () => api.get<any>(`/api/payouts/preview?date=${date}`) });
   const lastBatch = useQuery({ queryKey: ['payout-last-interest'], queryFn: () => api.get<{ summary: LastInterestSummary | null }>('/api/payouts/last-interest-summary') });
   const batches = useQuery({ queryKey: ['payout-batches'], queryFn: () => api.get<{ rows: any[] }>('/api/payouts') });
+  // Investments whose accrual start disagrees with the day their money arrived.
+  // Warning only (owner 2026-08-26) — a false positive must never be able to
+  // hold up a month's payout, so nothing here disables a download.
+  const dateHealth = useQuery({ queryKey: ['payout-date-health'], queryFn: () => api.get<{ rows: DateHealthRow[] }>('/api/payouts/date-health') });
   const statements = useQuery({ queryKey: ['bank-statements'], queryFn: () => api.get<{ rows: any[] }>('/api/bank-statements') });
 
   const create = useMutation({ mutationFn: () => api.post('/api/payouts', { payout_date: date }), onSuccess: () => { setConfirming(false); setMsg('Sent to the approvals queue — a checker confirms it, which settles the period and resets interest.'); qc.invalidateQueries({ queryKey: ['payout-batches'] }); qc.invalidateQueries({ queryKey: ['payout-preview', date] }); }, onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Failed') });
@@ -152,6 +222,7 @@ export function PayoutsPage() {
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Interest payouts (NEFT)</h1>
       <p className="text-sm text-text-muted mt-1 mb-4">Download the NEFT sheet for any date, as often as you like — it shows each investment's interest accrued since it was last paid, up to that date. Nothing is recorded by downloading. Only when you mark a date as paid does it go to a checker; on approval that period is settled and interest starts fresh.</p>
+      <DateHealthBanner rows={dateHealth.data?.rows ?? []} />
       <div className="flex items-center gap-2 mb-4">
         <label className="text-sm text-text-label">Up to date</label>
         <input type="date" value={date} onChange={(e) => { setDate(e.target.value); setConfirming(false); }} className="px-2.5 py-1.5 text-sm border border-border-strong rounded" />

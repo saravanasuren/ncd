@@ -37,6 +37,18 @@ payoutsRouter.get('/preview', requirePermission('payouts:generate'),
 payoutsRouter.get('/last-interest-summary', requirePermission('payouts:generate'),
   asyncHandler(async (_req, res) => res.json({ summary: await s.lastPaidInterestSummary(getDb()) })));
 
+/**
+ * Investments whose accrual start disagrees with the day their money arrived —
+ * shown as a warning on the payout screen BEFORE the run goes out (owner
+ * 2026-08-26). Never blocks: a false positive must not hold up a month's payout.
+ * Returns [] when there is nothing to say, which is the normal case.
+ */
+payoutsRouter.get('/date-health', requirePermission('payouts:generate'),
+  asyncHandler(async (_req, res) => {
+    const { payoutDateHealth } = await import('./health.js');
+    res.json({ rows: await payoutDateHealth(getDb()) });
+  }));
+
 // Stateless: pull the sheet for ANY date, as often as you like. Writes nothing.
 payoutsRouter.get('/sheet.xlsx', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => {

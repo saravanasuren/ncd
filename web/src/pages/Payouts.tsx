@@ -11,6 +11,13 @@ interface LastInterestSummary {
   batch_no: string; payout_date: string;
   customers: number; investments: number; gross: number; tds: number; net: number;
   outstanding: number;
+  /** Money in / out since that batch — a record of the period, not a bridge
+   *  between the two columns (see BatchComparison's note). */
+  movement: {
+    since: string;
+    added: { customers: number; investments: number; amount: number };
+    redeemed: { customers: number; redemptions: number; amount: number };
+  };
 }
 
 /** Last paid batch vs the batch about to be cut — each metric coloured green
@@ -19,15 +26,23 @@ function BatchComparison({ last, now }: {
   last: LastInterestSummary;
   now: { customers: number; investments: number; gross: number; tds: number; net: number; outstanding: number };
 }) {
-  const rows: Array<{ label: string; last: number; now: number; money?: boolean }> = [
-    { label: 'Customers', last: last.customers, now: now.customers },
+  const m = last.movement;
+  // Added/Redeemed are only meaningful for Customers and Outstanding. Gross, TDS
+  // and Net are interest EARNED, not money in or out — inventing a figure for
+  // them would put a different kind of number in the same column (owner
+  // 2026-08-27: leave them blank).
+  const rows: Array<{ label: string; last: number; now: number; money?: boolean;
+                      added?: number; redeemed?: number }> = [
+    { label: 'Customers', last: last.customers, now: now.customers,
+      added: m?.added.customers, redeemed: m?.redeemed.customers },
     // No Investments row (owner 2026-08-19). Outstanding already says how much
     // principal each batch earned on, which is the number that explains gross;
     // a count of investments moved with it and added nothing.
     // The principal each batch's interest was earned on (owner 2026-08-16).
     // Placed ABOVE Gross because it is the explanation for it: gross can fall
     // while customers rise, and this is the row that says why.
-    { label: 'Outstanding', last: last.outstanding, now: now.outstanding, money: true },
+    { label: 'Outstanding', last: last.outstanding, now: now.outstanding, money: true,
+      added: m?.added.amount, redeemed: m?.redeemed.amount },
     { label: 'Gross', last: last.gross, now: now.gross, money: true },
     { label: 'TDS', last: last.tds, now: now.tds, money: true },
     { label: 'Net', last: last.net, now: now.net, money: true },
@@ -39,11 +54,13 @@ function BatchComparison({ last, now }: {
         vs last paid batch — <span className="mono">{last.batch_no}</span> · {last.payout_date}
       </div>
       <div className="overflow-x-auto">
-        <table className="text-xs w-full max-w-[560px]">
+        <table className="text-xs w-full max-w-[760px]">
           <thead>
             <tr className="text-text-muted">
               <th className="font-medium py-1 pr-4 text-left"></th>
               <th className="font-medium py-1 pr-4 text-right">Last batch</th>
+              <th className="font-medium py-1 pr-4 text-right">Added</th>
+              <th className="font-medium py-1 pr-4 text-right">Redeemed</th>
               <th className="font-medium py-1 pr-4 text-right">This batch</th>
               <th className="font-medium py-1 text-right">Change</th>
             </tr>
@@ -58,6 +75,14 @@ function BatchComparison({ last, now }: {
                 <tr key={r.label} className="border-t border-border/60">
                   <td className="py-1 pr-4 text-text-label">{r.label}</td>
                   <td className="py-1 pr-4 text-right mono text-text-muted">{fmt(r.last, r.money)}</td>
+                  <td className="py-1 pr-4 text-right mono text-success">
+                    {r.added === undefined ? <span className="text-text-muted">—</span>
+                      : r.added === 0 ? '0' : `+${fmt(r.added, r.money)}`}
+                  </td>
+                  <td className="py-1 pr-4 text-right mono text-danger">
+                    {r.redeemed === undefined ? <span className="text-text-muted">—</span>
+                      : r.redeemed === 0 ? '0' : `−${fmt(r.redeemed, r.money)}`}
+                  </td>
                   <td className="py-1 pr-4 text-right mono font-semibold">{fmt(r.now, r.money)}</td>
                   <td className={`py-1 text-right mono ${color}`}>
                     {arrow}{' '}{d === 0 ? '0' : `${d > 0 ? '+' : '−'}${fmt(Math.abs(d), r.money)}`}
@@ -68,6 +93,14 @@ function BatchComparison({ last, now }: {
             })}
           </tbody>
         </table>
+        {m && (
+          <div className="text-[11px] text-text-muted mt-1.5 max-w-[760px]">
+            Added / Redeemed is the movement since {m.since} — {m.added.investments} investment(s)
+            in, {m.redeemed.redemptions} redemption(s) out. They record the period; they do not add
+            up from Last batch to This batch, because Last batch shows each line's outstanding as it
+            stands today, so redeemed money has already dropped out of it.
+          </div>
+        )}
       </div>
     </div>
   );

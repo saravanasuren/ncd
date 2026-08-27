@@ -360,6 +360,17 @@ export interface LastInterestBatchSummary {
   customers: number; investments: number; gross: number; tds: number; net: number;
   /** Principal the batch's interest was earned on — see previewDue's totals. */
   outstanding: number;
+  /**
+   * What moved between that batch and now (owner 2026-08-27). A record of money
+   * in and money out for the period, NOT an arithmetic bridge from the last
+   * batch to this one — see the note on the query for why it cannot be one.
+   */
+  movement: {
+    /** Exclusive lower bound: the last batch's payout date. */
+    since: string;
+    added: { customers: number; investments: number; amount: number };
+    redeemed: { customers: number; redemptions: number; amount: number };
+  };
 }
 
 /**
@@ -390,11 +401,43 @@ export async function lastPaidInterestSummary(db: Db): Promise<LastInterestBatch
        JOIN applications a ON a.id = ds.application_id
        LEFT JOIN application_lines l ON l.id = ds.line_id
       WHERE ds.batch_id = $1 AND ds.status = 'Paid' AND ds.due_type IN ${DUE_TYPES}`, [batch.id])).rows[0]!;
+  const since = String(batch.payout_date).slice(0, 10);
+
+  // Money in and money out since that batch (owner 2026-08-27).
+  //
+  // Deliberately NOT a bridge from `outstanding` above to this batch's. That
+  // figure re-reads each line's LIVE outstanding, so a redemption has already
+  // been stripped out of BOTH sides — subtracting `redeemed` from it a second
+  // time would double-count and make the row look wrong. Measured on production
+  // 2026-08-27: last 60.17Cr + added 7.23Cr = this 67.40Cr exactly, with the
+  // 1.20Cr redeemed already gone from the 60.17Cr. So this is a record of the
+  // period's movement, and the UI labels it as such.
+  //
+  // Same definitions the Book report uses, so the two screens agree: an addition
+  // is money RECEIVED in the window (date_money_received), a redemption is one
+  // raised in the window, valued at the principal returned.
+  const add = (await db.query<{ investments: string; customers: string; amount: string }>(
+    `SELECT count(*) AS investments, count(DISTINCT customer_id) AS customers,
+            COALESCE(sum(total_amount), 0) AS amount
+       FROM applications
+      WHERE date_money_received > $1::date
+        AND status NOT IN ('Rejected', 'Withdrawn')`, [since])).rows[0]!;
+  const red = (await db.query<{ redemptions: string; customers: string; amount: string }>(
+    `SELECT count(*) AS redemptions, count(DISTINCT a.customer_id) AS customers,
+            COALESCE(sum(r.principal), 0) AS amount
+       FROM redemptions r JOIN applications a ON a.id = r.application_id
+      WHERE r.redemption_date > $1::date`, [since])).rows[0]!;
+
   return {
-    batch_no: batch.batch_no, payout_date: String(batch.payout_date).slice(0, 10),
+    batch_no: batch.batch_no, payout_date: since,
     customers: Number(agg.customers), investments: Number(agg.investments),
     gross: round2(Number(agg.gross)), tds: round2(Number(agg.tds)), net: round2(Number(agg.net)),
     outstanding: round2(Number(agg.outstanding)),
+    movement: {
+      since,
+      added: { customers: Number(add.customers), investments: Number(add.investments), amount: round2(Number(add.amount)) },
+      redeemed: { customers: Number(red.customers), redemptions: Number(red.redemptions), amount: round2(Number(red.amount)) },
+    },
   };
 }
 

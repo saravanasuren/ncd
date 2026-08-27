@@ -582,6 +582,80 @@ export async function editInvestmentDate(db: Db, actor: AuthUser, appId: number,
   });
 }
 
+/**
+ * Correct ONE credit's money-received date on a clubbed investment (owner
+ * 2026-08-27). Super Admin only, and ONLY while no interest has been paid or
+ * locked into a batch — the same rule editInvestmentDate uses, for the same
+ * reason: past that, changing a date rewrites money already sent.
+ *
+ * Why this exists alongside editInvestmentDate: a clubbed investment is ONE
+ * debenture paid for on several days — the owner's example, 50,000 today,
+ * 50,000 tomorrow, 1,00,000 the day after — and each credit earns from ITS OWN
+ * date. There is no single "investment date" to move, so editInvestmentDate
+ * refuses it outright. Until now that left NO way to fix a mistyped tranche
+ * date on screen at all; it took a hand-written database repair (8 of those on
+ * 2026-08-26).
+ *
+ * Refused on a SINGLE-credit investment. There the credit's date and the
+ * application's must stay equal, and moving only the credit creates precisely
+ * the mismatch the payout health check reports. editInvestmentDate is the tool
+ * for those — it moves both and keeps them in step.
+ *
+ * The application's own date_money_received / interest_start_date are left
+ * alone. On a clubbed investment every line carries its own date, so those two
+ * are only a fallback that nothing reads; moving them would change no figure
+ * and could leave them disagreeing with the credits.
+ *
+ * 🔒 interest-logic-locked: this DOES change a first period's day count, which
+ * is the whole point — so it is Super-Admin-only, audited before/after, and
+ * rebuilds the schedule through the real materialize rather than editing
+ * figures by hand.
+ */
+export async function editCreditDate(db: Db, actor: AuthUser, appId: number, lineId: number, newDate: string) {
+  if (actor.role !== 'super_admin') throw errors.forbidden('Only a Super Admin can change a credit date');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) throw errors.badRequest('A valid date (YYYY-MM-DD) is required');
+  return db.withTx(async (tx) => {
+    const line = (await tx.query<{ application_id: string; date_money_received: string | null }>(
+      'SELECT application_id, date_money_received FROM application_lines WHERE id = $1', [lineId])).rows[0];
+    if (!line || Number(line.application_id) !== appId) throw errors.notFound('Credit not found on this investment');
+
+    const count = Number((await tx.query<{ n: string }>(
+      'SELECT count(*) AS n FROM application_lines WHERE application_id = $1', [appId])).rows[0]!.n);
+    if (count < 2) {
+      throw errors.badRequest('This investment has a single credit — change the investment date instead, so the credit and the investment stay in step.');
+    }
+    const locked = await tx.query(
+      "SELECT 1 FROM disbursement_schedule WHERE application_id = $1 AND (status = 'Paid' OR batch_id IS NOT NULL) LIMIT 1", [appId]);
+    if (locked.rowCount) {
+      throw errors.conflict('Interest has already been paid or locked into a batch on this investment — its dates can no longer be changed.');
+    }
+
+    const before = line.date_money_received ? String(line.date_money_received).slice(0, 10) : null;
+    await tx.query('UPDATE application_lines SET date_money_received = $1 WHERE id = $2', [newDate, lineId]);
+    // Rebuild only if a schedule already EXISTS. An investment still awaiting
+    // approval has none — it is generated at go-live, from these very dates —
+    // and materialising one here would hand an unapproved investment a live
+    // schedule as a side effect of a typo fix. Where one does exist, tear down
+    // the unpaid rows and rebuild so this credit's first (broken) period moves
+    // with it; nothing is Paid (guarded above), so the delete satisfies
+    // materialize's "skip if already materialised" check.
+    const existing = await tx.query('SELECT 1 FROM disbursement_schedule WHERE application_id = $1 LIMIT 1', [appId]);
+    if (existing.rowCount) {
+      await tx.query("DELETE FROM disbursement_schedule WHERE application_id = $1 AND status <> 'Paid'", [appId]);
+      const { materializeForApplication } = await import('../schedule/materialize.js');
+      await materializeForApplication(tx, appId);
+      const { accrueForApplication } = await import('../incentives/accrual.js');
+      await accrueForApplication(tx, appId);
+    }
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'application.credit-date.edit', entityType: 'application_lines', entityId: lineId,
+      before: { date_money_received: before },
+      after: { date_money_received: newDate, application_id: appId },
+    });
+    return { ok: true, line_id: lineId, date_money_received: newDate };
+  });
+}
+
 /** Record eSign completion. Non-gating: it stamps esigned_at and does not
  * change the lifecycle status (eSign no longer sits on the critical path). */
 export async function markESigned(db: Db, actor: AuthUser, appId: number) {

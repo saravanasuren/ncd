@@ -74,7 +74,7 @@ function currentValue(c: any, f: CustomerField): string | boolean {
 async function purgeConfirm(promptText: ReturnType<typeof useConfirm>['promptText'], what: string): Promise<string | null> {
   const typed = await promptText({
     title: `⚠️ Permanently delete ${what}`,
-    body: 'This erases the record and everything linked to it (schedule, collections, incentives, redemptions). It CANNOT be undone.',
+    body: 'This erases the record and everything linked to it — schedule, collections, incentives, redemptions, and any locker links or escrow matches. It goes through whatever is attached; nothing blocks it. It CANNOT be undone.',
     label: 'Type DELETE to confirm', placeholder: 'DELETE', minLength: 6, confirmLabel: 'Continue', danger: true,
   });
   if (typed !== 'DELETE') return null;

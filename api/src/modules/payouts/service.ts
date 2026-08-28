@@ -479,11 +479,20 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
            LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
            LEFT JOIN customer_bank_accounts cb ON cb.customer_id = a.customer_id AND cb.is_active = TRUE
           WHERE a.id = $1 LIMIT 1`, [r.application_id])).rows[0];
+      // Carry any one-time adjustment onto the slice too (owner 2026-08-27) —
+      // previewDue attached it to this row (total = net ± adjustment), but the
+      // slice used to be stamped batch-only, so an adjustment on a redeemed
+      // investment's final broken interest was consumed without ever being paid.
+      // No-op when there's no adjustment (total == net, delta 0). chk_ds_net holds:
+      // net = gross − tds + adjustment.
+      const sliceAdj = round2(Number(r.addition_amount) - Number(r.deduction_amount));
       await tx.query(
         `UPDATE disbursement_schedule
-            SET batch_id = $2, payee_account = COALESCE($3, payee_account), payee_ifsc = COALESCE($4, payee_ifsc)
+            SET batch_id = $2, payee_account = COALESCE($3, payee_account), payee_ifsc = COALESCE($4, payee_ifsc),
+                net_amount = $5, adjustment_amount = $6
           WHERE id = $1 AND status = 'Scheduled' AND batch_id IS NULL`,
-        [r.schedule_id, batchId, bank?.account_number ?? null, bank?.ifsc ?? null]);
+        [r.schedule_id, batchId, bank?.account_number ?? null, bank?.ifsc ?? null,
+         round2(Number(r.total_amount)), sliceAdj]);
     }
 
     for (const r of (due.rows as Record<string, unknown>[]).filter((x) => !x.schedule_id)) {
@@ -1301,8 +1310,15 @@ export async function createAdjustment(db: Db, actor: AuthUser, input: CreateAdj
          FROM applications a JOIN customers c ON c.id = a.customer_id WHERE a.id = $1`,
       [input.application_id])).rows[0];
     if (!app) throw errors.notFound('Application not found');
-    if (!OUTSTANDING_APPLICATION_STATUSES.includes(app.status as never)) {
-      throw errors.unprocessable(`${app.application_no} is ${app.status} — adjustments apply to live investments only`);
+    // A live investment always qualifies. A REDEEMED one still qualifies IF it
+    // has a broken-period interest payout not yet settled (owner 2026-08-27) —
+    // its one final interest payment this cut-off, which the adjustment rides on.
+    const live = OUTSTANDING_APPLICATION_STATUSES.includes(app.status as never);
+    const pendingSlice = live ? false : Boolean((await tx.query(
+      "SELECT 1 FROM disbursement_schedule WHERE application_id = $1 AND status = 'Scheduled' AND batch_id IS NULL AND due_type IN ('Interest','BrokenInterest') LIMIT 1",
+      [input.application_id])).rowCount);
+    if (!live && !pendingSlice) {
+      throw errors.unprocessable(`${app.application_no} is ${app.status} with no interest payout still due — adjustments apply to a live investment, or a redeemed one whose broken-period interest is still to be paid.`);
     }
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO payout_adjustments (application_id, kind, amount, narration, created_by_user_id)

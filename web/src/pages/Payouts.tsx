@@ -443,8 +443,10 @@ function AdjustmentsCard({ onMsg }: { onMsg: (m: string) => void }) {
     onError: (e) => onMsg(e instanceof ApiError ? e.message : 'Failed'),
   });
 
-  // Adjustments ride on interest, so only live investments qualify.
-  const liveApps = ((detail.data?.applications ?? []) as any[]).filter((a) => Number(a.outstanding ?? 0) > 0);
+  // Adjustments ride on interest: a live investment, OR a REDEEMED one whose
+  // final broken-period interest is still to be paid this cut-off (owner
+  // 2026-08-27) — it drops off again once that slice is settled.
+  const liveApps = ((detail.data?.applications ?? []) as any[]).filter((a) => Number(a.outstanding ?? 0) > 0 || a.has_pending_payout);
   const statusChip: Record<string, string> = {
     PendingApproval: 'text-warn', Approved: 'text-success', Consumed: 'text-text-muted',
   };
@@ -482,7 +484,7 @@ function AdjustmentsCard({ onMsg }: { onMsg: (m: string) => void }) {
             <select className={inp} value={appId} onChange={(e) => setAppId(e.target.value)}>
               <option value="">Investment…</option>
               {liveApps.map((a: any) => (
-                <option key={a.id} value={a.id}>{a.application_no} · {a.series_code ?? ''} · {formatINR(Number(a.amount ?? 0))}</option>
+                <option key={a.id} value={a.id}>{a.application_no} · {a.series_code ?? ''} · {formatINR(Number(a.amount ?? 0))}{Number(a.outstanding ?? 0) === 0 ? ' · redeemed (final interest)' : ''}</option>
               ))}
             </select>
             <select className={inp} value={kind} onChange={(e) => setKind(e.target.value as 'Addition' | 'Deduction')}>

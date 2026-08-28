@@ -22,7 +22,7 @@ import { errors } from '../../../lib/errors.js';
 import { nextSeq, isUniqueViolation } from '../../../lib/sequences.js';
 import { formatNumber, DEFAULT_NUMBER_FORMATS } from '../../../lib/numbering.js';
 import { getCompanyProfile, getBondSignature } from '../../products/service.js';
-import { companyHeader, COMPANY, LOGO_PATH, HAS_LOGO, customerAddress, addressColumns } from './shared.js';
+import { companyHeader, COMPANY, LOGO_PATH, HAS_LOGO, customerAddress, addressColumns, amountInWords } from './shared.js';
 
 /** Only an issued investment carries a certificate — a pending application must
  * never burn a certificate number (mirrors wealth's gate). */
@@ -191,10 +191,44 @@ function _drawDetailTable(doc: Doc, y: number, rows: Array<[string, string, numb
   return y + totalH + 18;
 }
 
+/**
+ * The promise-to-pay paragraph printed on every bond certificate — the
+ * operative legal text of the instrument.
+ *
+ * Exported, and kept as a pure string builder, so the WORDING can be tested
+ * directly. Inside the PDF it is compressed and ungreppable, which would leave
+ * the one part of this document that actually binds the Company as the one part
+ * no test could see.
+ *
+ * Owner-supplied wording, 2026-08-28. Two substantive changes beyond
+ * punctuation, both deliberate:
+ *   · the sum now appears in WORDS as well as figures — the standard protection
+ *     against a misread or altered figure on a negotiable instrument. Uses the
+ *     same amountInWords as the acknowledgment, so two documents can never word
+ *     the same amount differently.
+ *   · principal and interest are stated SEPARATELY. The old text promised the
+ *     principal "including interest at the rate specified above", which read as
+ *     though interest were paid together with the principal at redemption. It is
+ *     not: interest is paid on the monthly payout run, principal at redemption.
+ *     The certificate now says exactly what the system actually does.
+ */
+export function bondLegalParagraph(legalName: string, corporateOffice: string, totalAmount: number): string {
+  return `For Value Received, ${legalName}, having its Corporate Office at ${corporateOffice}, `
+    + `promises to pay to the person(s) named herein as the holder(s), or their order, the sum of `
+    + `Rs. ${Number(totalAmount).toLocaleString('en-IN')} (${amountInWords(totalAmount)}) upon presentation `
+    + `and discharge of this NCD Certificate on the date of redemption as mentioned above. `
+    + `The principal amount shall be payable on redemption, while interest shall be paid separately at the `
+    + `rate specified above, subject to deduction of tax at source at the rate prevailing from time to time `
+    + `under the provisions of the Income-tax Act, 1961, or any statutory modification or re-enactment thereof. `
+    + `The NCD is issued subject to and with the benefit of the conditions mentioned in the Private Placement `
+    + `Offer Letter, which shall be binding on the Company, the NCD Holders, and persons claiming by, through, `
+    + `or under any of them.`;
+}
+
 function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHeader>, totalAmount: number, signatures: Array<Buffer | null>) {
   const x = 50, w = doc.page.width - 100;
   doc.fillColor(C.TEXT).font('Helvetica').fontSize(9.5).text(
-    `For Value Received ${co.legal_name} having its Corporate Office at ${co.corporate_office_address} promises to pay the person(s) named as holder(s) or to their order the sum of Rs. ${Number(totalAmount).toLocaleString('en-IN')} upon presentation and discharge of this NCD Certificate on the date of redemption as mentioned above including interest at the rate specified above subject to Deduction of tax at source at the rate prevailing from time to time under the provisions of Indian Income Tax Act-1961 or any statutory modifications (or reenactment thereof). The NCD is issued subject to and with the benefit of conditions mentioned in Private Placement Offer Letter which shall be binding on the Company and the NCD Holders and persons claiming by, through or under any of them.`,
+    bondLegalParagraph(co.legal_name, co.corporate_office_address, totalAmount),
     x, y, { width: w, align: 'justify' });
   y = doc.y + 10;
   doc.font('Helvetica-Oblique').fontSize(9).text('*Will be subject to deduction of TDS on interest and applicable Government levies', x, y, { width: w });

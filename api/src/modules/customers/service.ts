@@ -287,6 +287,14 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
             -- lines were never materialised. Without the status guard a redeemed
             -- app wrongly showed its original amount as outstanding.
             CASE WHEN a.status IN (${OUTSTANDING_SQL_LIST}) THEN COALESCE(bk.live, a.total_amount) ELSE 0 END AS outstanding,
+            -- Has an interest/broken-interest payout still to be settled (unpaid,
+            -- not yet in a batch). True for a live investment AND for a REDEEMED
+            -- one whose final broken-period interest hasn't been paid yet — the
+            -- one case a one-time adjustment must still be allowed on (owner
+            -- 2026-08-27), and only until that slice is paid.
+            EXISTS (SELECT 1 FROM disbursement_schedule ds
+                     WHERE ds.application_id = a.id AND ds.status = 'Scheduled' AND ds.batch_id IS NULL
+                       AND ds.due_type IN ('Interest','BrokenInterest')) AS has_pending_payout,
             a.status,
             a.date_money_received, a.allotment_date, a.archived_at,
             -- eSign state per investment, so the customer's list shows at a

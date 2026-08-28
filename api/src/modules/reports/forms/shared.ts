@@ -29,7 +29,11 @@ export const COMPANY = {
   legal_name: 'Dhanam Investment and Finance Private Limited',
   cin: 'U64920TZ2016PTC031308',
   rbi_registration_no: 'N-07.00831',
-  corporate_office_address: '2/191B, 2nd Floor, Darshini Business Centre, Mylampatty Road, Karayampalayam, Chinniyampalayam, Coimbatore, TN - 641 048',
+  // Pincode corrected 641 048 → 641 062 (owner 2026-08-28). This constant is
+  // the ONLY source: company_profile has no address column, so getCompanyProfile's
+  // pick() always falls through to here. It prints on the bond certificate, the
+  // acknowledgment and the application form, so all three move together.
+  corporate_office_address: '2/191B, 2nd Floor, Darshini Business Centre, Mylampatty Road, Karayampalayam, Chinniyampalayam, Coimbatore, TN - 641 062',
   registered_office_address: '22/3, 2nd Street, Nehru Nagar, Behind CMS School, Ganapathy, Coimbatore, TN - 641 006',
   website: 'www.dhanamfinance.com',
   general_email: 'contact@dhanam.finance',

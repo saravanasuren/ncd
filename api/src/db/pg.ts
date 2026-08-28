@@ -24,6 +24,23 @@ export class PgDb implements Db {
 
   constructor(connectionString: string) {
     this.pool = new pg.Pool({ connectionString, max: 10 });
+    // An IDLE pooled connection that dies emits 'error' on the Pool. With no
+    // listener, Node treats an unhandled EventEmitter 'error' as a THROW — so it
+    // became an uncaughtException and the API exited.
+    //
+    // That is not hypothetical: 2026-08-28 06:21 UTC, unattended-upgrades
+    // restarted Postgres, every open connection got "terminating connection due
+    // to administrator command", and this killed the API. systemd restarted it
+    // ~6s later, so the damage was small — but a routine overnight package
+    // upgrade must not be able to take the book down at all.
+    //
+    // Swallowing is correct here: the pool discards the dead client and opens a
+    // fresh one on the next query. Nothing is lost, because an IDLE connection
+    // by definition has no in-flight work. A connection that dies MID-query
+    // still rejects that query's promise, so real failures are unaffected.
+    this.pool.on('error', (err) => {
+      console.error('[db] idle pooled connection dropped (recovering):', (err as Error).message);
+    });
   }
 
   async query<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<QueryResult<T>> {

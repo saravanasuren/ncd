@@ -590,6 +590,29 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
     };
   }
 
+  // Bond handover change: the checker needs to see what is recorded now versus
+  // what is being asked for, and whether this is a reversal rather than a fix.
+  if (req.request_type === 'bond_distribution_change' && id) {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT a.application_no, a.total_amount, c.full_name AS customer, c.customer_code
+         FROM applications a JOIN customers c ON c.id = a.customer_id WHERE a.id = $1`, [id])).rows[0];
+    if (r) return {
+      subject: `${r.customer} · ${r.application_no}`,
+      amount: money(r.total_amount),
+      facts: clean([
+        fact('Customer', `${r.customer} (${r.customer_code})`),
+        fact('Investment', String(r.application_no)),
+        fact('Recorded as given', dateOnly(meta.current_given_on)),
+        fact('Recorded note', meta.current_note ? String(meta.current_note) : null),
+        meta.reversal
+          ? fact('Change', 'REVERSE — mark the bond as NOT given')
+          : fact('New date given', dateOnly(meta.new_given_on)),
+        meta.reversal ? null : fact('New note', meta.new_note ? String(meta.new_note) : '(cleared)'),
+        fact('Reason', meta.reason ? String(meta.reason) : null),
+      ]),
+    };
+  }
+
   if (id && req.entity_type === 'applications') {
     const r = (await db.query<Record<string, unknown>>(
       `SELECT a.application_no, a.total_amount, a.status, a.date_money_received, a.referred_by_text,

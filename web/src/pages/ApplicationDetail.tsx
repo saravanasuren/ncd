@@ -264,21 +264,7 @@ export function ApplicationDetailPage() {
         {/* Has the customer actually RECEIVED their bond? (owner 2026-08-19).
             Every other bond field says what we produced — generated, eSigned,
             filed — none of them says it reached the customer's hands. */}
-        {can('applications:update') && (
-          <label className={`text-xs flex items-center gap-1.5 border rounded px-3 py-1.5 cursor-pointer ${a.bond_distributed_at ? 'border-[color:var(--success)] text-success' : 'border-border hover:bg-bg'}`}
-            title={a.bond_distributed_at
-              ? `Marked by ${a.bond_distributed_by_name ?? 'someone'} on ${String(a.bond_distributed_at).slice(0, 10)}`
-              : 'Tick once the bond certificate has been handed to the customer'}>
-            <input type="checkbox" checked={!!a.bond_distributed_at}
-              onChange={(e) => run(api.post(`/api/applications/${id}/bond-distributed`, { distributed: e.target.checked }))} />
-            Bond given to customer
-            {a.bond_distributed_at && (
-              <span className="text-text-muted">
-                · {String(a.bond_distributed_at).slice(0, 10)}{a.bond_distributed_by_name ? ` · ${a.bond_distributed_by_name}` : ''}
-              </span>
-            )}
-          </label>
-        )}
+        <BondHandover app={a} appId={Number(id)} onDone={invalidate} onErr={setMsg} />
         {can('applications:update') && (
           <label className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg cursor-pointer">
             {a.receipt_file_path ? 'Replace receipt…' : 'Upload receipt…'}
@@ -597,6 +583,137 @@ function InvestmentDate({ a, appId, canEdit, onErr }: {
         </span>
       )}
     </p>
+  );
+}
+
+/**
+ * "Bond given to customer" — WRITE-ONCE (owner 2026-08-28).
+ *
+ * It used to be a plain checkbox: it stamped the moment you clicked it, said
+ * nothing about how the bond travelled, and anyone could quietly untick it and
+ * erase the record of who vouched for the handover.
+ *
+ * Now: marking it asks WHEN it actually reached the customer and HOW ("sent by
+ * courier, AWB 123456"), and applies at once. After that the tick is locked —
+ * there is no untick. Correcting the date or note, or reversing the whole thing,
+ * goes to Admin/CXO approval, which is the only way back.
+ *
+ * NCD Manager and above only; the server enforces the same rule.
+ */
+function BondHandover({ app, appId, onDone, onErr }: {
+  app: any; appId: number; onDone: () => void; onErr: (m: string) => void;
+}) {
+  const { user } = useAuth();
+  const mayMark = ['ncd_manager', 'admin', 'super_admin'].includes(String(user?.role ?? ''));
+  const given = !!app.bond_distributed_at;
+  const today = new Date().toISOString().slice(0, 10);
+
+  const [panel, setPanel] = useState<null | 'mark' | 'change'>(null);
+  const [date, setDate] = useState(today);
+  const [note, setNote] = useState('');
+  const [reason, setReason] = useState('');
+  const [reverse, setReverse] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  const run = async (fn: Promise<unknown>, after: () => void) => {
+    setBusy(true);
+    try { await fn; after(); onDone(); }
+    catch (e) { onErr(e instanceof ApiError ? e.message : String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const onDate = app.bond_distributed_on ? String(app.bond_distributed_on).slice(0, 10) : null;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className={`text-xs flex items-center gap-1.5 border rounded px-3 py-1.5 ${given ? 'border-[color:var(--success)] text-success' : 'border-border'}`}
+        title={given
+          ? `Recorded by ${app.bond_distributed_by_name ?? 'someone'}${onDate ? ` · given ${onDate}` : ''}`
+          : 'Record that the bond certificate reached the customer'}>
+        {/* Deliberately NOT an <input> once given: a checkbox invites an untick
+            that is no longer allowed, and a disabled one still looks clickable. */}
+        <span aria-hidden>{given ? '☑' : '☐'}</span>
+        Bond given to customer
+        {given && (
+          <span className="text-text-muted">
+            · {onDate ?? String(app.bond_distributed_at).slice(0, 10)}
+            {app.bond_distributed_by_name ? ` · ${app.bond_distributed_by_name}` : ''}
+          </span>
+        )}
+        {!given && mayMark && !panel && (
+          <button className="ml-1 text-primary hover:underline" onClick={() => { setDate(today); setNote(''); setPanel('mark'); }}>
+            mark as given
+          </button>
+        )}
+        {given && mayMark && !panel && !sent && (
+          <button className="ml-1 text-text-muted hover:underline" onClick={() => { setDate(onDate ?? today); setNote(app.bond_distributed_note ?? ''); setReason(''); setReverse(false); setPanel('change'); }}>
+            request change
+          </button>
+        )}
+      </div>
+
+      {given && app.bond_distributed_note && (
+        <div className="text-[11px] text-text-muted pl-1">{app.bond_distributed_note}</div>
+      )}
+      {sent && <div className="text-[11px] text-success pl-1">Sent for Admin/CXO approval — it changes once approved.</div>}
+
+      {panel === 'mark' && (
+        <div className="border border-border rounded p-2 flex flex-col gap-1.5 max-w-[420px]">
+          <label className="text-[11px] text-text-label">Date given to the customer
+            <input type="date" max={today} value={date} onChange={(e) => setDate(e.target.value)}
+              className="ml-1.5 text-xs border border-border-strong rounded px-1.5 py-0.5" />
+          </label>
+          <label className="text-[11px] text-text-label">Notes
+            <input type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500}
+              placeholder="Sent by courier, AWB 123456 / handed to the son"
+              className="ml-1.5 text-xs border border-border-strong rounded px-1.5 py-0.5 w-full mt-0.5" />
+          </label>
+          <div className="text-[11px] text-text-muted">Once saved this cannot be unticked — a change needs Admin/CXO approval.</div>
+          <div className="flex gap-2">
+            <button className="text-xs bg-primary hover:bg-primary-hover text-white rounded px-2 py-0.5 disabled:opacity-40"
+              disabled={busy || !date}
+              onClick={() => run(api.post(`/api/applications/${appId}/bond-distributed`, { given_on: date, note: note || undefined }),
+                () => setPanel(null))}>Save</button>
+            <button className="text-xs text-text-muted hover:underline" onClick={() => setPanel(null)}>cancel</button>
+          </div>
+        </div>
+      )}
+
+      {panel === 'change' && (
+        <div className="border border-border rounded p-2 flex flex-col gap-1.5 max-w-[420px]">
+          <label className="text-[11px] flex items-center gap-1.5">
+            <input type="checkbox" checked={reverse} onChange={(e) => setReverse(e.target.checked)} />
+            Reverse it — the bond was NOT given
+          </label>
+          {!reverse && (
+            <>
+              <label className="text-[11px] text-text-label">Date given
+                <input type="date" max={today} value={date} onChange={(e) => setDate(e.target.value)}
+                  className="ml-1.5 text-xs border border-border-strong rounded px-1.5 py-0.5" />
+              </label>
+              <label className="text-[11px] text-text-label">Notes
+                <input type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500}
+                  className="ml-1.5 text-xs border border-border-strong rounded px-1.5 py-0.5 w-full mt-0.5" />
+              </label>
+            </>
+          )}
+          <label className="text-[11px] text-text-label">Reason (required)
+            <input type="text" value={reason} onChange={(e) => setReason(e.target.value)}
+              className="ml-1.5 text-xs border border-border-strong rounded px-1.5 py-0.5 w-full mt-0.5" />
+          </label>
+          <div className="flex gap-2">
+            <button className="text-xs bg-primary hover:bg-primary-hover text-white rounded px-2 py-0.5 disabled:opacity-40"
+              disabled={busy || reason.trim().length < 2 || (!reverse && !date)}
+              onClick={() => run(
+                api.patch(`/api/applications/${appId}/bond-distributed`,
+                  { given_on: reverse ? null : date, note: reverse ? null : (note || null), reason }),
+                () => { setPanel(null); setSent(true); })}>Request change</button>
+            <button className="text-xs text-text-muted hover:underline" onClick={() => setPanel(null)}>cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

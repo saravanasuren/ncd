@@ -519,29 +519,126 @@ export async function setLockerDeposit(db: Db, actor: AuthUser, appId: number, v
   return { ok: true };
 }
 
-/** Mark whether the bond certificate has been handed to the customer (owner
- * 2026-08-19). Records WHO marked it and WHEN, because the question this
- * answers months later is "who says this customer got their bond".
- *
- * Un-marking clears both, so the record never claims a handover happened at a
- * time nobody stands behind. Deliberately not gated on status: a bond can be
- * handed over late, and refusing to record a fact that already happened would
- * just leave the book wrong. */
-export async function setBondDistributed(db: Db, actor: AuthUser, appId: number, value: boolean) {
-  const upd = await db.query(
-    `UPDATE applications
-        SET bond_distributed_at = CASE WHEN $1 THEN now() ELSE NULL END,
-            bond_distributed_by = CASE WHEN $1 THEN $2::bigint ELSE NULL END,
-            updated_at = now()
-      WHERE id = $3
-      RETURNING bond_distributed_at`, [value, actor.id, appId]);
-  if (!upd.rowCount) throw errors.notFound('Application not found');
-  await writeAudit(db, {
-    actorId: actor.id, action: 'application.bond-distributed', entityType: 'applications', entityId: appId,
-    after: { distributed: value, at: upd.rows[0]?.bond_distributed_at ?? null },
-  });
-  return { ok: true, bond_distributed_at: upd.rows[0]?.bond_distributed_at ?? null };
+/** Who may record a bond handover, or ask for one to be corrected (owner
+ *  2026-08-28: "restrict it to NCD Manager and above"). Same maker tier as an
+ *  investment-date change. */
+function assertBondActor(actor: AuthUser) {
+  if (!['ncd_manager', 'admin', 'super_admin'].includes(actor.role)) {
+    throw errors.forbidden('Only an NCD Manager or Admin can record a bond handover');
+  }
 }
+
+/** A handover date must be real, and cannot be in the future — you cannot have
+ *  already given a customer something tomorrow. */
+function assertGivenOn(givenOn: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(givenOn)) throw errors.badRequest('A valid date (YYYY-MM-DD) is required');
+  if (givenOn > new Date().toISOString().slice(0, 10)) throw errors.badRequest('The bond cannot have been given on a future date');
+}
+
+/**
+ * Record that the bond certificate reached the customer (owner 2026-08-19,
+ * reworked 2026-08-28).
+ *
+ * WRITE-ONCE. It used to be a plain checkbox that stamped now() and that anyone
+ * could silently untick, wiping the record of who said the customer got their
+ * bond. Now: the operator supplies the date it was actually handed over and a
+ * note saying how, it is recorded immediately, and from then on the mark can
+ * only be changed through maker/checker approval —
+ * requestBondDistributionChange below. Un-marking here is not possible at all.
+ *
+ * `bond_distributed_at` stays the moment of RECORDING (and the "is it marked"
+ * test the rest of the app keys on); `bond_distributed_on` is the handover.
+ */
+export async function setBondDistributed(
+  db: Db, actor: AuthUser, appId: number, givenOn: string, note?: string | null,
+) {
+  assertBondActor(actor);
+  assertGivenOn(givenOn);
+  return db.withTx(async (tx) => {
+    const cur = (await tx.query<{ bond_distributed_at: string | null }>(
+      'SELECT bond_distributed_at FROM applications WHERE id = $1', [appId])).rows[0];
+    if (!cur) throw errors.notFound('Application not found');
+    // Already recorded → this is a CHANGE, and a change needs a checker.
+    if (cur.bond_distributed_at) {
+      throw errors.conflict('This bond is already marked as given — a change needs Admin/CXO approval');
+    }
+    const upd = await tx.query<{ bond_distributed_at: string }>(
+      `UPDATE applications
+          SET bond_distributed_at = now(), bond_distributed_by = $1::bigint,
+              bond_distributed_on = $2::date, bond_distributed_note = NULLIF(btrim($3), ''),
+              updated_at = now()
+        WHERE id = $4
+        RETURNING bond_distributed_at`, [actor.id, givenOn, note ?? '', appId]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'application.bond-distributed', entityType: 'applications', entityId: appId,
+      after: { distributed: true, given_on: givenOn, note: note ?? null },
+    });
+    return { ok: true, bond_distributed_at: upd.rows[0]!.bond_distributed_at, bond_distributed_on: givenOn };
+  });
+}
+
+/**
+ * Ask to correct or reverse a recorded handover (owner 2026-08-28: "any changes
+ * to it should be going to approval only"). Maker: NCD Manager+. Checker:
+ * Admin/CXO. Nothing moves until a checker approves.
+ *
+ * `givenOn: null` means REVERSE it — the bond was not actually given. That is
+ * the only route back, which is the point: the checkbox itself cannot be
+ * unticked.
+ */
+export async function requestBondDistributionChange(
+  db: Db, actor: AuthUser, appId: number, givenOn: string | null, note: string | null, reason: string,
+) {
+  assertBondActor(actor);
+  if (givenOn !== null) assertGivenOn(givenOn);
+  if (!reason?.trim()) throw errors.badRequest('A reason is required');
+  return db.withTx(async (tx) => {
+    const cur = (await tx.query<Record<string, unknown>>(
+      `SELECT application_no, bond_distributed_at, bond_distributed_on, bond_distributed_note
+         FROM applications WHERE id = $1`, [appId])).rows[0];
+    if (!cur) throw errors.notFound('Application not found');
+    if (!cur.bond_distributed_at) throw errors.badRequest('This bond is not marked as given — there is nothing to change');
+    const req = await createApprovalRequest(tx, {
+      type: 'bond_distribution_change', entityType: 'applications', entityId: appId, makerUserId: actor.id,
+      metadata: {
+        application_no: cur.application_no,
+        current_given_on: cur.bond_distributed_on ? String(cur.bond_distributed_on).slice(0, 10) : null,
+        current_note: cur.bond_distributed_note ?? null,
+        new_given_on: givenOn, new_note: note, reason,
+        reversal: givenOn === null,
+      },
+    });
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'application.bond-distributed.change-requested',
+      entityType: 'applications', entityId: appId,
+      after: { from: cur.bond_distributed_on ?? null, to: givenOn, reversal: givenOn === null, reason },
+    });
+    return { ok: true, pending_approval: true, approval_request: req };
+  });
+}
+
+// Apply the change only on final approval — the sole path that can move or clear
+// a recorded handover.
+registerOnFinalApprove('bond_distribution_change', async (tx, req) => {
+  const appId = Number(req.entity_id ?? 0);
+  if (!appId) return;
+  const givenOn = req.metadata.new_given_on == null ? null : String(req.metadata.new_given_on);
+  if (givenOn !== null && !/^\d{4}-\d{2}-\d{2}$/.test(givenOn)) throw errors.badRequest('The stored date is invalid');
+  const note = req.metadata.new_note == null ? null : String(req.metadata.new_note);
+
+  if (givenOn === null) {
+    // Reversal: the handover did not happen. Clear the lot so nothing claims it did.
+    await tx.query(
+      `UPDATE applications SET bond_distributed_at = NULL, bond_distributed_by = NULL,
+              bond_distributed_on = NULL, bond_distributed_note = NULL, updated_at = now()
+        WHERE id = $1`, [appId]);
+    return;
+  }
+  await tx.query(
+    `UPDATE applications SET bond_distributed_on = $1::date,
+            bond_distributed_note = NULLIF(btrim($2), ''), updated_at = now()
+      WHERE id = $3`, [givenOn, note ?? '', appId]);
+});
 
 // A single-credit investment whose date can still be corrected (no interest paid
 // or batched). Shared by the request and the apply, so both judge eligibility the

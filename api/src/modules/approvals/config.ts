@@ -146,6 +146,15 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Credit Date Change',
     levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
   },
+  // Correcting or reversing a recorded bond handover (owner 2026-08-28: "any
+  // changes to it should be going to approval only"). The mark is write-once —
+  // this is the ONLY way to move the date, edit the note, or undo it.
+  // Maker: NCD Manager+. Checker: Admin/CXO.
+  bond_distribution_change: {
+    type: 'bond_distribution_change',
+    label: 'Bond Handover Change',
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
+  },
   // One-time addition/deduction on an investment's next interest payout.
   // Maker: NCD Manager+ (payouts:adjust). Checker: Admin/CXO (owner 2026-07-23).
   payout_adjustment: {

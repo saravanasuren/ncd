@@ -108,10 +108,28 @@ applicationsRouter.post('/:id/locker-deposit', requirePermission('applications:u
     res.json(await s.setLockerDeposit(getDb(), req.user!, Number(req.params.id), is_locker_deposit));
   }));
 
+// Record that the bond reached the customer. WRITE-ONCE: the operator gives the
+// date it was actually handed over plus a note on how, and it applies at once.
+// It cannot be unticked here — once recorded, only the approval route below can
+// move or clear it (owner 2026-08-28). NCD Manager+ enforced in the service.
 applicationsRouter.post('/:id/bond-distributed', requirePermission('applications:update'),
   asyncHandler(async (req, res) => {
-    const { distributed } = z.object({ distributed: z.boolean() }).parse(req.body);
-    res.json(await s.setBondDistributed(getDb(), req.user!, Number(req.params.id), distributed));
+    const b = z.object({ given_on: z.string(), note: z.string().max(500).optional() }).parse(req.body);
+    res.json(await s.setBondDistributed(getDb(), req.user!, Number(req.params.id), b.given_on, b.note ?? null));
+  }));
+
+// REQUEST a correction to a recorded handover, or its reversal. Maker NCD
+// Manager+, checker Admin/CXO; nothing changes until approved. `given_on: null`
+// reverses it — the only way back, since the checkbox itself is locked.
+applicationsRouter.patch('/:id/bond-distributed', requirePermission('applications:update'),
+  asyncHandler(async (req, res) => {
+    const b = z.object({
+      given_on: z.string().nullable(),
+      note: z.string().max(500).nullable().optional(),
+      reason: z.string().min(2),
+    }).parse(req.body);
+    res.json(await s.requestBondDistributionChange(
+      getDb(), req.user!, Number(req.params.id), b.given_on, b.note ?? null, b.reason));
   }));
 
 applicationsRouter.post('/:id/mark-esigned', requirePermission('applications:mark-esigned'),

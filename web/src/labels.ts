@@ -59,6 +59,7 @@ export const APPROVAL_TYPE_LABELS: Record<string, string> = {
   club_into_active: 'Club into Active Investment',
   investment_date_change: 'Investment Date Change',
   credit_date_change: 'Credit Date Change',
+  bond_distribution_change: 'Bond Handover Change',
   premature_redemption: 'Premature Redemption',
   redemption: 'Redemption',
   rollover: 'Rollover',

@@ -47,7 +47,7 @@ describe('bond distributed to the customer', () => {
 
   it('records WHO marked it and WHEN, not just that it happened', async () => {
     const a = await admin();
-    const res = await a.post(`/api/applications/${appId}/bond-distributed`, { distributed: true });
+    const res = await a.post(`/api/applications/${appId}/bond-distributed`, { given_on: '2026-08-20' });
     expect(res.status).toBe(200);
 
     const r = await row();
@@ -66,27 +66,29 @@ describe('bond distributed to the customer', () => {
     expect(String(d.json.application.bond_distributed_by_name ?? '')).not.toBe('');
   });
 
-  it('un-marking clears the name and the date together', async () => {
-    // A record that kept a stale timestamp after being un-ticked would claim a
-    // handover happened at a moment nobody stands behind.
+  it('cannot be un-marked — the record stands until a checker approves otherwise', async () => {
+    // This used to assert the opposite. Un-ticking wiped who vouched for the
+    // handover, which is why the owner asked for it to be impossible
+    // (2026-08-28); reversal now goes through Admin/CXO approval instead.
     const a = await admin();
-    await a.post(`/api/applications/${appId}/bond-distributed`, { distributed: false });
+    const again = await a.post(`/api/applications/${appId}/bond-distributed`, { given_on: '2026-08-25' });
+    expect(again.status).toBe(409);
     const r = await row();
-    expect(r.bond_distributed_at).toBeNull();
-    expect(r.bond_distributed_by).toBeNull();
+    expect(r.bond_distributed_at).not.toBeNull();
+    expect(r.bond_distributed_by).not.toBeNull();
   });
 
-  it('leaves an audit row each way', async () => {
+  it('leaves an audit row for the marking', async () => {
     const { rows } = await ctx.db.query(
       "SELECT after_data FROM audit_log WHERE action = 'application.bond-distributed' AND entity_id = $1 ORDER BY id", [String(appId)]);
-    expect(rows.length).toBe(2);
+    expect(rows.length).toBe(1);
     expect((rows[0] as any).after_data.distributed).toBe(true);
-    expect((rows[1] as any).after_data.distributed).toBe(false);
+    expect((rows[0] as any).after_data.given_on).toBe('2026-08-20');
   });
 
   it('needs the update permission', async () => {
     const anon = new Client(ctx.base);
-    const res = await anon.post(`/api/applications/${appId}/bond-distributed`, { distributed: true });
+    const res = await anon.post(`/api/applications/${appId}/bond-distributed`, { given_on: '2026-08-20' });
     expect(res.status).toBeGreaterThanOrEqual(401);
   });
 });

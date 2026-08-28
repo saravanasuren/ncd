@@ -611,6 +611,103 @@ registerOnFinalApprove('investment_date_change', async (tx, req) => {
     after: { date_money_received: newDate, via: 'approval', request_id: req.id } });
 });
 
+// ONE credit on a clubbed investment whose date can still be corrected. Shared
+// by the request and the apply, so both judge eligibility identically — the
+// mirror of assertDateChangeable above. Returns the credit's current date so the
+// approval can show old → new.
+async function assertCreditDateChangeable(tx: Db, appId: number, lineId: number): Promise<{ current: string | null }> {
+  const line = (await tx.query<{ application_id: string; date_money_received: string | null }>(
+    'SELECT application_id, date_money_received FROM application_lines WHERE id = $1', [lineId])).rows[0];
+  if (!line || Number(line.application_id) !== appId) throw errors.notFound('Credit not found on this investment');
+  const count = Number((await tx.query<{ n: string }>(
+    'SELECT count(*) AS n FROM application_lines WHERE application_id = $1', [appId])).rows[0]!.n);
+  if (count < 2) {
+    throw errors.badRequest('This investment has a single credit — change the investment date instead, so the credit and the investment stay in step.');
+  }
+  const locked = await tx.query(
+    "SELECT 1 FROM disbursement_schedule WHERE application_id = $1 AND (status = 'Paid' OR batch_id IS NOT NULL) LIMIT 1", [appId]);
+  if (locked.rowCount) {
+    throw errors.conflict('Interest has already been paid or locked into a batch on this investment — its dates can no longer be changed.');
+  }
+  return { current: line.date_money_received ? String(line.date_money_received).slice(0, 10) : null };
+}
+
+/**
+ * Request a correction to ONE credit's money-received date on a clubbed
+ * investment (owner 2026-08-27). Like the investment-date change it does NOT
+ * apply immediately — it goes through maker/checker, because moving a credit's
+ * date rebuilds the schedule and shifts that credit's first period.
+ * 🔒 interest-logic-locked. Maker: NCD Manager+; Checker: Admin/CXO.
+ *
+ * Why this exists alongside editInvestmentDate: a clubbed investment is ONE
+ * debenture paid for on several days — the owner's example, 50,000 today,
+ * 50,000 tomorrow, 1,00,000 the day after — and each credit earns from ITS OWN
+ * date. There is no single "investment date" to move, so editInvestmentDate
+ * refuses it outright. Until now that left NO way to fix a mistyped credit date
+ * on screen at all; it took a hand-written database repair (8 of those on
+ * 2026-08-26).
+ *
+ * Refused on a SINGLE-credit investment. There the credit's date and the
+ * application's must stay equal, and moving only the credit creates precisely
+ * the mismatch the payout health check reports — editInvestmentDate is the tool
+ * for those, and it moves both.
+ */
+export async function editCreditDate(db: Db, actor: AuthUser, appId: number, lineId: number, newDate: string) {
+  if (!['ncd_manager', 'admin', 'super_admin'].includes(actor.role)) {
+    throw errors.forbidden('Only an NCD Manager or Admin can request a credit-date change');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) throw errors.badRequest('A valid date (YYYY-MM-DD) is required');
+  return db.withTx(async (tx) => {
+    // Judge eligibility now so the maker gets immediate feedback; re-judged at approval.
+    const { current } = await assertCreditDateChangeable(tx, appId, lineId);
+    const no = (await tx.query<{ application_no: string }>('SELECT application_no FROM applications WHERE id = $1', [appId])).rows[0]!.application_no;
+    const amount = (await tx.query<{ amount: string }>('SELECT amount FROM application_lines WHERE id = $1', [lineId])).rows[0]!.amount;
+    const req = await createApprovalRequest(tx, {
+      type: 'credit_date_change', entityType: 'application_lines', entityId: lineId, makerUserId: actor.id,
+      // application_id travels on the request: the entity is the LINE, so the
+      // handler cannot infer which investment to rebuild without it.
+      metadata: { application_no: no, application_id: appId, line_id: lineId, amount: Number(amount), new_date: newDate, current_date: current },
+    });
+    await writeAudit(tx, { actorId: actor.id, action: 'application.credit-date.requested', entityType: 'application_lines', entityId: lineId,
+      after: { application_id: appId, from: current, to: newDate } });
+    return { ok: true, pending_approval: true, approval_request: req };
+  });
+}
+
+// Apply the credit-date correction on final approval. Only here does it touch
+// the investment. Re-asserts eligibility first, so a payout that landed between
+// request and approval can't corrupt the schedule.
+registerOnFinalApprove('credit_date_change', async (tx, req) => {
+  const lineId = Number(req.metadata.line_id ?? req.entity_id ?? 0);
+  const appId = Number(req.metadata.application_id ?? 0);
+  if (!lineId || !appId) return;
+  const newDate = String(req.metadata.new_date ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) throw errors.badRequest('The stored date is invalid');
+  const { current } = await assertCreditDateChangeable(tx, appId, lineId);
+
+  await tx.query('UPDATE application_lines SET date_money_received = $1 WHERE id = $2', [newDate, lineId]);
+  // Rebuild only if a schedule already EXISTS. An investment still awaiting its
+  // own approval has none — it is generated at go-live, from these very dates —
+  // and materialising one here would hand an unapproved investment a live
+  // schedule as a side effect of a typo fix. Where one does exist, tear down the
+  // unpaid rows and rebuild so this credit's first (broken) period moves with
+  // it; nothing is Paid (guarded above), so the delete satisfies materialize's
+  // "skip if already materialised" check.
+  const existing = await tx.query('SELECT 1 FROM disbursement_schedule WHERE application_id = $1 LIMIT 1', [appId]);
+  if (existing.rowCount) {
+    await tx.query("DELETE FROM disbursement_schedule WHERE application_id = $1 AND status <> 'Paid'", [appId]);
+    const { materializeForApplication } = await import('../schedule/materialize.js');
+    await materializeForApplication(tx, appId);
+    const { accrueForApplication } = await import('../incentives/accrual.js');
+    await accrueForApplication(tx, appId);
+  }
+  await writeAudit(tx, {
+    actorId: req.maker_user_id, action: 'application.credit-date.edit', entityType: 'application_lines', entityId: lineId,
+    before: { date_money_received: current },
+    after: { date_money_received: newDate, application_id: appId, via: 'approval', request_id: req.id },
+  });
+});
+
 /** Record eSign completion. Non-gating: it stamps esigned_at and does not
  * change the lifecycle status (eSign no longer sits on the critical path). */
 export async function markESigned(db: Db, actor: AuthUser, appId: number) {

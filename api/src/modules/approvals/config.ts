@@ -136,6 +136,16 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Investment Date Change',
     levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
   },
+  // Correcting ONE credit's date on a clubbed investment. Exactly the same kind
+  // of change as investment_date_change above — it rebuilds the schedule and
+  // shifts that credit's first period — so it carries the same maker/checker
+  // (owner 2026-08-27). A separate type only because it names a single credit
+  // rather than the whole investment.
+  credit_date_change: {
+    type: 'credit_date_change',
+    label: 'Credit Date Change',
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
+  },
   // One-time addition/deduction on an investment's next interest payout.
   // Maker: NCD Manager+ (payouts:adjust). Checker: Admin/CXO (owner 2026-07-23).
   payout_adjustment: {

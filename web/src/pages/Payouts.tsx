@@ -316,8 +316,12 @@ export function PayoutsPage() {
           {lastBatch.data?.summary && preview.data.count > 0 && (
             <BatchComparison
               last={lastBatch.data.summary}
+              // Net here is the PAYABLE (net ± one-time adjustments = sheetTotals.total),
+              // not gross−TDS, so a one-time adjustment moves this row (owner 2026-08-28).
+              // The Last batch column already reads payable — its stored net_amount is
+              // written as net±adjustments — so both sides now measure the same thing.
               now={{ customers: preview.data.customers ?? 0, investments: preview.data.investments ?? preview.data.count,
-                     gross: sheetTotals.gross, tds: sheetTotals.tds, net: sheetTotals.net,
+                     gross: sheetTotals.gross, tds: sheetTotals.tds, net: sheetTotals.total,
                      outstanding: Number(preview.data.totals?.outstanding ?? 0) }}
             />
           )}

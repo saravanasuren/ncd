@@ -200,7 +200,13 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   // 2026-07-20). Everything they need — what they brought in and what they've
   // been paid — lives on My Earnings, so they keep earnings:read-own and land
   // there instead.
-  branch_staff: [...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view'), 'lockers:enroll'],
+  //
+  // lockers:waive lets branch staff REQUEST a rent waiver / premium-customer
+  // (owner 2026-08-29) — the "Apply waiver" and "Premium customer" buttons in
+  // locker enrolment. It is a maker-only power: the waiver/premium still settles
+  // only after an Admin/CXO approves it (approvals/config.ts), so the two-person
+  // control is intact — staff request, Admin/CXO grant.
+  branch_staff: [...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view'), 'lockers:enroll', 'lockers:waive'],
 
   // Agents source leads and enrol, but must NOT approve KYC on customers they
   // enrolled — that is a segregation-of-duties break on a regulated control

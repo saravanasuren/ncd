@@ -193,12 +193,15 @@ describe('an approval survives LockerHub being unreachable', () => {
 });
 
 describe('who may ask', () => {
-  it('branch staff cannot request a waiver — lockers:waive is manager+', async () => {
+  it('branch staff CAN request a waiver — it still goes to Admin/CXO to grant (owner 2026-08-29)', async () => {
     const staff = await as('staff@demo.local');
     const r = await staff.post(`/api/lockers/applications/${nextApp()}/fee-waivers`, {
-      leg: 'rent', waiver_pct: 100, reason: 'Trying it on',
+      leg: 'rent', waiver_pct: 100, reason: 'Branch requested',
     });
-    expect(r.status).toBe(403);
+    // Maker-only: the request is raised (201, PendingApproval) but nothing is
+    // waived until an Admin/CXO approves it — the two-person control is intact.
+    expect(r.status).toBe(201);
+    expect(r.json.status).toBe('PendingApproval');
   });
 
   it('the enrolment screen can read the waivers on an application', async () => {

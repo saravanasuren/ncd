@@ -788,7 +788,7 @@ export function CustomerDetailPage() {
       </div>
 
 
-      <RelationsKyc customerId={Number(id)} data={data} onChange={invalidate} can={can} />
+      <CustomerKyc customerId={Number(id)} data={data} onChange={invalidate} can={can} />
     </div>
   );
 }
@@ -959,7 +959,7 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
   );
 }
 
-function RelationsKyc({ customerId, data, onChange, can }: { customerId: number; data: any; onChange: () => void; can: (...p: any[]) => boolean }) {
+function CustomerKyc({ customerId, data, onChange, can }: { customerId: number; data: any; onChange: () => void; can: (...p: any[]) => boolean }) {
   const { promptText } = useConfirm();
   const [msg, setMsg] = useState('');
   const [docType, setDocType] = useState('');
@@ -968,11 +968,6 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
   const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
   const inp = 'px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary';
 
-  async function addJoint() {
-    const name = await promptText({ title: 'Add a joint holder', label: 'Joint holder full name', confirmLabel: 'Add' }); if (!name) return;
-    const existing = (data.jointHolders ?? []).map((h: any) => ({ full_name: h.full_name, relationship: h.relationship, pan: h.pan, phone: h.phone }));
-    await wrap(api.put(`/api/customers/${customerId}/joint-holders`, { holders: [...existing, { full_name: name }] }));
-  }
   /** Upload against the type the operator picked. The type is not cosmetic —
    *  background verification looks up `customer_photo`, `pan_card` etc. by
    *  name, so a photo filed as generic 'KYC' is invisible to it. */
@@ -995,17 +990,6 @@ function RelationsKyc({ customerId, data, onChange, can }: { customerId: number;
   return (
     <>
       {msg && <div className="text-xs text-danger mb-2">{msg}</div>}
-
-      {/* Nominees moved up into the Profile card (owner 2026-08-19) — they are
-          profile detail, and having them there is what puts their edits on the
-          correction → approval road. Joint holders stay here. */}
-      <div className={card}>
-        <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-3">Relations</h2>
-        <div className="text-sm">
-          <div className="flex items-center justify-between"><span className="font-semibold">Joint holders</span>{can('customers:update') && <button onClick={addJoint} className="text-xs text-primary hover:underline">+ Add</button>}</div>
-          <ul className="mt-1 text-text-muted">{(data.jointHolders ?? []).map((h: any) => <li key={h.id}>{h.full_name}</li>)}{!(data.jointHolders ?? []).length && <li>None</li>}</ul>
-        </div>
-      </div>
 
       {/* KYC — documents + verification */}
       <div className={card}>

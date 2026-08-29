@@ -634,7 +634,7 @@ lockersRouter.post('/fee-waivers/:id/retry', requirePermission('lockers:waive'),
 const TENANT_SNAP = z.object({
   tenant_name: z.string().nullish(), locker_no: z.string().nullish(), branch_id: z.string().nullish(),
 });
-lockersRouter.post('/tenants/:tenantId/link', requirePermission('lockers:waive'), asyncHandler(async (req, res) => {
+lockersRouter.post('/tenants/:tenantId/link', requirePermission('lockers:link-tenant'), asyncHandler(async (req, res) => {
   const b = TENANT_SNAP.extend({ customer_id: z.number().int().positive().nullable() }).parse(req.body ?? {});
   res.json(await linkTenant(getDb(), req.user!, String(req.params.tenantId), b.customer_id, b));
 }));

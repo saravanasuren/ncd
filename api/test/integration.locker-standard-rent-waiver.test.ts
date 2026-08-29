@@ -91,9 +91,9 @@ describe('standard rent waiver — no checker', () => {
     expect(waiverCalls()).toHaveLength(0);   // nothing sent twice
   });
 
-  it('still needs lockers:waive — branch staff cannot', async () => {
+  it('branch staff CAN apply the standard rent waiver — fixed policy, no discretion (owner 2026-08-29)', async () => {
     const r = await (await as('staff@demo.local')).post('/api/lockers/applications/la_stdrent_2/apply-rent-waiver', M);
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(200);
   });
 
   // ── CONTROLS: the discretionary paths keep their checker ──────────────────

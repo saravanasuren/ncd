@@ -26,9 +26,13 @@ const TENANT = {
 describe('locker deposit waivers', () => {
   let waiverId = 0, reqId = 0;
 
-  it('branch staff hold lockers:enroll but cannot waive', async () => {
+  it('branch staff CAN record a waiver — it still goes to Admin/CXO to approve (owner 2026-08-29)', async () => {
     const staff = await as('staff@demo.local');
-    expect((await staff.post('/api/lockers/waivers', TENANT)).status).toBe(403);
+    // Its own tenancy id so it doesn't consume the one the manager tests below
+    // rely on being clean (only one OPEN waiver per tenancy).
+    const r = await staff.post('/api/lockers/waivers', { ...TENANT, lockerhub_tenant_id: 'tn_waiver_staff' });
+    expect(r.status).toBe(201);
+    expect(r.json.status).toBe('PendingApproval');
   });
 
   it('a reason is mandatory', async () => {

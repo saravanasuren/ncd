@@ -46,6 +46,11 @@ export const PERMISSIONS = [
   // Record a deposit waiver/exception on a locker tenancy — NCD Manager+ makes,
   // Admin/CXO approves (approvals:check-premature).
   'lockers:waive',
+  // Manually link a LockerHub tenant row to an NCD customer (Locker Tenants
+  // page). Split OUT of lockers:waive (owner 2026-08-29) so branch staff, who
+  // now hold lockers:waive for the enrolment waiver/premium buttons, do NOT also
+  // get this cross-page data-linking power. Stays with NCD Manager+.
+  'lockers:link-tenant',
   // Allot a locker with rent/deposit still outstanding (§A20). LockerHub asked
   // us to gate their override to a senior role — the tenancy is created against
   // money not received, so this sits with the same people who approve a waiver.
@@ -186,6 +191,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'imports:run',
     'lockers:enroll',
     'lockers:waive',
+    // Cross-page tenant→customer linking (Locker Tenants) stays with NCD Manager+.
+    'lockers:link-tenant',
   ],
 
   branch_manager: [
@@ -194,13 +201,24 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'reports:download',
     'approvals:check-handover', // repeat-customer handover (any one of Admin/CXO/BM)
     'lockers:enroll',
+    // Rent/full-rent waiver + premium-customer buttons in locker enrolment
+    // (owner 2026-08-29: those buttons across all levels that enrol lockers).
+    // Maker-only — Admin/CXO still approve. NOT lockers:link-tenant.
+    'lockers:waive',
   ],
 
   // Branch staff don't see the company-wide NCD Portfolio dashboard (owner
   // 2026-07-20). Everything they need — what they brought in and what they've
   // been paid — lives on My Earnings, so they keep earnings:read-own and land
   // there instead.
-  branch_staff: [...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view'), 'lockers:enroll'],
+  //
+  // lockers:waive lets branch staff use the enrolment waiver buttons (owner
+  // 2026-08-29: standard rent waiver → 6k/12k/20k, full-rent waiver, and Premium
+  // customer — across all levels that enrol lockers). Maker-only: each still
+  // settles only after an Admin/CXO approves it (approvals/config.ts), so the
+  // two-person control holds — staff request, Admin/CXO grant. Deliberately NOT
+  // lockers:link-tenant (the cross-page tenant-linking override stays manager+).
+  branch_staff: [...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view'), 'lockers:enroll', 'lockers:waive'],
 
   // Agents source leads and enrol, but must NOT approve KYC on customers they
   // enrolled — that is a segregation-of-duties break on a regulated control

@@ -41,6 +41,17 @@ export function backoffMs(attempts: number): number {
   return Math.min(30 * 60_000, 60_000 * 2 ** Math.max(0, attempts - 1));
 }
 
+/**
+ * How long a claimed row is reserved while this drain sends it. The claim pushes
+ * next_attempt_at this far into the future so no other drain cycle (a slow tick
+ * overlapping the next, a concurrent immediate-send caller, or a second app
+ * instance) can pick the same row — that overlap is exactly what double-sent an
+ * interest message on 2026-08-28. Must comfortably exceed one drain's wall time
+ * (limit × gap + provider latency). If the process dies mid-send, the lease
+ * lapses and the row retries — at-least-once, never the silent twice-at-once.
+ */
+export const CLAIM_LEASE_MS = 5 * 60_000;
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export async function enqueue(db: Db, input: EnqueueInput): Promise<number> {
@@ -56,19 +67,36 @@ export async function enqueue(db: Db, input: EnqueueInput): Promise<number> {
 /**
  * Drain up to `limit` due notifications, pacing between sends. Never throws.
  *
+ * Rows are CLAIMED atomically before any send: one UPDATE leases the due rows
+ * (pushes their next_attempt_at out by CLAIM_LEASE_MS) via `FOR UPDATE SKIP
+ * LOCKED`, so a concurrent drain skips them and gets the NEXT free rows instead.
+ * Without this a slow cycle overlapping the next 60s tick sent the same row
+ * twice (2026-08-28). Each claimed row then gets a final outcome below (Sent /
+ * Failed / Pending-with-backoff), which supersedes the lease; anything left
+ * leased (a mid-cycle stop, or a crash) simply becomes due again when the lease
+ * lapses.
+ *
  * `stopped` is true when the provider rate-limited us and the rest of the
- * cycle was deliberately left alone — those rows stay Pending and the next
+ * cycle was deliberately left alone — those rows go back to Pending and the next
  * cron tick picks them up, so a big batch drains over several minutes rather
  * than dying in one burst.
  */
 export async function drainOnce(db: Db, limit = 25): Promise<{ sent: number; failed: number; retrying: number; stopped: boolean }> {
-  const { rows } = await db.query<Record<string, unknown>>(
-    `SELECT id, channel, template, to_address, payload, attempts
-       FROM notifications_queue
-      WHERE status = 'Pending' AND next_attempt_at <= now()
-      ORDER BY id LIMIT $1`,
-    [limit]
+  const claimed = await db.query<Record<string, unknown>>(
+    `UPDATE notifications_queue
+        SET next_attempt_at = now() + ($2 || ' milliseconds')::interval
+      WHERE id IN (
+        SELECT id FROM notifications_queue
+         WHERE status = 'Pending' AND next_attempt_at <= now()
+         ORDER BY id
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED
+      )
+      RETURNING id, channel, template, to_address, payload, attempts`,
+    [limit, String(CLAIM_LEASE_MS)]
   );
+  // RETURNING order is unspecified; restore id order so pacing + tests are stable.
+  const rows = claimed.rows.sort((a, b) => Number(a.id) - Number(b.id));
   let sent = 0, failed = 0, retrying = 0, stopped = false;
   const gap = Math.max(0, config.NOTIFY_SEND_GAP_MS);
   // WhatsApp template config (names, {{n}} mapping, on/off) is admin-editable in
@@ -114,17 +142,28 @@ export async function drainOnce(db: Db, limit = 25): Promise<{ sent: number; fai
           [res.messageId ?? null, attempts, id]);
         sent++;
       } else if (res.rateLimited) {
-        // The door is shut for EVERY message on this channel, not just this
-        // one, so push them all back together. Pushing only the current row
-        // would let the next tick walk into the same 429 a minute later, and
-        // the one after that, inching through the queue an hour at a time.
-        // A rate limit also costs no attempt — it is not this message's fault.
+        // The door is shut for EVERY message on this channel. First put the rows
+        // we CLAIMED but haven't sent (this one and the rest of this cycle) back
+        // to Pending on the rate-limit backoff — they're leased into the future
+        // right now, so without this they'd wait the whole lease. Then defer any
+        // OTHER now-due row on the channel too, so the next tick doesn't just
+        // walk into the same 429 and inch through the queue an hour at a time.
+        // A rate limit costs no attempt — it is not this message's fault.
+        const backoff = String(config.NOTIFY_RATE_LIMIT_BACKOFF_MS);
+        const unsent = rows.slice(i).map((x) => Number(x.id));
+        await db.query(
+          `UPDATE notifications_queue
+              SET status = 'Pending', error = $1, next_attempt_at = now() + ($2 || ' milliseconds')::interval
+            WHERE id = ANY($3)`,
+          [res.error ?? 'rate limited', backoff, unsent]);
         await db.query(
           `UPDATE notifications_queue
               SET error = $1, next_attempt_at = now() + ($2 || ' milliseconds')::interval
             WHERE status = 'Pending' AND channel = $3 AND next_attempt_at <= now()`,
-          [res.error ?? 'rate limited', String(config.NOTIFY_RATE_LIMIT_BACKOFF_MS), String(r.channel)]);
+          [res.error ?? 'rate limited', backoff, String(r.channel)]);
         retrying++;
+        stopped = true;
+        break;   // leave the rest for the next cron tick
       } else if (res.retryable && attempts < MAX_ATTEMPTS) {
         await db.query(
           "UPDATE notifications_queue SET status='Pending', error=$1, attempts=$2, next_attempt_at = now() + ($3 || ' milliseconds')::interval WHERE id=$4",
@@ -136,8 +175,6 @@ export async function drainOnce(db: Db, limit = 25): Promise<{ sent: number; fai
           [res.error ?? 'send failed', attempts, id]);
         failed++;
       }
-
-      if (res.rateLimited) { stopped = true; break; }   // leave the rest Pending
     } catch (e) {
       // An exception here is our bug, not the provider's — retry it too: a
       // transient render/DB hiccup must not cost a customer their message.

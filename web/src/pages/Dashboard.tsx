@@ -57,15 +57,20 @@ export function Dashboard() {
   // NCD book download: CXO + Admin tier only (not every reports:download holder).
   const canDownloadBook = !!user && ['super_admin', 'admin', 'cxo'].includes(user.role);
   const [range, setRange] = useState<Range>(defaultRange);
-  const [drill, setDrill] = useState<{ widget: string; title: string; seriesOverride?: number } | null>(null);
+  const [drill, setDrill] = useState<{ widget: string; title: string; seriesOverride?: number[] } | null>(null);
 
   const overview = useQuery({
     queryKey: ['dash-overview', range.from, range.to, (range.series ?? []).join(',')],
     queryFn: () => api.get<any>(`/api/dashboard/overview?${qs(range)}`),
   });
   const activeSeries = overview.data?.active_series;
+  // Every OPEN series, not just the active one shown on the tile face. The tile
+  // reads NCD_29 (the latest open series), but its drill lists ALL open series
+  // together (owner 2026-08-29) — NCD Bonds and any other still-open series too.
+  const openSeriesIds: number[] = ((overview.data?.series ?? []) as any[])
+    .filter((s) => s.status === 'Open').map((s) => Number(s.series_id));
 
-  function pickWidget(widget: string, title: string, seriesOverride?: number) {
+  function pickWidget(widget: string, title: string, seriesOverride?: number[]) {
     if (!canDrill) return;
     setDrill({ widget, title, seriesOverride });
   }
@@ -104,7 +109,7 @@ export function Dashboard() {
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mt-5 mb-6">
                   <Tile label="Active series" value={activeSeries ? activeSeries.code : '—'}
                     sub={activeSeries ? `${formatINR(activeSeries.outstanding)} · ${activeSeries.investments} NCDs` : 'No open series'}
-                    primary onClick={() => pickWidget('series', `${activeSeries?.code ?? 'Active series'} — investments`, activeSeries?.series_id)} canDrill={canDrill && !!activeSeries} />
+                    primary onClick={() => pickWidget('series', 'Open series — investments', openSeriesIds.length ? openSeriesIds : (activeSeries ? [activeSeries.series_id] : undefined))} canDrill={canDrill && !!activeSeries} />
                   <Tile label="Outstanding book" value={formatINR(k.outstanding_book)} sub={`${k.active_investors} investors`}
                     onClick={() => pickWidget('outstanding', 'Outstanding book — by series')} canDrill={canDrill} />
                   {/* No range picked → the most recent 30, a rolling
@@ -335,12 +340,12 @@ function cell(v: unknown, kind?: FlatCol['kind']) {
   return String(v);
 }
 
-function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget: string; title: string; range: Range; seriesOverride?: number; onClose: () => void }) {
+function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget: string; title: string; range: Range; seriesOverride?: number[]; onClose: () => void }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [profile, setProfile] = useState<{ id: number; name: string } | null>(null);
-  // A tile that targets one specific series (e.g. Active series) forces that
-  // series filter regardless of the current range's series selection.
-  const effRange: Range = seriesOverride ? { ...range, series: [seriesOverride] } : range;
+  // A tile that targets specific series (e.g. Active series → every OPEN series)
+  // forces that series filter regardless of the current range's series selection.
+  const effRange: Range = seriesOverride?.length ? { ...range, series: seriesOverride } : range;
   const q = useQuery({
     queryKey: ['drill', widget, effRange.from, effRange.to, (effRange.series ?? []).join(',')],
     queryFn: () => api.get<any>(`/api/dashboard/drill/${widget}?${qs(effRange)}`),

@@ -85,8 +85,9 @@ describe('premium customer — complimentary rent', () => {
     expect(again.json.already).toBe(true);
   });
 
-  it('branch staff cannot make a customer premium — needs lockers:waive', async () => {
+  it('branch staff CAN request premium — it still goes to Admin/CXO to approve (owner 2026-08-29)', async () => {
     const r = await (await as('staff@demo.local')).post('/api/lockers/applications/la_premium_3/premium-rent', {});
-    expect(r.status).toBe(403);
+    expect(r.status).toBe(200);
+    expect(r.json.status).toBe('PendingApproval');
   });
 });

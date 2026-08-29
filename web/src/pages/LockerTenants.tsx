@@ -287,7 +287,7 @@ export function LockerTenantsPage() {
                     <div className="text-xs text-text-muted">
                       {r.tenant_phone ?? ''} {r.customer_code ? `· ${r.customer_code}` : ''}
                       {r.linked_manually && <span className="ml-1 text-[10px] text-text-muted" title="Linked by hand, not by automatic matching">(linked)</span>}
-                      {can('lockers:waive') && (r.override_key || r.tenant_id) && (
+                      {can('lockers:link-tenant') && (r.override_key || r.tenant_id) && (
                         <button className="ml-1.5 text-primary hover:underline"
                           onClick={() => { setLinkFor(r); setCustQ(''); }}>{r.customer_id ? 'change link' : 'link customer…'}</button>
                       )}

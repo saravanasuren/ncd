@@ -15,7 +15,6 @@ export function CustomerProfileModal({ id, name, onClose }: { id: number; name: 
   const apps: any[] = data?.applications ?? [];
   const banks: any[] = data?.bankAccounts ?? [];
   const noms: any[] = data?.nominees ?? [];
-  const joints: any[] = data?.jointHolders ?? [];
   const docs: any[] = data?.documents ?? [];
   const h3 = 'text-xs font-semibold text-text-label uppercase tracking-wide mb-2';
   const dmy = (v: unknown) => { const m = String(v ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : null; };
@@ -114,20 +113,14 @@ export function CustomerProfileModal({ id, name, onClose }: { id: number; name: 
                   </div>
                 </>
               )}
-              {(noms.length > 0 || joints.length > 0) && (
+              {noms.length > 0 && (
                 <>
-                  <h3 className={h3}>Nominees &amp; joint holders</h3>
+                  <h3 className={h3}>Nominees</h3>
                   <div className="text-xs mb-4">
                     {noms.map((n: any) => (
                       <div key={`n${n.id}`} className="flex flex-wrap gap-x-3 border-b border-border/60 last:border-0 py-1.5">
                         <span className="font-medium">{n.full_name}</span>
                         <span className="text-text-muted">nominee{n.relationship ? ` · ${n.relationship}` : ''}{n.share_pct != null ? ` · ${n.share_pct}%` : ''}</span>
-                      </div>
-                    ))}
-                    {joints.map((j: any) => (
-                      <div key={`j${j.id}`} className="flex flex-wrap gap-x-3 border-b border-border/60 last:border-0 py-1.5">
-                        <span className="font-medium">{j.full_name}</span>
-                        <span className="text-text-muted">joint holder{j.relationship ? ` · ${j.relationship}` : ''}</span>
                       </div>
                     ))}
                   </div>

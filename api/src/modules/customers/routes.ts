@@ -176,13 +176,6 @@ customersRouter.post('/:id/handover-request', requirePermission('customers:hando
     res.status(201).json({ request: await s.requestHandover(getDb(), req.user!, Number(req.params.id), toUserId, reason) });
   }));
 
-// Relations
-customersRouter.put('/:id/joint-holders', requirePermission('customers:update'),
-  asyncHandler(async (req, res) => {
-    // nullish (not optional): the UI round-trips existing rows whose blank fields come back as NULL.
-    const { holders } = z.object({ holders: z.array(z.object({ full_name: z.string().min(1), pan: z.string().nullish(), phone: z.string().nullish(), relationship: z.string().nullish() })) }).parse(req.body);
-    res.json(await s.setJointHolders(getDb(), req.user!, Number(req.params.id), holders));
-  }));
 customersRouter.put('/:id/nominees', requirePermission('customers:update'),
   asyncHandler(async (req, res) => {
     const { nominees } = z.object({ nominees: z.array(z.object({

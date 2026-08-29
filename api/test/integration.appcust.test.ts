@@ -111,21 +111,26 @@ describe('applications — revert allotment', () => {
 });
 
 describe('customers — relations, deceased, KYC docs', () => {
-  it('sets joint holders + nominees and rejects >100% shares', async () => {
+  it('sets nominees and rejects >100% shares', async () => {
     const a = await admin();
     const cid = await newCustomer(a, 'Relations Cust', '9500000005');
-    expect((await a.put(`/api/customers/${cid}/joint-holders`, { holders: [{ full_name: 'JH One', relationship: 'Spouse' }] })).status).toBe(200);
     expect((await a.put(`/api/customers/${cid}/nominees`, { nominees: [{ full_name: 'Nom', share_pct: 60 }, { full_name: 'Nom Two', share_pct: 50 }] })).status).toBe(400);
     expect((await a.put(`/api/customers/${cid}/nominees`, { nominees: [{ full_name: 'Nom', share_pct: 100 }] })).status).toBe(200);
     const detail = await a.get(`/api/customers/${cid}`);
+    // Joint holders were removed (owner 2026-08-29) — the field is gone from the
+    // customer detail entirely.
+    expect(detail.json.jointHolders).toBeUndefined();
     // Regression: the UI round-trips existing rows whose blank fields come back
     // as NULL — a second add must not 400 (schemas are nullish, not optional).
     const rt = detail.json.nominees.map((n: any) => ({ full_name: n.full_name, relationship: n.relationship, share_pct: n.share_pct != null ? Number(n.share_pct) : null }));
     expect((await a.put(`/api/customers/${cid}/nominees`, { nominees: rt })).status).toBe(200);
-    const jh = detail.json.jointHolders.map((h: any) => ({ full_name: h.full_name, relationship: h.relationship, pan: h.pan, phone: h.phone }));
-    expect((await a.put(`/api/customers/${cid}/joint-holders`, { holders: [...jh, { full_name: 'JH Two' }] })).status).toBe(200);
-    expect(detail.json.jointHolders.length).toBe(1);
     expect(detail.json.nominees.length).toBe(1);
+  });
+
+  it('the removed joint-holders endpoint is gone', async () => {
+    const a = await admin();
+    const cid = await newCustomer(a, 'NoJoint Cust', '9500000015');
+    expect((await a.put(`/api/customers/${cid}/joint-holders`, { holders: [{ full_name: 'JH One' }] })).status).toBe(404);
   });
 
   it('uploads a KYC doc and streams it back; mirror from the app tags origin', async () => {

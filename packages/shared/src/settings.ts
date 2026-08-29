@@ -175,15 +175,6 @@ export const SETTINGS_CATALOG: SettingDef[] = [
 
   // ── Customers ──
   {
-    key: 'customers.max_joint_holders',
-    group: 'Customers',
-    label: 'Max joint holders',
-    description: 'Maximum joint holders per customer.',
-    type: 'number',
-    default: 2,
-    editableBy: 'admin',
-  },
-  {
     key: 'customers.lead_sources',
     group: 'Customers',
     label: 'Lead sources',

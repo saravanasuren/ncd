@@ -276,7 +276,6 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
   const referredBy = await resolveReferredBy(db, (c?.referred_by_text as string | null) ?? null);
   const bankAccounts = (await db.query('SELECT * FROM customer_bank_accounts WHERE customer_id = $1 ORDER BY is_active DESC, id', [id])).rows;
   const nominees = (await db.query('SELECT * FROM nominees WHERE customer_id = $1', [id])).rows;
-  const jointHolders = (await db.query('SELECT * FROM joint_holders WHERE customer_id = $1', [id])).rows;
   const documents = (await db.query('SELECT id, doc_type, original_filename, origin, uploaded_at FROM customer_documents WHERE customer_id = $1', [id])).rows;
   // The customer's investments — every application with its live outstanding
   // (partial withdrawals reduce it), newest first.
@@ -323,7 +322,7 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
      ) bk ON TRUE
      WHERE a.customer_id = $1
      ORDER BY a.date_money_received DESC NULLS LAST, a.id DESC`, [id])).rows;
-  return { customer: c, referredBy, bankAccounts, nominees, jointHolders, documents, applications };
+  return { customer: c, referredBy, bankAccounts, nominees, documents, applications };
 }
 
 /**
@@ -605,23 +604,6 @@ registerOnFinalApprove('customer_creation', async (tx, req) => {
     await tx.query("UPDATE customers SET creation_status = 'Approved', is_active = TRUE, updated_at = now() WHERE id = $1", [Number(req.entity_id)]);
   }
 });
-
-// ── Joint holders ─────────────────────────────────────────────────────
-export async function setJointHolders(db: Db, actor: AuthUser, customerId: number, holders: Array<{ full_name: string; pan?: string | null; phone?: string | null; relationship?: string | null }>) {
-  await assertVisible(db, actor, customerId);
-  const settings = await getSettingsMap(db);
-  const max = Number(settings['customers.max_joint_holders'] ?? 2);
-  if (holders.length > max) throw errors.badRequest(`At most ${max} joint holders allowed`);
-  await db.withTx(async (tx) => {
-    await tx.query('DELETE FROM joint_holders WHERE customer_id = $1', [customerId]);
-    for (const h of holders) {
-      await tx.query('INSERT INTO joint_holders (customer_id, full_name, pan, phone, relationship) VALUES ($1,$2,$3,$4,$5)',
-        [customerId, h.full_name, h.pan ?? null, h.phone ?? null, h.relationship ?? null]);
-    }
-    await writeAudit(tx, { actorId: actor.id, action: 'customer.joint-holders', entityType: 'customers', entityId: customerId, after: { count: holders.length } });
-  });
-  return { ok: true };
-}
 
 // ── Nominees ──────────────────────────────────────────────────────────
 export interface NomineeInput {

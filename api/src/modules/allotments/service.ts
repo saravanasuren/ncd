@@ -33,6 +33,14 @@ export async function pendingBySeriesSummary(db: Db) {
             -- base than the series actually has. DISTINCT on the same Active
             -- filter, so all three figures describe the same set of rows.
             count(DISTINCT a.customer_id) FILTER (WHERE a.status = 'Active')::int AS customer_count,
+            -- When the series was allotted (owner 2026-08-28: the page showed the
+            -- status but never the date). Read from the investments, which is
+            -- where allotment_date is actually stamped — NOT from
+            -- allotment_batches, which also holds Cancelled attempts and would
+            -- show a date for an allotment that never happened. max() is a
+            -- single value because one batch stamps one date; verified on
+            -- production that no series carries two.
+            max(a.allotment_date)::text AS allotment_date,
             -- the open allotment approval for this series (drives the "Pending
             -- approval" state + Revert on the Allotments page)
             (SELECT ab.approval_request_id FROM allotment_batches ab

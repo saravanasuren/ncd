@@ -201,14 +201,43 @@ export async function personPerformance(db: Db, _actor: AuthUser, type: 'staff' 
   if (!person) throw errors.notFound(`${type === 'agent' ? 'Agent' : 'Staff member'} not found`);
 
   const col = type === 'agent' ? 'enrolled_by_agent_id' : 'enrolled_by_user_id';
-  const custN = Number((await db.query<{ n: string }>(`SELECT count(*)::int AS n FROM customers WHERE ${col} = $1`, [id])).rows[0]!.n);
-  // Attribute an investment to this enroller either directly (a.${col}), or —
-  // when the investment carries NO enroller of its own (migrated from wealth,
-  // where only the customer keeps the enroller) — via the enroller of its
-  // customer. The both-null guard keeps investments the OTHER channel sourced
-  // (agent-entered on a staff-enrolled customer, or vice versa) out of this
-  // person's tally.
-  const attr = `(a.${col} = $1 OR (a.enrolled_by_user_id IS NULL AND a.enrolled_by_agent_id IS NULL AND c.${col} = $1))`;
+  const { referredToAgentSql, referredToStaffSql } = await import('../agents/service.js');
+  const referred = (refCol: string) => (type === 'agent'
+    ? referredToAgentSql(refCol, '$1')
+    : referredToStaffSql(refCol, '$1'));
+
+  // Attribute an investment to this person by EITHER route:
+  //
+  //  · they ENROLLED it — a.${col} directly, or (for wealth-migrated rows that
+  //    carry no enroller of their own) via the enroller of its customer. The
+  //    both-null guard keeps investments the OTHER channel sourced out of this
+  //    person's tally.
+  //
+  //  · they REFERRED it — the effective referred-by text resolves to them.
+  //    This was missing, and it is how most agents' business actually arrives:
+  //    the agent introduces the customer and office STAFF key the investment in,
+  //    so the agent enrols nothing. Shivashanmugam (owner 2026-08-28) showed
+  //    0 customers, 0 investments and Rs 0 brought in beside Rs 8,10,000 of
+  //    incentive — because the incentive counted what he referred and this page
+  //    counted what he typed. All 39 investments (~Rs 4.05 crore) were present
+  //    the whole time. Matching by referrer is what makes the two agree.
+  //
+  // Effective referrer = the application's own text, else the customer's — the
+  // same COALESCE the scoping rules use, so one investment cannot be scoped to
+  // one person and reported under another.
+  //
+  // The two routes are OR'd, not exclusive: an investment an agent both referred
+  // and keyed in counts once (it is a row filter, not a sum over people). Where
+  // a different person referred what this person enrolled, it shows on both
+  // pages — correct, since each did a real part of it.
+  const effRef = "COALESCE(NULLIF(btrim(a.referred_by_text), ''), c.referred_by_text)";
+  const attr = `(a.${col} = $1
+    OR (a.enrolled_by_user_id IS NULL AND a.enrolled_by_agent_id IS NULL AND c.${col} = $1)
+    OR ${referred(effRef)})`;
+
+  const custN = Number((await db.query<{ n: string }>(
+    `SELECT count(*)::int AS n FROM customers c
+      WHERE c.${col} = $1 OR ${referred('c.referred_by_text')}`, [id])).rows[0]!.n);
   const inv = (await db.query<{ n: string; live: string; invested: string; outstanding: string }>(
     `SELECT count(*)::int AS n,
             count(*) FILTER (WHERE a.status IN (${OUTSTANDING_SQL}))::int AS live,

@@ -299,6 +299,49 @@ export async function resolveReferrer(db: Db, text: string): Promise<{ kind: 'st
 }
 
 /**
+ * The same match as resolveReferrer above, as SQL — so a REPORT can attribute
+ * business the way the incentive engine actually paid it.
+ *
+ * Why this exists: an agent's page counted only what they ENROLLED
+ * (enrolled_by_agent_id), while their incentive counted what they REFERRED
+ * (referred_by_text → resolveReferrer). An agent who introduces business that
+ * office staff then key in enrols nothing, so the page read 0 customers,
+ * 0 investments and Rs 0 brought in beside a correct Rs 8,10,000 of incentive
+ * (Shivashanmugam, owner 2026-08-28 — 39 investments, ~Rs 4.05 crore, all
+ * present, none of them visible). Two screens were answering two different
+ * questions side by side.
+ *
+ * Kept here, next to resolveReferrer, because the moment these two rules live
+ * in different files they drift — and a drifted rule pays one person and
+ * credits another.
+ */
+export function referredToAgentSql(refCol: string, agentParam: string): string {
+  return `EXISTS (SELECT 1 FROM agents ra
+                   WHERE ra.id = ${agentParam} AND ra.deleted_at IS NULL
+                     AND btrim(COALESCE(${refCol}, '')) <> ''
+                     AND (upper(btrim(ra.agent_code)) = upper(btrim(${refCol}))
+                          OR lower(btrim(ra.full_name)) = lower(btrim(${refCol}))))`;
+}
+
+/**
+ * The staff half — with resolveReferrer's PRECEDENCE preserved. That function
+ * looks for an agent FIRST, so a name both could claim belongs to the agent.
+ * Without the NOT EXISTS below, a staff member sharing a name with an agent
+ * would be credited with business the agent was actually paid for.
+ */
+export function referredToStaffSql(refCol: string, userParam: string): string {
+  return `(EXISTS (SELECT 1 FROM users ru JOIN roles rr ON rr.id = ru.role_id
+                    WHERE ru.id = ${userParam} AND rr.name <> 'customer'
+                      AND btrim(COALESCE(${refCol}, '')) <> ''
+                      AND (upper(btrim(ru.code)) = upper(btrim(${refCol}))
+                           OR lower(btrim(ru.full_name)) = lower(btrim(${refCol}))))
+           AND NOT EXISTS (SELECT 1 FROM agents ra2
+                            WHERE ra2.deleted_at IS NULL
+                              AND (upper(btrim(ra2.agent_code)) = upper(btrim(${refCol}))
+                                   OR lower(btrim(ra2.full_name)) = lower(btrim(${refCol})))))`;
+}
+
+/**
  * Free-text referred-by that matches nobody → create a PendingApproval agent +
  * an agent_registration approval (owner: "upon entering free text will be
  * created as new agent upon approval"). Idempotent per normalized name; the

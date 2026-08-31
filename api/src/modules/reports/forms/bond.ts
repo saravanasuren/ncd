@@ -339,7 +339,17 @@ async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId
  * investments it comprises. Document-only: the underlying investments and their
  * interest/redemption are unchanged.
  */
-export async function consolidatedBondCertificatePdf(db: Db, customerId: number, seriesId: number): Promise<Buffer> {
+/**
+ * Draw ONE customer's consolidated bond onto an existing document.
+ *
+ * Split out of consolidatedBondCertificatePdf (owner 2026-08-28) so a whole
+ * series can be produced as one printable file without duplicating any of the
+ * layout. The single-bond export below is this function plus a document, so the
+ * two can never drift apart.
+ *
+ * NB: this MINTS a certificate number for a customer who has none.
+ */
+async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, seriesId: number): Promise<void> {
   const apps = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.application_no, a.total_amount, a.allotment_date, a.maturity_date, a.status,
             l.coupon_rate_pct, l.tenure_months, l.face_value
@@ -382,11 +392,6 @@ export async function consolidatedBondCertificatePdf(db: Db, customerId: number,
   const certificateNo = await ensureConsolidatedBondSerial(db, customerId, seriesId, year);
   const fullAddress = customerAddress(cust) || '—';
 
-  const doc = new PDFDocument({ size: 'A4', margin: 50 });
-  const chunks: Buffer[] = [];
-  doc.on('data', (c: Buffer) => chunks.push(c));
-  const done = new Promise<Buffer>((res) => doc.on('end', () => res(Buffer.concat(chunks))));
-
   _drawBorder(doc);
   let y = _drawHeader(doc, co);
   y = _drawTitle(doc, y);
@@ -411,7 +416,39 @@ export async function consolidatedBondCertificatePdf(db: Db, customerId: number,
   y = _drawDetailTable(doc, y, rows);
   const signatures = await Promise.all([0, 1, 2].map((i) => getBondSignature(db, i).then((s) => s?.buffer ?? null)));
   _drawLegalAndSign(doc, y, co, totalInvested, signatures);
+}
 
+/** One customer's consolidated bond for a series. */
+export async function consolidatedBondCertificatePdf(db: Db, customerId: number, seriesId: number): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', margin: 50 });
+  const chunks: Buffer[] = [];
+  doc.on('data', (c: Buffer) => chunks.push(c));
+  const done = new Promise<Buffer>((res) => doc.on('end', () => res(Buffer.concat(chunks))));
+  await _consolidatedBondPage(db, doc, customerId, seriesId);
+  doc.end();
+  return done;
+}
+
+/**
+ * Every customer's consolidated bond for a series, in ONE printable file (owner
+ * 2026-08-28: "a button which says download all bonds").
+ *
+ * Bonds are drawn in the order given, one per page. Minting is the caller's
+ * decision to have made: producing these permanently allocates a certificate
+ * number to every customer who lacked one, and the UI warns with the count
+ * before it is clicked.
+ */
+export async function consolidatedBondsForSeriesPdf(
+  db: Db, seriesId: number, customerIds: number[],
+): Promise<Buffer> {
+  const doc = new PDFDocument({ size: 'A4', margin: 50 });
+  const chunks: Buffer[] = [];
+  doc.on('data', (c: Buffer) => chunks.push(c));
+  const done = new Promise<Buffer>((res) => doc.on('end', () => res(Buffer.concat(chunks))));
+  for (const [i, customerId] of customerIds.entries()) {
+    if (i > 0) doc.addPage();
+    await _consolidatedBondPage(db, doc, customerId, seriesId);
+  }
   doc.end();
   return done;
 }

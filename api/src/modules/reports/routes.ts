@@ -109,6 +109,26 @@ reportsRouter.get('/consolidated-bond/:customerId/:seriesId.pdf', requirePermiss
     res.setHeader('Content-Disposition', `inline; filename="consolidated-bond-${req.params.customerId}-${req.params.seriesId}.pdf"`);
     res.end(buf);
   }));
+// EVERY customer's consolidated bond for a series, as one printable file (owner
+// 2026-08-28). Gated on allotments:execute, not customers:read: this is the
+// series-wide operation from the Allotments page, and it MINTS a certificate
+// number for every customer who lacks one — a heavier action than reading one
+// customer's document.
+reportsRouter.get('/consolidated-bonds/series/:seriesId.pdf', requirePermission('allotments:execute'),
+  asyncHandler(async (req, res) => {
+    const seriesId = Number(req.params.seriesId);
+    const { seriesCustomers } = await import('../allotments/service.js');
+    const { rows, series } = await seriesCustomers(getDb(), seriesId);
+    if (!rows.length) throw errors.notFound('No issued investments in this series');
+    const ids = (rows as Array<Record<string, unknown>>).map((r) => Number(r.customer_id));
+    const { consolidatedBondsForSeriesPdf } = await import('./forms/bond.js');
+    const buf = await consolidatedBondsForSeriesPdf(getDb(), seriesId, ids);
+    const safe = String(series.code || seriesId).replace(/[^A-Za-z0-9_-]+/g, '-');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${safe}-bonds.pdf"`);
+    res.end(buf);
+  }));
+
 reportsRouter.get('/allotment/:applicationId.pdf', requirePermission('customers:read'),
   asyncHandler(async (req, res) => {
     const { assertApplicationVisible } = await import('../../lib/visibility.js');

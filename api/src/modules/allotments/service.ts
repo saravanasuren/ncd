@@ -12,6 +12,7 @@ import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { canTransition } from '../../lib/statusMachine.js';
 import { createApprovalRequest, registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
+import { REFERRER, REFERRER_LATERAL_JOINS } from '../reports/book.js';
 
 /** Apps ready to allot = Active in the series but not yet allotted. */
 const READY_TO_ALLOT = "a.status = 'Active' AND a.allotment_date IS NULL";
@@ -42,6 +43,53 @@ export async function pendingBySeriesSummary(db: Db) {
      GROUP BY s.id, s.code, s.name, s.status ORDER BY s.code`
   );
   return rows;
+}
+
+/** Statuses a consolidated bond covers — the same set forms/bond.ts issues for,
+ *  so every customer this page lists has a bond that can actually be produced. */
+const BOND_ISSUABLE = ['Active', 'Matured', 'Redeemed', 'RolledOver'];
+
+/**
+ * The customers holding a series, for the drill-down behind a series name on the
+ * Allotments page (owner 2026-08-28).
+ *
+ * One row per CUSTOMER, not per investment — several people hold two or three in
+ * the same series, and the page offers one consolidated bond per person. Each
+ * row carries its own investments so the row can expand without a second call.
+ *
+ * `has_bond` says whether a certificate number already exists. It drives the
+ * warning on "Download all": producing a bond MINTS a permanent number, and the
+ * operator should know how many new ones a click will create.
+ */
+export async function seriesCustomers(db: Db, seriesId: number) {
+  const series = (await db.query<{ code: string; name: string }>(
+    'SELECT code, name FROM series WHERE id = $1', [seriesId])).rows[0];
+  if (!series) throw errors.notFound('Series not found');
+
+  const { rows } = await db.query(
+    `SELECT c.id AS customer_id, c.customer_code, c.full_name,
+            NULLIF(btrim(${REFERRER}), '') AS referred_by,
+            count(a.id)::int AS investment_count,
+            COALESCE(sum(a.total_amount), 0) AS total_amount,
+            (cb.bond_serial_no IS NOT NULL) AS has_bond,
+            cb.bond_serial_no,
+            json_agg(json_build_object(
+              'application_id', a.id, 'application_no', a.application_no,
+              'amount', a.total_amount, 'status', a.status,
+              'allotment_date', a.allotment_date
+            ) ORDER BY a.date_money_received NULLS LAST, a.id) AS investments
+       FROM applications a
+       JOIN customers c ON c.id = a.customer_id${REFERRER_LATERAL_JOINS}
+       LEFT JOIN consolidated_bonds cb ON cb.customer_id = c.id AND cb.series_id = a.series_id
+      WHERE a.series_id = $1 AND a.status = ANY($2::text[])
+      GROUP BY c.id, c.customer_code, c.full_name, cb.bond_serial_no, ${REFERRER}
+      ORDER BY c.full_name`, [seriesId, BOND_ISSUABLE]);
+
+  return {
+    series: { id: seriesId, code: series.code, name: series.name },
+    rows,
+    without_bond: rows.filter((r) => !(r as Record<string, unknown>).has_bond).length,
+  };
 }
 
 export async function createAllotmentBatch(db: Db, actor: AuthUser, input: { series_id: number; allotment_date: string; isin?: string; notes?: string }) {

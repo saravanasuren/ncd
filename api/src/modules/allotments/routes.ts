@@ -11,6 +11,12 @@ export const allotmentsRouter = Router();
 allotmentsRouter.get('/series', requirePermission('allotments:execute'),
   asyncHandler(async (_req, res) => res.json({ rows: await s.pendingBySeriesSummary(getDb()) })));
 
+// The customers holding a series — the drill-down behind a series name. One row
+// per customer, each carrying its own investments so a row expands without a
+// second call (owner 2026-08-28).
+allotmentsRouter.get('/series/:id/customers', requirePermission('allotments:execute'),
+  asyncHandler(async (req, res) => res.json(await s.seriesCustomers(getDb(), Number(req.params.id)))));
+
 allotmentsRouter.post('/series/:id', requirePermission('allotments:execute'),
   asyncHandler(async (req, res) => {
     const input = z.object({ allotment_date: z.string(), isin: z.string().optional(), notes: z.string().optional() }).parse(req.body);

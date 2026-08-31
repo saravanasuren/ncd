@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
@@ -52,7 +53,11 @@ export function AllotmentsPage() {
   if (error) return <div className="text-danger">Failed to load series.</div>;
 
   const columns: Column<SeriesRow>[] = [
-    { key: 'code', header: 'Series', tdClassName: 'font-semibold' },
+    // The series name is the way into its customers (owner 2026-08-28) — the
+    // list of who holds it, who referred them, and their bonds.
+    { key: 'code', header: 'Series', tdClassName: 'font-semibold',
+      value: (s) => s.code,
+      render: (s) => <Link to={`/app/allotments/${s.series_id}`} className="text-primary hover:underline">{s.code}</Link> },
     { key: 'name', header: 'Name' },
     // Customers before Investments: the smaller, human number reads first, and
     // the pair together shows how concentrated a series is.

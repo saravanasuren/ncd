@@ -30,6 +30,7 @@ import { AgentsPage } from './pages/Agents.js';
 import { BackgroundVerificationPage } from './pages/BackgroundVerification.js';
 import { PersonDetailPage } from './pages/PersonDetail.js';
 import { AllotmentsPage } from './pages/Allotments.js';
+import SeriesCustomers from './pages/SeriesCustomers.js';
 import { PayoutsPage } from './pages/Payouts.js';
 import { EscrowPage } from './pages/Escrow.js';
 import { MaturityAlertsPage } from './pages/MaturityAlerts.js';
@@ -126,6 +127,7 @@ export function App() {
           <Route path="approvals" element={<RequirePerm perm={['approvals:check', 'approvals:check-premature', 'approvals:check-handover']}><ApprovalsPage /></RequirePerm>} />
           <Route path="agents" element={<RequirePerm perm="agents:manage"><AgentsPage /></RequirePerm>} />
           <Route path="allotments" element={<RequirePerm perm="allotments:execute"><AllotmentsPage /></RequirePerm>} />
+          <Route path="allotments/:seriesId" element={<RequirePerm perm="allotments:execute"><SeriesCustomers /></RequirePerm>} />
           <Route path="redemptions" element={<RequirePerm perm="redemptions:initiate"><RedemptionsPage /></RequirePerm>} />
           <Route path="ncd-events" element={<RequirePerm perm="redemptions:initiate"><EventsPage /></RequirePerm>} />
           <Route path="maturity-alerts" element={<RequirePerm perm="dashboard:view"><MaturityAlertsPage /></RequirePerm>} />

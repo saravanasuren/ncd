@@ -13,6 +13,9 @@ interface SeriesRow {
   /** Distinct PEOPLE holding an Active investment — not the same as total_count,
    *  since one customer often holds several in a series. */
   customer_count: number;
+  /** The date the series was allotted, from the date stamped on its investments.
+   *  Null while it is still Open. */
+  allotment_date: string | null;
   pending_request_id: number | null;   // an allotment approval awaiting a checker
 }
 
@@ -64,6 +67,14 @@ export function AllotmentsPage() {
         </span>
       ) },
     { key: 'status', header: 'Status' },
+    // Next to Status, because it is the detail Status implies but never showed
+    // (owner 2026-08-28). Blank while a series is still Open — there is no date
+    // yet, and a dash says that more honestly than an empty cell.
+    { key: 'allotment_date', header: 'Allotted on', align: 'right',
+      value: (s) => s.allotment_date ?? '',
+      render: (s) => s.allotment_date
+        ? <span className="mono">{String(s.allotment_date).slice(0, 10)}</span>
+        : <span className="text-text-muted">—</span> },
     { key: 'actions', header: 'Actions', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
       render: (s) => {
         const revertBtn = (

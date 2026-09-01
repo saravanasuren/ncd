@@ -163,6 +163,49 @@ export async function setSeriesStatus(db: Db, actor: AuthUser, id: number, to: s
     await writeAudit(tx, { actorId: actor.id, action: 'series.status', entityType: 'series', entityId: id, before: cur.rows[0], after: { status: to } });
   });
 }
+/**
+ * Publish a series to the customer-facing apps, or withdraw it (owner
+ * 2026-08-29: "I need only NCD 29 to be visible to dhanamfin application ... can
+ * we make this UI editable?").
+ *
+ * Maker/checker, because the effect is external: approving this puts an
+ * investment product in front of customers, or takes it away from them.
+ * Nothing moves until Admin/CXO approves.
+ *
+ * Deliberately independent of `status`. Open means the series CAN take money —
+ * an internal fact, and the one that used to publish a series as a side effect.
+ * This is the separate, deliberate question of whether customers should be
+ * offered it. A series can be open for branch enrolment while invisible in the
+ * app, which is exactly the NCD BOND case this was built for.
+ */
+export async function requestSeriesVisibility(
+  db: Db, actor: AuthUser, seriesId: number, visible: boolean, reason?: string | null,
+) {
+  const cur = (await db.query<{ code: string; name: string; status: string; visible_in_app: boolean }>(
+    'SELECT code, name, status, visible_in_app FROM series WHERE id = $1', [seriesId])).rows[0];
+  if (!cur) throw errors.notFound('Series not found');
+  if (cur.visible_in_app === visible) {
+    throw errors.badRequest(visible ? 'That series is already visible in the app' : 'That series is already hidden from the app');
+  }
+  return db.withTx(async (tx) => {
+    const req = await createApprovalRequest(tx, {
+      type: 'series_visibility_change', entityType: 'series', entityId: seriesId, makerUserId: actor.id,
+      metadata: { code: cur.code, name: cur.name, status: cur.status, from: cur.visible_in_app, to: visible, reason: reason ?? null },
+    });
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'series.app-visibility.requested', entityType: 'series', entityId: seriesId,
+      before: { visible_in_app: cur.visible_in_app }, after: { visible_in_app: visible, reason: reason ?? null },
+    });
+    return { ok: true, applied: false, approval_request: req };
+  });
+}
+
+registerOnFinalApprove('series_visibility_change', async (tx, req) => {
+  if (!req.entity_id) return;
+  await tx.query('UPDATE series SET visible_in_app = $1 WHERE id = $2',
+    [req.metadata.to === true, Number(req.entity_id)]);
+});
+
 export async function setSeriesIsin(db: Db, actor: AuthUser, id: number, isin: string) {
   await db.query('UPDATE series SET isin = $1 WHERE id = $2', [isin, id]);
   await writeAudit(db, { actorId: actor.id, action: 'series.isin', entityType: 'series', entityId: id, after: { isin } });

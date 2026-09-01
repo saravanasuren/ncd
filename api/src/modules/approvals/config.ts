@@ -155,6 +155,15 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Bond Handover Change',
     levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
   },
+  // Publishing a series to the customer-facing apps, or withdrawing it (owner
+  // 2026-08-29). A mis-click here puts an investment product in front of
+  // customers, so it is maker/checker like the rest of the series record.
+  // Maker: products:manage. Checker: Admin/CXO.
+  series_visibility_change: {
+    type: 'series_visibility_change',
+    label: 'Series App Visibility',
+    levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
+  },
   // One-time addition/deduction on an investment's next interest payout.
   // Maker: NCD Manager+ (payouts:adjust). Checker: Admin/CXO (owner 2026-07-23).
   payout_adjustment: {

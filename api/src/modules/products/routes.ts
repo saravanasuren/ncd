@@ -43,6 +43,12 @@ productsRouter.post('/series/:id/status', manage, asyncHandler(async (req, res) 
   await s.setSeriesStatus(getDb(), req.user!, Number(req.params.id), to);
   res.json({ ok: true });
 }));
+// Publish a series to the customer apps, or withdraw it. Maker/checker: nothing
+// changes until Admin/CXO approves (owner 2026-08-29).
+productsRouter.patch('/series/:id/app-visibility', manage, asyncHandler(async (req, res) => {
+  const b = z.object({ visible: z.boolean(), reason: z.string().max(500).optional() }).parse(req.body);
+  res.json(await s.requestSeriesVisibility(getDb(), req.user!, Number(req.params.id), b.visible, b.reason ?? null));
+}));
 productsRouter.post('/series/:id/isin', manage, asyncHandler(async (req, res) => {
   const { isin } = z.object({ isin: z.string().min(1) }).parse(req.body);
   await s.setSeriesIsin(getDb(), req.user!, Number(req.params.id), isin);

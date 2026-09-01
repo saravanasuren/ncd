@@ -186,9 +186,16 @@ customerReadsRouter.get('/customers/:id/holdings', asyncHandler(async (req, res)
 customerReadsRouter.get('/series/active', asyncHandler(async (_req, res) => {
   const db = getDb();
   const { rows: serieses } = await db.query<Record<string, unknown>>(
+    // Open AND published. Being open is an internal state — it means the series
+    // can take money — and it used to publish the series to customers as a side
+    // effect (owner 2026-08-29). visible_in_app is the deliberate decision, and
+    // it is opt-in, so a newly opened series reaches nobody until someone says
+    // so. This is the whole external surface: LockerHub and DhanamFin both read
+    // this endpoint, and a series we do not want sold should not be sold
+    // anywhere.
     `SELECT s.id, s.code, s.name, s.status, s.opened_at
        FROM series s
-      WHERE s.status = 'Open'
+      WHERE s.status = 'Open' AND s.visible_in_app = TRUE
       ORDER BY s.opened_at DESC NULLS LAST, s.id DESC`
   );
 

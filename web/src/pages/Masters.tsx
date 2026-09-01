@@ -111,6 +111,14 @@ function SeriesSection() {
     mutationFn: (v: { id: number; to: string }) => api.post(`/api/series/${v.id}/status`, { to: v.to }),
     onSuccess: invalidate, onError: onErr,
   });
+  // Publishing a series to the customer apps is maker/checker (owner
+  // 2026-08-29) — approving it puts a product in front of customers.
+  const setAppVisible = useMutation({
+    mutationFn: (v: { id: number; visible: boolean }) =>
+      api.patch(`/api/series/${v.id}/app-visibility`, { visible: v.visible }),
+    onSuccess: () => { setErr(''); qc.invalidateQueries({ queryKey: ['series'] }); },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
   const setIsin = useMutation({
     mutationFn: (v: { id: number; isin: string }) => api.post(`/api/series/${v.id}/isin`, { isin: v.isin }),
     onSuccess: () => { setIsinFor(null); invalidate(); }, onError: onErr,
@@ -145,6 +153,34 @@ function SeriesSection() {
           {s.status === 'PendingApproval' ? 'Awaiting approval' : s.status}
         </span>
       ) },
+    // Next to Status, because the two are easy to confuse and must not be.
+    // Open = this series may take money (internal). In app = customers are
+    // offered it. Opening a series used to publish it by accident.
+    { key: 'visible_in_app', header: 'In app', value: (s) => (s.visible_in_app ? 'yes' : 'no'),
+      render: (s) => {
+        const on = s.visible_in_app === true;
+        return (
+          <button
+            className={`text-xs rounded px-1.5 py-0.5 ${on ? 'bg-[color:var(--success-bg)] text-success' : 'bg-bg text-text-muted'}`}
+            title={on ? 'Customers are offered this series. Click to request it be withdrawn.'
+                      : 'Customers are not offered this series. Click to request it be published.'}
+            disabled={setAppVisible.isPending}
+            onClick={async () => {
+              setErr('');
+              const ok = await confirm({
+                title: on ? `Withdraw ${s.code} from the customer apps?` : `Publish ${s.code} to the customer apps?`,
+                body: on
+                  ? 'Customers will stop being offered this series. Branch staff can still enrol into it. Goes to Admin/CXO for approval.'
+                  : 'Customers will be offered this series in the DhanamFin app. Goes to Admin/CXO for approval.',
+                confirmLabel: 'Send for approval',
+                danger: on,
+              });
+              if (ok) setAppVisible.mutate({ id: s.id, visible: !on });
+            }}>
+            {on ? '\u2611 In app' : '\u2610 Hidden'}
+          </button>
+        );
+      } },
     { key: 'actions', header: '', align: 'right', sortable: false, filterable: false, tdClassName: 'whitespace-nowrap',
       render: (s) => (editFor && editFor.id === s.id ? (
         <>

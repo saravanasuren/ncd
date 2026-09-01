@@ -103,20 +103,47 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
 
   const result = await db.withTx(async (tx) => {
     // 1. Find (PAN first, then phone) or create the customer.
-    let found: Array<Record<string, unknown>> = [];
     const pan = String(b.pan ?? '').trim().toUpperCase();
-    if (pan) {
-      found = (await tx.query<Record<string, unknown>>(
-        `SELECT id, customer_code, full_name, kyc_status, pan FROM customers
-          WHERE UPPER(TRIM(COALESCE(pan,''))) = $1 ORDER BY id ASC LIMIT 1`, [pan]
-      )).rows;
-    }
-    if (found.length === 0) {
-      found = (await tx.query<Record<string, unknown>>(
-        `SELECT id, customer_code, full_name, kyc_status, pan FROM customers
-          WHERE ${phoneMatchSql('phone')} = $1 ORDER BY id ASC LIMIT 1`, [phone]
-      )).rows;
-    }
+    // Aadhaar may arrive at the top level or inside a KYC attempt. Digits only,
+    // and only a full 12 is accepted — a partial or masked value ("XXXX1234")
+    // stored in this column would read as a real Aadhaar to everything
+    // downstream. NB: the number itself is never written to updated_fields or
+    // the audit row; only the FIELD NAME is, so nothing echoes it back.
+    const aadhaarOf = (v: unknown) => {
+      const d = String(v ?? '').replace(/\D/g, '');
+      return d.length === 12 ? d : null;
+    };
+    const aadhaarAttempt = Array.isArray(b.kyc?.attempts)
+      ? (b.kyc.attempts as Array<Record<string, unknown>>)
+        .find((at) => String(at.document_type ?? '').toUpperCase() === 'AADHAAR' && at.id_number)
+      : undefined;
+    const aadhaarFull = aadhaarOf(b.aadhaar) ?? aadhaarOf(aadhaarAttempt?.id_number);
+    const byPan = pan ? (await tx.query<Record<string, unknown>>(
+      `SELECT id, customer_code, full_name, kyc_status, pan FROM customers
+        WHERE UPPER(TRIM(COALESCE(pan,''))) = $1 ORDER BY id ASC LIMIT 1`, [pan]
+    )).rows : [];
+    const byPhone = (await tx.query<Record<string, unknown>>(
+      `SELECT id, customer_code, full_name, kyc_status, pan FROM customers
+        WHERE ${phoneMatchSql('phone')} = $1 ORDER BY id ASC LIMIT 1`, [phone]
+    )).rows;
+
+    // When the PAN and the phone point at DIFFERENT people the payload
+    // contradicts itself, and PAN-first matching resolved it silently and
+    // catastrophically: the whole payload merged onto whoever held that PAN.
+    // Proven in test — sending Person A's PAN with Person B's details rewrote
+    // A's name and address to B's, while B's own record stayed empty. One
+    // mistyped field corrupted two customers.
+    //
+    // The phone wins. It is the identity the customer authenticated with (OTP at
+    // signup); the PAN is a typed field that may simply be wrong. On a
+    // contradiction the PAN is untrustworthy for this payload: not matched on,
+    // and not written.
+    const panContradictsPhone = byPan.length > 0 && byPhone.length > 0
+      && Number(byPan[0]!.id) !== Number(byPhone[0]!.id);
+    const panTrusted = !panContradictsPhone;
+    const found: Array<Record<string, unknown>> = panContradictsPhone
+      ? byPhone
+      : (byPan.length ? byPan : byPhone);
 
     let customerId: number;
     let customerCode: string;
@@ -128,9 +155,10 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
       // record lands Approved + active (legacy 2026-06-18 behaviour).
       customerCode = await nextCode(tx, 'customer', codeFmt);
       const { rows } = await tx.query<{ id: string }>(
-        `INSERT INTO customers (customer_code, full_name, phone, email, dob, gender, address, city, state,
-                                kyc_status, creation_status, is_active)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Pending','Approved',TRUE) RETURNING id`,
+        `INSERT INTO customers (customer_code, full_name, phone, email, dob, gender, address, city, district,
+                                state, pincode, pan, aadhaar, father_name, occupation, phone_secondary,
+                                ckyc_number, kyc_status, creation_status, is_active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'Pending','Approved',TRUE) RETURNING id`,
         [
           customerCode, name, phone,
           b.email || null,
@@ -139,10 +167,24 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
           // and 500'd the whole sync exactly as the blank nominee dob did.
           iso(b.dob),
           b.gender ? String(b.gender).slice(0, 40) : null,
-          // ncd has no `pin` column — fold the pincode into the address line.
-          [addr.line1 || null, addr.pincode ? `PIN ${String(addr.pincode).slice(0, 15)}` : null].filter(Boolean).join(', ') || null,
+          // The pincode used to be folded into the address line as ", PIN 641062"
+          // because "ncd has no pin column". It has had one since (owner
+          // 2026-08-29) — so the address is the address and the pincode is its
+          // own field, sortable and searchable like every other customer's.
+          addr.line1 || null,
           addr.city || null,
+          addr.district || null,
           addr.state || null,
+          addr.pincode ? String(addr.pincode).trim().slice(0, 10) : null,
+          // PAN was read at the top of this handler to FIND a matching customer
+          // and then silently dropped — it appeared in neither the insert nor
+          // the update, so a PAN sent at signup was thrown away. It now lands.
+          panTrusted ? (pan || null) : null,
+          aadhaarFull,
+          b.father_name || null,
+          b.occupation || null,
+          b.phone_secondary ? normalisePhone(b.phone_secondary) || null : null,
+          b.ckyc_number || null,
         ]
       );
       customerId = Number(rows[0]!.id);
@@ -167,6 +209,15 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
       };
       push('full_name', name);
       if (b.email) push('email', b.email);
+      // Everything below was accepted on CREATE and ignored on MERGE, which is
+      // the path that matters most: the app collects KYC and personal details
+      // AFTER signup, so the profile is completed by an update, not an insert.
+      if (addr.pincode) push('pincode', String(addr.pincode).trim().slice(0, 10));
+      if (addr.district) push('district', addr.district);
+      if (b.father_name) push('father_name', b.father_name);
+      if (b.occupation) push('occupation', b.occupation);
+      if (b.ckyc_number) push('ckyc_number', b.ckyc_number);
+      if (b.phone_secondary) push('phone_secondary', normalisePhone(b.phone_secondary));
       // A date we cannot parse is left alone rather than 500ing the sync —
       // push() skips null, so the customer keeps whatever dob they had.
       if (b.dob) push('dob', iso(b.dob));
@@ -177,6 +228,35 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
       sets.push('updated_at = now()');
       vals.push(customerId);
       await tx.query(`UPDATE customers SET ${sets.join(', ')} WHERE id = $${p}`, vals);
+
+      // PAN and Aadhaar are deliberately NOT in the bulk update above.
+      //
+      // customers.pan is UNIQUE. A blind write of a PAN that already belongs to
+      // somebody else raises 23505, which aborts this transaction and loses the
+      // ENTIRE sync — name, address, nominee, bank, everything — over one bad
+      // field. And overwriting a PAN that staff have already verified with
+      // whatever the app happens to hold would be worse than dropping it.
+      //
+      // So: fill only what is empty or a synthetic placeholder, and let a
+      // collision leave the record alone. Same rule the KYC-attempt block below
+      // has always applied; this is the top-level `pan` reaching the same gate.
+      if (panTrusted && pan.length >= 10) {
+        const cur = (await tx.query<{ pan: string | null }>('SELECT pan FROM customers WHERE id = $1', [customerId])).rows[0];
+        const curPan = cur?.pan ?? '';
+        if (curPan === '' || curPan.startsWith('LH_') || curPan.startsWith('CGRP_')) {
+          try {
+            await tx.query('UPDATE customers SET pan = $2, updated_at = now() WHERE id = $1', [customerId, pan]);
+            updatedFields.push('pan');
+          } catch { /* that PAN belongs to another customer — keep what we have */ }
+        }
+      }
+      // Aadhaar: fill a blank, never replace. A stored Aadhaar has been through
+      // someone's verification; the app's copy is not better evidence.
+      if (aadhaarFull) {
+        const r = await tx.query(
+          'UPDATE customers SET aadhaar = $2, updated_at = now() WHERE id = $1 AND aadhaar IS NULL', [customerId, aadhaarFull]);
+        if (r.rowCount) updatedFields.push('aadhaar');
+      }
     }
 
     // 2. KYC — append-only; only verified attempts count. ncd has no

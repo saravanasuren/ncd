@@ -150,6 +150,31 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
     let created: boolean;
     const addr = (b.address ?? {}) as Record<string, unknown>;
 
+    // The whole street address, not just its first line (owner 2026-08-29).
+    //
+    // DHN0735 is the worked example: LockerHub holds "SECTOR 26, SAMBHAJI CHOWK,
+    // NEAR SOUTH INDIAN BANK, 'SAI ATHARVA', BUNGALOW NO.2, PLOT F6-F10,, NIGDI
+    // PRADHIKARAN, Maharashtra, 411044" and NCD stored "SECTOR 26, SAMBHAJI
+    // CHOWK" — everything between the first line and the city was lost, because
+    // this handler read `line1` and nothing else. The doubled comma in their
+    // display string is the giveaway: they join components, and at least one of
+    // them never had a home here.
+    //
+    // So take every street-ish part the payload offers and join them. Unknown
+    // senders differ on the key name, and reading several costs nothing: a key
+    // that is absent contributes nothing. city/state/pincode stay in their own
+    // columns and are excluded here, or the address would repeat them.
+    const STREET_KEYS = ['line1', 'line2', 'line3', 'street', 'area', 'landmark', 'locality'];
+    const addressLine = STREET_KEYS
+      .map((k) => String(addr[k] ?? '').trim())
+      .filter(Boolean)
+      .join(', ') || null;
+    // Which address keys actually arrived — NAMES ONLY, never values. The
+    // contract does not document this shape and the audit keeps no payloads, so
+    // without this we are guessing at what the app sends. Costs one short array
+    // on the audit row and leaks nothing.
+    const addressKeysSeen = Object.keys(addr).filter((k) => String(addr[k] ?? '').trim() !== '');
+
     if (found.length === 0) {
       // CREATE — LockerHub has already run its own verification flow, so the
       // record lands Approved + active (legacy 2026-06-18 behaviour).
@@ -171,7 +196,7 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
           // because "ncd has no pin column". It has had one since (owner
           // 2026-08-29) — so the address is the address and the pincode is its
           // own field, sortable and searchable like every other customer's.
-          addr.line1 || null,
+          addressLine,
           addr.city || null,
           addr.district || null,
           addr.state || null,
@@ -222,7 +247,7 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
       // push() skips null, so the customer keeps whatever dob they had.
       if (b.dob) push('dob', iso(b.dob));
       if (b.gender) push('gender', String(b.gender).slice(0, 40));
-      if (addr.line1) push('address', addr.line1);
+      if (addressLine) push('address', addressLine);
       if (addr.city) push('city', addr.city);
       if (addr.state) push('state', addr.state);
       sets.push('updated_at = now()');
@@ -381,6 +406,9 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
         trigger,
         phone: maskPhone(phone),
         updated_fields: updatedFields,
+        // Key NAMES only, never values — see addressKeysSeen. This is how we
+        // find out what the app actually sends without keeping payloads.
+        address_keys: addressKeysSeen,
         lockerhub_application_no: b.lockerhub_application_no ?? null,
       },
       ip: req.ip,

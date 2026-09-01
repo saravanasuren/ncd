@@ -613,6 +613,24 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
     };
   }
 
+  // Series app visibility: the checker is deciding whether customers are offered
+  // this product, so lead with the direction of travel, not the field name.
+  if (req.request_type === 'series_visibility_change') {
+    return {
+      subject: `${meta.name ?? meta.code} · ${meta.code}`,
+      amount: null,               // a visibility change moves no money
+      facts: clean([
+        fact('Series', `${meta.name ?? ''} (${meta.code})`.trim()),
+        fact('Series status', meta.status ? String(meta.status) : null),
+        fact('Change', meta.to === true
+          ? 'PUBLISH — customers will be offered this series in the app'
+          : 'WITHDRAW — customers will no longer be offered this series'),
+        fact('Currently', meta.from === true ? 'Visible in the app' : 'Hidden from the app'),
+        fact('Reason', meta.reason ? String(meta.reason) : null),
+      ]),
+    };
+  }
+
   if (id && req.entity_type === 'applications') {
     const r = (await db.query<Record<string, unknown>>(
       `SELECT a.application_no, a.total_amount, a.status, a.date_money_received, a.referred_by_text,

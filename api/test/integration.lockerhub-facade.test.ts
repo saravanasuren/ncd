@@ -59,7 +59,11 @@ beforeAll(async () => {
   // The allotment closed the demo series; re-open it so the Open-series
   // endpoints (series/active, subscription-request, locker-deposits) have a
   // live subject, as they will in production.
-  await ctx.db.query("UPDATE series SET status = 'Open' WHERE id = $1", [seriesId]);
+  //
+  // visible_in_app too (owner 2026-08-29): being Open no longer publishes a
+  // series to the customer apps — that is now a separate, opt-in decision. A
+  // series on offer in production is both, so the fixture must be both.
+  await ctx.db.query("UPDATE series SET status = 'Open', visible_in_app = TRUE WHERE id = $1", [seriesId]);
 });
 afterAll(async () => { await ctx.close(); });
 

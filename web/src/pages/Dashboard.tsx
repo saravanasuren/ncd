@@ -404,6 +404,7 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
                 )
               ) : kind === 'groups' ? (
                 groups.length === 0 ? <Empty /> : (
+                  <>
                   <table className="w-full text-sm border-collapse">
                     <thead><tr className="text-left text-xs text-text-label uppercase tracking-wide border-b border-border">
                       <th className="py-2 pr-3">Group</th><th className="py-2 px-3 text-right">Investors</th>
@@ -415,7 +416,35 @@ function DrillModal({ widget, title, range, seriesOverride, onClose }: { widget:
                           onPickCustomer={(c) => setProfile({ id: c.customer_id, name: c.customer })} />
                       ))}
                     </tbody>
+                    {groups.length > 0 && (() => {
+                      // Totals the columns as displayed. Investors is a SUM, not
+                      // a distinct count: the children carry redeemed customers
+                      // the summary counts exclude, so counting ids across them
+                      // would produce a figure that disagrees with the rows
+                      // above it — worse than a sum. Someone holding in two
+                      // groups is therefore counted in each, which the note
+                      // below says out loud rather than leaving to be discovered.
+                      const t = groups.reduce((acc, g: any) => ({
+                        investors: acc.investors + Number(g.investors ?? 0),
+                        investments: acc.investments + Number(g.investments ?? 0),
+                        outstanding: acc.outstanding + Number(g.outstanding ?? 0),
+                      }), { investors: 0, investments: 0, outstanding: 0 });
+                      return (
+                        <tfoot><tr className="border-t-2 border-border font-semibold">
+                          <td className="py-2 pr-3">Total ({groups.length})</td>
+                          <td className="py-2 px-3 text-right mono">{t.investors}</td>
+                          <td className="py-2 px-3 text-right mono">{t.investments}</td>
+                          <td className="py-2 pl-3 text-right mono">{formatINR(t.outstanding)}</td>
+                        </tr></tfoot>
+                      );
+                    })()}
                   </table>
+                  {groups.length > 1 && (
+                    <p className="text-[11px] text-text-muted mt-1.5">
+                      Investors is the sum of the rows — anyone holding in more than one group is counted in each.
+                    </p>
+                  )}
+                  </>
                 )
               ) : (
                 rows.length === 0 ? <Empty /> : (

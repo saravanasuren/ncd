@@ -618,6 +618,7 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
   if (req.request_type === 'series_visibility_change') {
     return {
       subject: `${meta.name ?? meta.code} · ${meta.code}`,
+      amount: null,               // a visibility change moves no money
       facts: clean([
         fact('Series', `${meta.name ?? ''} (${meta.code})`.trim()),
         fact('Series status', meta.status ? String(meta.status) : null),

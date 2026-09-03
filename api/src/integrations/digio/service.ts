@@ -55,7 +55,16 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
       return { ok: true, authorisedUserId, docType: sess.document_type, fresh: true };
     }
     // eSign is off the critical path — just stamp esigned_at if not already set.
-    await tx.query('UPDATE applications SET esigned_at = COALESCE(esigned_at, now()) WHERE id = $1', [applicationId]);
+    //
+    // signing_method is stamped HERE, where a real Digio signature actually
+    // lands, rather than anywhere a person could set it. It is the only place
+    // that may write 'esign'; 'physical' is written only by an upload carrying
+    // an actual signed document (owner 2026-09-03).
+    await tx.query(
+      `UPDATE applications
+          SET esigned_at = COALESCE(esigned_at, now()),
+              signing_method = COALESCE(signing_method, 'esign')
+        WHERE id = $1`, [applicationId]);
     // Generate + store the Bond certificate right after eSign (owner spec).
     // Defensive — a PDF hiccup must not fail the signing webhook.
     try {

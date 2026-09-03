@@ -65,13 +65,21 @@ export function createApp(): Express {
   // Upload routes carry base64 file payloads (~37% inflation on a 5 MB cap),
   // so they get a larger parser; everything else keeps the tight default.
   //
-  // A SIGNED LOCKER AGREEMENT is the outlier and gets its own, larger limit
-  // (owner 2026-09-03). It is a multi-page document scanned at a branch, which
-  // routinely lands at 8-15 MB — and /api/lockers otherwise sits on the 2 MB
-  // default, so a perfectly good scan was refused by the body parser before the
-  // upload validator ever saw it. Mounted BEFORE the others because the first
-  // json() to match wins; a later, larger limit on the same path never runs.
-  app.use('/api/lockers/applications', express.json({ limit: '28mb' }));
+  // Scanned SIGNED documents — a locker agreement or an investment application
+  // form — are the outliers: multi-page, scanned at a branch, routinely 8-15 MB,
+  // where the 2 MB default refused them before validateUpload ever ran.
+  //
+  // Scoped to the two upload paths, NOT to /api/applications or
+  // /api/lockers/applications as a whole: those prefixes carry every other route
+  // on both resources, and a limit set deliberately tight elsewhere should not
+  // be loosened as a side effect of one document getting bigger.
+  //
+  // Mounted BEFORE the others because the first json() to match wins — a later,
+  // larger limit on the same path never runs.
+  app.use([
+    '/api/lockers/applications/:id/agreement/signed-upload',
+    '/api/applications/:id/signed-upload',
+  ], express.json({ limit: '28mb' }));
   app.use(['/api/applications', '/api/customers', '/api/integration', '/api/portal', '/api/escrow'], express.json({ limit: '8mb' }));
   app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());

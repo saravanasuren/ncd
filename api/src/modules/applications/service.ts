@@ -819,6 +819,81 @@ registerOnFinalApprove('credit_date_change', async (tx, req) => {
 // Its honest replacement is digio.checkOneApplication(), which asks Digio instead
 // of asking a human, and can only ever confirm what actually happened.
 
+// A signature made ON PAPER is recorded by uploadSignedApplication() below
+// (owner 2026-09-03). It sits on the RIGHT side of the same line: it demands an
+// actual signed document, the date written on it and who uploaded it, where the
+// deleted button demanded nothing at all.
+
+/**
+ * The signed application form, scanned back in (owner 2026-09-03).
+ *
+ * The investment form is ALREADY pre-filled and already carries signature boxes
+ * — it is the document Digio signs — so the physical path prints that same form
+ * from /api/reports/application-form/:id.pdf. All that was missing was anywhere
+ * to put the signed copy.
+ *
+ * Unlike the locker agreement this does NOT go to a checker: marking an
+ * investment signed has never been an approval step here, eSign is off the
+ * critical path, and adding a gate to a daily flow nobody asked to slow down
+ * would be a change to an existing process rather than the missing capability.
+ * The uploader, the date on the paper and the document itself are all recorded,
+ * so it is evidenced and auditable — which is what was actually absent.
+ */
+export async function uploadSignedApplication(
+  db: Db, actor: AuthUser, appId: number,
+  input: { data_base64: string; filename?: string | null; signed_on: string },
+) {
+  const signedOn = String(input.signed_on ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(signedOn)) throw errors.badRequest('Enter the date the customer signed, as it appears on the form.');
+  if (signedOn > new Date().toISOString().slice(0, 10)) throw errors.badRequest('The signing date cannot be in the future.');
+
+  const app = (await db.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [appId])).rows[0];
+  if (!app) throw errors.notFound('Application not found');
+  if (isTerminal('application', app.status)) throw errors.conflict('Application is closed');
+
+  const { validateUpload, MAX_SIGNED_DOC_BYTES } = await import('../../lib/uploads.js');
+  const { saveBuffer, removeStored } = await import('../../lib/storage.js');
+  const { buffer, mime } = validateUpload(input.data_base64, MAX_SIGNED_DOC_BYTES);
+  const filename = String(input.filename ?? '').trim() || `signed-application-${appId}.pdf`;
+  const pages = mime === 'application/pdf'
+    ? ((buffer.toString('latin1').match(/\/Type\s*\/Page[^s]/g) ?? []).length || null)
+    : null;
+  const stored = saveBuffer('signed-applications', filename, buffer);
+
+  try {
+    return await db.withTx(async (tx) => {
+      await tx.query(
+        `UPDATE applications
+            SET signing_method = 'physical', esigned_at = COALESCE(esigned_at, now()),
+                signed_on = $2::date, signed_doc_path = $3, signed_doc_filename = $4,
+                signed_doc_mime = $5, signed_doc_pages = $6,
+                signed_doc_uploaded_by_user_id = $7, updated_at = now()
+          WHERE id = $1`,
+        [appId, signedOn, stored.path, filename, mime, pages, actor.id]);
+      await writeAudit(tx, {
+        actorId: actor.id, action: 'application.signed.upload', entityType: 'applications', entityId: appId,
+        after: { method: 'physical', signed_on: signedOn, pages, bytes: buffer.length },
+      });
+      return { ok: true, signing_method: 'physical', signed_on: signedOn, pages };
+    });
+  } catch (e) {
+    // The row never landed, so the file must not survive it.
+    removeStored(stored.path);
+    throw e;
+  }
+}
+
+/** The stored scan. For a physically signed investment THIS is the signed form. */
+export async function getSignedApplication(db: Db, appId: number) {
+  const r = (await db.query<Record<string, unknown>>(
+    'SELECT signed_doc_path, signed_doc_mime, signed_doc_filename FROM applications WHERE id = $1', [appId])).rows[0];
+  if (!r?.signed_doc_path) return null;
+  const { readStored } = await import('../../lib/storage.js');
+  const buffer = readStored(String(r.signed_doc_path));
+  if (!buffer) return null;
+  return { buffer, mime: (r.signed_doc_mime as string) ?? null, filename: (r.signed_doc_filename as string) ?? null };
+}
+
 export async function listApplications(db: Db, actor: AuthUser, filters: { status?: string; series_id?: number; showArchived?: boolean } = {}) {
   const conds: string[] = [];
   const params: unknown[] = [];

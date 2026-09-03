@@ -13,12 +13,21 @@
  *   node dist/scripts/backfill-locker-signings.js            # dry run
  *   node dist/scripts/backfill-locker-signings.js --commit
  */
+import { loadSecretsFromSsm } from '../secrets.js';
 import { createDb } from '../db/index.js';
 import * as lh from '../integrations/lockerhub/client.js';
 
 const COMMIT = process.argv.includes('--commit');
 
 async function main() {
+  // FIRST, before anything reads config. Both createDb() and
+  // lockerHubConfigured() resolve at call time from the config object that
+  // loadSecretsFromSsm() populates — without this the script reports
+  // "LOCKERHUB_API_URL is not set" on a box where it plainly is, and createDb()
+  // would silently hand back an empty PGlite. Every other CLI here does this;
+  // this one shipped without it and could not run at all.
+  await loadSecretsFromSsm();
+
   if (!lh.lockerHubConfigured()) {
     console.error('LOCKERHUB_API_URL is not set — nothing to read from.');
     process.exitCode = 1;

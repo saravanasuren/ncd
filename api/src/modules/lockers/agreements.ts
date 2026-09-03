@@ -249,3 +249,110 @@ export async function syncFromEsignStatus(
       WHERE id = $2`, [ref ?? null, cur.id]);
   return getSigning(db, applicationId);
 }
+
+/**
+ * The pre-filled agreement, ready to print (owner 2026-09-03: "it should not be
+ * a blank application form, everything should be pre filled").
+ *
+ * Assembles what NCD knows about the customer with what LockerHub knows about
+ * the locker, so the customer is handed a finished document and writes one
+ * thing on it: their signature.
+ *
+ * Generating it also moves the signing to AwaitingSignature and stamps when —
+ * "printed on the 3rd, still not back on the 20th" is a question the branch
+ * needs to be able to ask.
+ */
+export async function generateAgreementForm(
+  db: Db, actor: AuthUser, applicationId: string,
+): Promise<{ buffer: Buffer; filename: string }> {
+  const signing = await getSigning(db, applicationId);
+  if (!signing) throw errors.badRequest('Choose how this agreement will be signed first.');
+  if (signing.method !== 'physical') {
+    throw errors.badRequest('This agreement is set to e-Sign. Switch it to a physical signature to print a copy for signing.');
+  }
+  if (signing.status === 'Signed') throw errors.conflict('This agreement is already signed.');
+
+  const [{ lockerAgreementPdf }, lh] = await Promise.all([
+    import('../reports/forms/locker-agreement.js'),
+    import('../../integrations/lockerhub/client.js'),
+  ]);
+
+  // LockerHub owns the locker: number, size, branch, lease and the amounts.
+  // Best-effort — an outage prints the form with those lines ruled for the
+  // branch to complete by hand rather than refusing to print at all.
+  let app: Record<string, unknown> | null = null;
+  if (lh.lockerHubConfigured()) {
+    app = await lh.getLockerApplication(applicationId).catch(() => null) as Record<string, unknown> | null;
+    if (app && !app.branch_name && app.branch_id) {
+      const bl = await lh.branches().catch(() => null);
+      const b = bl?.branches.find((x) => String(x.id) === String(app!.branch_id));
+      if (b) app.branch_name = b.name;
+    }
+  }
+  const allot = (app?.allotment ?? {}) as Record<string, unknown>;
+  const legs = (app?.legs ?? {}) as Record<string, { amount?: number }>;
+
+  // The customer: the id on the signing row, else matched on the phone
+  // LockerHub holds, which is the key their side is organised around.
+  const CUSTOMER_COLS = `id, full_name, customer_code, pan, phone, email, dob, father_name, occupation,
+                         address, city, district, state, pincode`;
+  let customer: Record<string, unknown> | null = null;
+  const cid = (await db.query<{ customer_id: string | null }>(
+    'SELECT customer_id FROM locker_agreement_signings WHERE id = $1', [signing.id])).rows[0]?.customer_id;
+  if (cid) {
+    customer = (await db.query<Record<string, unknown>>(
+      `SELECT ${CUSTOMER_COLS} FROM customers WHERE id = $1`, [Number(cid)])).rows[0] ?? null;
+  }
+  if (!customer && app?.phone) {
+    const digits = String(app.phone).replace(/\D/g, '').slice(-10);
+    if (digits.length === 10) {
+      customer = (await db.query<Record<string, unknown>>(
+        `SELECT ${CUSTOMER_COLS} FROM customers
+          WHERE right(regexp_replace(phone, '\\D', '', 'g'), 10) = $1 LIMIT 1`, [digits])).rows[0] ?? null;
+    }
+  }
+  if (!customer) {
+    // Printing an agreement with no hirer on it would produce a document whose
+    // most important field is blank — refuse, and say what to do about it.
+    throw errors.badRequest('No NCD customer is linked to this locker application, so the agreement cannot be filled in. Link the customer first.');
+  }
+
+  // The largest share is the one that belongs on the agreement when a customer
+  // has more than one nominee.
+  const nom = (await db.query<Record<string, unknown>>(
+    `SELECT full_name, relationship, phone FROM nominees
+      WHERE customer_id = $1 ORDER BY share_pct DESC NULLS LAST, id LIMIT 1`,
+    [Number(customer.id)])).rows[0] ?? null;
+
+  const buffer = await lockerAgreementPdf(db, {
+    customer: customer as never,
+    locker: {
+      lockerhub_application_id: applicationId,
+      locker_number: (allot.locker_number as string) ?? null,
+      size: (app?.locker_size as string) ?? null,
+      branch: (app?.branch_name as string) ?? null,
+      lease_start: (app?.lease_start as string) ?? null,
+      lease_end: (app?.lease_expires_on as string) ?? (app?.lease_end as string) ?? null,
+      rent_amount: legs.rent?.amount ?? null,
+      deposit_amount: legs.deposit?.amount ?? null,
+    },
+    nominee: nom ? {
+      name: nom.full_name as string,
+      relationship: (nom.relationship as string) ?? null,
+      phone: (nom.phone as string) ?? null,
+    } : null,
+  });
+
+  await db.query(
+    `UPDATE locker_agreement_signings
+        SET status = CASE WHEN status = 'Draft' THEN 'AwaitingSignature' ELSE status END,
+            form_generated_at = now(), updated_at = now()
+      WHERE id = $1`, [signing.id]);
+  await writeAudit(db, {
+    actorId: actor.id, action: 'locker.agreement.form',
+    entityType: 'locker_agreement_signings', entityId: signing.id,
+    after: { application: applicationId, locker: allot.locker_number ?? null },
+  });
+
+  return { buffer, filename: `locker-agreement-${applicationId}.pdf` };
+}

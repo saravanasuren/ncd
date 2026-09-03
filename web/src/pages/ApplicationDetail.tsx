@@ -193,6 +193,34 @@ export function ApplicationDetailPage() {
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
   const run = (p: Promise<unknown>) => p.then(() => { setMsg(''); invalidate(); }).catch((e) => setMsg(e instanceof ApiError ? e.message : 'Failed'));
 
+  /**
+   * The signed application form, scanned back in (owner 2026-09-03: "currently
+   * i only see esigning no manual signature upload provisions").
+   *
+   * The form is already pre-filled and already carries signature boxes — it is
+   * the document Digio signs — so staff print that same form, get it signed and
+   * upload the result. Asks for the date ON THE PAPER, because the scan often
+   * comes back days after the customer signed.
+   */
+  const uploadSignedApp = async (file: File) => {
+    const signedOn = await promptText({
+      title: 'When did the customer sign?',
+      body: 'The date written on the form, not today.',
+      label: 'Date signed', inputType: 'date', confirmLabel: 'Upload signed form',
+    });
+    if (!signedOn) return;
+    const data_base64 = await new Promise<string>((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onerror = () => reject(new Error('unreadable'));
+      fr.onload = () => resolve(String(fr.result).split(',')[1] ?? '');
+      fr.readAsDataURL(file);
+    }).catch(() => null);
+    if (!data_base64) { setMsg('Could not read that file.'); return; }
+    await run(api.post(`/api/applications/${id}/signed-upload`, {
+      data_base64, filename: file.name, signed_on: signedOn,
+    }).then(() => setNote('Signed application form uploaded.')));
+  };
+
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Application not found or out of scope.</div>;
   const a = data.application;
@@ -216,18 +244,31 @@ export function ApplicationDetailPage() {
         {a.status === 'PendingApproval' && (
           <span className="text-xs text-text-muted">Awaiting investment approval — approve in Approvals to take it live.</span>
         )}
-        {/* eSign. There is deliberately NO "mark this signed" control: a signature
-            is recorded only when Digio says the customer signed, never because a
-            member of staff said so (owner 2026-08-29). "Send for eSign" only
-            appears when nothing is out; while one is, the state below says where
-            it stands, which is what staff previously could not see at all. */}
+        {/* eSign, or the same form signed by hand. There is deliberately NO
+            "mark this signed" control: a signature is recorded only when Digio
+            says the customer signed, or when an actual signed document is
+            uploaded — never because a member of staff said so (owner
+            2026-08-29). "Send for eSign" only appears when nothing is out;
+            while one is, the state below says where it stands. */}
         {can('applications:mark-esigned') && data.esign?.state === 'not_sent' && ['PendingActivation', 'PendingEsign', 'Active'].includes(a.status) && (
-          <button onClick={() => {
-            run(api.post<{ sign_url: string | null; stub: boolean }>(`/api/applications/${id}/esign/initiate`).then((r) => {
-              if (r.sign_url && !r.stub) window.open(r.sign_url, '_blank', 'noopener');
-              else setNote(r.stub ? 'eSign is in sandbox mode (no Digio credentials) — nothing was sent.' : 'Signing session created.');
-            }));
-          }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Send for eSign</button>
+          <>
+            <button onClick={() => {
+              run(api.post<{ sign_url: string | null; stub: boolean }>(`/api/applications/${id}/esign/initiate`).then((r) => {
+                if (r.sign_url && !r.stub) window.open(r.sign_url, '_blank', 'noopener');
+                else setNote(r.stub ? 'eSign is in sandbox mode (no Digio credentials) — nothing was sent.' : 'Signing session created.');
+              }));
+            }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Send for eSign</button>
+            {/* The form is already pre-filled and already carries signature
+                boxes — it is the document Digio signs. Signing on paper prints
+                that same form. */}
+            <a href={`/api/reports/application-form/${id}.pdf`} target="_blank" rel="noreferrer"
+               className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">↓ Print form to sign</a>
+            <label className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover cursor-pointer">
+              Upload signed form
+              <input type="file" className="hidden" accept="application/pdf,image/jpeg,image/png"
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void uploadSignedApp(f); }} />
+            </label>
+          </>
         )}
         {data.esign?.state === 'awaiting' && (
           <span className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-2 py-1"
@@ -252,9 +293,20 @@ export function ApplicationDetailPage() {
             )}
           </>
         )}
-        {a.esigned_at && <span className="text-xs text-success">eSigned ✓</span>}
+        {/* Never a bare "eSigned". Before this the label said eSigned for every
+            signed form, including ones signed on paper — a claim we could not
+            evidence. A legacy row with no method recorded says exactly that. */}
+        {a.esigned_at && (
+          <span className="text-xs text-success">
+            {a.signing_method === 'physical' ? 'Physically signed' : a.signing_method === 'esign' ? 'eSigned' : 'Signed · method not recorded'} ✓
+            {a.signed_on ? ` · ${String(a.signed_on).slice(0, 10)}` : ''}
+          </span>
+        )}
         {a.esigned_pdf_path && (
-          <a href={`/api/reports/esigned/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Signed application</a>
+          <a href={`/api/reports/esigned/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">eSigned application</a>
+        )}
+        {a.signed_doc_filename && (
+          <a href={`/api/applications/${id}/signed-application.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Signed application form</a>
         )}
         {can('applications:update') && (
           <label className="text-xs flex items-center gap-1.5 border border-border rounded px-3 py-1.5" title="Money came from a locker (LockerHub-originated deposits flag themselves automatically)">

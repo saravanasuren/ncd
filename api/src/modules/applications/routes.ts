@@ -4,9 +4,9 @@ import { z } from 'zod';
 import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
+import { serveHeaders } from '../../lib/uploads.js';
 import * as s from './service.js';
 import * as purge from '../admin/purge.js';
-import { serveHeaders } from '../../lib/uploads.js';
 
 export const applicationsRouter = Router();
 
@@ -145,6 +145,32 @@ applicationsRouter.patch('/:id/bond-distributed', requirePermission('application
 // POST /:id/mark-esigned was removed 2026-08-29 — see the note where
 // markESigned() used to live in service.ts. Use /:id/esign/check, which asks
 // Digio rather than accepting a person's word for it.
+
+// The signed application form, scanned back in. The form itself is already
+// pre-filled and already carries signature boxes (it is what Digio signs), so
+// staff print /api/reports/application-form/:id.pdf, get it signed, and upload
+// the result here.
+applicationsRouter.post('/:id/signed-upload', requirePermission('applications:mark-esigned'),
+  asyncHandler(async (req, res) => {
+    const b = z.object({
+      data_base64: z.string().min(1),
+      filename: z.string().max(200).nullish(),
+      signed_on: z.string(),
+    }).parse(req.body);
+    res.status(201).json(await s.uploadSignedApplication(getDb(), req.user!, Number(req.params.id), {
+      data_base64: b.data_base64, filename: b.filename ?? null, signed_on: b.signed_on,
+    }));
+  }));
+
+applicationsRouter.get('/:id/signed-application.pdf', requirePermission('customers:read'),
+  asyncHandler(async (req, res) => {
+    const d = await s.getSignedApplication(getDb(), Number(req.params.id));
+    if (!d) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No signed application on file' } }); return; }
+    const h = serveHeaders(d.mime, d.filename, 'signed-application.pdf');
+    res.setHeader('Content-Type', h.type);
+    res.setHeader('Content-Disposition', h.disposition);
+    res.end(d.buffer);
+  }));
 
 // Correct the investment (money-received) date — Super Admin only, enforced in
 // the service; refused once interest is paid/batched. Rebuilds the schedule.

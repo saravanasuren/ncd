@@ -939,10 +939,22 @@ export function LockerEnrollmentPage() {
                   // uploading the scan land in the next two PRs; until then the
                   // choice is recorded and visible rather than silently lost.
                   if (physical) return (
-                    <div className="mt-1 flex items-center gap-2 flex-wrap">
-                      <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">{signing.label}</span>
-                      <span className="text-xs text-text-muted">Printing the filled agreement and uploading the signed copy are coming next.</span>
-                      <button className={btnGhost} disabled={busy} onClick={() => chooseMethod('esign')}>Switch to e-Sign</button>
+                    <div className="mt-1 flex flex-col gap-1.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">{signing.label}</span>
+                        {/* Opens in the browser's PDF viewer so staff can print
+                            straight from it. Everything we hold is already on
+                            it — the customer signs, they do not fill it in. */}
+                        <a className={btn} href={`/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement/form.pdf`}
+                           target="_blank" rel="noopener noreferrer" onClick={() => { window.setTimeout(loadSigning, 1500); }}>
+                          Print filled agreement
+                        </a>
+                        <button className={btnGhost} disabled={busy} onClick={() => chooseMethod('esign')}>Switch to e-Sign</button>
+                      </div>
+                      <span className="text-xs text-text-muted">
+                        Print it, have the customer sign, then scan and upload the signed copy here.
+                        {signing.has_form_pdf || signing.status === 'AwaitingSignature' ? ' Uploading the scan arrives in the next change.' : ''}
+                      </span>
                     </div>
                   );
 

@@ -30,7 +30,7 @@ import './cheques.js';
 // Locker agreement signing record (owner 2026-09-03) — e-Sign or a physical
 // signature. Static like the rest: the maker-checker hooks for a scanned
 // agreement register here at boot once PR 3 adds them.
-import { getSigning, listSignings, chooseMethod, recordEsignSent, syncFromEsignStatus } from './agreements.js';
+import { getSigning, listSignings, chooseMethod, recordEsignSent, syncFromEsignStatus, generateAgreementForm } from './agreements.js';
 // Registers the locker_offline_payment approval handlers at boot (owner 2026-08-22).
 import './offlinePayments.js';
 import { linkTenant, removeTenant, restoreTenant, removeLockerApplication } from './tenantOverrides.js';
@@ -565,6 +565,17 @@ lockersRouter.post('/applications/:id/agreement/method', asyncHandler(async (req
     method: b.method,
     customer_id: b.customer_id ?? null,
   }));
+}));
+
+// The agreement to print — PRE-FILLED with everything we hold, so the customer
+// signs a finished document rather than completing a form (owner 2026-09-03).
+// Inline so it opens in the browser's viewer and staff can hit print, rather
+// than landing in Downloads for them to go and find.
+lockersRouter.get('/applications/:id/agreement/form.pdf', asyncHandler(async (req, res) => {
+  const { buffer, filename } = await generateAgreementForm(getDb(), req.user!, String(req.params.id));
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+  res.end(buffer);
 }));
 
 // ── Authorised users (owner 2026-08-22) ──────────────────────────────────

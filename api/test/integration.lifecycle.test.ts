@@ -49,8 +49,11 @@ describe('build an Active investment', () => {
 
   it('eSign is non-gating: the app stays PendingApproval', async () => {
     const a = await admin();
-    const es = await a.post(`/api/applications/${appId}/mark-esigned`);
-    expect(es.status).toBe(200);
+    // Signed the only way it can now be signed — by Digio completing it. (The
+    // manual "mark signed" route was removed 2026-08-29; a signature is never
+    // recorded on a person's say-so.) What this test asserts is unchanged: a
+    // signature must not move the investment's status.
+    await ctx.db.query('UPDATE applications SET esigned_at = now() WHERE id = $1', [appId]);
     const after = await a.get(`/api/applications/${appId}`);
     expect(after.json.application.status).toBe('PendingApproval');
     expect(after.json.application.esigned_at).toBeTruthy();

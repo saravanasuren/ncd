@@ -77,11 +77,21 @@ applicationsRouter.post('/:id/attribute-referrer', requirePermission('incentives
   }));
 
 // Start a Digio eSign session for this application (returns the sign URL).
-// Stub/sandbox until DIGIO_* creds are in SSM; eSign is off the critical path.
 applicationsRouter.post('/:id/esign/initiate', requirePermission('applications:mark-esigned'),
   asyncHandler(async (req, res) => {
     const { initiateSigning } = await import('../../integrations/digio/service.js');
     res.status(201).json(await initiateSigning(getDb(), req.user!, Number(req.params.id)));
+  }));
+
+// Ask DIGIO whether this application's outstanding signature is done. Replaces
+// the old "Mark eSigned", which recorded a signature on a person's say-so. This
+// route cannot mark an unsigned document signed — it only reports, and records,
+// what Digio returns. Meant for a request the 15s poller has stopped chasing;
+// inside that window the cron has already asked seconds ago.
+applicationsRouter.post('/:id/esign/check', requirePermission('applications:mark-esigned'),
+  asyncHandler(async (req, res) => {
+    const { checkOneApplication } = await import('../../integrations/digio/service.js');
+    res.json(await checkOneApplication(getDb(), Number(req.params.id)));
   }));
 
 applicationsRouter.post('/:id/receipt', requirePermission('applications:create', 'applications:update'),
@@ -132,8 +142,9 @@ applicationsRouter.patch('/:id/bond-distributed', requirePermission('application
       getDb(), req.user!, Number(req.params.id), b.given_on, b.note ?? null, b.reason));
   }));
 
-applicationsRouter.post('/:id/mark-esigned', requirePermission('applications:mark-esigned'),
-  asyncHandler(async (req, res) => { await s.markESigned(getDb(), req.user!, Number(req.params.id)); res.json({ ok: true }); }));
+// POST /:id/mark-esigned was removed 2026-08-29 — see the note where
+// markESigned() used to live in service.ts. Use /:id/esign/check, which asks
+// Digio rather than accepting a person's word for it.
 
 // Correct the investment (money-received) date — Super Admin only, enforced in
 // the service; refused once interest is paid/batched. Rebuilds the schedule.

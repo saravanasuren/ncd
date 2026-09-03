@@ -69,12 +69,19 @@ export async function lockerProfile(db: Db, lockerApplicationId: string) {
     try { esign = await lh.esignStatus(appId) as Record<string, unknown>; } catch { /* not signed yet / unreachable */ }
   }
 
+  // How the agreement was signed — e-Sign or a physical signature (owner
+  // 2026-09-03). Reconciled against LockerHub's answer on the way past, so an
+  // e-Sign they report as done stamps our row; a physical one is left alone.
+  const { syncFromEsignStatus } = await import('./agreements.js');
+  const signing = await syncFromEsignStatus(db, appId, esign).catch(() => null);
+
   return {
     locker_application_id: appId,
     customer: customer && { id: Number(customer.id), full_name: customer.full_name, customer_code: customer.customer_code, phone: customer.phone },
     lockerhub,          // raw LockerHub record: legs, payments[], allotment, lease, rent, deposit
     lockerhub_error,    // set only on a fetch failure, so "no data" ≠ "outage"
     esign,              // A19 status (null until signing starts / on outage)
+    signing,            // OUR record: which way it was signed, and where it got to
     pledges: pledges.map((p) => ({
       id: Number(p.id), application_id: Number(p.application_id), application_no: p.application_no,
       locker_no: p.locker_no, locker_size: p.locker_size, linked_amount: Number(p.linked_amount),

@@ -329,7 +329,26 @@ export function LockerEnrollmentPage() {
     });
     if (!ok) return;
     const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/esign/initiate`, {}));
-    if (r) { setEsign(r); await loadEsign(); }
+    if (r) { setEsign(r); await loadEsign(); await loadSigning(); }
+  };
+
+  /**
+   * How the agreement gets signed (owner 2026-09-03). Two paths that differ ONLY
+   * in how the signature is captured — Digio, or a printed pre-filled agreement
+   * the customer signs by hand. Printing and uploading arrive in the next two
+   * PRs; this records the choice and shows which way a locker went.
+   */
+  const [signing, setSigning] = useState<any>(null);
+  const loadSigning = async () => {
+    if (!app?.application_id) return;
+    const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement`));
+    if (r) setSigning(r.signing ?? null);
+  };
+  const chooseMethod = async (method: 'esign' | 'physical') => {
+    if (!app?.application_id) return;
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement/method`,
+      { method, ...(ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}) }));
+    if (r) { setSigning(r); setErr(''); }
   };
   /** Waivers on this application (pending + approved). */
   const [feeWaivers, setFeeWaivers] = useState<any[]>([]);
@@ -438,7 +457,7 @@ export function LockerEnrollmentPage() {
   // Waivers belong to an application, so they follow it rather than the mount.
   useEffect(() => { void loadFeeWaivers(); void loadOfflinePayments(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id]);
   // There is no agreement until there is a locker — §A19 is post-allotment.
-  useEffect(() => { void loadEsign(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id, app?.allotment?.locker_number]);
+  useEffect(() => { void loadEsign(); void loadSigning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id, app?.allotment?.locker_number]);
   const chequeFor = (leg: string) => cheques.find((c) => c.leg === leg && c.status === 'Pending')
     ?? cheques.find((c) => c.leg === leg && c.status === 'Cleared');
   // Lockers and NCD are ONLINE-ONLY (contract v1.2 §A10): cash/cheque/transfer
@@ -898,14 +917,35 @@ export function LockerEnrollmentPage() {
                   // and 404s for staff (LockerHub, 2026-07-31).
                   const esignId = esign?.esign_id || esign?.id;
                   const doc = esignId ? `/api/lockers/agreements/${encodeURIComponent(String(esignId))}/pdf` : null;
-                  if (st === 'signed' || st === 'completed') return (
+                  const physical = signing?.method === 'physical';
+
+                  // Signed, either way. The method is always named — a bare
+                  // "signed" that hides which way it happened is the thing this
+                  // whole change exists to stop (owner 2026-09-03).
+                  if (signing?.is_signed || st === 'signed' || st === 'completed') return (
                     <div className="mt-1 flex items-center gap-2 flex-wrap">
-                      <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">✓ signed</span>
-                      {doc
-                        ? <a className={btnGhost} href={doc} target="_blank" rel="noopener noreferrer">↓ Signed agreement</a>
-                        : <span className="text-xs text-text-muted">Signed, but LockerHub did not return an agreement id — ask them for the copy.</span>}
+                      <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">
+                        ✓ {signing?.label ?? 'e-Signed'}{signing?.signed_on ? ` · ${signing.signed_on}` : ''}
+                      </span>
+                      {physical
+                        ? <span className="text-xs text-text-muted">Signed on paper — the scan is the agreement on file.</span>
+                        : doc
+                          ? <a className={btnGhost} href={doc} target="_blank" rel="noopener noreferrer">↓ Signed agreement</a>
+                          : <span className="text-xs text-text-muted">Signed, but LockerHub did not return an agreement id — ask them for the copy.</span>}
                     </div>
                   );
+
+                  // Physical path chosen. Printing the pre-filled agreement and
+                  // uploading the scan land in the next two PRs; until then the
+                  // choice is recorded and visible rather than silently lost.
+                  if (physical) return (
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
+                      <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">{signing.label}</span>
+                      <span className="text-xs text-text-muted">Printing the filled agreement and uploading the signed copy are coming next.</span>
+                      <button className={btnGhost} disabled={busy} onClick={() => chooseMethod('esign')}>Switch to e-Sign</button>
+                    </div>
+                  );
+
                   if (esign?.found) return (
                     <div className="mt-1 flex items-center gap-2 flex-wrap">
                       <span className="text-xs rounded px-1.5 py-0.5 bg-bg text-text-muted">awaiting signature{st ? ` · ${st}` : ''}</span>
@@ -913,10 +953,15 @@ export function LockerEnrollmentPage() {
                       <button className={btnGhost} disabled={busy} onClick={loadEsign}>Check again</button>
                     </div>
                   );
+
+                  // Nothing started. The two paths are offered side by side, and
+                  // the choice is made BEFORE either action rather than inferred
+                  // from which button gets pressed.
                   return (
                     <div className="mt-1 flex items-center gap-2 flex-wrap">
                       <button className={btn} disabled={busy} onClick={startEsign}>Send agreement for signing</button>
-                      <span className="text-xs text-text-muted">Digio emails and texts the customer a signing link.</span>
+                      <button className={btnGhost} disabled={busy} onClick={() => chooseMethod('physical')}>Sign on paper instead</button>
+                      <span className="text-xs text-text-muted">e-Sign texts the customer a link. On paper, you print the filled agreement and scan it back.</span>
                     </div>
                   );
                 })()}

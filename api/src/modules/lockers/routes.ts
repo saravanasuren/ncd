@@ -27,6 +27,10 @@ import './feeWaivers.js';
 // hooks at boot, so approving a cheque clearance works on a fresh restart even
 // before any cheque route is hit.
 import './cheques.js';
+// Locker agreement signing record (owner 2026-09-03) — e-Sign or a physical
+// signature. Static like the rest: the maker-checker hooks for a scanned
+// agreement register here at boot once PR 3 adds them.
+import { getSigning, listSignings, chooseMethod, recordEsignSent, syncFromEsignStatus } from './agreements.js';
 // Registers the locker_offline_payment approval handlers at boot (owner 2026-08-22).
 import './offlinePayments.js';
 import { linkTenant, removeTenant, restoreTenant, removeLockerApplication } from './tenantOverrides.js';
@@ -517,11 +521,51 @@ lockersRouter.get('/agreements/:esignId/pdf', asyncHandler(async (req, res) => {
 // Read is open to anyone who can enrol — staff need to see whether the
 // customer has signed. Starting one messages the customer (Digio emails and
 // SMSes them), so it is a deliberate click, never a page load.
-lockersRouter.get('/applications/:id/esign', asyncHandler(async (req, res) =>
-  res.json(await lh.esignStatus(String(req.params.id)))));
+lockersRouter.get('/applications/:id/esign', asyncHandler(async (req, res) => {
+  const status = await lh.esignStatus(String(req.params.id));
+  // Reconcile our record against theirs on the way past. They own the e-Sign,
+  // so a signature they report stamps our row; a PHYSICAL row is left alone
+  // (their status still reads esign_pending for one, and letting that through
+  // would undo a checker's decision). Never allowed to break the read.
+  await syncFromEsignStatus(getDb(), String(req.params.id), status as Record<string, unknown>).catch(() => null);
+  res.json(status);
+}));
 
-lockersRouter.post('/applications/:id/esign/initiate', asyncHandler(async (req, res) =>
-  res.json(await lh.esignInitiate(staffOf(req), String(req.params.id)))));
+lockersRouter.post('/applications/:id/esign/initiate', asyncHandler(async (req, res) => {
+  const out = await lh.esignInitiate(staffOf(req), String(req.params.id));
+  // Bookkeeping AFTER LockerHub accepts, so a failed initiate leaves no row
+  // claiming otherwise. recordEsignSent never throws — the e-Sign flow that has
+  // worked since July must not start failing because a record could not be
+  // written (owner 2026-09-03).
+  await recordEsignSent(getDb(), req.user!, String(req.params.id),
+    (out?.esign_id ?? out?.id) as string | undefined);
+  res.json(out);
+}));
+
+// ── How the agreement gets signed (owner 2026-09-03) ─────────────────────
+// Two paths, differing ONLY in how the signature is captured: the e-Sign above,
+// or a printed pre-filled agreement signed by hand and scanned back in. The
+// record covers both, so every locker can say which way it went.
+lockersRouter.get('/applications/:id/agreement', asyncHandler(async (req, res) => {
+  const appId = String(req.params.id);
+  const [signing, history] = await Promise.all([
+    getSigning(getDb(), appId),
+    listSignings(getDb(), appId),
+  ]);
+  res.json({ signing, history });
+}));
+
+lockersRouter.post('/applications/:id/agreement/method', asyncHandler(async (req, res) => {
+  const b = z.object({
+    method: z.enum(['esign', 'physical']),
+    customer_id: z.number().int().positive().nullish(),
+  }).parse(req.body);
+  res.json(await chooseMethod(getDb(), req.user!, {
+    lockerhub_application_id: String(req.params.id),
+    method: b.method,
+    customer_id: b.customer_id ?? null,
+  }));
+}));
 
 // ── Authorised users (owner 2026-08-22) ──────────────────────────────────
 // People the holder authorises to operate a locker. Not active until the holder

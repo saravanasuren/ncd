@@ -24,8 +24,11 @@ describe('customer investments — eSign state', () => {
     expect(row.esigned_at).toBeNull();
     expect(row.has_signed_copy).toBe(false);
 
-    // Signed → stamped, still no stored copy (stub mode stores none).
-    await a.post(`/api/applications/${app.json.id}/mark-esigned`);
+    // Signed → stamped, still no stored copy (stub mode stores none). Set the
+    // way Digio completes it — the manual "mark signed" route was removed
+    // 2026-08-29. What this test covers, the customer list reporting eSign state
+    // per investment, is unchanged.
+    await ctx.db.query('UPDATE applications SET esigned_at = now() WHERE id = $1', [Number(app.json.id)]);
     row = (await a.get(`/api/customers/${cust.json.id}`)).json.applications.find((x: any) => x.id === app.json.id);
     expect(row.esigned_at).not.toBeNull();
     expect(row.has_signed_copy).toBe(false);

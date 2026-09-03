@@ -805,17 +805,19 @@ registerOnFinalApprove('credit_date_change', async (tx, req) => {
   });
 });
 
-/** Record eSign completion. Non-gating: it stamps esigned_at and does not
- * change the lifecycle status (eSign no longer sits on the critical path). */
-export async function markESigned(db: Db, actor: AuthUser, appId: number) {
-  await db.withTx(async (tx) => {
-    const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [appId])).rows[0];
-    if (!app) throw errors.notFound('Application not found');
-    if (isTerminal('application', app.status)) throw errors.conflict('Application is closed');
-    await tx.query('UPDATE applications SET esigned_at = now(), updated_at = now() WHERE id = $1', [appId]);
-    await writeAudit(tx, { actorId: actor.id, action: 'application.esigned', entityType: 'applications', entityId: appId });
-  });
-}
+// markESigned() was removed on 2026-08-29. It stamped a signature date because a
+// person clicked a button — no document, no evidence, no approval — which is the
+// one thing an e-signature record must never be able to say.
+//
+// It was already obsolete: the owner's 2026-07-22 spec put a poller in place that
+// asks Digio every 15 seconds and completes the signature itself, "with no
+// webhook and no manual Mark eSigned". The poller shipped; the button did not get
+// deleted with it. In the whole life of the system it was pressed once, and all
+// 7 signed investments carry a real signed PDF — so nothing was ever recorded
+// falsely. Removing it closes the possibility rather than fixing damage.
+//
+// Its honest replacement is digio.checkOneApplication(), which asks Digio instead
+// of asking a human, and can only ever confirm what actually happened.
 
 export async function listApplications(db: Db, actor: AuthUser, filters: { status?: string; series_id?: number; showArchived?: boolean } = {}) {
   const conds: string[] = [];
@@ -916,12 +918,35 @@ export async function getApplicationDetail(db: Db, actor: AuthUser, appId: numbe
   const schedule = consolidateSchedule((await db.query(
     'SELECT id, line_id, due_date, due_type, gross_amount, tds_amount, net_amount, status, paid_at FROM disbursement_schedule WHERE application_id = $1 ORDER BY due_date, line_id',
     [appId])).rows as Record<string, unknown>[]);
-  // A signature is out with the customer — the UI polls while this is true so the
-  // page flips to eSigned on its own once the Digio poller completes it.
-  const pendingSessions = Number((await db.query<{ n: number }>(
-    "SELECT count(*)::int AS n FROM digio_signing_sessions WHERE application_id = $1 AND status = 'requested'", [appId]
-  )).rows[0]?.n ?? 0);
-  const esignPending = pendingSessions > 0 && !app.esigned_at;
+  // Where the signature actually stands. Staff could previously see only "signed"
+  // or "not signed", with no way to tell a signature sitting with the customer
+  // from one that was never sent — which is part of why a manual "Mark eSigned"
+  // button felt necessary at all (owner 2026-08-29).
+  //
+  //   signed   — Digio confirmed it and the signed document is on file
+  //   awaiting — sent, inside the poll window; the 15s poller is chasing it
+  //   stalled  — sent, past the window; the poller has stopped, so a human may
+  //              want to ask Digio once more
+  //   not_sent — nothing has been sent
+  //
+  // The window comes from the poller itself, so the UI cannot offer a re-check
+  // at a moment the cron is still handling.
+  const { POLL_WINDOW_DAYS } = await import('../../integrations/digio/service.js');
+  const session = (await db.query<{ created_at: string; days_old: number }>(
+    `SELECT created_at, EXTRACT(EPOCH FROM (now() - created_at)) / 86400 AS days_old
+       FROM digio_signing_sessions
+      WHERE application_id = $1 AND status = 'requested'
+      ORDER BY created_at DESC LIMIT 1`, [appId])).rows[0];
+  const esignPending = !!session && !app.esigned_at;
+  const esignStalled = esignPending && Number(session!.days_old) > POLL_WINDOW_DAYS;
+  const esignState: 'signed' | 'awaiting' | 'stalled' | 'not_sent' =
+    app.esigned_at ? 'signed' : esignStalled ? 'stalled' : esignPending ? 'awaiting' : 'not_sent';
+  const esign = {
+    state: esignState,
+    sent_at: session?.created_at ?? null,
+    days_waiting: session ? Math.floor(Number(session.days_old)) : null,
+    poll_window_days: POLL_WINDOW_DAYS,
+  };
   // Locker pledge breakdown: total / linked to lockers / free NCD / redeemable.
   // The investment is never split — links are claims against it.
   const { depositSummary } = await import('../lockers/deposits.js');
@@ -939,7 +964,9 @@ export async function getApplicationDetail(db: Db, actor: AuthUser, appId: numbe
        LEFT JOIN users u ON u.id = pa.created_by_user_id
       WHERE pa.application_id = $1
       ORDER BY pa.created_at`, [appId])).rows;
-  return { application: app, lines, schedule, esign_pending: esignPending, locker, adjustments };
+  // esign_pending kept as-is so the existing auto-refresh keeps working; `esign`
+  // carries the detail the screen now shows.
+  return { application: app, lines, schedule, esign_pending: esignPending, esign, locker, adjustments };
 }
 
 /**

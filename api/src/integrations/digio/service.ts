@@ -102,6 +102,15 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
   return { ok: result.ok, applicationId: result.applicationId };
 }
 
+/**
+ * How long the automatic poller keeps chasing a signature. Exported because the
+ * UI has to draw the same line: a request INSIDE this window is "awaiting the
+ * customer" and needs no help, one OUTSIDE it is stalled and is the only place a
+ * manual re-check earns its keep. Two copies of this number would silently
+ * disagree and offer the button at the wrong time.
+ */
+export const POLL_WINDOW_DAYS = 7;
+
 /** Poll outstanding sessions against Digio (real mode only). Cron-gated. */
 export async function pollOutstanding(db: Db): Promise<{ checked: number; signed: number }> {
   if (!digioConfigured()) return { checked: 0, signed: 0 };
@@ -112,7 +121,7 @@ export async function pollOutstanding(db: Db): Promise<{ checked: number; signed
   const { rows } = await db.query<{ digio_request_id: string }>(
     `SELECT digio_request_id FROM digio_signing_sessions
       WHERE status = 'requested' AND digio_request_id IS NOT NULL
-        AND created_at > now() - interval '7 days'
+        AND created_at > now() - interval '${POLL_WINDOW_DAYS} days'
       ORDER BY created_at DESC LIMIT 50`);
   let signed = 0;
   for (const r of rows) {
@@ -120,4 +129,33 @@ export async function pollOutstanding(db: Db): Promise<{ checked: number; signed
     if (isSignedStatus(status)) { await completeSigning(db, r.digio_request_id, {}); signed++; }
   }
   return { checked: rows.length, signed };
+}
+
+/**
+ * Ask Digio about ONE application's outstanding signature, ignoring the age
+ * cutoff above.
+ *
+ * This is the replacement for the old "Mark eSigned" button. That button
+ * recorded a signature because a person said so; this one records it because
+ * DIGIO says so, and it can only ever confirm what actually happened — there is
+ * no path here that marks an unsigned document signed.
+ *
+ * It exists only for the stalled case. Inside the poll window the 15-second
+ * cron has already asked, seconds ago, so a button would be theatre.
+ */
+export async function checkOneApplication(db: Db, applicationId: number): Promise<
+  { ok: false; reason: 'not-configured' | 'no-session' } | { ok: true; signed: boolean; status: string | null }
+> {
+  if (!digioConfigured()) return { ok: false, reason: 'not-configured' };
+  const row = (await db.query<{ digio_request_id: string }>(
+    `SELECT digio_request_id FROM digio_signing_sessions
+      WHERE application_id = $1 AND status = 'requested' AND digio_request_id IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1`, [applicationId])).rows[0];
+  if (!row) return { ok: false, reason: 'no-session' };
+  const status = await fetchStatus(row.digio_request_id).catch(() => null);
+  if (isSignedStatus(status)) {
+    await completeSigning(db, row.digio_request_id, {});
+    return { ok: true, signed: true, status };
+  }
+  return { ok: true, signed: false, status };
 }

@@ -216,21 +216,41 @@ export function ApplicationDetailPage() {
         {a.status === 'PendingApproval' && (
           <span className="text-xs text-text-muted">Awaiting investment approval — approve in Approvals to take it live.</span>
         )}
-        {can('applications:mark-esigned') && !a.esigned_at && ['PendingActivation', 'PendingEsign', 'Active'].includes(a.status) && (
-          <>
-            <button onClick={() => {
-              run(api.post<{ sign_url: string | null; stub: boolean }>(`/api/applications/${id}/esign/initiate`).then((r) => {
-                if (r.sign_url && !r.stub) window.open(r.sign_url, '_blank', 'noopener');
-                else setNote(r.stub ? 'eSign is in sandbox mode (no Digio creds) — use Mark eSigned to record completion.' : 'Signing session created.');
-              }));
-            }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Send for eSign</button>
-            <button onClick={() => run(api.post(`/api/applications/${id}/mark-esigned`))} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">Mark eSigned</button>
-          </>
+        {/* eSign. There is deliberately NO "mark this signed" control: a signature
+            is recorded only when Digio says the customer signed, never because a
+            member of staff said so (owner 2026-08-29). "Send for eSign" only
+            appears when nothing is out; while one is, the state below says where
+            it stands, which is what staff previously could not see at all. */}
+        {can('applications:mark-esigned') && data.esign?.state === 'not_sent' && ['PendingActivation', 'PendingEsign', 'Active'].includes(a.status) && (
+          <button onClick={() => {
+            run(api.post<{ sign_url: string | null; stub: boolean }>(`/api/applications/${id}/esign/initiate`).then((r) => {
+              if (r.sign_url && !r.stub) window.open(r.sign_url, '_blank', 'noopener');
+              else setNote(r.stub ? 'eSign is in sandbox mode (no Digio credentials) — nothing was sent.' : 'Signing session created.');
+            }));
+          }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Send for eSign</button>
         )}
-        {!a.esigned_at && data.esign_pending && (
-          <span className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-2 py-1" title="Digio is polled every 15s; this flips to eSigned automatically once the customer signs">
-            ⏳ Waiting for signature — checking every 15s
+        {data.esign?.state === 'awaiting' && (
+          <span className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-2 py-1"
+            title={`Sent ${data.esign.days_waiting === 0 ? 'today' : `${data.esign.days_waiting} day(s) ago`}. Digio is asked every 15 seconds; this becomes eSigned on its own once the customer signs.`}>
+            ⏳ Sent to customer — waiting for them to sign
           </span>
+        )}
+        {data.esign?.state === 'stalled' && (
+          <>
+            <span className="text-xs text-danger bg-[color:var(--danger-bg)] rounded px-2 py-1"
+              title={`Automatic checking stops after ${data.esign.poll_window_days} days, so this is no longer being chased.`}>
+              ⚠ Unsigned for {data.esign.days_waiting} days — no longer checked automatically
+            </span>
+            {can('applications:mark-esigned') && (
+              <button
+                title="Asks Digio once whether this has been signed. It can only confirm a real signature — it cannot mark an unsigned document as signed."
+                onClick={() => run(api.post<{ ok: boolean; signed?: boolean; reason?: string }>(`/api/applications/${id}/esign/check`).then((r) => {
+                  if (!r.ok) setNote(r.reason === 'no-session' ? 'Nothing is out for signature on this investment.' : 'eSign is not configured on this server.');
+                  else setNote(r.signed ? 'Digio confirms it is signed — recorded.' : 'Digio says it is still unsigned. The customer has not signed yet.');
+                }))}
+                className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Check with Digio</button>
+            )}
+          </>
         )}
         {a.esigned_at && <span className="text-xs text-success">eSigned ✓</span>}
         {a.esigned_pdf_path && (

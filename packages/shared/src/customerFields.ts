@@ -150,3 +150,62 @@ export const KYC_DOCUMENT_TYPES: { key: string; label: string }[] = [
   { key: 'nominee_kyc', label: 'Nominee KYC' },
   { key: 'other', label: 'Other' },
 ];
+
+/**
+ * Relationships offered for a nominee. Shared so the enrolment wizard and the
+ * customer profile offer the same list — they drifted apart when the profile
+ * had no relationship field at all, and nominees added there landed with a null
+ * relationship (two on 2026-09-03 alone).
+ *
+ * Free text already on record that is not in this list still displays; the
+ * pickers keep it as an extra option rather than silently blanking it.
+ */
+export const NOMINEE_RELATIONSHIPS: string[] = [
+  'Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister', 'Other',
+];
+
+/** One nominee, in the shape `PUT /api/customers/:id/nominees` accepts. */
+export interface NomineeInput {
+  full_name: string;
+  relationship?: string | null;
+  share_pct?: number;
+  dob?: string | null;
+  pan?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  guardian_name?: string | null;
+  guardian_pan?: string | null;
+  kyc_id_type?: string | null;
+  kyc_id_number?: string | null;
+}
+
+/**
+ * A stored nominee row, in the shape the endpoint wants it back.
+ *
+ * That endpoint REPLACES a customer's whole nominee set, so any field left out
+ * of this is deleted. The customer page used to send back nothing but name,
+ * relationship and share, which silently wiped the DOB, PAN, phone, address,
+ * guardian and KYC id — all captured by the enrolment wizard — off every
+ * nominee each time another was added. 171 nominees on the book carry a DOB and
+ * 67 a KYC id, so the loss was real rather than theoretical.
+ *
+ * Anything that resends a nominee it did not itself collect in full must go
+ * through here.
+ */
+export function nomineeToInput(n: Record<string, unknown>): NomineeInput {
+  const text = (v: unknown) => { const t = String(v ?? '').trim(); return t === '' ? null : t; };
+  const share = Number(n.share_pct);
+  return {
+    full_name: String(n.full_name ?? '').trim(),
+    relationship: text(n.relationship),
+    // Omitted, not zero: a missing share reads server-side as "split the rest",
+    // where a 0 would be an explicit "this nominee gets nothing".
+    ...(share > 0 ? { share_pct: share } : {}),
+    // DATE arrives as 'YYYY-MM-DD' already; the slice guards a caller that hands
+    // over a full timestamp.
+    dob: n.dob ? String(n.dob).slice(0, 10) : null,
+    pan: text(n.pan), phone: text(n.phone), address: text(n.address),
+    guardian_name: text(n.guardian_name), guardian_pan: text(n.guardian_pan),
+    kyc_id_type: text(n.kyc_id_type), kyc_id_number: text(n.kyc_id_number),
+  };
+}

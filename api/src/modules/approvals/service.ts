@@ -684,16 +684,6 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
   }
 
   /**
-   * A locker agreement signed on paper. The checker is being asked whether a
-   * SCAN is a genuine signed agreement, so the card has to carry the things
-   * that decide that — above all the document itself. Approving a document you
-   * cannot open is not an approval.
-   *
-   * The page count is here because uploading page 1 of a four-page agreement is
-   * the commonest scanning mistake there is, and it approves clean unless the
-   * count is in front of the person approving it.
-   */
-  /**
    * A locker allotment notice. Keyed on LockerHub's string application id, so
    * everything comes from metadata rather than an entity row.
    *
@@ -726,6 +716,44 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
     };
   }
 
+  /**
+   * Nominee change. The generic customers branch below shows the customer and a
+   * `changes` blob that a nominee request does not carry, so a checker deciding
+   * WHO RECEIVES THE MONEY was shown nothing about the nominees at all. Lead
+   * with the proposed set, and put the current one beside it so the checker can
+   * see what actually moves.
+   */
+  if (req.request_type === 'customer_nominees' && id) {
+    const r = (await db.query<Record<string, unknown>>(
+      'SELECT full_name, customer_code FROM customers WHERE id = $1', [id])).rows[0];
+    const now = (await db.query<Record<string, unknown>>(
+      'SELECT full_name, relationship, share_pct FROM nominees WHERE customer_id = $1 ORDER BY id', [id])).rows;
+    const proposed = (meta.nominees ?? []) as Array<Record<string, unknown>>;
+    const line = (n: Record<string, unknown>) =>
+      `${n.full_name}${n.relationship ? ` (${n.relationship})` : ''} — ${Number(n.share_pct) || 0}%`;
+    const list = (xs: Array<Record<string, unknown>>) => (xs.length ? xs.map(line).join(', ') : 'none');
+    if (r) return {
+      subject: `${r.full_name}${r.customer_code ? ` · ${r.customer_code}` : ''}`,
+      amount: null,
+      facts: clean([
+        fact('Customer', `${r.full_name}${r.customer_code ? ` (${r.customer_code})` : ''}`),
+        fact('Nominees now', list(now)),
+        fact('Proposed', list(proposed)),
+        fact('Reason', meta.reason),
+      ]),
+    };
+  }
+
+  /**
+   * A locker agreement signed on paper. The checker is being asked whether a
+   * SCAN is a genuine signed agreement, so the card has to carry the things
+   * that decide that — above all the document itself. Approving a document you
+   * cannot open is not an approval.
+   *
+   * The page count is here because uploading page 1 of a four-page agreement is
+   * the commonest scanning mistake there is, and it approves clean unless the
+   * count is in front of the person approving it.
+   */
   if (req.request_type === 'locker_physical_agreement' && id) {
     const r = (await db.query<Record<string, unknown>>(
       `SELECT s.lockerhub_application_id, s.signed_on, s.signed_at_branch, s.witness_name,

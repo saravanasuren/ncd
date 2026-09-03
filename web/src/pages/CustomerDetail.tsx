@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { formatINR, KYC_DOCUMENT_TYPES, CORRECTABLE_CUSTOMER_FIELDS, PAYMENT_METHODS, type CustomerField } from '@new-wealth/shared';
+import { formatINR, KYC_DOCUMENT_TYPES, CORRECTABLE_CUSTOMER_FIELDS, NOMINEE_RELATIONSHIPS, PAYMENT_METHODS, nomineeToInput, type CustomerField, type NomineeInput } from '@new-wealth/shared';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
@@ -397,6 +397,16 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
   );
 }
 
+/** The nominee the editor has open. `index` -1 is a new one. */
+interface NomineeDraft { index: number; full_name: string; relationship: string; share_pct: string }
+
+/** The standard relationships, plus whatever is already on the row if it is not
+ *  one of them — a picker must never blank a value just because it is unusual. */
+function relationshipOptions(current: string): string[] {
+  const v = current.trim();
+  return v && !NOMINEE_RELATIONSHIPS.includes(v) ? [...NOMINEE_RELATIONSHIPS, v] : NOMINEE_RELATIONSHIPS;
+}
+
 export function CustomerDetailPage() {
   const { confirm, promptText } = useConfirm();
   const { id } = useParams();
@@ -412,6 +422,8 @@ export function CustomerDetailPage() {
   const [corrReason, setCorrReason] = useState('');
   const [handoverTo, setHandoverTo] = useState('');
   const [handoverReason, setHandoverReason] = useState('');
+  // The nominee being added or changed. Null when the editor is closed.
+  const [nomEdit, setNomEdit] = useState<NomineeDraft | null>(null);
 
   const key = ['customer', id];
   const { data, isLoading, error } = useQuery({ queryKey: key, queryFn: () => api.get<any>(`/api/customers/${id}`) });
@@ -432,26 +444,16 @@ export function CustomerDetailPage() {
   const card = 'bg-surface border border-border rounded-lg shadow-card p-5 mb-4';
 
   /**
-   * Add a nominee. The FIRST one for a customer saves immediately; once a
-   * nominee exists, the server turns any change into an approval request
-   * (owner 2026-08-19) — so the message has to report which happened rather
-   * than always claiming "saved".
+   * Write the nominee set. The FIRST nominee for a customer saves immediately;
+   * once one exists the server turns ANY change — edit, add or remove — into an
+   * approval request (owner 2026-08-19), so the message has to report which
+   * happened rather than always claiming "saved".
    */
-  async function addNominee() {
-    const name = await promptText({ title: 'Add a nominee', label: 'Nominee full name', confirmLabel: 'Next' });
-    if (!name) return;
-    // Blank means "give them everything" — the server splits whatever is
-    // unallocated, so a sole nominee lands at 100%. Coercing blank to 0 here is
-    // what used to write 0% and say the opposite of what staff intended.
-    const typed = await promptText({ title: `Share for ${name}`, body: 'Leave blank to give this nominee the whole holding.', label: 'Share %', minLength: 0, confirmLabel: 'Add nominee' });
-    const share = typed != null && typed.trim() !== '' ? Number(typed) : undefined;
-    if (share != null && !(share > 0)) { setMsg('Share % must be a number above 0, or blank.'); return; }
-    const existing = (data.nominees ?? []).map((n: any) => ({ full_name: n.full_name, relationship: n.relationship, share_pct: Number(n.share_pct) || undefined }));
+  async function putNominees(next: NomineeInput[], reason: string) {
     try {
-      const r = await api.put<{ applied?: boolean }>(`/api/customers/${id}/nominees`, {
-        nominees: [...existing, { full_name: name, ...(share != null ? { share_pct: share } : {}) }],
-      });
+      const r = await api.put<{ applied?: boolean }>(`/api/customers/${id}/nominees`, { nominees: next, reason });
       setMsg('');
+      setNomEdit(null);
       setNote(r.applied === false
         ? 'Nominee change sent to the approvals queue — it takes effect once a checker approves it.'
         : '');
@@ -459,6 +461,65 @@ export function CustomerDetailPage() {
     } catch (e) {
       setMsg(e instanceof ApiError ? e.message : 'Failed');
     }
+  }
+
+  /** Every nominee on file, in display order, ready to be sent back whole. */
+  const nomineeRows = (): NomineeInput[] => (data.nominees ?? []).map(nomineeToInput);
+
+  function saveNomineeDraft(d: NomineeDraft) {
+    const name = d.full_name.trim();
+    if (name.length < 2) { setMsg('Nominee name is required.'); return; }
+    const typed = d.share_pct.trim();
+    const share = typed === '' ? null : Number(typed);
+    if (share !== null && !(share > 0 && share <= 100)) {
+      setMsg('Share % must be a number above 0 and up to 100, or blank to give this nominee the rest.');
+      return;
+    }
+
+    const rows = nomineeRows();
+    // Spread the stored row first so DOB, PAN, phone, address, guardian and KYC
+    // id ride through an edit of the three fields shown here.
+    const edited: NomineeInput = { ...(d.index >= 0 ? rows[d.index]! : { full_name: name }), full_name: name };
+    edited.relationship = d.relationship.trim() || null;
+    if (share !== null) edited.share_pct = share; else delete edited.share_pct;
+
+    const next = d.index >= 0 ? rows.map((r, i) => (i === d.index ? edited : r)) : [...rows, edited];
+    void putNominees(next, d.index >= 0 ? `Nominee updated: ${name}` : `Nominee added: ${name}`);
+  }
+
+  async function removeNominee(index: number) {
+    const n = (data.nominees ?? [])[index];
+    const rest = (data.nominees ?? []).length - 1;
+    const ok = await confirm({
+      title: `Remove ${n?.full_name ?? 'this nominee'}?`,
+      body: rest > 0
+        ? 'The nominees left keep the shares they state; any left blank split what is unallocated.'
+        : 'This customer would be left with NO nominee on file.',
+      confirmLabel: 'Remove nominee',
+      danger: true,
+    });
+    if (!ok) return;
+    void putNominees(nomineeRows().filter((_, i) => i !== index), `Nominee removed: ${n?.full_name ?? ''}`.trim());
+  }
+
+  /**
+   * What the shares would come to if the open draft were saved. Blanks are
+   * filled by the server from whatever is left, so they are reported as blanks
+   * rather than counted as zero — 10 customers on the book are already off 100%
+   * and nothing on screen ever said so.
+   */
+  function shareHint(d: NomineeDraft): string {
+    const others = (data.nominees ?? [])
+      .filter((_: unknown, i: number) => i !== d.index)
+      .map((n: any) => Number(n.share_pct) || 0);
+    const typed = d.share_pct.trim();
+    const stated = others.filter((x: number) => x > 0).reduce((a: number, b: number) => a + b, 0)
+      + (typed === '' ? 0 : Number(typed) || 0);
+    const blanks = others.filter((x: number) => !(x > 0)).length + (typed === '' ? 1 : 0);
+    if (blanks) return blanks === 1
+      ? `${stated}% stated · the blank one takes the remaining ${Math.max(0, 100 - stated)}%`
+      : `${stated}% stated · ${blanks} blanks split the remaining ${Math.max(0, 100 - stated)}%`;
+    return stated === 100 ? 'Shares total 100%' : `Shares total ${stated}% — not 100%`;
   }
 
   return (
@@ -565,7 +626,8 @@ export function CustomerDetailPage() {
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[11px] font-semibold text-text-label uppercase tracking-wide">Nominees</span>
               {can('customers:update') && (
-                <button onClick={addNominee} className="text-xs text-primary hover:underline"
+                <button onClick={() => { setMsg(''); setNomEdit({ index: -1, full_name: '', relationship: '', share_pct: '' }); }}
+                  className="text-xs text-primary hover:underline"
                   title={(data.nominees ?? []).length
                     ? 'Nominee changes go to a checker before they take effect'
                     : 'Record the first nominee for this customer'}>
@@ -574,14 +636,68 @@ export function CustomerDetailPage() {
               )}
             </div>
             <ul className="text-sm mb-4 mt-0.5">
-              {(data.nominees ?? []).map((n: any) => (
-                <li key={n.id}>
-                  <span className="font-medium">{n.full_name}</span>
-                  <span className="text-text-muted"> — {Number(n.share_pct) || 0}%{n.relationship ? ` · ${n.relationship}` : ''}</span>
+              {(data.nominees ?? []).map((n: any, i: number) => (
+                <li key={n.id} className="flex items-baseline gap-3 py-0.5">
+                  <span className="min-w-0">
+                    <span className="font-medium">{n.full_name}</span>
+                    <span className="text-text-muted"> — {Number(n.share_pct) || 0}%{n.relationship ? ` · ${n.relationship}` : ''}</span>
+                  </span>
+                  {can('customers:update') && (
+                    <span className="ml-auto shrink-0 flex gap-2">
+                      <button
+                        onClick={() => { setMsg(''); setNomEdit({ index: i, full_name: n.full_name ?? '', relationship: n.relationship ?? '', share_pct: Number(n.share_pct) > 0 ? String(Number(n.share_pct)) : '' }); }}
+                        className="text-xs text-primary hover:underline">Edit</button>
+                      <button onClick={() => void removeNominee(i)}
+                        className="text-xs text-danger hover:underline">Remove</button>
+                    </span>
+                  )}
                 </li>
               ))}
               {!(data.nominees ?? []).length && <li className="text-text-muted">—</li>}
             </ul>
+            {nomEdit && (
+              <div className="border border-border rounded p-3 mb-4 bg-bg">
+                <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">
+                  {nomEdit.index >= 0 ? 'Edit nominee' : 'Add nominee'}
+                  {(data.nominees ?? []).length > 0 && (
+                    <span className="ml-2 font-normal normal-case tracking-normal text-text-muted">· needs a checker</span>
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <label className="text-xs text-text-muted">
+                    Full name
+                    <input autoFocus className={`${inp} w-full mt-1`} value={nomEdit.full_name}
+                      onChange={(e) => setNomEdit({ ...nomEdit, full_name: e.target.value })} />
+                  </label>
+                  <label className="text-xs text-text-muted">
+                    Relationship
+                    <select className={`${inp} w-full mt-1`} value={nomEdit.relationship}
+                      onChange={(e) => setNomEdit({ ...nomEdit, relationship: e.target.value })}>
+                      <option value="">—</option>
+                      {relationshipOptions(nomEdit.relationship).map((r) => <option key={r}>{r}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs text-text-muted">
+                    Share %
+                    <input className={`${inp} w-full mt-1`} value={nomEdit.share_pct} placeholder="blank = the rest"
+                      onChange={(e) => setNomEdit({ ...nomEdit, share_pct: e.target.value })} />
+                  </label>
+                </div>
+                <div className="flex items-center gap-2 mt-3">
+                  <button onClick={() => saveNomineeDraft(nomEdit)}
+                    className="text-xs bg-primary text-white rounded px-4 py-1.5 hover:bg-primary-hover">Save nominee</button>
+                  <button onClick={() => { setNomEdit(null); setMsg(''); }}
+                    className="text-xs border border-border rounded px-3 py-1.5 hover:bg-surface">Cancel</button>
+                  <span className="text-xs text-text-muted ml-auto">{shareHint(nomEdit)}</span>
+                </div>
+                {/* The other details this nominee carries are captured by the
+                    enrolment wizard and are NOT shown here — saying so is the
+                    only way staff can tell they survive an edit. */}
+                <div className="text-[11px] text-text-muted mt-2">
+                  DOB, PAN, phone, address and KYC id stay as they are.
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

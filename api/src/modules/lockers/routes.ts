@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
+import { serveHeaders } from '../../lib/uploads.js';
 import * as lh from '../../integrations/lockerhub/client.js';
 // Static import ON PURPOSE: it registers the locker_deposit_waiver approval
 // handlers at boot. A dynamic import inside the route would leave approvals
@@ -30,7 +31,10 @@ import './cheques.js';
 // Locker agreement signing record (owner 2026-09-03) — e-Sign or a physical
 // signature. Static like the rest: the maker-checker hooks for a scanned
 // agreement register here at boot once PR 3 adds them.
-import { getSigning, listSignings, chooseMethod, recordEsignSent, syncFromEsignStatus, generateAgreementForm } from './agreements.js';
+import {
+  getSigning, listSignings, chooseMethod, recordEsignSent, syncFromEsignStatus,
+  generateAgreementForm, uploadSignedAgreement, getSignedDocument, cancelSigning,
+} from './agreements.js';
 // Registers the locker_offline_payment approval handlers at boot (owner 2026-08-22).
 import './offlinePayments.js';
 import { linkTenant, removeTenant, restoreTenant, removeLockerApplication } from './tenantOverrides.js';
@@ -576,6 +580,48 @@ lockersRouter.get('/applications/:id/agreement/form.pdf', asyncHandler(async (re
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
   res.end(buffer);
+}));
+
+// The signed scan comes back. This does NOT mark it signed — it raises an
+// approval and the agreement stays unsigned until a checker has seen the
+// document (owner 2026-09-03).
+lockersRouter.post('/applications/:id/agreement/signed-upload', asyncHandler(async (req, res) => {
+  const b = z.object({
+    data_base64: z.string().min(1),
+    filename: z.string().max(200).nullish(),
+    signed_on: z.string(),
+    signed_at_branch: z.string().max(120).nullish(),
+    witness_name: z.string().max(120).nullish(),
+    note: z.string().max(500).nullish(),
+  }).parse(req.body);
+  res.status(201).json(await uploadSignedAgreement(getDb(), req.user!, {
+    lockerhub_application_id: String(req.params.id),
+    data_base64: b.data_base64,
+    filename: b.filename ?? null,
+    signed_on: b.signed_on,
+    signed_at_branch: b.signed_at_branch ?? null,
+    witness_name: b.witness_name ?? null,
+    note: b.note ?? null,
+  }));
+}));
+
+// The stored scan. For a physical signing THIS is the agreement on file, which
+// is why it is served from our own storage and not proxied to LockerHub.
+lockersRouter.get('/applications/:id/agreement/signed.pdf', asyncHandler(async (req, res) => {
+  const d = await getSignedDocument(getDb(), String(req.params.id));
+  if (!d) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No signed agreement on file' } }); return; }
+  const h = serveHeaders(d.mime, d.filename, 'signed-agreement.pdf');
+  res.setHeader('Content-Type', h.type);
+  res.setHeader('Content-Disposition', h.disposition);
+  res.end(d.buffer);
+}));
+
+// Abandon an unapproved signing — a wrong scan, or a customer who changed their
+// mind. Cancelled, not deleted: the attempt stays in the audit trail.
+lockersRouter.delete('/applications/:id/agreement', asyncHandler(async (req, res) => {
+  const b = z.object({ reason: z.string().max(500).nullish() }).parse(req.body ?? {});
+  await cancelSigning(getDb(), req.user!, String(req.params.id), b.reason ?? null);
+  res.json({ ok: true });
 }));
 
 // ── Authorised users (owner 2026-08-22) ──────────────────────────────────

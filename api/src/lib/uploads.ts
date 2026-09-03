@@ -18,12 +18,24 @@ const SNIFF: [string, (b: Buffer) => boolean][] = [
 
 export const ALLOWED_MIMES = new Set(SNIFF.map(([m]) => m));
 
+/**
+ * A scanned, signed document. A multi-page agreement scanned at a branch at 300
+ * dpi routinely lands at 8-15 MB, so the 5 MB default refuses perfectly good
+ * scans (owner 2026-09-03). Raised for THIS use only — the tight default is
+ * what protects every other upload path, and one document type needing more is
+ * not a reason to loosen all of them.
+ */
+export const MAX_SIGNED_DOC_BYTES = 20 * 1024 * 1024;
+
 /** Decode + validate an upload; returns the buffer and the SNIFFED mime (the
- * client-declared one is ignored). Throws 400 on empty/oversized/unknown types. */
-export function validateUpload(dataBase64: string): { buffer: Buffer; mime: string } {
+ * client-declared one is ignored). Throws 400 on empty/oversized/unknown types.
+ * `maxBytes` overrides the default cap for the few paths that need a bigger one. */
+export function validateUpload(dataBase64: string, maxBytes = MAX_UPLOAD_BYTES): { buffer: Buffer; mime: string } {
   const buffer = Buffer.from(dataBase64, 'base64');
   if (!buffer.length) throw errors.badRequest('Empty file');
-  if (buffer.length > MAX_UPLOAD_BYTES) throw errors.badRequest('File too large (max 5 MB)');
+  if (buffer.length > maxBytes) {
+    throw errors.badRequest(`File too large (max ${Math.round(maxBytes / (1024 * 1024))} MB)`);
+  }
   const hit = SNIFF.find(([, test]) => test(buffer));
   if (!hit) throw errors.badRequest('Only JPEG, PNG, WebP or PDF files are accepted');
   return { buffer, mime: hit[0] };

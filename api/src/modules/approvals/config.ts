@@ -194,6 +194,17 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
     label: 'Locker Cheque Clearance',
     levels: [{ level: 1, checkerPermission: checkPremature, label: 'Admin / CXO' }],
   },
+  // A locker agreement signed ON PAPER (owner 2026-09-03). Maker: whoever can
+  // enrol. Checker: Admin/CXO, like the offline payment above.
+  //
+  // The e-Sign path has NO approval and this one does, deliberately: Digio's
+  // signature is cryptographic evidence that a named person signed, where a
+  // scan is evidence that somebody uploaded a file. Those are different claims.
+  locker_physical_agreement: {
+    type: 'locker_physical_agreement',
+    label: 'Physically Signed Locker Agreement',
+    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
+  },
   locker_offline_payment: {
     type: 'locker_offline_payment',
     label: 'Locker Rent Payment',

@@ -350,6 +350,46 @@ export function LockerEnrollmentPage() {
       { method, ...(ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}) }));
     if (r) { setSigning(r); setErr(''); }
   };
+
+  /**
+   * The signed paper comes back. Asks for the date ON THE DOCUMENT rather than
+   * assuming today: the customer signs at the branch on Tuesday and the scan is
+   * uploaded on Friday, and the agreement date is Tuesday.
+   *
+   * This does NOT mark it signed — it goes to a checker, who has to be able to
+   * open the scan before deciding.
+   */
+  const uploadSigned = async (file: File) => {
+    if (!app?.application_id) return;
+    const signedOn = await promptText({
+      title: 'When did the customer sign?',
+      body: 'The date written on the agreement, not today — the scan often comes back days later.',
+      label: 'Date signed', inputType: 'date', confirmLabel: 'Next',
+    });
+    if (!signedOn) return;
+    const branch = await promptText({
+      title: 'Where was it signed?', label: 'Branch', minLength: 0, confirmLabel: 'Upload signed agreement',
+    });
+    if (branch === null) return;
+
+    const data_base64 = await new Promise<string>((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onerror = () => reject(new Error('Could not read the file'));
+      fr.onload = () => resolve(String(fr.result).split(',')[1] ?? '');
+      fr.readAsDataURL(file);
+    }).catch(() => null);
+    if (!data_base64) { setErr('Could not read that file.'); return; }
+
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement/signed-upload`, {
+      data_base64, filename: file.name, signed_on: signedOn,
+      signed_at_branch: branch.trim() || null,
+    }));
+    if (r) {
+      setSigning(r);
+      setErr('');
+      setNote('Signed agreement uploaded — it takes effect once a checker approves it.');
+    }
+  };
   /** Waivers on this application (pending + approved). */
   const [feeWaivers, setFeeWaivers] = useState<any[]>([]);
   const loadFeeWaivers = async () => {
@@ -938,25 +978,39 @@ export function LockerEnrollmentPage() {
                   // Physical path chosen. Printing the pre-filled agreement and
                   // uploading the scan land in the next two PRs; until then the
                   // choice is recorded and visible rather than silently lost.
-                  if (physical) return (
-                    <div className="mt-1 flex flex-col gap-1.5">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">{signing.label}</span>
-                        {/* Opens in the browser's PDF viewer so staff can print
-                            straight from it. Everything we hold is already on
-                            it — the customer signs, they do not fill it in. */}
-                        <a className={btn} href={`/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement/form.pdf`}
-                           target="_blank" rel="noopener noreferrer" onClick={() => { window.setTimeout(loadSigning, 1500); }}>
-                          Print filled agreement
-                        </a>
-                        <button className={btnGhost} disabled={busy} onClick={() => chooseMethod('esign')}>Switch to e-Sign</button>
+                  if (physical) {
+                    const waiting = signing.status === 'PendingApproval';
+                    return (
+                      <div className="mt-1 flex flex-col gap-1.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-xs rounded px-1.5 py-0.5 ${waiting ? 'bg-bg text-text-muted' : 'bg-[color:var(--warn-bg)] text-warn'}`}>{signing.label}</span>
+                          {/* Opens in the browser's PDF viewer so staff can print
+                              straight from it. Everything we hold is already on
+                              it — the customer signs, they do not fill it in. */}
+                          <a className={btnGhost} href={`/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement/form.pdf`}
+                             target="_blank" rel="noopener noreferrer" onClick={() => { window.setTimeout(loadSigning, 1500); }}>
+                            ↓ Print filled agreement
+                          </a>
+                          {waiting ? (
+                            <a className={btnGhost} href={`/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement/signed.pdf`}
+                               target="_blank" rel="noopener noreferrer">View uploaded scan</a>
+                          ) : (
+                            <label className={`${btn} cursor-pointer`}>
+                              Upload signed copy
+                              <input type="file" className="hidden" accept="application/pdf,image/jpeg,image/png"
+                                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void uploadSigned(f); }} />
+                            </label>
+                          )}
+                          {!waiting && <button className={btnGhost} disabled={busy} onClick={() => chooseMethod('esign')}>Switch to e-Sign</button>}
+                        </div>
+                        <span className="text-xs text-text-muted">
+                          {waiting
+                            ? `Waiting for a checker to approve the scan${signing.signed_doc_pages ? ` · ${signing.signed_doc_pages} page${signing.signed_doc_pages > 1 ? 's' : ''}` : ''}.`
+                            : 'Print it, have the customer sign, then scan and upload the signed copy here. PDF or photo, up to 20 MB.'}
+                        </span>
                       </div>
-                      <span className="text-xs text-text-muted">
-                        Print it, have the customer sign, then scan and upload the signed copy here.
-                        {signing.has_form_pdf || signing.status === 'AwaitingSignature' ? ' Uploading the scan arrives in the next change.' : ''}
-                      </span>
-                    </div>
-                  );
+                    );
+                  }
 
                   if (esign?.found) return (
                     <div className="mt-1 flex items-center gap-2 flex-wrap">

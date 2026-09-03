@@ -683,6 +683,44 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
     };
   }
 
+  /**
+   * A locker agreement signed on paper. The checker is being asked whether a
+   * SCAN is a genuine signed agreement, so the card has to carry the things
+   * that decide that — above all the document itself. Approving a document you
+   * cannot open is not an approval.
+   *
+   * The page count is here because uploading page 1 of a four-page agreement is
+   * the commonest scanning mistake there is, and it approves clean unless the
+   * count is in front of the person approving it.
+   */
+  if (req.request_type === 'locker_physical_agreement' && id) {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT s.lockerhub_application_id, s.signed_on, s.signed_at_branch, s.witness_name,
+              s.signed_doc_pages, s.signed_doc_filename, s.note,
+              c.full_name AS customer, c.customer_code
+         FROM locker_agreement_signings s
+         LEFT JOIN customers c ON c.id = s.customer_id
+        WHERE s.id = $1`, [id])).rows[0];
+    if (r) {
+      const appId = String(r.lockerhub_application_id);
+      return {
+        subject: `${r.customer ?? 'Locker'} · ${appId}`,
+        amount: null,
+        facts: clean([
+          fact('Customer', r.customer ? `${r.customer}${r.customer_code ? ` (${r.customer_code})` : ''}` : null),
+          fact('Locker application', appId),
+          fact('Signed on', dateOnly(r.signed_on)),
+          fact('Signed at', r.signed_at_branch),
+          fact('Witness', r.witness_name),
+          fact('Pages in the scan', r.signed_doc_pages),
+          fact('Note', r.note),
+          // The document itself — without this the checker is approving blind.
+          fact('Signed agreement', `/api/lockers/applications/${encodeURIComponent(appId)}/agreement/signed.pdf`),
+        ]),
+      };
+    }
+  }
+
   if (id && req.entity_type === 'customers') {
     const r = (await db.query<Record<string, unknown>>(
       'SELECT full_name, customer_code, phone, pan FROM customers WHERE id = $1', [id])).rows[0];

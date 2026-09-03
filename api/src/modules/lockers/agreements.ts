@@ -23,6 +23,7 @@ import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
+import { registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 
 export type SignMethod = 'esign' | 'physical';
 
@@ -356,3 +357,185 @@ export async function generateAgreementForm(
 
   return { buffer, filename: `locker-agreement-${applicationId}.pdf` };
 }
+
+/**
+ * Count pages in a PDF. Someone uploading page 1 of a four-page agreement is the
+ * commonest scanning mistake there is, and it approves clean unless the count is
+ * on the checker's card. Best-effort: an image scan has no page count, and an
+ * unreadable PDF returns null rather than refusing an otherwise good document.
+ */
+function pdfPageCount(buf: Buffer, mime: string): number | null {
+  if (mime !== 'application/pdf') return null;
+  const raw = buf.toString('latin1');
+  const byType = (raw.match(/\/Type\s*\/Page[^s]/g) ?? []).length;
+  if (byType > 0) return byType;
+  const m = raw.match(/\/Count\s+(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * The signed scan comes back (owner 2026-09-03).
+ *
+ * This does NOT mark the agreement signed. Digio's signature is cryptographic
+ * evidence that a named person signed; a scan is evidence that somebody
+ * uploaded a file. The second claim is exactly what a checker is for, so the
+ * upload raises an approval and the agreement stays unsigned until then.
+ */
+export async function uploadSignedAgreement(
+  db: Db, actor: AuthUser,
+  input: {
+    lockerhub_application_id: string;
+    data_base64: string;
+    filename?: string | null;
+    signed_on: string;
+    signed_at_branch?: string | null;
+    witness_name?: string | null;
+    note?: string | null;
+  },
+): Promise<SigningView> {
+  const appId = String(input.lockerhub_application_id ?? '').trim();
+  const signing = await getSigning(db, appId);
+  if (!signing) throw errors.badRequest('Choose how this agreement will be signed first.');
+  if (signing.method !== 'physical') {
+    throw errors.badRequest('This agreement is set to e-Sign. Switch it to a physical signature before uploading a signed copy.');
+  }
+  if (signing.status === 'Signed') throw errors.conflict('This agreement is already signed.');
+  if (signing.status === 'PendingApproval') throw errors.conflict('A signed copy is already waiting for approval.');
+
+  const signedOn = String(input.signed_on ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(signedOn)) throw errors.badRequest('Enter the date the customer signed, as it appears on the paper.');
+  // The date is on the document, not the clock: it is read off the paper, so a
+  // future one means somebody mistyped it.
+  if (signedOn > new Date().toISOString().slice(0, 10)) throw errors.badRequest('The signing date cannot be in the future.');
+
+  const { validateUpload, MAX_SIGNED_DOC_BYTES } = await import('../../lib/uploads.js');
+  const { saveBuffer, removeStored } = await import('../../lib/storage.js');
+  const { buffer, mime } = validateUpload(input.data_base64, MAX_SIGNED_DOC_BYTES);
+  const pages = pdfPageCount(buffer, mime);
+  const filename = String(input.filename ?? '').trim() || `signed-agreement-${appId}.pdf`;
+  const stored = saveBuffer('locker-agreements', filename, buffer);
+
+  try {
+    return await db.withTx(async (tx) => {
+      const { createApprovalRequest } = await import('../approvals/service.js');
+      const req = await createApprovalRequest(tx, {
+        type: 'locker_physical_agreement',
+        entityType: 'locker_agreement_signings',
+        entityId: signing.id,
+        makerUserId: actor.id,
+        metadata: {
+          signing_id: signing.id,
+          lockerhub_application_id: appId,
+          signed_on: signedOn,
+          branch: input.signed_at_branch ?? null,
+          witness: input.witness_name ?? null,
+          pages,
+          filename,
+        },
+      });
+      const row = (await tx.query<Record<string, unknown>>(
+        `UPDATE locker_agreement_signings
+            SET status = 'PendingApproval', signed_doc_path = $1, signed_doc_filename = $2,
+                signed_doc_mime = $3, signed_doc_pages = $4, signed_on = $5::date,
+                signed_at_branch = $6, witness_name = $7, note = $8,
+                uploaded_by_user_id = $9, approval_request_id = $10, updated_at = now()
+          WHERE id = $11 RETURNING ${COLS}`,
+        [stored.path, filename, mime, pages, signedOn,
+         input.signed_at_branch ?? null, input.witness_name ?? null, input.note ?? null,
+         actor.id, req.id, signing.id])).rows[0]!;
+      await writeAudit(tx, {
+        actorId: actor.id, action: 'locker.agreement.uploaded',
+        entityType: 'locker_agreement_signings', entityId: signing.id,
+        after: { application: appId, signed_on: signedOn, pages, bytes: buffer.length },
+      });
+      return shape(row);
+    });
+  } catch (e) {
+    // The row never landed, so the file must not survive it — otherwise every
+    // failed upload leaves an orphan nobody will ever find or delete.
+    removeStored(stored.path);
+    throw e;
+  }
+}
+
+/** The stored scan. This IS the agreement on file for a physical signing. */
+export async function getSignedDocument(
+  db: Db, applicationId: string,
+): Promise<{ buffer: Buffer; mime: string | null; filename: string | null } | null> {
+  const r = (await db.query<Record<string, unknown>>(
+    `SELECT signed_doc_path, signed_doc_mime, signed_doc_filename
+       FROM locker_agreement_signings
+      WHERE lockerhub_application_id = $1 AND signed_doc_path IS NOT NULL
+      ORDER BY id DESC LIMIT 1`, [applicationId])).rows[0];
+  if (!r?.signed_doc_path) return null;
+  const { readStored } = await import('../../lib/storage.js');
+  const buffer = readStored(String(r.signed_doc_path));
+  if (!buffer) return null;
+  return { buffer, mime: (r.signed_doc_mime as string) ?? null, filename: (r.signed_doc_filename as string) ?? null };
+}
+
+/**
+ * Abandon a signing that has not been approved — a wrong scan, a customer who
+ * changed their mind. Cancelled rather than deleted: the attempt is part of the
+ * audit trail, and the partial unique index then frees the locker for another.
+ */
+export async function cancelSigning(db: Db, actor: AuthUser, applicationId: string, reason?: string | null): Promise<void> {
+  await db.withTx(async (tx) => {
+    const cur = (await tx.query<Record<string, unknown>>(
+      `SELECT id, status, approval_request_id FROM locker_agreement_signings
+        WHERE lockerhub_application_id = $1 AND status = ANY($2::text[])
+        ORDER BY id DESC LIMIT 1 FOR UPDATE`, [applicationId, [...LIVE_STATUSES]])).rows[0];
+    if (!cur) throw errors.notFound('No signing to cancel on this locker.');
+    if (cur.status === 'Signed') throw errors.conflict('This agreement is signed and cannot be cancelled.');
+    if (cur.approval_request_id) {
+      await tx.query(
+        `UPDATE approval_requests SET status = 'Cancelled', updated_at = now()
+          WHERE id = $1 AND status = 'Pending'`, [cur.approval_request_id]);
+    }
+    await tx.query(
+      `UPDATE locker_agreement_signings
+          SET status = 'Cancelled', approval_request_id = NULL, note = COALESCE($2, note), updated_at = now()
+        WHERE id = $1`, [cur.id, reason ?? null]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'locker.agreement.cancelled',
+      entityType: 'locker_agreement_signings', entityId: Number(cur.id),
+      before: { status: cur.status }, after: { reason: reason ?? null },
+    });
+  });
+}
+
+// ── Maker-checker ────────────────────────────────────────────────────────
+// Approve first, sync second — like the offline payments and the cheque
+// register: the approval stands on its own, and a LockerHub outage leaves the
+// agreement Signed with the error recorded and retryable, never rolled back.
+// Their push needs an endpoint they do not have yet (PR 4); until then the
+// record is NCD's alone and lockerhub_synced_at stays null, honestly.
+registerOnFinalApprove('locker_physical_agreement', async (tx, req) => {
+  const id = req.metadata.signing_id ? Number(req.metadata.signing_id) : (req.entity_id ? Number(req.entity_id) : null);
+  if (!id) return;
+  const act = (await tx.query<{ approver_user_id: string }>(
+    `SELECT approver_user_id FROM approval_actions WHERE approval_request_id = $1 AND action = 'approve'
+      ORDER BY id DESC LIMIT 1`, [req.id])).rows[0];
+  await tx.query(
+    `UPDATE locker_agreement_signings
+        SET status = 'Signed', approved_by_user_id = $1, approval_request_id = NULL,
+            signed_at = COALESCE(signed_at, now()), updated_at = now()
+      WHERE id = $2 AND status = 'PendingApproval' AND approval_request_id = $3`,
+    [act?.approver_user_id ?? null, id, req.id]);
+});
+
+// A refused scan does NOT cancel the signing: the customer signed on paper, the
+// upload was just wrong (a missing page, the wrong document, an illegible
+// scan). It goes back to awaiting a signature so staff can upload a better one
+// without starting the whole agreement again.
+registerOnReject('locker_physical_agreement', async (tx, req) => {
+  const id = req.metadata.signing_id ? Number(req.metadata.signing_id) : (req.entity_id ? Number(req.entity_id) : null);
+  if (!id) return;
+  await tx.query(
+    `UPDATE locker_agreement_signings
+        SET status = 'AwaitingSignature', approval_request_id = NULL,
+            signed_doc_path = NULL, signed_doc_filename = NULL, signed_doc_mime = NULL,
+            signed_doc_pages = NULL, updated_at = now()
+      WHERE id = $1 AND status = 'PendingApproval' AND approval_request_id = $2`,
+    [id, req.id]);
+});

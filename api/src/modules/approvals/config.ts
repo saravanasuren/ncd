@@ -200,6 +200,20 @@ export const APPROVAL_TYPES: Record<string, ApprovalTypeDef> = {
   // The e-Sign path has NO approval and this one does, deliberately: Digio's
   // signature is cryptographic evidence that a named person signed, where a
   // scan is evidence that somebody uploaded a file. Those are different claims.
+  // A locker was allotted (owner 2026-09-04). A NOTICE, not a gate — exactly
+  // like app_investment above: the locker is ALREADY handed over and the
+  // customer has it, so nothing here can block or reverse the allotment. There
+  // is deliberately NO registerOnFinalApprove handler; approving clears the
+  // notice and does nothing else.
+  //
+  // It exists so an admin sees every allotment, and above all sees the BACKDATED
+  // ones — a stated past date that LockerHub's own record will contradict, since
+  // they always stamp today.
+  locker_allotment: {
+    type: 'locker_allotment',
+    label: 'Locker allotted',
+    levels: [{ level: 1, checkerPermission: check, label: 'NCD Manager / Admin' }],
+  },
   locker_physical_agreement: {
     type: 'locker_physical_agreement',
     label: 'Physically Signed Locker Agreement',

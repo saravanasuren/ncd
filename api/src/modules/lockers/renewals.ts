@@ -45,6 +45,13 @@ export interface RenewalRow {
   pledged_amount: number;
   ncd_backed: boolean;
   state: 'expired' | 'due' | 'upcoming' | 'unknown';
+  /**
+   * The allotment was BACKDATED on our side (owner 2026-09-04). The expiry above
+   * is LockerHub's, computed from the date THEY stamped — so this locker comes
+   * up for renewal LATE by however far it was backdated. Shown rather than
+   * silently corrected: their date is the one their billing follows.
+   */
+  backdated_allotment?: { allotted_on: string; lockerhub_allotted_on: string | null; reason: string | null } | null;
 }
 
 /** Everything expiring within this many days counts as "coming up". */
@@ -145,10 +152,24 @@ export async function lockerRenewals(
   const t = await lockerTenants(db, opts.branchId ? { branchId: opts.branchId } : {});
   const tenancies = (t.rows ?? []) as Array<Record<string, any>>;
 
+  // Backdated allotments, so a locker whose real start pre-dates LockerHub's
+  // record is visibly flagged instead of quietly renewing late.
+  const { backdatedByApplication } = await import('./allotments.js');
+  const backdated = await backdatedByApplication(db).catch(() => new Map());
+
   const rows: RenewalRow[] = [];
   for (const r of tenancies) {
     const row = renewalRowFrom(r, withinDays);
-    if (row) rows.push(row);
+    if (!row) continue;
+    const bd = row.lockerhub_application_id ? backdated.get(row.lockerhub_application_id) : undefined;
+    if (bd) {
+      row.backdated_allotment = {
+        allotted_on: bd.allotted_on,
+        lockerhub_allotted_on: bd.lockerhub_allotted_on,
+        reason: bd.backdate_reason,
+      };
+    }
+    rows.push(row);
   }
 
   // Most overdue first, then soonest. The top of this list is money already

@@ -14,6 +14,9 @@ import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
 import { serveHeaders } from '../../lib/uploads.js';
+// Static like the other locker modules: the allotment notice must be
+// registerable at boot, not on first use.
+import { checkAllottedOn, recordAllotment, getAllotment } from './allotments.js';
 import * as lh from '../../integrations/lockerhub/client.js';
 // Static import ON PURPOSE: it registers the locker_deposit_waiver approval
 // handlers at boot. A dynamic import inside the route would leave approvals
@@ -274,11 +277,20 @@ lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) =
   const b = z.object({
     locker_id: z.string().optional(),
     lease_months: z.number().int().positive().optional(),
+    // When the locker was REALLY handed over. Optional — omitted means today,
+    // so an ordinary same-day allotment is unchanged (owner 2026-09-04).
+    allotted_on: z.string().optional(),
+    backdate_reason: z.string().max(500).optional(),
     override: z.object({
       reason: z.string().trim().min(5, 'Say why the locker is being handed over unpaid'),
       approved_by: z.string().trim().min(2, 'Name who authorised it'),
     }).optional(),
   }).parse(req.body ?? {});
+
+  // Validate the date BEFORE calling LockerHub. A typo must not cost a real
+  // allotment: once they allocate, the locker is handed over and there is no
+  // undo. This throws 400 and nothing has happened yet.
+  checkAllottedOn(b.allotted_on, b.backdate_reason);
 
   if (b.override) {
     await writeAudit(getDb(), {
@@ -289,12 +301,35 @@ lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) =
   }
   let result: Record<string, unknown>;
   try {
-    result = await lh.allocate(staffOf(req), String(req.params.id), b) as Record<string, unknown>;
+    // Deliberately NOT spreading `b`: allotted_on / backdate_reason are OURS.
+    // Their A11 contract has no date, and posting an unknown field to a live
+    // allocation is not worth finding out about the hard way.
+    result = await lh.allocate(staffOf(req), String(req.params.id), {
+      locker_id: b.locker_id, lease_months: b.lease_months, override: b.override,
+    }) as Record<string, unknown>;
   } catch (e) {
     const detail = (e as { detail?: { already?: boolean } }).detail;
     if (detail?.already === true) { res.json({ ...detail, success: true, already: true }); return; }
     throw e;
   }
+  // Record when it was REALLY allotted and raise the Approvals notice (owner
+  // 2026-09-04). A NOTICE, not a gate — modelled on app_investment: the locker
+  // is already handed over, so nothing here can block or reverse it. Awaited
+  // so the notice exists before the operator can refresh the page, but
+  // recordAllotment never throws.
+  {
+    const al = (result.allotment ?? result) as Record<string, unknown>;
+    await recordAllotment(getDb(), req.user!, {
+      lockerhub_application_id: String(req.params.id),
+      allotted_on: b.allotted_on ?? null,
+      backdate_reason: b.backdate_reason ?? null,
+      lockerhub_allotted_on: (al.allotted_on as string) ?? (al.lease_start as string) ?? null,
+      locker_no: (al.locker_number as string) ?? (al.locker_no as string) ?? b.locker_id ?? null,
+      branch_id: (al.branch_id as string) ?? null,
+      branch_name: (al.branch_name as string) ?? null,
+    });
+  }
+
   // The booking is complete → confirm it to the customer on WhatsApp (owner
   // 2026-08-07). Best-effort and only AFTER a real allocation: never block or
   // fail the response on a notify error, and inert until an approved template

@@ -535,6 +535,17 @@ export function LockerEnrollmentPage() {
    * auto-pick the lowest vacant locker of the size, which is the old behaviour
    * and still the right default when nobody cares which box it is.
    */
+  /**
+   * When the locker was REALLY handed over (owner 2026-09-04). Blank means
+   * today, so the ordinary same-day allotment is untouched. A past date needs a
+   * reason: LockerHub stamps their own date and will disagree with ours, so the
+   * why is the only thing that makes the notice reviewable.
+   */
+  const [allottedOn, setAllottedOn] = useState('');
+  const [backdateReason, setBackdateReason] = useState('');
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const isBackdated = !!allottedOn && allottedOn < todayISO;
+
   const allocate = async (chosen?: string) => {
     setErr(''); setBusy(true);
     try {
@@ -544,9 +555,12 @@ export function LockerEnrollmentPage() {
       const outstanding = app?.obligations_settled === false;
       await api.post(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/allocate`, {
         ...(chosen ? { locker_id: chosen } : {}),
+        // Omitted when blank — the server then records today.
+        ...(allottedOn ? { allotted_on: allottedOn } : {}),
+        ...(isBackdated && backdateReason.trim() ? { backdate_reason: backdateReason.trim() } : {}),
         ...(outstanding ? { override: { reason: 'Rent yet to be paid — allotted per policy (owner 2026-08-22)', approved_by: user?.fullName ?? 'staff' } } : {}),
       });
-      setPicking(false); setLockerId('');
+      setPicking(false); setLockerId(''); setAllottedOn(''); setBackdateReason('');
       await refreshApp();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : 'Failed';
@@ -1042,6 +1056,39 @@ export function LockerEnrollmentPage() {
                 {app.obligations_settled === false
                   ? <span className="text-warn">Rent yet to be paid — you can still allot now (the rent is collected and approved separately).</span>
                   : <span>Payments settled — allotment pending.</span>}
+              </div>
+
+              {/* When the locker was REALLY handed over (owner 2026-09-04).
+                  Blank = today, so a same-day allotment needs no thought. */}
+              <div className="flex items-end gap-2 flex-wrap mt-3 mb-1">
+                <label className="text-xs text-text-muted">
+                  Date of allotment
+                  <input type="date" max={todayISO} className={`${inp} block mt-1`}
+                    value={allottedOn} onChange={(e) => setAllottedOn(e.target.value)} />
+                </label>
+                {isBackdated && (
+                  <label className="text-xs text-text-muted flex-1 min-w-[16rem]">
+                    Why is it backdated?
+                    <input className={`${inp} w-full mt-1`} value={backdateReason}
+                      onChange={(e) => setBackdateReason(e.target.value)}
+                      placeholder="e.g. handed over at the branch on the day, entered late" />
+                  </label>
+                )}
+                <span className="text-xs text-text-muted pb-1.5">
+                  {allottedOn ? '' : 'Leave blank for today.'}
+                </span>
+              </div>
+              {isBackdated && (
+                // Said plainly rather than hidden: LockerHub stamps their own
+                // date and their renewal reminder follows THEIRS, so a backdated
+                // locker comes up late until they accept our date.
+                <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-2 py-1.5 mb-2">
+                  Backdated to {allottedOn}. LockerHub will still record today, and their renewal
+                  date follows theirs — this locker is flagged on the Renewals screen so it is not missed.
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 flex-wrap">
                 {!picking && (<>
                   {/* The number was already chosen in step 1, so the primary
                       action here is to confirm it, not to ask again. It can

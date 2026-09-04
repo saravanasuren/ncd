@@ -26,6 +26,8 @@ interface Row {
   customer_id: number | null;
   customer_code: string | null;
   lease_start: string | null;
+  /** Set when NCD recorded a real allotment date earlier than LockerHub's. */
+  backdated_allotment?: { allotted_on: string; lockerhub_allotted_on: string | null; reason: string | null } | null;
   lease_expires_on: string | null;
   days_to_expiry: number | null;
   annual_rent: number | null;
@@ -86,7 +88,24 @@ export function LockerRenewalsPage() {
       // close, not the most urgent thing on the page.
       value: (r) => r.days_to_expiry ?? 99999, render: (r) => <When days={r.days_to_expiry} /> },
     { key: 'lease_expires_on', header: 'Lease ends', value: (r) => r.lease_expires_on ?? '',
-      render: (r) => r.lease_expires_on ?? <span className="text-text-muted">—</span> },
+      render: (r) => (
+        <span className="whitespace-nowrap">
+          {r.lease_expires_on ?? <span className="text-text-muted">—</span>}
+          {/* The expiry above is LockerHub's, computed from the date THEY
+              stamped. A backdated locker therefore renews late by exactly how
+              far it was backdated — flagged rather than silently drifting
+              (owner 2026-09-04). */}
+          {r.backdated_allotment && (
+            <span className="ml-1.5 text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn"
+              title={`Really allotted ${r.backdated_allotment.allotted_on}`
+                + (r.backdated_allotment.lockerhub_allotted_on ? `, LockerHub recorded ${r.backdated_allotment.lockerhub_allotted_on}` : '')
+                + `. This expiry follows LockerHub's date, so renewal falls due late.`
+                + (r.backdated_allotment.reason ? ` Reason: ${r.backdated_allotment.reason}` : '')}>
+              backdated
+            </span>
+          )}
+        </span>
+      ) },
     { key: 'tenant_name', header: 'Tenant', value: (r) => r.tenant_name ?? '',
       render: (r) => (r.customer_id
         ? <Link to={`/app/customers/${r.customer_id}`} className="text-primary hover:underline">{r.tenant_name}</Link>

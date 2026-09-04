@@ -693,6 +693,39 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
    * the commonest scanning mistake there is, and it approves clean unless the
    * count is in front of the person approving it.
    */
+  /**
+   * A locker allotment notice. Keyed on LockerHub's string application id, so
+   * everything comes from metadata rather than an entity row.
+   *
+   * The backdate is the point of the card: our date and theirs are shown side
+   * by side, because a stated past date is the one thing here that nothing else
+   * can corroborate.
+   */
+  if (req.request_type === 'locker_allotment') {
+    const appId = String(meta.lockerhub_application_id ?? '');
+    const ours = meta.allotted_on ? String(meta.allotted_on) : null;
+    const theirs = meta.lockerhub_allotted_on ? String(meta.lockerhub_allotted_on) : null;
+    const c = appId ? (await db.query<Record<string, unknown>>(
+      `SELECT c.full_name, c.customer_code FROM locker_allotments la
+         JOIN customers c ON c.id = la.customer_id
+        WHERE la.lockerhub_application_id = $1`, [appId])).rows[0] : undefined;
+    return {
+      subject: `${meta.locker_no ? `Locker ${meta.locker_no}` : 'Locker'}${appId ? ` · ${appId}` : ''}`,
+      amount: null,
+      facts: clean([
+        fact('Customer', c ? `${c.full_name}${c.customer_code ? ` (${c.customer_code})` : ''}` : null),
+        fact('Locker', meta.locker_no),
+        fact('Branch', meta.branch),
+        fact('Application', appId || null),
+        fact('Allotted on', ours),
+        meta.backdated ? fact('Backdated', `yes — reason: ${meta.backdate_reason ?? '(none given)'}`) : null,
+        // Shown only when it disagrees; on a same-day allotment it is noise.
+        theirs && theirs !== ours ? fact('LockerHub recorded', `${theirs} — their renewal date follows THIS, not ours`) : null,
+        fact('Note', 'The locker is already allotted. Approving clears this notice and changes nothing.'),
+      ]),
+    };
+  }
+
   if (req.request_type === 'locker_physical_agreement' && id) {
     const r = (await db.query<Record<string, unknown>>(
       `SELECT s.lockerhub_application_id, s.signed_on, s.signed_at_branch, s.witness_name,

@@ -699,14 +699,20 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
       `SELECT c.full_name, c.customer_code FROM locker_allotments la
          JOIN customers c ON c.id = la.customer_id
         WHERE la.lockerhub_application_id = $1`, [appId])).rows[0] : undefined;
+    // Lead with the CUSTOMER, like every other card. LockerHub's application id
+    // is their internal primary key — unreadable, and no use as a headline
+    // (owner 2026-09-04: "what are those characters"). It stays in the facts,
+    // where it is what you quote back to LockerHub.
+    const who = c ? String(c.full_name) : null;
+    const what = meta.locker_no ? `Locker ${meta.locker_no}` : 'Locker';
     return {
-      subject: `${meta.locker_no ? `Locker ${meta.locker_no}` : 'Locker'}${appId ? ` · ${appId}` : ''}`,
+      subject: who ? `${who} · ${what}` : `${what}${meta.branch ? ` · ${meta.branch}` : ''}`,
       amount: null,
       facts: clean([
         fact('Customer', c ? `${c.full_name}${c.customer_code ? ` (${c.customer_code})` : ''}` : null),
         fact('Locker', meta.locker_no),
         fact('Branch', meta.branch),
-        fact('Application', appId || null),
+        fact('LockerHub application', appId || null),
         fact('Allotted on', ours),
         meta.backdated ? fact('Backdated', `yes — reason: ${meta.backdate_reason ?? '(none given)'}`) : null,
         // Shown only when it disagrees; on a same-day allotment it is noise.

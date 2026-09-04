@@ -21,7 +21,8 @@
     "migrate:legacy:dev": "tsx src/migrate-legacy/run.ts",
     "recompute-accruals": "node dist/scripts/recompute-accruals.js",
     "rematerialize": "node dist/scripts/rematerialize-application.js",
-    "backfill:locker-signings": "node dist/scripts/backfill-locker-signings.js"
+    "backfill:locker-signings": "node dist/scripts/backfill-locker-signings.js",
+    "backfill:allotment-customers": "node dist/scripts/backfill-allotment-customers.js"
   },
   "dependencies": {
     "@aws-sdk/client-ses": "^3.1088.0",

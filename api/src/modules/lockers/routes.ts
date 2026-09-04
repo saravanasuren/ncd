@@ -319,14 +319,19 @@ lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) =
   // recordAllotment never throws.
   {
     const al = (result.allotment ?? result) as Record<string, unknown>;
+    const t = (result.tenant ?? result) as Record<string, unknown>;
     await recordAllotment(getDb(), req.user!, {
       lockerhub_application_id: String(req.params.id),
       allotted_on: b.allotted_on ?? null,
       backdate_reason: b.backdate_reason ?? null,
       lockerhub_allotted_on: (al.allotted_on as string) ?? (al.lease_start as string) ?? null,
       locker_no: (al.locker_number as string) ?? (al.locker_no as string) ?? b.locker_id ?? null,
-      branch_id: (al.branch_id as string) ?? null,
-      branch_name: (al.branch_name as string) ?? null,
+      branch_id: (al.branch_id as string) ?? (t.branch_id as string) ?? null,
+      branch_name: (al.branch_name as string) ?? (t.branch_name as string) ?? null,
+      // The join to an NCD customer. LockerHub is phone-keyed and sends no
+      // customer id, so without this the card has no name on it — which is
+      // exactly how the first eight went out.
+      phone: (t.phone as string) ?? (t.tenant_phone as string) ?? null,
     });
   }
 

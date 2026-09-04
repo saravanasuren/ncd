@@ -35,6 +35,49 @@ export interface AllotmentRecordInput {
   branch_id?: string | null;
   branch_name?: string | null;
   customer_id?: number | null;
+  /** The tenant's phone from LockerHub, used to find the NCD customer when no
+   *  customer_id is given. LockerHub is phone-keyed, so this is the join. */
+  phone?: string | null;
+}
+
+/**
+ * Fill in the customer and the branch name.
+ *
+ * Neither arrives on LockerHub's allocate response: it carries no NCD customer
+ * id (they are phone-keyed) and no branch_name (only branch_id). Without this
+ * the approval card had nothing human on it at all — every one of the first
+ * eight read "Locker F21-11 · mtms1j5r0tepf3n", which is LockerHub's internal
+ * primary key and means nothing to the person reading it (owner 2026-09-04:
+ * "what are those characters").
+ *
+ * Both lookups are best-effort. A card with a locker number is still worth
+ * having; one that failed to save because a branch name could not be resolved
+ * is not.
+ */
+export async function enrich(db: Db, input: AllotmentRecordInput): Promise<AllotmentRecordInput> {
+  const out = { ...input };
+
+  if (out.customer_id == null) {
+    const digits = String(out.phone ?? '').replace(/\D/g, '').slice(-10);
+    if (digits.length === 10) {
+      const c = (await db.query<{ id: string }>(
+        `SELECT id FROM customers WHERE right(regexp_replace(phone, '\\D', '', 'g'), 10) = $1
+          ORDER BY id LIMIT 1`, [digits])).rows[0];
+      if (c) out.customer_id = Number(c.id);
+    }
+  }
+
+  if (!out.branch_name && out.branch_id) {
+    try {
+      const lh = await import('../../integrations/lockerhub/client.js');
+      if (lh.lockerHubConfigured()) {
+        const { branches } = await lh.branches();
+        const b = branches.find((x) => String(x.id) === String(out.branch_id));
+        if (b) out.branch_name = b.name;
+      }
+    } catch { /* cosmetic — a missing branch name never costs the record */ }
+  }
+  return out;
 }
 
 const iso = (v: unknown): string => String(v ?? '').slice(0, 10);
@@ -70,6 +113,9 @@ export async function recordAllotment(
 ): Promise<void> {
   try {
     const { allotted_on, backdated, backdate_reason } = checkAllottedOn(input.allotted_on, input.backdate_reason);
+    // Resolve the customer and branch BEFORE the transaction: both are network
+    // or read work, and neither belongs inside a write lock.
+    input = await enrich(db, input);
     await db.withTx(async (tx) => {
       const { createApprovalRequest } = await import('../approvals/service.js');
       const req = await createApprovalRequest(tx, {

@@ -44,6 +44,9 @@ beforeAll(async () => {
             allotted_on: new Date().toISOString().slice(0, 10),
             lease_start: new Date().toISOString().slice(0, 10),
           },
+          // Phone-keyed, and no NCD customer id: this phone is the only join
+          // back to our customer, which is what the card needs to show a name.
+          tenant: { phone: '9534000001', branch_id: 'br_erode' },
         });
       }
       return send(404, { error: 'not found' });
@@ -98,6 +101,49 @@ describe('an ordinary same-day allotment is unchanged', () => {
     const row = await rowOf('LKR-AL-1');
     expect(row!.allotted_on).toBe(TODAY);      // untouched
     expect(row!.backdated).toBe(false);
+  });
+});
+
+describe('the card has a human on it, not just LockerHub\'s id', () => {
+  // Owner 2026-09-04: "what are those characters" — the first eight cards read
+  // "Locker F21-11 · mtms1j5r0tepf3n", LockerHub's internal primary key, and
+  // nothing else. The route never passed a customer through, so the name lookup
+  // found nothing every time.
+  it('links the NCD customer from the tenant phone, and names the branch', async () => {
+    const a = await admin();
+    await a.post('/api/customers', { full_name: 'Allot Card Cust', phone: '9534000001' });
+    const r = await allot(a, 'LKR-AL-CARD');
+    expect(r.status).toBe(200);
+
+    const row = await rowOf('LKR-AL-CARD');
+    expect(row!.customer_id).not.toBeNull();
+    // branch_name is resolved from branch_id — LockerHub sends only the id.
+    expect(row!.branch_name).toBe('Erode');
+  });
+
+  it('leads the card with the customer, and keeps the id as a reference', async () => {
+    const n = await noticeFor('LKR-AL-CARD');
+    const checker = await as('ncd@demo.local');
+    const card = (await checker.get(`/api/approvals/${Number(n!.id)}`)).json;
+    expect(card.detail.subject).toBe('Allot Card Cust · Locker C-14');
+    // The raw id is still available — it is what you quote back to LockerHub —
+    // but labelled as theirs rather than sitting alone as the headline.
+    expect(JSON.stringify(card.detail.facts)).toContain('LockerHub application');
+    expect(JSON.stringify(card.detail.facts)).toContain('LKR-AL-CARD');
+  });
+
+  it('falls back to the locker and branch when no customer matches the phone', async () => {
+    const a = await admin();
+    // No NCD customer on this application's phone at all.
+    await allot(a, 'LKR-AL-NOCUST');
+    await ctx.db.query(
+      'UPDATE locker_allotments SET customer_id = NULL WHERE lockerhub_application_id = $1', ['LKR-AL-NOCUST']);
+    const n = await noticeFor('LKR-AL-NOCUST');
+    const checker = await as('ncd@demo.local');
+    const card = (await checker.get(`/api/approvals/${Number(n!.id)}`)).json;
+    // Still readable — never the bare application id on its own.
+    expect(card.detail.subject).toContain('Locker C-14');
+    expect(card.detail.subject).not.toBe('LKR-AL-NOCUST');
   });
 });
 

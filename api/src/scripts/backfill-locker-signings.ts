@@ -14,19 +14,24 @@
  *   node dist/scripts/backfill-locker-signings.js --commit
  */
 import { loadSecretsFromSsm } from '../secrets.js';
-import { createDb } from '../db/index.js';
-import * as lh from '../integrations/lockerhub/client.js';
+
+// Top-level await, then DYNAMIC imports — the pattern db/migrate-cli.ts uses.
+//
+// config.js VALIDATES at module-evaluation time and throws in production when
+// JWT_ACCESS_SECRET / LOCKERHUB_INTEGRATION_KEY are still defaults. Static
+// imports are hoisted and run before any top-level statement, so a static
+// `import ... from '../integrations/lockerhub/client.js'` pulls config in and
+// throws BEFORE loadSecretsFromSsm() can run — whether that call sits at the
+// top of main() or the top of the file. The first fix moved the call into
+// main() and still could not run for exactly this reason.
+await loadSecretsFromSsm();
+
+const { createDb } = await import('../db/index.js');
+const lh = await import('../integrations/lockerhub/client.js');
 
 const COMMIT = process.argv.includes('--commit');
 
 async function main() {
-  // FIRST, before anything reads config. Both createDb() and
-  // lockerHubConfigured() resolve at call time from the config object that
-  // loadSecretsFromSsm() populates — without this the script reports
-  // "LOCKERHUB_API_URL is not set" on a box where it plainly is, and createDb()
-  // would silently hand back an empty PGlite. Every other CLI here does this;
-  // this one shipped without it and could not run at all.
-  await loadSecretsFromSsm();
 
   if (!lh.lockerHubConfigured()) {
     console.error('LOCKERHUB_API_URL is not set — nothing to read from.');

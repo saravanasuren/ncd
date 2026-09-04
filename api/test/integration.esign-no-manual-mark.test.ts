@@ -112,11 +112,38 @@ describe('eSign cannot be self-certified', () => {
     expect((await detail(a, appId)).application.esigned_at).toBeNull();
   });
 
-  it('branch staff cannot start or check a signature', async () => {
+  /**
+   * REVERSED on 2026-09-04 (owner: "get all these access to branch staff login
+   * also — esign access and manual sign upload option"). Branch staff enrol the
+   * investment and sit with the customer, so they are the people who get the
+   * form signed.
+   *
+   * This does not weaken the control the rest of this file is about. What was
+   * removed on 2026-08-29 was the ability to ASSERT a signature; that is still
+   * gone for everyone. A branch staff member can start a Digio signing, ask
+   * Digio whether it completed, and upload a real signed document — none of
+   * which can record a signature that did not happen.
+   */
+  it('branch staff CAN start a signature, and still cannot invent one', async () => {
     const a = await admin();
     const appId = await liveInvestment(a, 'ESign Perms', '9706000006');
     const staff = await as('staff@demo.local');
-    expect((await staff.post(`/api/applications/${appId}/esign/initiate`)).status).toBe(403);
-    expect((await staff.post(`/api/applications/${appId}/esign/check`)).status).toBe(403);
+    expect((await staff.post(`/api/applications/${appId}/esign/initiate`)).status).toBeLessThan(400);
+    // The re-check asks Digio; it answers no-session/not-configured here, but
+    // the point is that it is REACHABLE and cannot fabricate a signature.
+    expect((await staff.post(`/api/applications/${appId}/esign/check`)).status).toBeLessThan(400);
+    expect((await detail(a, appId)).application.esigned_at).toBeNull();
+    // The route that let a person say "this is signed" is gone for them too.
+    expect((await staff.post(`/api/applications/${appId}/mark-esigned`)).status).toBe(404);
+  });
+
+  it('an AGENT still cannot touch a signature — they are external', async () => {
+    const a = await admin();
+    const appId = await liveInvestment(a, 'ESign Agent Perms', '9706000007');
+    const agent = await as('agent@demo.local');
+    expect((await agent.post(`/api/applications/${appId}/esign/initiate`)).status).toBe(403);
+    expect((await agent.post(`/api/applications/${appId}/signed-upload`, {
+      data_base64: Buffer.from('%PDF-1.4\n').toString('base64'), signed_on: '2026-09-01',
+    })).status).toBe(403);
   });
 });

@@ -94,6 +94,44 @@ describe('the signed application form can be uploaded', () => {
 // only by the Digio completion path, and 'physical' only by an upload carrying
 // a real document — which is what the rest of this file covers.
 
+describe('branch staff can do all three, because they are the ones in the room', () => {
+  // Owner 2026-09-04: "get all these access to branch staff login also — esign
+  // access and manual sign upload option". Branch staff enrol the investment and
+  // sit with the customer, so they are who gets the form signed.
+  it('a branch staff member can print, upload, and read back the signed form', async () => {
+    // Enrolled BY the staff member, which is the real flow — they sit with the
+    // customer. An investment they cannot see 404s on the print, and should:
+    // that is scope working, not a missing permission.
+    const staff = await as('staff@demo.local');
+    const id = await enrol(staff, 'Branch Staff Signed', '9533000008');
+
+    const form = await fetch(`${ctx.base}/api/reports/application-form/${id}.pdf`,
+      { headers: { cookie: staff.cookieHeader(), 'X-Requested-With': 'dhanam' } });
+    expect(form.status).toBe(200);
+
+    const up = await staff.post(`/api/applications/${id}/signed-upload`, {
+      data_base64: pdfOf(2), filename: 'branch-signed.pdf', signed_on: '2026-08-28',
+    });
+    expect(up.status).toBe(201);
+    const row = await appRow(id);
+    expect(row.signing_method).toBe('physical');
+    expect(row.signed_doc_uploaded_by_user_id).not.toBeNull();
+
+    const back = await fetch(`${ctx.base}/api/applications/${id}/signed-application.pdf`,
+      { headers: { cookie: staff.cookieHeader(), 'X-Requested-With': 'dhanam' } });
+    expect(back.status).toBe(200);
+  });
+
+  it('and still cannot reach an investment outside their scope', async () => {
+    const a = await admin();
+    const other = await enrol(a, 'Someone Elses', '9533000009');
+    const staff = await as('staff@demo.local');
+    const form = await fetch(`${ctx.base}/api/reports/application-form/${other}.pdf`,
+      { headers: { cookie: staff.cookieHeader(), 'X-Requested-With': 'dhanam' } });
+    expect(form.status).toBe(404);
+  });
+});
+
 describe('what the upload refuses', () => {
   it('a signing date in the future', async () => {
     const a = await admin();

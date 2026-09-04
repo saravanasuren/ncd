@@ -24,6 +24,12 @@ interface ApprovalReq {
   maker_name?: string | null;   // who RAISED the request (e.g. created the customer)
 }
 
+/** A fact value that is a document/endpoint URL (rendered as an openable link,
+ *  not bare text) — an in-app API path or an absolute http(s) URL. */
+function isDocUrl(v: string): boolean {
+  return typeof v === 'string' && (v.startsWith('/api/') || /^https?:\/\//.test(v));
+}
+
 /** Human title for a request card, e.g. "NCD_27 · Activation" for a batch. */
 function requestTitle(r: ApprovalReq): string {
   const label = TYPE_LABELS[r.request_type] ?? r.request_type;
@@ -101,7 +107,16 @@ function Detail({ id, canAct, selfApproval, actionLabel, onDone }: { id: number;
           {facts.map((f) => (
             <span key={f.label} className="contents">
               <dt className="text-text-muted">{f.label}</dt>
-              <dd className="m-0 font-medium break-words">{f.value}</dd>
+              <dd className="m-0 font-medium break-words">
+                {/* A document fact (e.g. the signed locker agreement) is a URL —
+                    render it as a link the checker can open and review before
+                    approving, not a bare path (owner 2026-08-29). */}
+                {isDocUrl(f.value)
+                  ? <a href={f.value} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                      {f.value.toLowerCase().endsWith('.pdf') ? 'View PDF ↗' : 'Open ↗'}
+                    </a>
+                  : f.value}
+              </dd>
             </span>
           ))}
         </dl>

@@ -200,6 +200,10 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'dashboard:drilldown',
     'reports:download',
     'approvals:check-handover', // repeat-customer handover (any one of Admin/CXO/BM)
+    // Signatures on the investment form (owner 2026-09-04). Granted to branch
+    // staff below; a manager who cannot do what their own staff can would be an
+    // odd hole to leave, so it goes here too.
+    'applications:mark-esigned',
     'lockers:enroll',
     // Rent/full-rent waiver + premium-customer buttons in locker enrolment
     // (owner 2026-08-29: those buttons across all levels that enrol lockers).
@@ -218,7 +222,28 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   // settles only after an Admin/CXO approves it (approvals/config.ts), so the
   // two-person control holds — staff request, Admin/CXO grant. Deliberately NOT
   // lockers:link-tenant (the cross-page tenant-linking override stays manager+).
-  branch_staff: [...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view'), 'lockers:enroll', 'lockers:waive'],
+  // applications:mark-esigned lets branch staff handle the signature on an
+  // investment form (owner 2026-09-04: "get all these access to branch staff
+  // login also — esign access and manual sign upload option"). It covers all
+  // three controls on the investment page: send for eSign, print the pre-filled
+  // form to sign, and upload the signed copy back.
+  //
+  // NOT a self-certification: the button that let a person assert a signature
+  // was removed on 2026-08-29 (#376). 'esign' is now written only by Digio
+  // confirming a real signature, and 'physical' only by an upload carrying an
+  // actual signed document — so widening WHO may do this does not widen what
+  // can be claimed. The equivalent locker controls already worked for them,
+  // being behind lockers:enroll.
+  //
+  // The permission is still NAMED mark-esigned after the route it used to gate.
+  // Left alone deliberately: it is a string in the live role_permissions table,
+  // and renaming it would need a data migration for no behavioural gain.
+  branch_staff: [
+    ...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view'),
+    'applications:mark-esigned',
+    'lockers:enroll',
+    'lockers:waive',
+  ],
 
   // Agents source leads and enrol, but must NOT approve KYC on customers they
   // enrolled — that is a segregation-of-duties break on a regulated control

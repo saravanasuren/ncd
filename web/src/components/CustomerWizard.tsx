@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { DP_ID_RE, IFSC_RE, PAN_RE, sanitizeAlphaSpace, sanitizeName, ddmmyyyyToISO, isoToDDMMYYYY } from '@new-wealth/shared';
+import { DP_ID_RE, IFSC_RE, PAN_RE, NOMINEE_RELATIONSHIPS, sanitizeAlphaSpace, sanitizeName, ddmmyyyyToISO, isoToDDMMYYYY } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { ReferredByPicker } from './ReferredByPicker.js';
 
@@ -24,7 +24,7 @@ const GENDERS = ['Male', 'Female', 'Other'];
 const CATEGORIES = ['Individual', 'HUF', 'Corporate', 'Trust', 'NRI', 'Others'];
 const DEPOSITORIES = ['NSDL', 'CDSL'];
 const ACCOUNT_TYPES = ['Savings', 'Current'];
-const RELATIONSHIPS = ['Spouse', 'Son', 'Daughter', 'Father', 'Mother', 'Brother', 'Sister', 'Other'];
+const RELATIONSHIPS = NOMINEE_RELATIONSHIPS;
 
 const STEPS = ['Personal', 'Demat', 'KYC docs', 'Bank', 'Nominee', 'Review'] as const;
 

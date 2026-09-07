@@ -41,6 +41,67 @@ export async function listOfflinePayments(db: Db, applicationId: string) {
   return rows.map(shape);
 }
 
+export interface PayerInfo {
+  tenant_name: string | null;
+  locker_no: string | null;
+  branch_name: string | null;
+  customer_id: number | null;
+  customer_code: string | null;
+}
+
+/**
+ * Who holds this locker. Tries our own records first — free, and authoritative
+ * where we have them — then LockerHub, who is the only source for a locker NCD
+ * has no other involvement in.
+ *
+ * Never throws: the caller is recording a payment, and not knowing the name is
+ * a worse card, not a failed payment.
+ */
+export async function resolvePayer(db: Db, appId: string): Promise<PayerInfo> {
+  const out: PayerInfo = { tenant_name: null, locker_no: null, branch_name: null, customer_id: null, customer_code: null };
+  try {
+    const ours = (await db.query<Record<string, unknown>>(
+      `SELECT la.locker_no, la.branch_name, c.id AS cid, c.full_name, c.customer_code
+         FROM locker_allotments la LEFT JOIN customers c ON c.id = la.customer_id
+        WHERE la.lockerhub_application_id = $1`, [appId])).rows[0];
+    if (ours) {
+      out.locker_no = (ours.locker_no as string) ?? null;
+      out.branch_name = (ours.branch_name as string) ?? null;
+      if (ours.cid) {
+        out.customer_id = Number(ours.cid);
+        out.tenant_name = (ours.full_name as string) ?? null;
+        out.customer_code = (ours.customer_code as string) ?? null;
+      }
+    }
+    if (out.tenant_name) return out;
+
+    if (!lh.lockerHubConfigured()) return out;
+    const app = await lh.getLockerApplication(appId).catch(() => null) as Record<string, any> | null;
+    if (!app) return out;
+    out.tenant_name = out.tenant_name ?? (app.name as string) ?? null;
+    out.locker_no = out.locker_no ?? (app.allotment?.locker_number as string) ?? null;
+    // LockerHub is phone-keyed, so their phone is the join back to our customer.
+    const digits = String(app.phone ?? '').replace(/\D/g, '').slice(-10);
+    if (!out.customer_id && digits.length === 10) {
+      const c = (await db.query<Record<string, unknown>>(
+        `SELECT id, full_name, customer_code FROM customers
+          WHERE right(regexp_replace(phone, '\\D', '', 'g'), 10) = $1 ORDER BY id LIMIT 1`, [digits])).rows[0];
+      if (c) {
+        out.customer_id = Number(c.id);
+        out.customer_code = (c.customer_code as string) ?? null;
+        // Our own name is preferred over LockerHub's spelling once matched.
+        out.tenant_name = (c.full_name as string) ?? out.tenant_name;
+      }
+    }
+    if (!out.branch_name && app.branch_id) {
+      const bl = await lh.branches().catch(() => null);
+      const b = bl?.branches.find((x) => String(x.id) === String(app.branch_id));
+      if (b) out.branch_name = b.name;
+    }
+  } catch { /* a name is a nicety; the payment is not */ }
+  return out;
+}
+
 /** Record an offline rent payment; it goes to Admin/CXO and settles on approval. */
 export async function recordOfflinePayment(
   db: Db, actor: AuthUser,
@@ -52,6 +113,20 @@ export async function recordOfflinePayment(
   if (input.method !== 'cheque' && input.method !== 'transfer') throw errors.badRequest('Choose a payment method — cheque or transfer.');
   const reference = String(input.reference ?? '').trim();
   if (reference.length < 2) throw errors.badRequest('Enter the payment reference (cheque number, or the bank/UTR reference).');
+
+  // WHOSE rent this is, captured NOW and carried on the request (owner
+  // 2026-09-07: "im not knowing whose locker rent has been given for approval").
+  //
+  // It cannot be resolved later from our own tables: measured on production,
+  // none of the four lockers with a pending payment appear in ANY NCD locker
+  // table — no allotment, no deposit link, no cheque. Only LockerHub knows the
+  // tenant, and asking them once here is far better than asking per row every
+  // time the queue renders.
+  //
+  // Best-effort in every direction. A payment must still be recordable when
+  // LockerHub is unreachable; the card then falls back to the locker reference,
+  // which is what it showed before.
+  const who = await resolvePayer(db, appId);
 
   return db.withTx(async (tx) => {
     const open = (await tx.query(
@@ -67,7 +142,14 @@ export async function recordOfflinePayment(
 
     const req = await createApprovalRequest(tx, {
       type: 'locker_offline_payment', entityType: 'locker_offline_payments', entityId: id, makerUserId: actor.id,
-      metadata: { payment_id: id, lockerhub_application_id: appId, leg, method: input.method, reference, amount: input.amount ?? null },
+      metadata: {
+        payment_id: id, lockerhub_application_id: appId, leg, method: input.method, reference,
+        amount: input.amount ?? null,
+        // Stored on the request so the card reads correctly for ever, without
+        // depending on LockerHub being up when somebody opens the queue.
+        tenant_name: who.tenant_name, locker_no: who.locker_no, branch_name: who.branch_name,
+        customer_id: who.customer_id, customer_code: who.customer_code,
+      },
     });
     await tx.query('UPDATE locker_offline_payments SET approval_request_id = $1 WHERE id = $2', [req.id, id]);
     await writeAudit(tx, {

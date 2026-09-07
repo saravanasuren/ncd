@@ -921,17 +921,25 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
          LEFT JOIN customers c_lk ON c_lk.id = l.customer_id
         WHERE p.id = $1`, [id])).rows[0];
     if (r) {
-      const who = r.customer ? String(r.customer) : null;
+      // The name captured when the payment was recorded takes precedence: these
+      // lockers are commonly ones NCD has no other record of, so the joins above
+      // find nothing and this is the only place the tenant is known. Measured on
+      // production — all four pending payments were on lockers absent from every
+      // NCD locker table.
+      const who = (meta.tenant_name ? String(meta.tenant_name) : null) ?? (r.customer ? String(r.customer) : null);
+      const code = (meta.customer_code ? String(meta.customer_code) : null) ?? (r.customer_code ? String(r.customer_code) : null);
+      const lockerNo = r.locker_no ?? (meta.locker_no ? String(meta.locker_no) : null);
+      const branch = r.branch_name ?? (meta.branch_name ? String(meta.branch_name) : null);
       const leg = String(r.leg ?? 'rent');
       return {
         // The name first, like every other card — it is the thing the checker
         // needs before anything else.
-        subject: `${who ?? 'Locker'} · ${leg}${r.locker_no ? ` · Locker ${r.locker_no}` : ''}`,
+        subject: `${who ?? 'Locker'} · ${leg}${lockerNo ? ` · Locker ${lockerNo}` : ''}`,
         amount: money(r.amount ?? meta.amount),
         facts: clean([
-          fact('Customer', who ? `${who}${r.customer_code ? ` (${r.customer_code})` : ''}` : null),
-          fact('Locker', r.locker_no),
-          fact('Branch', r.branch_name),
+          fact('Customer', who ? `${who}${code ? ` (${code})` : ''}` : null),
+          fact('Locker', lockerNo),
+          fact('Branch', branch),
           fact('Leg', leg),
           fact('Amount', money(r.amount ?? meta.amount)),
           fact('Method', r.method ?? meta.method),

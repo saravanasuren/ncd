@@ -34,6 +34,19 @@ export async function pendingBySeriesSummary(db: Db) {
             -- base than the series actually has. DISTINCT on the same Active
             -- filter, so all three figures describe the same set of rows.
             count(DISTINCT a.customer_id) FILTER (WHERE a.status = 'Active')::int AS customer_count,
+            -- How much of the series is actually SIGNED (owner 2026-09-04: "how
+            -- to know how many e signs have been made in a series"). It was
+            -- nowhere — no screen and no report counted signatures at all, and
+            -- the first measurement was stark: 7 signed across 890 investments,
+            -- with the current open series at 0 of 51. A count on this page is
+            -- the cheapest way for that gap to stop being invisible.
+            --
+            -- Counted over the SAME Active set as the three figures above, so
+            -- "12 / 51" compares like with like rather than against a different
+            -- denominator.
+            count(a.id) FILTER (WHERE a.status = 'Active' AND a.esigned_at IS NOT NULL)::int AS signed_count,
+            count(a.id) FILTER (WHERE a.status = 'Active' AND a.signing_method = 'esign')::int AS esigned_count,
+            count(a.id) FILTER (WHERE a.status = 'Active' AND a.signing_method = 'physical')::int AS physically_signed_count,
             -- When the series was allotted (owner 2026-08-28: the page showed the
             -- status but never the date). Read from the investments, which is
             -- where allotment_date is actually stamped — NOT from

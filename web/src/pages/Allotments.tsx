@@ -14,6 +14,12 @@ interface SeriesRow {
   /** Distinct PEOPLE holding an Active investment — not the same as total_count,
    *  since one customer often holds several in a series. */
   customer_count: number;
+  /** Active investments with a signature on file, by either method (owner
+   *  2026-09-04). Counted over the same Active set as total_count, so the pair
+   *  reads as a fraction of the same thing. */
+  signed_count: number;
+  esigned_count: number;
+  physically_signed_count: number;
   /** The date the series was allotted, from the date stamped on its investments.
    *  Null while it is still Open. */
   allotment_date: string | null;
@@ -63,6 +69,31 @@ export function AllotmentsPage() {
     // the pair together shows how concentrated a series is.
     { key: 'customer_count', header: 'Customers', align: 'right', value: (s) => s.customer_count },
     { key: 'total_count', header: 'Investments', align: 'right', value: (s) => s.total_count },
+    // Signed paperwork, which no screen or report counted before (owner
+    // 2026-09-04: "how to know how many e signs have been made in a series").
+    // Sorted on the SHARE, not the count: a series with 5 of 129 is in worse
+    // shape than one with 2 of 2, and ranking by the raw number hides that.
+    { key: 'signed_count', header: 'Signed', align: 'right',
+      value: (s) => (s.total_count ? s.signed_count / s.total_count : -1),
+      render: (s) => {
+        if (!s.total_count) return <span className="text-text-muted">—</span>;
+        const all = s.signed_count >= s.total_count;
+        const none = s.signed_count === 0;
+        const bits = [
+          s.esigned_count ? `${s.esigned_count} e-signed` : '',
+          s.physically_signed_count ? `${s.physically_signed_count} on paper` : '',
+        ].filter(Boolean).join(' · ');
+        return (
+          <span className="inline-flex flex-col items-end leading-tight"
+            title={bits || 'Nothing signed in this series yet'}>
+            <span className={`mono ${all ? 'text-success' : none ? 'text-danger' : 'text-warn'}`}>
+              {s.signed_count} / {s.total_count}
+            </span>
+            {/* The split only means something once there IS a split. */}
+            {bits && <span className="text-[11px] text-text-muted">{bits}</span>}
+          </span>
+        );
+      } },
     { key: 'total_amount', header: 'Investment amount', align: 'right',
       value: (s) => Number(s.total_amount),
       render: (s) => (

@@ -22,6 +22,40 @@ interface ApprovalReq {
   subject?: string;
   amount?: number | null;
   maker_name?: string | null;   // who RAISED the request (e.g. created the customer)
+  /** When it was raised. Shown on every approval so "who sent this, and when"
+   *  is answerable from the queue (owner 2026-09-07). */
+  created_at?: string | null;
+}
+
+/**
+ * "4 Sep 2026, 3:42 pm" — the date AND the time, because the question being
+ * answered is how long a request has been sitting, and a bare date cannot
+ * distinguish this morning from three days ago at closing time.
+ *
+ * Rendered in the browser's own locale/zone: the reader is at a branch in IST
+ * and the stored value is UTC, so formatting the raw string would show the
+ * wrong hour.
+ */
+function raisedAt(v: unknown): string | null {
+  const t = v ? new Date(String(v)) : null;
+  if (!t || Number.isNaN(t.getTime())) return null;
+  return t.toLocaleString('en-IN', {
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  });
+}
+
+/** How long ago, for the cases where the absolute time is not the point. */
+function agoFrom(v: unknown): string | null {
+  const t = v ? new Date(String(v)) : null;
+  if (!t || Number.isNaN(t.getTime())) return null;
+  const mins = Math.floor((Date.now() - t.getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
 }
 
 /** A fact value that is a document/endpoint URL (rendered as an openable link,
@@ -346,6 +380,15 @@ export function ApprovalsPage() {
                 <div className="text-xs text-text-muted font-mono mt-0.5">
                   {r.request_no}
                   {r.maker_name && <span className="font-sans"> · raised by {r.maker_name}</span>}
+                  {/* When it was sent (owner 2026-09-07). The absolute time is
+                      what a queue needs — "3d ago" alone cannot be quoted back
+                      to anyone — with the relative age beside it so a request
+                      that has been sitting stands out. */}
+                  {raisedAt(r.created_at) && (
+                    <span className="font-sans"> · {raisedAt(r.created_at)}
+                      {agoFrom(r.created_at) && <span className="text-text-muted"> ({agoFrom(r.created_at)})</span>}
+                    </span>
+                  )}
                 </div>
               </div>
               {!r.canAct && (

@@ -45,6 +45,9 @@ export interface ApprovalRow {
   status: string;
   maker_user_id: number | null;
   metadata: Record<string, unknown>;
+  /** When the request was raised. Carried through so every screen can say when
+   *  it was sent, not just by whom (owner 2026-09-07). */
+  created_at?: string | null;
 }
 
 function rowToApproval(r: Record<string, unknown>): ApprovalRow {
@@ -60,6 +63,9 @@ function rowToApproval(r: Record<string, unknown>): ApprovalRow {
     status: String(r.status),
     maker_user_id: r.maker_user_id != null ? Number(r.maker_user_id) : null,
     metadata: (r.metadata as Record<string, unknown>) ?? {},
+    // Dropped here until 2026-09-07, so `SELECT ar.*` carried it and the mapper
+    // silently threw it away — the queue had no timestamp to show.
+    created_at: r.created_at != null ? String(r.created_at) : null,
   };
 }
 
@@ -880,6 +886,61 @@ export async function describeRequest(db: Db, req: ApprovalRow): Promise<Request
         fact('Reason', r.reason),
       ]),
     };
+  }
+
+  /**
+   * Locker rent or deposit paid offline. There was NO branch for this at all —
+   * the card fell through to the raw-metadata fallback and read
+   * "REQ-2026-000528" with a bare Lockerhub application id, so the checker could
+   * not tell WHOSE rent they were approving (owner 2026-09-07: "in this approval
+   * im not knowing whose locker rent has been given for approval").
+   *
+   * locker_offline_payments has no customer of its own — it is keyed on
+   * LockerHub's application id — so the name is resolved from whichever locker
+   * record knows it. The allotment record is preferred: it is the one written at
+   * hand-over with the customer resolved from LockerHub's own tenant phone.
+   */
+  if (id && req.entity_type === 'locker_offline_payments') {
+    const r = (await db.query<Record<string, unknown>>(
+      `SELECT p.lockerhub_application_id, p.leg, p.method, p.reference, p.amount, p.status,
+              COALESCE(la.locker_no, l.locker_no)                  AS locker_no,
+              la.branch_name,
+              COALESCE(c_al.full_name, c_lk.full_name)             AS customer,
+              COALESCE(c_al.customer_code, c_lk.customer_code)     AS customer_code
+         FROM locker_offline_payments p
+         LEFT JOIN locker_allotments la ON la.lockerhub_application_id = p.lockerhub_application_id
+         LEFT JOIN customers c_al ON c_al.id = la.customer_id
+         -- Fallback for a locker whose deposit is backed by an NCD investment
+         -- but which predates the allotment record.
+         LEFT JOIN LATERAL (
+           SELECT dl.locker_no, a.customer_id
+             FROM locker_deposit_links dl JOIN applications a ON a.id = dl.application_id
+            WHERE dl.lockerhub_application_id = p.lockerhub_application_id
+            ORDER BY dl.id DESC LIMIT 1
+         ) l ON TRUE
+         LEFT JOIN customers c_lk ON c_lk.id = l.customer_id
+        WHERE p.id = $1`, [id])).rows[0];
+    if (r) {
+      const who = r.customer ? String(r.customer) : null;
+      const leg = String(r.leg ?? 'rent');
+      return {
+        // The name first, like every other card — it is the thing the checker
+        // needs before anything else.
+        subject: `${who ?? 'Locker'} · ${leg}${r.locker_no ? ` · Locker ${r.locker_no}` : ''}`,
+        amount: money(r.amount ?? meta.amount),
+        facts: clean([
+          fact('Customer', who ? `${who}${r.customer_code ? ` (${r.customer_code})` : ''}` : null),
+          fact('Locker', r.locker_no),
+          fact('Branch', r.branch_name),
+          fact('Leg', leg),
+          fact('Amount', money(r.amount ?? meta.amount)),
+          fact('Method', r.method ?? meta.method),
+          fact('Reference', r.reference ?? meta.reference),
+          fact('LockerHub application', r.lockerhub_application_id),
+          fact('On approval', `The ${leg} is marked paid and settled on LockerHub`),
+        ]),
+      };
+    }
   }
 
   if (id && req.entity_type === 'locker_cheques') {

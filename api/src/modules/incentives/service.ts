@@ -54,6 +54,49 @@ export async function payeeAccruals(db: Db, payeeType: string, payeeId: number) 
   return rows;
 }
 
+/**
+ * One payee's incentives, month by month (owner 2026-09-07: "make the incentives
+ * page in such a way that i get to see month wise data for me to easily see each
+ * ones monthly incentives").
+ *
+ * The page already lists every accrual with a Month column, but a 44-row list is
+ * not a monthly figure — reading "what did Bindhu earn in August" off it meant
+ * adding rows up by eye. This is that sum.
+ *
+ * Grouped on the money-received month, the same month the accrual rows show and
+ * the same one My Earnings groups by, so the two screens agree.
+ */
+export async function payeeMonthly(db: Db, payeeType: string, payeeId: number) {
+  const { rows } = await db.query(
+    `SELECT to_char(COALESCE(a.date_money_received, a.created_at::date), 'YYYY-MM') AS month,
+            count(*)::int AS investments,
+            count(DISTINCT a.customer_id)::int AS customers,
+            COALESCE(sum(a.total_amount),0) AS investment_amount,
+            COALESCE(sum(ia.amount),0) AS accrued,
+            COALESCE(sum(ia.amount) FILTER (WHERE ia.paid_at IS NOT NULL),0) AS paid,
+            -- Referrer vs enroller, because they are different work and the
+            -- split is what explains a payee's number to them.
+            count(*) FILTER (WHERE ia.matrix_cell = 'referrer')::int AS as_referrer,
+            count(*) FILTER (WHERE ia.matrix_cell <> 'referrer')::int AS as_enroller
+     ${ACCRUAL_FROM}
+     WHERE ia.payee_type = $1 AND ia.payee_id = $2 AND ${NOT_SELF}
+     GROUP BY 1 ORDER BY 1 DESC`, [payeeType, payeeId]);
+  return rows.map((r) => {
+    const accrued = Number((r as any).accrued); const paid = Number((r as any).paid);
+    return {
+      month: (r as any).month,
+      investments: Number((r as any).investments),
+      customers: Number((r as any).customers),
+      investment_amount: round2(Number((r as any).investment_amount)),
+      accrued: round2(accrued),
+      paid: round2(paid),
+      balance: round2(accrued - paid),
+      as_referrer: Number((r as any).as_referrer),
+      as_enroller: Number((r as any).as_enroller),
+    };
+  });
+}
+
 /** Pay one customer's incentive in full — marks that accrual paid + logs the
  * payout against the application. Idempotent (a paid accrual is a no-op). */
 export async function payCustomerAccrual(db: Db, actor: AuthUser, payeeType: string, payeeId: number, applicationId: number) {
@@ -157,8 +200,11 @@ export async function myEarnings(db: Db, actor: AuthUser) {
   const payeeId = actor.agentId ?? actor.id;
   const bal = await payeeBalance(db, payeeType, payeeId);
 
+  // application_id / customer_id so the page can link straight through to them
+  // (owner 2026-09-07: "make everything in my earnings clickable").
   const paidItems = (await db.query(
     `SELECT ia.amount, ia.accrual_date, ia.paid_at, a.application_no,
+            ia.application_id, c.id AS customer_id,
             c.full_name AS customer_name, c.customer_code
      ${ACCRUAL_FROM}
      WHERE ia.payee_type = $1 AND ia.payee_id = $2 AND ia.paid_at IS NOT NULL AND ${NOT_SELF}
@@ -191,6 +237,58 @@ export async function myEarnings(db: Db, actor: AuthUser) {
        FROM applications a WHERE ${MINE}
       GROUP BY 1 ORDER BY 1 DESC`, [ownerId])).rows;
 
+  /**
+   * What she is actually PAID ON, beside what she enrolled (owner 2026-09-07:
+   * "show both lines in my earnings so it reconciles").
+   *
+   * The two are different sets, and that is the whole point. Measured on
+   * production for one branch staff member in August: 8 investments enrolled
+   * (₹34L), but 10 credited (₹38L) — and only ONE of those was the enroller
+   * side. The rest she earned as the REFERRER on investments colleagues keyed
+   * in. Her page said ₹34L while the incentives list paid her on ₹38L, and
+   * nothing on screen explained the gap.
+   *
+   * `credited` is the same basis the Incentives page uses, so the two now
+   * reconcile row for row. It is split by side because "I enrolled it" and "I
+   * referred it" are different work.
+   */
+  const CREDIT = `ia.payee_type = $1 AND ia.payee_id = $2 AND ${NOT_SELF}`;
+  const AS_REFERRER = `ia.matrix_cell = 'referrer'`;
+
+  const credTotals = (await db.query<Record<string, unknown>>(
+    `SELECT count(*)::int AS investments,
+            count(DISTINCT a.customer_id)::int AS customers,
+            COALESCE(sum(a.total_amount),0) AS amount,
+            COALESCE(sum(ia.amount) FILTER (WHERE ia.paid_at IS NOT NULL),0) AS incentive_paid,
+            count(*) FILTER (WHERE ${AS_REFERRER})::int AS referred_investments,
+            COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_REFERRER}),0) AS referred_amount,
+            count(*) FILTER (WHERE NOT ${AS_REFERRER})::int AS enrolled_investments,
+            COALESCE(sum(a.total_amount) FILTER (WHERE NOT ${AS_REFERRER}),0) AS enrolled_amount
+     ${ACCRUAL_FROM} WHERE ${CREDIT}`, [payeeType, payeeId])).rows[0]!;
+
+  const credBySeries = (await db.query(
+    `SELECT s.code AS series_code, s.name AS series_name,
+            count(*)::int AS investments,
+            count(DISTINCT a.customer_id)::int AS customers,
+            COALESCE(sum(a.total_amount),0) AS amount,
+            COALESCE(sum(ia.amount) FILTER (WHERE ia.paid_at IS NOT NULL),0) AS incentive_paid,
+            COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_REFERRER}),0) AS referred_amount,
+            COALESCE(sum(a.total_amount) FILTER (WHERE NOT ${AS_REFERRER}),0) AS enrolled_amount
+     ${ACCRUAL_FROM}
+     WHERE ${CREDIT} GROUP BY s.code, s.name ORDER BY s.code DESC`, [payeeType, payeeId])).rows;
+
+  const credByMonth = (await db.query(
+    `SELECT to_char(COALESCE(a.date_money_received, a.created_at::date), 'YYYY-MM') AS month,
+            count(*)::int AS investments,
+            count(DISTINCT a.customer_id)::int AS customers,
+            COALESCE(sum(a.total_amount),0) AS amount,
+            COALESCE(sum(ia.amount) FILTER (WHERE ia.paid_at IS NOT NULL),0) AS incentive_paid,
+            COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_REFERRER}),0) AS referred_amount,
+            count(*) FILTER (WHERE ${AS_REFERRER})::int AS referred_investments,
+            COALESCE(sum(a.total_amount) FILTER (WHERE NOT ${AS_REFERRER}),0) AS enrolled_amount,
+            count(*) FILTER (WHERE NOT ${AS_REFERRER})::int AS enrolled_investments
+     ${ACCRUAL_FROM} WHERE ${CREDIT} GROUP BY 1 ORDER BY 1 DESC`, [payeeType, payeeId])).rows;
+
   return {
     paid: bal.paid, // paid-to-date only — never accrued/balance
     paid_items: paidItems,
@@ -201,6 +299,23 @@ export async function myEarnings(db: Db, actor: AuthUser) {
     },
     by_series: bySeries,
     by_month: byMonth,
+    credited: {
+      totals: {
+        investments: Number(credTotals.investments),
+        customers: Number(credTotals.customers),
+        amount: Number(credTotals.amount),
+        // PAID only. Accrued is deliberately absent from this whole response
+        // (owner 2026-07-20) — a staff member sees what they have been paid,
+        // never what is owed.
+        incentive_paid: Number(credTotals.incentive_paid),
+        referred_investments: Number(credTotals.referred_investments),
+        referred_amount: Number(credTotals.referred_amount),
+        enrolled_investments: Number(credTotals.enrolled_investments),
+        enrolled_amount: Number(credTotals.enrolled_amount),
+      },
+      by_series: credBySeries,
+      by_month: credByMonth,
+    },
   };
 }
 

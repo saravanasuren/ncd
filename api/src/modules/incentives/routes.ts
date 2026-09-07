@@ -54,5 +54,16 @@ incentivesRouter.post('/agents/:id/eligibility', requirePermission('incentives:m
     const input = z.object({ rate_pct: z.number(), payout_mode: z.string().optional(), bank_name: z.string().optional(), account_number: z.string().optional(), ifsc: z.string().optional() }).parse(req.body);
     res.status(201).json({ request: await s.requestAgentEligibility(getDb(), req.user!, Number(req.params.id), input) });
   }));
+
+// Month-wise for one payee (owner 2026-09-07). Gated on manage-eligibility
+// ALONE, exactly like the accrual list it summarises — NOT on earnings:read-own
+// as well. That second permission is held by every branch staff member, and
+// this route takes any payee id, so accepting it would let one read a
+// colleague's incentives. Staff get their own month-wise figures from
+// /my-earnings, which is scoped to the caller and cannot name anyone else.
+incentivesRouter.get('/payees/:type/:id/monthly', requirePermission('incentives:manage-eligibility'),
+  asyncHandler(async (req, res) => {
+    res.json({ rows: await s.payeeMonthly(getDb(), String(req.params.type), Number(req.params.id)) });
+  }));
 incentivesRouter.post('/agents/:id/eligibility/revoke', requirePermission('incentives:manage-eligibility'),
   asyncHandler(async (req, res) => { await s.revokeAgentEligibility(getDb(), req.user!, Number(req.params.id)); res.json({ ok: true }); }));

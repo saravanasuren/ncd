@@ -54,6 +54,8 @@ interface Tenant {
   rent_status?: 'paid' | 'waived' | 'premium' | null;
   waiver_id: number | null; waiver_status: string | null; waiver_reason: string | null;
   linked_manually?: boolean; override_key?: string | null;
+  /** The locker agreement is signed, and by which route (owner 2026-09-04). */
+  agreement_signed?: boolean; agreement_method?: 'esign' | 'physical' | null;
 }
 
 export function LockerTenantsPage() {
@@ -130,6 +132,15 @@ export function LockerTenantsPage() {
     const hay = `${r.tenant_name ?? ''} ${r.tenant_phone ?? ''} ${r.tenant_email ?? ''} ${r.customer_code ?? ''} ${r.locker_no ?? ''} ${r.application_no ?? ''}`.toLowerCase();
     return hay.includes(q.trim().toLowerCase());
   });
+
+  // Signed agreements among the lockers currently listed. A row with no
+  // LockerHub application can never have one, so it is left out of BOTH halves
+  // rather than counted as unsigned.
+  const agreementCount = rows.reduce(
+    (acc, r) => r.lockerhub_application_id
+      ? { signed: acc.signed + (r.agreement_signed ? 1 : 0), signable: acc.signable + 1 }
+      : acc,
+    { signed: 0, signable: 0 });
   const ncdCount = all.filter((r) => r.ncd_backed).length;
 
   return (
@@ -243,6 +254,21 @@ export function LockerTenantsPage() {
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide">
             Tenants {branchId ? `· ${branchName(branchId)}` : restrictedTo ? '· my branch' : '· all branches'} ({rows.length})
+            {/* The same figure the Allotments page shows per series, for lockers
+                (owner 2026-09-04). Counted from the rows ON SCREEN, not a
+                server-side total: the branch picker and the NCD-only toggle
+                filter this list, and a total computed over everything would
+                disagree with the table under it. Only lockers that COULD have an
+                agreement are in the denominator. */}
+            {agreementCount.signable > 0 && (
+              <span className={`ml-2 text-xs font-normal normal-case tracking-normal rounded px-1.5 py-0.5 ${
+                agreementCount.signed === agreementCount.signable ? 'bg-[color:var(--success-bg)] text-success'
+                : agreementCount.signed ? 'bg-[color:var(--warn-bg)] text-warn'
+                : 'bg-[color:var(--danger-bg)] text-danger'}`}
+                title="Locker agreements with a signature on file, by e-Sign or on paper">
+                {agreementCount.signed} / {agreementCount.signable} agreements signed
+              </span>
+            )}
           </h2>
         </div>
 
@@ -269,6 +295,7 @@ export function LockerTenantsPage() {
                 <th className="py-2 pr-3">Rent status</th>
                 <th className="py-2 pr-3">Lease</th>
                 <th className="py-2 pr-3 text-right">NCD pledged</th>
+                <th className="py-2 pr-3">Agreement</th>
                 <th className="py-2 pr-3">Locker app</th>
               </tr>
             </thead>
@@ -316,6 +343,21 @@ export function LockerTenantsPage() {
                     {(r.lease_start ?? r.allotted_on) ? <>{r.lease_start ?? r.allotted_on}{r.lease_expires_on ? <> → {r.lease_expires_on}</> : null}</> : '—'}
                   </td>
                   <td className="py-2 pr-3 text-right mono">{r.pledged_amount > 0 ? formatINR(r.pledged_amount) : '—'}</td>
+                  {/* Whether the agreement is signed, and by which route. Never a
+                      bare "signed": the method is always named, the same rule the
+                      locker profile and the enrolment card follow. A row with no
+                      LockerHub application cannot have one at all, and says so
+                      rather than reading as unsigned. */}
+                  <td className="py-2 pr-3 whitespace-nowrap">
+                    {!r.lockerhub_application_id
+                      ? <span className="text-text-muted text-xs">—</span>
+                      : r.agreement_signed
+                        ? <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">
+                            ✓ {r.agreement_method === 'physical' ? 'on paper' : 'e-Signed'}
+                          </span>
+                        : <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger"
+                            title="No signed agreement on file for this locker">not signed</span>}
+                  </td>
                   <td className="py-2 pr-3 font-mono text-xs text-text-muted">
                     {/* Re-open the application. This is the ONLY route back to a
                         tenancy once staff leave the enrolment page — and so the

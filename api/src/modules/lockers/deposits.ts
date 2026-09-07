@@ -721,6 +721,26 @@ export async function lockerTenants(db: Db, opts: { branchId?: string | string[]
     });
   }
 
+  // Which agreements are signed, and how (owner 2026-09-04: the same count the
+  // Allotments page now shows per series, for lockers). Nothing counted this
+  // either — the signing record existed per locker but no list ever said how
+  // many of them were done.
+  //
+  // One query for the whole page rather than a lookup per row, and best-effort:
+  // an unreadable signing table must not take down the roster.
+  try {
+    const { rows: sig } = await db.query<Record<string, unknown>>(
+      `SELECT lockerhub_application_id, method, status FROM locker_agreement_signings
+        WHERE status = 'Signed'`);
+    const byApp = new Map(sig.map((r) => [String(r.lockerhub_application_id), String(r.method)]));
+    for (const r of rows) {
+      const appId = r.lockerhub_application_id ? String(r.lockerhub_application_id) : null;
+      const m = appId ? byApp.get(appId) : undefined;
+      r.agreement_signed = !!m;
+      r.agreement_method = m ?? null;
+    }
+  } catch { /* the roster is worth more than the column */ }
+
   return {
     rows,
     // The roster is all-or-nothing now — one call, so either we have it or we

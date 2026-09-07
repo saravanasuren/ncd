@@ -8,6 +8,11 @@ import { Tabs, type TabDef } from '../components/Tabs.js';
 import { useConfirm } from '../components/Confirm.js';
 
 interface Payee { payee_type: string; payee_id: number; payee_name: string | null; is_staff: boolean; investment_amount: string; pending_investment_amount: string; accrued: string; paid: string; balance: string; }
+interface MonthlyRow {
+  month: string; investments: number; customers: number;
+  investment_amount: number; accrued: number; paid: number; balance: number;
+  as_referrer: number; as_enroller: number;
+}
 interface Accrual { application_id: number; application_no: string; customer: string; customer_code: string; series_code: string; date_money_received: string | null; investment_amount: string; incentive_amount: string; paid: boolean; }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -162,6 +167,55 @@ function PayeeAccruals({ p, canPay, canRevert, onPaid, onReverted }: { p: Payee;
     onSuccess: () => { qc.invalidateQueries({ queryKey: key }); onReverted(); },
   });
   const rows = data?.rows ?? [];
+
+  /**
+   * Month-wise, above the per-customer list (owner 2026-09-07: "make the
+   * incentives page in such a way that i get to see month wise data for me to
+   * easily see each ones monthly incentives").
+   *
+   * The list below already carries a Month column, but 44 rows is not a monthly
+   * figure — reading "what did Bindhu earn in August" off it meant adding rows
+   * up by eye. Clicking a month filters the list to it.
+   */
+  const monthly = useQuery({
+    queryKey: ['inc-monthly', p.payee_type, p.payee_id],
+    queryFn: () => api.get<{ rows: MonthlyRow[] }>(`/api/incentives/payees/${p.payee_type}/${p.payee_id}/monthly`),
+  });
+  const [month, setMonth] = useState<string | null>(null);
+
+  const monthCols: Column<MonthlyRow>[] = [
+    { key: 'month', header: 'Month', tdClassName: 'font-semibold', value: (r) => r.month,
+      render: (r) => (
+        <button onClick={() => setMonth(month === r.month ? null : r.month)}
+          className={`hover:underline ${month === r.month ? 'text-primary font-semibold' : 'text-primary'}`}>
+          {monthLabel(`${r.month}-01`)}
+        </button>
+      ) },
+    { key: 'investments', header: 'Investments', align: 'right', value: (r) => r.investments },
+    { key: 'customers', header: 'Customers', align: 'right', value: (r) => r.customers },
+    { key: 'investment_amount', header: 'Investment', align: 'right',
+      value: (r) => Number(r.investment_amount), render: (r) => <span className="mono">{formatINR(r.investment_amount)}</span> },
+    { key: 'accrued', header: 'Incentive', align: 'right',
+      value: (r) => Number(r.accrued), render: (r) => <span className="mono font-semibold">{formatINR(r.accrued)}</span> },
+    { key: 'paid', header: 'Paid', align: 'right',
+      value: (r) => Number(r.paid), render: (r) => <span className="mono text-text-muted">{formatINR(r.paid)}</span> },
+    { key: 'balance', header: 'Balance', align: 'right',
+      value: (r) => Number(r.balance),
+      render: (r) => <span className={`mono ${Number(r.balance) > 0 ? 'text-warn font-semibold' : 'text-text-muted'}`}>{formatINR(r.balance)}</span> },
+    // Which side the month was earned on — it is the thing that explains a
+    // figure back to the person who earned it.
+    { key: 'split', header: 'Earned as', sortable: false, filterable: false,
+      render: (r) => (
+        <span className="text-xs text-text-muted whitespace-nowrap">
+          {[r.as_enroller ? `${r.as_enroller} enrolled` : '', r.as_referrer ? `${r.as_referrer} referred` : ''].filter(Boolean).join(' · ') || '—'}
+        </span>
+      ) },
+  ];
+
+  const shown = month
+    ? rows.filter((r) => String(r.date_money_received ?? '').slice(0, 7) === month)
+    : rows;
+
   const cols: Column<Accrual>[] = [
     { key: 'customer', header: 'Customer', value: (r) => r.customer,
       render: (r) => <span>{r.customer} <span className="font-mono text-xs text-text-muted">{r.customer_code}</span></span> },
@@ -187,9 +241,24 @@ function PayeeAccruals({ p, canPay, canRevert, onPaid, onReverted }: { p: Payee;
   ];
   return (
     <div className="bg-bg p-3">
+      <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1.5">
+        Month-wise
+        {month && <button onClick={() => setMonth(null)} className="ml-2 font-normal normal-case text-primary hover:underline">clear {monthLabel(`${month}-01`)}</button>}
+      </div>
+      <div className="mb-4">
+        {monthly.isLoading
+          ? <div className="text-xs text-text-muted px-2 py-3">Loading…</div>
+          : <DataTable columns={monthCols} rows={monthly.data?.rows ?? []} rowKey={(r) => r.month}
+              defaultSort={{ key: 'month', dir: 'desc' }} empty="Nothing accrued yet." />}
+      </div>
+
+      <div className="text-xs font-semibold text-text-label uppercase tracking-wide mb-1.5">
+        Customer-wise{month ? ` · ${monthLabel(`${month}-01`)}` : ''}
+      </div>
       {isLoading ? <div className="text-xs text-text-muted px-2 py-3">Loading…</div> : (
-        <DataTable columns={cols} rows={rows} rowKey={(r) => r.application_id}
-          defaultSort={{ key: 'investment_amount', dir: 'desc' }} empty="No eligible customers." />
+        <DataTable columns={cols} rows={shown} rowKey={(r) => r.application_id}
+          defaultSort={{ key: 'investment_amount', dir: 'desc' }}
+          empty={month ? 'Nothing in that month.' : 'No eligible customers.'} />
       )}
     </div>
   );

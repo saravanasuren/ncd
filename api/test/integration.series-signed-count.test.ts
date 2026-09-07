@@ -112,3 +112,61 @@ describe('the Allotments page counts signatures per series', () => {
     expect(Number(after.signed_count)).toBeLessThanOrEqual(Number(after.total_count));
   });
 });
+
+/**
+ * The same count for LOCKER agreements (owner 2026-09-04: "and same for locker
+ * aggrment also").
+ *
+ * Lockers have no series, so the equivalent lives on the tenant roster: a flag
+ * per locker and a count in the header. The signing record already existed per
+ * locker — nothing had ever counted them.
+ */
+describe('the tenant roster says which locker agreements are signed', () => {
+  it('flags a SIGNED agreement with its method, and an unsigned one as unsigned', async () => {
+    const a = await admin();
+    // Two lockers on the roster. A locker reaches the roster through NCD's own
+    // involvement — here a deposit link — so both appear even with LockerHub
+    // unreachable in tests.
+    const one = await liveInvestment(a, 'Roster Signed', '9535000011');
+    const two = await liveInvestment(a, 'Roster Unsigned', '9535000012');
+    for (const [appId, lk] of [[one, 'LKR-ROSTER-1'], [two, 'LKR-ROSTER-2']] as const) {
+      await ctx.db.query(
+        `INSERT INTO locker_deposit_links (application_id, lockerhub_application_id, linked_amount, status)
+         VALUES ($1, $2, 50000, 'active')`, [appId, lk]);
+    }
+
+    // One signed on paper; the other only STARTED — awaiting a signature is not
+    // signed, which is the entire point of the count.
+    await ctx.db.query(
+      `INSERT INTO locker_agreement_signings (lockerhub_application_id, method, status, signed_at)
+       VALUES ($1, 'physical', 'Signed', now())`, ['LKR-ROSTER-1']);
+    await ctx.db.query(
+      `INSERT INTO locker_agreement_signings (lockerhub_application_id, method, status)
+       VALUES ($1, 'esign', 'AwaitingSignature')`, ['LKR-ROSTER-2']);
+
+    const { lockerTenants } = await import('../src/modules/lockers/deposits.js');
+    const rows = (await lockerTenants(ctx.db, {})).rows as Array<Record<string, unknown>>;
+    const byApp = new Map(rows.map((r) => [String(r.lockerhub_application_id), r]));
+
+    const signed = byApp.get('LKR-ROSTER-1')!;
+    expect(signed).toBeTruthy();
+    expect(signed.agreement_signed).toBe(true);
+    expect(signed.agreement_method).toBe('physical');
+
+    const awaiting = byApp.get('LKR-ROSTER-2')!;
+    expect(awaiting).toBeTruthy();
+    // Started but not finished must read as NOT signed.
+    expect(awaiting.agreement_signed).toBe(false);
+  });
+
+  it('never reports a locker with no LockerHub application as unsigned', async () => {
+    // It cannot have an agreement at all, so it belongs in neither half of the
+    // count — counting it as unsigned would overstate the gap.
+    const { lockerTenants } = await import('../src/modules/lockers/deposits.js');
+    const rows = (await lockerTenants(ctx.db, {})).rows as Array<Record<string, unknown>>;
+    for (const r of rows) {
+      expect('agreement_signed' in r).toBe(true);
+      if (!r.lockerhub_application_id) expect(r.agreement_signed).toBe(false);
+    }
+  });
+});

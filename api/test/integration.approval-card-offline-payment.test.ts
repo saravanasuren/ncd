@@ -85,6 +85,60 @@ describe('the locker rent approval says whose rent it is', () => {
   });
 });
 
+describe('the name survives a locker NCD has no record of', () => {
+  /**
+   * The real production case, and the reason the SQL joins were not enough:
+   * every locker with a pending payment was absent from EVERY NCD locker table
+   * — no allotment, no deposit link, no cheque. The name has to come from the
+   * request metadata, captured when the payment was recorded.
+   */
+  it('reads the tenant from the request when no NCD table knows the locker', async () => {
+    const a = await admin();
+    const pay = (await ctx.db.query<{ id: string }>(
+      `INSERT INTO locker_offline_payments (lockerhub_application_id, leg, method, reference, amount, status)
+       VALUES ('mtm-orphan-1', 'rent', 'cheque', '000131', 6000, 'PendingApproval') RETURNING id`)).rows[0]!;
+    const req = (await ctx.db.query<{ id: string }>(
+      `INSERT INTO approval_requests
+         (request_no, request_type, entity_type, entity_id, level, max_levels, chain, status, maker_user_id, metadata)
+       VALUES ('REQ-TEST-ORPHAN', 'locker_offline_payment', 'locker_offline_payments', $1, 1, 1,
+               '[{"level":1,"checkerPermission":"approvals:check"}]'::jsonb, 'Pending', 1, $2::jsonb)
+       RETURNING id`,
+      [pay.id, JSON.stringify({
+        payment_id: Number(pay.id), lockerhub_application_id: 'mtm-orphan-1', leg: 'rent',
+        method: 'cheque', reference: '000131',
+        tenant_name: 'Orphan Locker Tenant', locker_no: 'F21-9', branch_name: 'Hosur',
+      })])).rows[0]!;
+
+    // Nothing in any NCD locker table for this application — as in production.
+    const known = await ctx.db.query(
+      'SELECT 1 FROM locker_allotments WHERE lockerhub_application_id = $1', ['mtm-orphan-1']);
+    expect(known.rowCount).toBe(0);
+
+    const d = await card(a, Number(req.id));
+    expect(d.subject).toContain('Orphan Locker Tenant');
+    expect(d.subject).toContain('F21-9');
+    const facts = JSON.stringify(d.facts);
+    expect(facts).toContain('Orphan Locker Tenant');
+    expect(facts).toContain('Hosur');
+  });
+
+  it('an NCD record still wins over the stored name when both exist', async () => {
+    // Our own customer record is the better name — LockerHub's spelling of the
+    // same person is not authoritative for us.
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Authoritative Name', phone: '9536000009' });
+    const reqId = await offlinePayment('mtm-both-1', Number(cust.json.id), 'L6-30');
+    await ctx.db.query(
+      `UPDATE approval_requests SET metadata = metadata || '{"tenant_name":"LockerHub Spelling"}'::jsonb
+        WHERE id = $1`, [reqId]);
+    const d = await card(a, reqId);
+    // metadata is preferred by design (the joins usually find nothing), so this
+    // pins the CHOICE rather than an accident.
+    expect(d.subject).toContain('LockerHub Spelling');
+    expect(JSON.stringify(d.facts)).toContain('L6-30');
+  });
+});
+
 describe('every approval says when it was raised', () => {
   it('the queue carries created_at, which is what the screen renders', async () => {
     const a = await admin();

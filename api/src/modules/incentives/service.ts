@@ -253,7 +253,23 @@ export async function myEarnings(db: Db, actor: AuthUser) {
    * referred it" are different work.
    */
   const CREDIT = `ia.payee_type = $1 AND ia.payee_id = $2 AND ${NOT_SELF}`;
+  /**
+   * THREE buckets, and they must add up to the total.
+   *
+   * matrix_cell is NULL on an IMPORTED accrual — 718 of 889 on production — and
+   * `NOT (matrix_cell = 'referrer')` is NULL for those, which a FILTER treats as
+   * not-true. The first version of this split therefore dropped 81% of the rows
+   * into neither bucket and showed a breakdown that did not sum to its own
+   * total. The tests missed it because the test environment only ever creates
+   * engine rows, never imported ones.
+   *
+   * The imported rows are NOT folded into "enrolled": their side was never
+   * recorded, and claiming somebody enrolled work we cannot attribute would be
+   * a made-up number rather than a missing one.
+   */
   const AS_REFERRER = `ia.matrix_cell = 'referrer'`;
+  const AS_ENROLLER = `ia.matrix_cell LIKE 'staff%'`;
+  const AS_EARLIER = `ia.matrix_cell IS NULL`;
 
   const credTotals = (await db.query<Record<string, unknown>>(
     `SELECT count(*)::int AS investments,
@@ -262,8 +278,10 @@ export async function myEarnings(db: Db, actor: AuthUser) {
             COALESCE(sum(ia.amount) FILTER (WHERE ia.paid_at IS NOT NULL),0) AS incentive_paid,
             count(*) FILTER (WHERE ${AS_REFERRER})::int AS referred_investments,
             COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_REFERRER}),0) AS referred_amount,
-            count(*) FILTER (WHERE NOT ${AS_REFERRER})::int AS enrolled_investments,
-            COALESCE(sum(a.total_amount) FILTER (WHERE NOT ${AS_REFERRER}),0) AS enrolled_amount
+            count(*) FILTER (WHERE ${AS_ENROLLER})::int AS enrolled_investments,
+            COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_ENROLLER}),0) AS enrolled_amount,
+            count(*) FILTER (WHERE ${AS_EARLIER})::int AS earlier_investments,
+            COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_EARLIER}),0) AS earlier_amount
      ${ACCRUAL_FROM} WHERE ${CREDIT}`, [payeeType, payeeId])).rows[0]!;
 
   const credBySeries = (await db.query(
@@ -273,7 +291,8 @@ export async function myEarnings(db: Db, actor: AuthUser) {
             COALESCE(sum(a.total_amount),0) AS amount,
             COALESCE(sum(ia.amount) FILTER (WHERE ia.paid_at IS NOT NULL),0) AS incentive_paid,
             COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_REFERRER}),0) AS referred_amount,
-            COALESCE(sum(a.total_amount) FILTER (WHERE NOT ${AS_REFERRER}),0) AS enrolled_amount
+            COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_ENROLLER}),0) AS enrolled_amount,
+            COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_EARLIER}),0) AS earlier_amount
      ${ACCRUAL_FROM}
      WHERE ${CREDIT} GROUP BY s.code, s.name ORDER BY s.code DESC`, [payeeType, payeeId])).rows;
 
@@ -285,8 +304,10 @@ export async function myEarnings(db: Db, actor: AuthUser) {
             COALESCE(sum(ia.amount) FILTER (WHERE ia.paid_at IS NOT NULL),0) AS incentive_paid,
             COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_REFERRER}),0) AS referred_amount,
             count(*) FILTER (WHERE ${AS_REFERRER})::int AS referred_investments,
-            COALESCE(sum(a.total_amount) FILTER (WHERE NOT ${AS_REFERRER}),0) AS enrolled_amount,
-            count(*) FILTER (WHERE NOT ${AS_REFERRER})::int AS enrolled_investments
+            COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_ENROLLER}),0) AS enrolled_amount,
+            count(*) FILTER (WHERE ${AS_ENROLLER})::int AS enrolled_investments,
+            COALESCE(sum(a.total_amount) FILTER (WHERE ${AS_EARLIER}),0) AS earlier_amount,
+            count(*) FILTER (WHERE ${AS_EARLIER})::int AS earlier_investments
      ${ACCRUAL_FROM} WHERE ${CREDIT} GROUP BY 1 ORDER BY 1 DESC`, [payeeType, payeeId])).rows;
 
   return {
@@ -312,6 +333,10 @@ export async function myEarnings(db: Db, actor: AuthUser) {
         referred_amount: Number(credTotals.referred_amount),
         enrolled_investments: Number(credTotals.enrolled_investments),
         enrolled_amount: Number(credTotals.enrolled_amount),
+        // Imported accruals, which carry no side. Their own bucket so the three
+        // add up to `amount` — see the comment on AS_EARLIER above.
+        earlier_investments: Number(credTotals.earlier_investments),
+        earlier_amount: Number(credTotals.earlier_amount),
       },
       by_series: credBySeries,
       by_month: credByMonth,

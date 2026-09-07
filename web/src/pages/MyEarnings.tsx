@@ -17,7 +17,7 @@ interface MonthRow { month: string; investments: number; customers: number; amou
 interface CreditRow {
   month?: string; series_code?: string; series_name?: string;
   investments: number; customers: number; amount: string; incentive_paid: string;
-  enrolled_amount: string; referred_amount: string;
+  enrolled_amount: string; referred_amount: string; earlier_amount: string;
   enrolled_investments?: number; referred_investments?: number;
 }
 interface MyEarnings {
@@ -32,6 +32,7 @@ interface MyEarnings {
       investments: number; customers: number; amount: number; incentive_paid: number;
       referred_investments: number; referred_amount: number;
       enrolled_investments: number; enrolled_amount: number;
+      earlier_investments: number; earlier_amount: number;
     };
     by_series: CreditRow[];
     by_month: CreditRow[];
@@ -125,6 +126,17 @@ export function MyEarningsPage() {
     { key: 'referred_amount', header: '— you referred', align: 'right',
       value: (r) => Number(r.referred_amount),
       render: (r) => <span className="mono text-text-muted">{formatINR(Number(r.referred_amount))}</span> },
+    // Imported accruals carry no side. Shown as their own column rather than
+    // folded into "you enrolled" — the side was never recorded, and claiming
+    // somebody enrolled work we cannot attribute would be a made-up number.
+    // The three columns add up to Credited; that is the point of the third one.
+    { key: 'earlier_amount', header: '— earlier records', align: 'right',
+      value: (r) => Number(r.earlier_amount),
+      render: (r) => (
+        <span className="mono text-text-muted" title="Brought over from the previous system — recorded before we tracked whether it was enrolled or referred">
+          {formatINR(Number(r.earlier_amount))}
+        </span>
+      ) },
   ];
 
   const monthCols: Column<CreditRow>[] = [
@@ -197,7 +209,9 @@ export function MyEarningsPage() {
         <div className="text-xs text-text-muted bg-surface border border-border rounded p-3 mb-6">
           Of the {formatINR(c.totals.amount)} you are paid on, {formatINR(c.totals.enrolled_amount)} is
           from investments you enrolled and {formatINR(c.totals.referred_amount)} from investments you
-          referred that a colleague keyed in. That is why this differs from what you enrolled.
+          referred that a colleague keyed in
+          {c.totals.earlier_amount > 0 && <>, with {formatINR(c.totals.earlier_amount)} carried over from the previous system</>}.
+          That is why this differs from what you enrolled.
         </div>
       )}
 

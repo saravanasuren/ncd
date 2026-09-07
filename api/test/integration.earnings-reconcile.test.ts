@@ -80,12 +80,41 @@ describe('My Earnings shows both bases and they reconcile', () => {
     expect(d.credited.totals.amount).toBeGreaterThanOrEqual(800000);
   });
 
-  it('the enrolled + referred split adds up to the credited total', async () => {
-    const t = (await mine(await staff())).credited.totals;
-    expect(t.enrolled_amount + t.referred_amount).toBe(t.amount);
-    expect(t.enrolled_investments + t.referred_investments).toBe(t.investments);
-    // ...and the referral is genuinely there, or this test proves nothing.
+  it('the split adds up to the credited total — INCLUDING imported accruals', async () => {
+    /**
+     * The bug this exists for. matrix_cell is NULL on an IMPORTED accrual —
+     * 718 of 889 on production — and `NOT (matrix_cell = 'referrer')` is NULL
+     * for those, which a FILTER treats as not-true. The first version dropped
+     * 81% of rows into neither bucket and showed a breakdown that did not sum
+     * to its own total.
+     *
+     * The earlier version of THIS test passed anyway, because the test
+     * environment only ever creates engine rows. So it seeds one the way an
+     * import does: with no matrix_cell at all.
+     */
+    const s2 = await staff();
+    // An investment nobody has accrued to her yet, then an accrual on it shaped
+    // the way the importer wrote them: no matrix_cell.
+    const appId = await invest(await admin(), 'Imported Accrual', '9537000003', 200000);
+    await ctx.db.query(
+      `INSERT INTO incentive_accruals (application_id, payee_type, payee_id, matrix_cell, rate_mode, rate_value, amount, accrual_date)
+       VALUES ($1, 'staff', $2, NULL, 'pct', 2, 1234, '2026-08-10')
+       ON CONFLICT (application_id, payee_type, payee_id) DO UPDATE SET matrix_cell = NULL`,
+      [appId, staffUserId]);
+
+    const t = (await mine(s2)).credited.totals;
+    expect(t.enrolled_amount + t.referred_amount + t.earlier_amount).toBe(t.amount);
+    expect(t.enrolled_investments + t.referred_investments + t.earlier_investments).toBe(t.investments);
+    // Each bucket is genuinely populated, or the sum proves nothing.
     expect(t.referred_amount).toBeGreaterThan(0);
+    expect(t.earlier_amount).toBeGreaterThan(0);
+  });
+
+  it('every month row adds up too, not just the total', async () => {
+    for (const r of (await mine(await staff())).credited.by_month) {
+      expect(Number(r.enrolled_amount) + Number(r.referred_amount) + Number(r.earlier_amount))
+        .toBe(Number(r.amount));
+    }
   });
 
   it('still never exposes accrued or balance — the credited lines are PAID only', async () => {

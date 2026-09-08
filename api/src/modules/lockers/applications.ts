@@ -33,6 +33,9 @@ export interface LockerApplicationRow {
   created_by_name: string | null;
   removed_at: string | null;
   removed_reason: string | null;
+  /** TRUE cancelled upstream · FALSE LockerHub still holds it · null unknown. */
+  lockerhub_cancelled: boolean | null;
+  lockerhub_refusal: string | null;
 }
 
 /**
@@ -90,7 +93,7 @@ const COLS = `
   COALESCE(c.full_name, a.customer_name) AS customer_name,
   COALESCE(c.phone, a.phone)             AS phone,
   u.full_name                            AS created_by_name,
-  o.removed_at, o.removed_reason`;
+  o.removed_at, o.removed_reason, o.lockerhub_cancelled, o.lockerhub_refusal`;
 
 const FROM = `
   FROM locker_applications a

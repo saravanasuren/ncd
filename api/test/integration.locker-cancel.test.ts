@@ -8,6 +8,15 @@
  * we only write our local hide if it succeeded. Writing the hide first — or
  * anyway — is what left the two systems disagreeing before, with NCD showing
  * the application gone while LockerHub still held it and its locker.
+ *
+ * Rewritten 2026-09-08. These stubs used to reject with a bare
+ * `Error('409 payment_collected')`, which the real client never throws — it
+ * throws an AppError carrying LockerHub's status and THEIR message. That
+ * fiction hid a live bug: a real refusal reads "Application is approved into a
+ * live tenancy — that is a closure/refund, not a cancellation", the code was
+ * matching /live_tenancy/ against it, and so an allotted locker could not be
+ * deleted at all. The stubs below now throw what the client really throws, and
+ * one case deliberately keeps the bare Error to pin the fallback.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { startTestServer, Client, type TestCtx } from './helpers/server.js';
@@ -28,12 +37,15 @@ const hidden = async (id: string) => Number((await ctx.db.query(
 describe('cancelling a locker application', () => {
   it('does NOT hide it here when LockerHub refuses — money already collected', async () => {
     const lh = await import('../src/integrations/lockerhub/client.js');
-    const spy = vi.spyOn(lh, 'cancelLockerApplication').mockRejectedValue(new Error('409 payment_collected'));
+    const { errors } = await import('../src/lib/errors.js');
+    const spy = vi.spyOn(lh, 'cancelLockerApplication')
+      .mockRejectedValue(errors.upstream(409, 'Rent has been collected against this application.'));
     const { removeLockerApplication } = await import('../src/modules/lockers/tenantOverrides.js');
     const actor = { id: 1, fullName: 'Admin', email: 'admin@dhanam.finance', role: 'super_admin' } as never;
 
+    // LockerHub's own sentence reaches the user, plus the way out.
     await expect(removeLockerApplication(ctx.db, actor, 'lh-refuse-paid', 'test cancel'))
-      .rejects.toThrow(/money already collected/i);
+      .rejects.toThrow(/Rent has been collected.*Super Admin/is);
     // The whole point: nothing written locally, so the two cannot disagree.
     expect(await hidden('lh-refuse-paid')).toBe(0);
     spy.mockRestore();
@@ -41,12 +53,16 @@ describe('cancelling a locker application', () => {
 
   it('says so plainly when it is already a live tenancy', async () => {
     const lh = await import('../src/integrations/lockerhub/client.js');
-    const spy = vi.spyOn(lh, 'cancelLockerApplication').mockRejectedValue(new Error('409 live_tenancy'));
+    // THE PRODUCTION WORDING, verbatim. There is no `live_tenancy` token in it;
+    // matching for one is precisely what broke this.
+    const { errors } = await import('../src/lib/errors.js');
+    const spy = vi.spyOn(lh, 'cancelLockerApplication').mockRejectedValue(errors.upstream(
+      409, 'Application is approved into a live tenancy — that is a closure/refund, not a cancellation.'));
     const { removeLockerApplication } = await import('../src/modules/lockers/tenantOverrides.js');
     const actor = { id: 1, fullName: 'Admin', email: 'admin@dhanam.finance', role: 'super_admin' } as never;
 
     await expect(removeLockerApplication(ctx.db, actor, 'lh-refuse-live', 'test cancel'))
-      .rejects.toThrow(/live tenancy/i);
+      .rejects.toThrow(/closure\/refund, not a cancellation.*Super Admin/is);
     expect(await hidden('lh-refuse-live')).toBe(0);
     spy.mockRestore();
   });
@@ -56,6 +72,9 @@ describe('cancelling a locker application', () => {
     // out-of-band, and it still has to leave NCD's screens. forceLocal writes the
     // local hide anyway — and reports honestly that LockerHub kept the record.
     const lh = await import('../src/integrations/lockerhub/client.js');
+    // Deliberately a BARE Error here, with the status only in the text: this is
+    // the one case pinning the leading-code fallback, so a caller that loses the
+    // AppError cannot quietly turn every refusal back into a 502.
     const spy = vi.spyOn(lh, 'cancelLockerApplication').mockRejectedValue(new Error('409 payment_collected'));
     const { removeLockerApplication } = await import('../src/modules/lockers/tenantOverrides.js');
     const actor = { id: 1, fullName: 'Admin', email: 'admin@dhanam.finance', role: 'super_admin' } as never;
@@ -69,7 +88,8 @@ describe('cancelling a locker application', () => {
 
   it('force local ONLY bypasses the paid / live-tenancy block, never a real upstream error', async () => {
     const lh = await import('../src/integrations/lockerhub/client.js');
-    const spy = vi.spyOn(lh, 'cancelLockerApplication').mockRejectedValue(new Error('500 boom'));
+    const { errors } = await import('../src/lib/errors.js');
+    const spy = vi.spyOn(lh, 'cancelLockerApplication').mockRejectedValue(errors.upstream(503, 'boom'));
     const { removeLockerApplication } = await import('../src/modules/lockers/tenantOverrides.js');
     const actor = { id: 1, fullName: 'Admin', email: 'admin@dhanam.finance', role: 'super_admin' } as never;
 

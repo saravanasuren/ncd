@@ -159,7 +159,14 @@ export async function removeLockerApplication(
     released = r?.locker_released ?? null;
   } catch (e) {
     const msg = (e as Error).message ?? '';
-    const status = Number((e as { status?: unknown }).status) || 0;
+    // lhFetch throws an AppError carrying LockerHub's own HTTP status, so
+    // `.status` is what production always has. The leading-code fallback is for
+    // anything that surfaces as a bare Error ("409 payment_collected") — cheap,
+    // and it means a future caller that loses the AppError does not silently
+    // turn every refusal back into a 502.
+    const status = Number((e as { status?: unknown }).status)
+      || Number(/^\s*(\d{3})\b/.exec(msg)?.[1])
+      || 0;
     // LockerHub refuses to cancel a PAID or live-tenancy application — cancelling
     // would be a refund/surrender that only they can do. Normally we stop here
     // rather than let the two disagree. But the money can be genuinely test data,

@@ -23,7 +23,8 @@
     "rematerialize": "node dist/scripts/rematerialize-application.js",
     "backfill:locker-signings": "node dist/scripts/backfill-locker-signings.js",
     "backfill:allotment-customers": "node dist/scripts/backfill-allotment-customers.js",
-    "backfill:offline-payment-payer": "node dist/scripts/backfill-offline-payment-payer.js"
+    "backfill:offline-payment-payer": "node dist/scripts/backfill-offline-payment-payer.js",
+    "repair:referrer-accruals": "node dist/scripts/repair-referrer-accruals.js"
   },
   "dependencies": {
     "@aws-sdk/client-ses": "^3.1088.0",

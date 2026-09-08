@@ -9,8 +9,35 @@ import { getMatrix } from './matrix.js';
 import { referrerIntroducedCustomer } from './referrer.js';
 
 export async function accrueForApplication(tx: Db, applicationId: number): Promise<void> {
+  /**
+   * The referrer falls back to the CUSTOMER's when the application carries none
+   * (owner 2026-09-07: "geetha s was enrolled by rithiesh but referred by nambi
+   * ... why is it showing under rithiesh name").
+   *
+   * This is the rule the rest of the system already uses —
+   * applications/service.ts refCol is
+   *   COALESCE(NULLIF(btrim(a.referred_by_text), ''), c.referred_by_text)
+   * and scoping, visibility and every report read it that way. The accrual
+   * engine alone read the application's column on its own, so an investment
+   * whose referrer sat on the customer but not on the application paid the
+   * WRONG PEOPLE: the referrer earned nothing, and the enroller was paid the
+   * full no-referrer rate instead of the reduced with-referrer one.
+   *
+   * Geetha.S is the worked example: referred by agent NAMBI on the customer,
+   * blank on the investment, so ₹70,00,000 paid Rithiesh L staff_new at 2%
+   * (₹1,40,000) and NAMBI nothing. Two investments on the book were affected.
+   *
+   * The customer is the right fallback and not a guess: a referrer introduces a
+   * PERSON, and every later investment by that person is theirs on the same
+   * footing — which is exactly what referrerIntroducedCustomer below already
+   * assumes.
+   */
   const app = (await tx.query<Record<string, unknown>>(
-    'SELECT customer_id, total_amount, customer_was_new_at_creation, referred_by_text, enrolled_by_user_id, enrolled_by_agent_id FROM applications WHERE id = $1',
+    `SELECT a.customer_id, a.total_amount, a.customer_was_new_at_creation,
+            COALESCE(NULLIF(btrim(a.referred_by_text), ''), c.referred_by_text) AS referred_by_text,
+            a.enrolled_by_user_id, a.enrolled_by_agent_id
+       FROM applications a JOIN customers c ON c.id = a.customer_id
+      WHERE a.id = $1`,
     [applicationId]
   )).rows[0];
   if (!app) return;

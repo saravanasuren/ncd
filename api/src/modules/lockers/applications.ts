@@ -19,6 +19,7 @@ import { lockerBranchScopeFor } from './branchScope.js';
 
 export interface LockerApplicationRow {
   lockerhub_application_id: string;
+  application_no: string | null;
   customer_id: number | null;
   customer_name: string | null;
   phone: string | null;
@@ -46,6 +47,8 @@ export interface LockerApplicationRow {
  */
 export async function recordApplication(db: Db, input: {
   applicationId: string;
+  /** LockerHub's own "APP-2026-01261" — the reference a person recognises. */
+  applicationNo?: string | null;
   customerId?: number | null;
   customerName?: string | null;
   phone?: string | null;
@@ -60,10 +63,11 @@ export async function recordApplication(db: Db, input: {
   if (!id) return;
   await db.query(
     `INSERT INTO locker_applications
-       (lockerhub_application_id, customer_id, customer_name, phone, branch_id, branch_name,
+       (lockerhub_application_id, application_no, customer_id, customer_name, phone, branch_id, branch_name,
         locker_size, locker_number, status, status_checked_at, created_by_user_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, CASE WHEN $9::text IS NULL THEN NULL ELSE now() END, $10)
+     VALUES ($1,$11,$2,$3,$4,$5,$6,$7,$8,$9, CASE WHEN $9::text IS NULL THEN NULL ELSE now() END, $10)
      ON CONFLICT (lockerhub_application_id) DO UPDATE SET
+       application_no = COALESCE(EXCLUDED.application_no, locker_applications.application_no),
        customer_id   = COALESCE(EXCLUDED.customer_id,   locker_applications.customer_id),
        customer_name = COALESCE(EXCLUDED.customer_name, locker_applications.customer_name),
        phone         = COALESCE(EXCLUDED.phone,         locker_applications.phone),
@@ -76,11 +80,12 @@ export async function recordApplication(db: Db, input: {
        updated_at    = now()`,
     [id, input.customerId ?? null, input.customerName ?? null, input.phone ?? null,
      input.branchId ?? null, input.branchName ?? null, input.lockerSize ?? null,
-     input.lockerNumber ?? null, input.status ?? null, input.createdByUserId ?? null]);
+     input.lockerNumber ?? null, input.status ?? null, input.createdByUserId ?? null,
+     input.applicationNo ?? null]);
 }
 
 const COLS = `
-  a.lockerhub_application_id, a.customer_id, a.branch_id, a.branch_name,
+  a.lockerhub_application_id, a.application_no, a.customer_id, a.branch_id, a.branch_name,
   a.locker_size, a.locker_number, a.status, a.status_checked_at, a.created_at,
   COALESCE(c.full_name, a.customer_name) AS customer_name,
   COALESCE(c.phone, a.phone)             AS phone,
@@ -137,6 +142,7 @@ export async function listApplications(
     where.push(`(lower(COALESCE(c.full_name, a.customer_name, '')) LIKE ${p}
              OR lower(COALESCE(c.phone, a.phone, ''))              LIKE ${p}
              OR lower(COALESCE(a.locker_number, ''))               LIKE ${p}
+             OR lower(COALESCE(a.application_no, ''))              LIKE ${p}
              OR lower(a.lockerhub_application_id)                  LIKE ${p})`);
   }
   vals.push(Math.min(Math.max(Number(f.limit ?? 200), 1), 500));
@@ -150,7 +156,38 @@ export async function listApplications(
 }
 
 /**
+ * LockerHub's branch list, memoised. A refresh of 50 applications would
+ * otherwise fetch the same handful of branches 50 times, and their GET on an
+ * application returns `branch_id` but no branch NAME — which is the only part
+ * of it a person can read.
+ */
+let branchCache: { at: number; byId: Map<string, string> } | null = null;
+const BRANCH_TTL_MS = 5 * 60_000;
+async function branchNameFor(branchId: string | null | undefined): Promise<string | null> {
+  const id = String(branchId ?? '').trim();
+  if (!id) return null;
+  if (!branchCache || Date.now() - branchCache.at > BRANCH_TTL_MS) {
+    try {
+      const lh = await import('../../integrations/lockerhub/client.js');
+      const r = await lh.branches();
+      branchCache = { at: Date.now(), byId: new Map((r?.branches ?? []).map((b) => [String(b.id), String(b.name)])) };
+    } catch {
+      // A branch we cannot name is not a reason to lose the rest of the row.
+      return null;
+    }
+  }
+  return branchCache.byId.get(id) ?? null;
+}
+
+/**
  * Re-ask LockerHub about one application and update the cached row.
+ *
+ * The field names here are the ones they ACTUALLY send, confirmed against a
+ * live response — not a guess. Their GET returns a flat object with `name`,
+ * `phone`, `application_no`, `branch_id` and `locker_size` at the top level,
+ * and the locker number nested under `allotment`. The first version of this
+ * read `customer_name` / `customer.name` / `locker_no`, none of which exist,
+ * so 42 of 50 rows refreshed to a blank Customer column.
  *
  * Deliberately tolerant: an application LockerHub no longer recognises (404 on
  * a cancelled one) must not throw, or the list page would break on exactly the
@@ -163,14 +200,17 @@ export async function refreshOne(db: Db, applicationId: string): Promise<{ ok: b
   try {
     const d = await lh.getLockerApplication(id) as Record<string, any>;
     const a = (d?.application ?? d ?? {}) as Record<string, any>;
+    const allot = (a.allotment ?? {}) as Record<string, any>;
+    const branchId = a.branch_id ?? null;
     await recordApplication(db, {
       applicationId: id,
-      customerName: a.customer_name ?? a.customer?.name ?? null,
+      applicationNo: a.application_no ?? null,
+      customerName: a.name ?? a.customer_name ?? a.customer?.name ?? null,
       phone: a.phone ?? a.customer?.phone ?? null,
-      branchId: a.branch_id ?? null,
-      branchName: a.branch_name ?? a.branch ?? null,
-      lockerSize: a.locker_size ?? a.size ?? null,
-      lockerNumber: a.locker_no ?? a.locker_number ?? null,
+      branchId,
+      branchName: a.branch_name ?? a.branch ?? await branchNameFor(branchId),
+      lockerSize: a.locker_size ?? allot.size ?? a.size ?? null,
+      lockerNumber: allot.locker_number ?? a.locker_no ?? a.locker_number ?? null,
       status: String(a.status ?? '') || 'unknown',
     });
     return { ok: true, status: a.status ?? null };

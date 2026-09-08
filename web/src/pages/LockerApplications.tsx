@@ -25,6 +25,7 @@ import { Tabs, type TabDef } from '../components/Tabs.js';
 
 interface Row {
   lockerhub_application_id: string;
+  application_no: string | null;
   customer_id: number | null;
   customer_name: string | null;
   phone: string | null;
@@ -163,6 +164,17 @@ export function LockerApplicationsPage() {
 
   const columns: Column<Row>[] = [
     {
+      // LockerHub's own reference. Their internal id (mts88mk6d0a6l7h) is what
+      // the API needs; this is what a person recognises, so it leads.
+      key: 'application_no', header: 'App No.', tdClassName: 'font-mono text-xs',
+      value: (r) => r.application_no ?? '',
+      render: (r) => (
+        <button className="text-primary hover:underline" onClick={() => open(r)}>
+          {r.application_no ?? <span className="text-text-muted">—</span>}
+        </button>
+      ),
+    },
+    {
       key: 'customer_name', header: 'Customer',
       value: (r) => r.customer_name ?? '',
       render: (r) => (
@@ -230,7 +242,7 @@ export function LockerApplicationsPage() {
       <div className="flex items-center gap-2 mb-3">
         <input
           className="px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary w-72"
-          placeholder="Search name, phone, locker or id…"
+          placeholder="Search name, phone, locker or app no…"
           value={q} onChange={(e) => setQ(e.target.value)} />
         <button className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40"
                 onClick={refreshAll} disabled={busy || !rows.length}>

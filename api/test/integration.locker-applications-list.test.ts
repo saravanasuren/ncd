@@ -23,7 +23,7 @@ let ctx: TestCtx;
 let mock: Server;
 let seen: Array<{ path: string; method: string; body: any }> = [];
 /** Applications the fake LockerHub has, and whether it will allow a cancel. */
-const upstream = new Map<string, { status: string; cancellable: boolean }>();
+const upstream = new Map<string, { status: string; cancellable: boolean; no: string }>();
 let nextId = 1;
 
 beforeAll(async () => {
@@ -40,9 +40,13 @@ beforeAll(async () => {
       };
 
       if (p === '/locker-applications' && req.method === 'POST') {
-        const id = `lhapp_${nextId++}`;
-        upstream.set(id, { status: 'created', cancellable: true });
-        return send(200, { id, status: 'created', branch_name: 'Erode', locker_size: body.locker_size });
+        const n = nextId++;
+        const id = `lhapp_${n}`;
+        upstream.set(id, { status: 'created', cancellable: true, no: `APP-2026-0${1200 + n}` });
+        return send(200, { id, application_no: `APP-2026-0${1200 + n}`, status: 'created', locker_size: body.locker_size });
+      }
+      if (p === '/branches' && req.method === 'GET') {
+        return send(200, { branches: [{ id: 'br_erode', name: 'Erode' }] });
       }
       let m = /^\/locker-applications\/([^/]+)\/cancel$/.exec(p);
       if (m && req.method === 'POST') {
@@ -56,7 +60,23 @@ beforeAll(async () => {
       if (m && req.method === 'GET') {
         const a = upstream.get(m[1]!);
         if (!a) return send(404, { error: 'not_found' });
-        return send(200, { id: m[1], status: a.status, branch_name: 'Erode', locker_size: 'Medium', locker_no: 'M1-2' });
+        // THIS SHAPE IS COPIED FROM A LIVE LOCKERHUB RESPONSE, deliberately.
+        // The first version of this mock returned `branch_name` and `locker_no`
+        // because that is what our code happened to read — so the test proved
+        // our own guess, passed, and 42 of 50 production rows still refreshed
+        // to a blank Customer column. A mock that echoes the caller's
+        // assumptions cannot catch a wrong assumption.
+        return send(200, {
+          application_id: m[1],
+          application_no: a.no,
+          status: a.status,
+          phone: '9876500011',
+          name: 'Locker Lister',
+          branch_id: 'br_erode',          // no branch_name — we resolve it from /branches
+          locker_size: 'Medium',
+          legs: { rent: { amount: 6000, settled: false }, deposit: { amount: 0, settled: true } },
+          allotment: { locker_number: 'M1-2', size: 'Medium' },   // locker number lives HERE
+        });
       }
       if (/\/waiver$/.test(p) && req.method === 'POST') return send(200, { success: true, leg: body.leg });
       return send(404, { error: 'not found' });
@@ -127,14 +147,29 @@ describe('locker applications list', () => {
     expect(none.json.rows).toHaveLength(0);
   });
 
-  it('refresh re-reads LockerHub and updates the cached row', async () => {
+  it('refresh maps every field LockerHub actually sends', async () => {
+    // Each assertion below is a field whose name we got WRONG the first time:
+    // they send `name` (not customer_name), `application_no`, the locker number
+    // under `allotment`, and only a `branch_id` that has to be resolved to a
+    // name through /branches.
     const r = await (await manager()).post(`/api/lockers/applications/${appId}/refresh`, {});
     expect(r.json.ok).toBe(true);
     const l = await listOf(await manager());
     const row = l.json.rows.find((x: any) => x.lockerhub_application_id === appId);
     expect(row.status).toBe('created');
-    expect(row.locker_number).toBe('M1-2');
+    expect(row.customer_name).toBe('Locker Lister');    // from `name`
+    expect(row.application_no).toMatch(/^APP-2026-/);   // their human reference
+    expect(row.locker_number).toBe('M1-2');             // from allotment.locker_number
+    expect(row.locker_size).toBe('Medium');
+    expect(row.branch_name).toBe('Erode');              // resolved from branch_id
     expect(row.status_checked_at).toBeTruthy();
+  });
+
+  it('is searchable by LockerHub application number', async () => {
+    const l = await listOf(await manager());
+    const no = l.json.rows.find((x: any) => x.lockerhub_application_id === appId).application_no;
+    const hit = await listOf(await manager(), `?q=${encodeURIComponent(no)}`);
+    expect(hit.json.rows.some((x: any) => x.lockerhub_application_id === appId)).toBe(true);
   });
 
   it('refresh on an application LockerHub has forgotten does NOT throw', async () => {

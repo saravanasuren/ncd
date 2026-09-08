@@ -147,12 +147,70 @@ describe('the printed agreement carries everything we already know', () => {
     expect(text).toContain('Spouse');
   });
 
-  it('prints the terms the customer is agreeing to', async () => {
+  /**
+   * pdf-parse loses the spaces between words in a JUSTIFIED paragraph — PDFKit
+   * positions each word itself, so the extractor has no space glyph to find.
+   * The rendered page is correct (checked visually); only the extraction is
+   * lossy — it also drops the typographic apostrophe in "CUSTOMER'S". Compare
+   * with punctuation and spacing stripped from BOTH sides, so an assertion
+   * tests the words rather than the extractor's rendering of them.
+   */
+  const squash = (t: string) => t.replace(/[^A-Za-z0-9]/g, '');
+  const has = (text: string, needle: string) => squash(text).includes(squash(needle));
+
+  // The owner's document (AGREEMENT 04-SEP.pdf) replaced the ten house-written
+  // clauses on 2026-09-08. These assert the SHAPE of that document — both
+  // annexures, the operative clause headings and the signature blocks — rather
+  // than sampling prose, because the failure worth catching is a whole section
+  // silently dropping out of the print, not a reworded sentence.
+  it('prints both annexures of the agreement', async () => {
     const a = await admin();
     const { text } = await pdfText(a, `/api/lockers/applications/${APP}/agreement/form.pdf`);
-    expect(text).toContain('TERMS OF HIRING');
-    expect(text).toContain('DECLARATION');
-    expect(text).toContain('Signature of the hirer');
+    for (const n of ['ANNEXURE I', 'SCHEDULE', 'ANNEXURE II', 'SAFE DEPOSIT LOCKER AGREEMENT']) {
+      expect(has(text, n), n).toBe(true);
+    }
+  });
+
+  it('prints every numbered section of the terms', async () => {
+    const a = await admin();
+    const { text } = await pdfText(a, `/api/lockers/applications/${APP}/agreement/form.pdf`);
+    for (const head of [
+      '1. LOCKER LICENCE',
+      '2. CUSTOMERS UNDERTAKINGS AND OBLIGATIONS',   // apostrophe dropped by the extractor
+      '3. THE COMPANYS RIGHTS',
+      '3.2 Termination of License',
+      '3.3 Breaking open of the Locker',
+      '4. Security Deposit',
+      '5. LAW AND JURISDICTION',
+    ]) {
+      expect(has(text, head), head).toBe(true);
+    }
+    // The last clause of the longest section: proof the terms are not truncated
+    // part-way through a page break.
+    expect(has(text, 'Auction Notice')).toBe(true);
+  });
+
+  it('prints the schedule fields the branch has to fill or check', async () => {
+    const a = await admin();
+    const { text } = await pdfText(a, `/api/lockers/applications/${APP}/agreement/form.pdf`);
+    for (const n of [
+      'LOCKER RENT PER ANNUM', 'PERIOD OF LICENCE', 'LOCKER OPERATION MANDATES',
+      'Key Number',              // issued at the counter
+      'Hirer 2',                 // a joint hiring stays possible on paper
+      'VERNACULAR UNDERTAKING', 'Signature of Customers',
+    ]) {
+      expect(has(text, n), n).toBe(true);
+    }
+  });
+
+  it('the vernacular undertaking carries the English wording in full', async () => {
+    // Tamil and Hindi need a Unicode font this repo does not have, so English
+    // is the only limb printed. If it ever goes missing the customer signs a
+    // declaration with nothing to declare.
+    const a = await admin();
+    const { text } = await pdfText(a, `/api/lockers/applications/${APP}/agreement/form.pdf`);
+    expect(has(text, 'read and understood all the above terms and conditions')).toBe(true);
+    expect(has(text, 'unconditionally accept them')).toBe(true);
   });
 
   it('never prints the Aadhaar', async () => {

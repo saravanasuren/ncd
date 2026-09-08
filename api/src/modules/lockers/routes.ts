@@ -135,8 +135,47 @@ lockersRouter.get('/customers/by-pan/:pan', asyncHandler(async (req, res) => {
 
 lockersRouter.get('/customers/:phone', asyncHandler(async (req, res) =>
   res.json(await lh.getCustomer(String(req.params.phone)))));
+// The locker applications NCD has created — the list that did not exist until
+// 2026-09-08. LockerHub publishes no list endpoint, so this reads OUR index
+// (085); statuses are what they last told us, refreshed on open or on demand.
+// Registered before '/applications/:id' so the literal path is unambiguous.
+lockersRouter.get('/applications', asyncHandler(async (req, res) => {
+  const { listApplications } = await import('./applications.js');
+  const show = String(req.query.show ?? 'live');
+  res.json(await listApplications(getDb(), req.user!, {
+    q: req.query.q ? String(req.query.q) : undefined,
+    branchId: req.query.branch_id ? String(req.query.branch_id) : undefined,
+    show: show === 'removed' || show === 'all' ? show : 'live',
+    limit: req.query.limit ? Number(req.query.limit) : undefined,
+  }));
+}));
+
+// Re-ask LockerHub about one row. Never throws on their 404 — the rows a user
+// most wants to tidy are exactly the ones LockerHub may have forgotten.
+lockersRouter.post('/applications/:id/refresh', asyncHandler(async (req, res) => {
+  const { refreshOne } = await import('./applications.js');
+  res.json(await refreshOne(getDb(), String(req.params.id)));
+}));
+
 lockersRouter.get('/applications/:id', asyncHandler(async (req, res) => {
   const app = await lh.getLockerApplication(String(req.params.id)) as Record<string, unknown>;
+  // Opening an application is the natural moment to refresh what the list shows
+  // for it, so the two screens never disagree. Cache-only; never fatal.
+  void (async () => {
+    try {
+      const { recordApplication } = await import('./applications.js');
+      await recordApplication(getDb(), {
+        applicationId: String(req.params.id),
+        customerName: (app.customer_name as string) ?? null,
+        phone: (app.phone as string) ?? null,
+        branchId: (app.branch_id as string) ?? null,
+        branchName: (app.branch_name as string) ?? null,
+        lockerSize: (app.locker_size as string) ?? (app.size as string) ?? null,
+        lockerNumber: (app.locker_no as string) ?? (app.locker_number as string) ?? null,
+        status: String(app.status ?? '') || null,
+      });
+    } catch (e) { console.warn('[locker] application index refresh failed (non-fatal):', (e as Error).message); }
+  })();
   // Restore the locker chosen at enrolment (owner 2026-08-22), so a resumed
   // application allots the same number instead of re-asking.
   const intended = (await getDb().query<{ locker_id: string; locker_number: string | null }>(
@@ -232,6 +271,24 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
   // fails the enrolment.
   const appId = String(created.id ?? created.application_id ?? '');
   if (appId) {
+    // Index it in NCD FIRST, before anything that can fail (085). An
+    // application we created but did not record is one nobody can ever reach
+    // again — LockerHub has no list endpoint, so this row is the only way back
+    // to it. Everything below here is allowed to fail; this is not.
+    const { recordApplication } = await import('./applications.js');
+    await recordApplication(getDb(), {
+      applicationId: appId,
+      customerId: customer_id ?? null,
+      customerName: (created.customer_name as string) ?? b.name ?? null,
+      phone: b.phone,
+      branchId: b.branch_id,
+      branchName: (created.branch_name as string) ?? null,
+      lockerSize: b.locker_size,
+      lockerNumber: locker_number ?? null,
+      status: String(created.status ?? '') || null,
+      createdByUserId: req.user!.id,
+    });
+
     const { autoWaiveDeposit } = await import('./feeWaivers.js');
     await autoWaiveDeposit(getDb(), req.user!, appId);
     // Remember the chosen locker so a resume allots the same one (owner

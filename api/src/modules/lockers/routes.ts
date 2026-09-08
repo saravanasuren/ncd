@@ -166,12 +166,14 @@ lockersRouter.get('/applications/:id', asyncHandler(async (req, res) => {
       const { recordApplication } = await import('./applications.js');
       await recordApplication(getDb(), {
         applicationId: String(req.params.id),
-        customerName: (app.customer_name as string) ?? null,
+        applicationNo: (app.application_no as string) ?? null,
+        customerName: (app.name as string) ?? (app.customer_name as string) ?? null,
         phone: (app.phone as string) ?? null,
         branchId: (app.branch_id as string) ?? null,
         branchName: (app.branch_name as string) ?? null,
-        lockerSize: (app.locker_size as string) ?? (app.size as string) ?? null,
-        lockerNumber: (app.locker_no as string) ?? (app.locker_number as string) ?? null,
+        lockerSize: (app.locker_size as string) ?? null,
+        lockerNumber: ((app.allotment as Record<string, unknown>)?.locker_number as string)
+          ?? (app.locker_no as string) ?? (app.locker_number as string) ?? null,
         status: String(app.status ?? '') || null,
       });
     } catch (e) { console.warn('[locker] application index refresh failed (non-fatal):', (e as Error).message); }
@@ -278,8 +280,9 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
     const { recordApplication } = await import('./applications.js');
     await recordApplication(getDb(), {
       applicationId: appId,
+      applicationNo: (created.application_no as string) ?? null,
       customerId: customer_id ?? null,
-      customerName: (created.customer_name as string) ?? b.name ?? null,
+      customerName: (created.name as string) ?? (created.customer_name as string) ?? b.name ?? null,
       phone: b.phone,
       branchId: b.branch_id,
       branchName: (created.branch_name as string) ?? null,

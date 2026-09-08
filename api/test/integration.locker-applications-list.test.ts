@@ -23,7 +23,11 @@ let ctx: TestCtx;
 let mock: Server;
 let seen: Array<{ path: string; method: string; body: any }> = [];
 /** Applications the fake LockerHub has, and whether it will allow a cancel. */
-const upstream = new Map<string, { status: string; cancellable: boolean; no: string }>();
+const upstream = new Map<string, {
+  status: string; cancellable: boolean; no: string;
+  /** How this one refuses a cancel: HTTP code + LockerHub's real prose. */
+  refuseWith?: { code: number; message: string };
+}>();
 let nextId = 1;
 
 beforeAll(async () => {
@@ -52,7 +56,13 @@ beforeAll(async () => {
       if (m && req.method === 'POST') {
         const a = upstream.get(m[1]!);
         if (!a) return send(404, { error: 'not_found' });
-        if (!a.cancellable) return send(409, { error: 'payment_collected', message: 'payment_collected' });
+        if (!a.cancellable) {
+          // LockerHub's REAL refusal wording, copied from production. Note there
+          // is no `live_tenancy` token anywhere in it — matching on one is what
+          // broke this.
+          const r = a.refuseWith ?? { code: 409, message: 'payment_collected' };
+          return send(r.code, { error: r.message, message: r.message });
+        }
         a.status = 'cancelled';
         return send(200, { success: true, locker_released: 'L1-1' });
       }
@@ -230,6 +240,75 @@ describe('locker applications list', () => {
 
     const live = await listOf(await superAdmin());
     expect(live.json.rows.some((x: any) => x.lockerhub_application_id === id)).toBe(false);
+  });
+
+  // ── The refusal the owner hit on 2026-09-08 ────────────────────────────────
+  // LockerHub answers an allotted locker with prose: "Application is approved
+  // into a live tenancy — that is a closure/refund, not a cancellation." The
+  // first version matched /live_tenancy/ against that, missed, returned a 502,
+  // and the UI (which offers the Super-Admin override only on a 409) never
+  // showed the way out. An allotted locker could not be deleted at all.
+  const LIVE_TENANCY = 'Application is approved into a live tenancy — that is a closure/refund, not a cancellation.';
+
+  it('a prose refusal is a 409 carrying LOCKERHUB\'s own words, not a 502', async () => {
+    const c = await create(await manager(), { phone: '9876500055', name: 'Live Tenancy' });
+    const id = String(c.json.id);
+    const u = upstream.get(id)!;
+    u.cancellable = false;
+    u.refuseWith = { code: 409, message: LIVE_TENANCY };
+
+    const r = await (await superAdmin()).post(`/api/lockers/applications/${id}/remove`, { reason: 'owner asked' });
+    expect(r.status).toBe(409);                       // NOT 502 — the UI keys on this
+    expect(r.json.error.message).toContain('live tenancy');
+    expect(r.json.error.message).toContain('Super Admin');   // tells them the way out
+    // Nothing hidden locally while LockerHub still holds it.
+    const live = await listOf(await superAdmin());
+    expect(live.json.rows.some((x: any) => x.lockerhub_application_id === id)).toBe(true);
+  });
+
+  it('force_local then removes it, and the audit records THEIR reason', async () => {
+    const c = await create(await manager(), { phone: '9876500066', name: 'Live Tenancy Two' });
+    const id = String(c.json.id);
+    const u = upstream.get(id)!;
+    u.cancellable = false;
+    u.refuseWith = { code: 409, message: LIVE_TENANCY };
+
+    const r = await (await superAdmin()).post(`/api/lockers/applications/${id}/remove`,
+      { reason: 'closed with LockerHub by phone', force_local: true });
+    expect(r.status).toBe(200);
+    expect(r.json.lockerhub_kept).toBe(true);
+    expect(upstream.get(id)!.status).not.toBe('cancelled');   // theirs untouched
+
+    const audit = (await ctx.db.query<Record<string, unknown>>(
+      `SELECT after_data FROM audit_log WHERE action = 'locker.application.remove' AND entity_id = $1`, [id])).rows[0];
+    expect(String((audit!.after_data as any).lockerhub_refusal)).toContain('live tenancy');
+  });
+
+  it('whichever 4xx they choose, the answer is the same', async () => {
+    // We must not depend on them picking 409 rather than 400 — the refusal is
+    // the 4xx, not the specific number or the wording.
+    for (const [i, code] of [400, 403, 422].entries()) {
+      const c = await create(await manager(), { phone: `987650007${i}`, name: `Refused ${code}` });
+      const id = String(c.json.id);
+      const u = upstream.get(id)!;
+      u.cancellable = false;
+      u.refuseWith = { code, message: 'This locker is let and cannot be cancelled here.' };
+      const r = await (await superAdmin()).post(`/api/lockers/applications/${id}/remove`, { reason: 'testing' });
+      expect(r.status, `upstream ${code}`).toBe(409);
+    }
+  });
+
+  it('CONTROL: a 5xx is a real outage and still fails hard — retrying may work', async () => {
+    const c = await create(await manager(), { phone: '9876500088', name: 'Their Outage' });
+    const id = String(c.json.id);
+    const u = upstream.get(id)!;
+    u.cancellable = false;
+    u.refuseWith = { code: 503, message: 'upstream unavailable' };
+    const r = await (await superAdmin()).post(`/api/lockers/applications/${id}/remove`, { reason: 'testing' });
+    expect(r.status).toBe(502);
+    // And it is NOT hidden locally on a mere outage.
+    const live = await listOf(await superAdmin());
+    expect(live.json.rows.some((x: any) => x.lockerhub_application_id === id)).toBe(true);
   });
 
   it('CONTROL: only a Super Admin may delete', async () => {

@@ -149,6 +149,9 @@ export async function removeLockerApplication(
   const lh = await import('../../integrations/lockerhub/client.js');
   let released: unknown = null;
   let cancelledOnLockerhub = true;
+  /** Why they refused, in their words — recorded so the audit says what
+   *  actually happened rather than a guess made here. */
+  let refusal = '';
   try {
     const r = await lh.cancelLockerApplication(
       { id: actor.id, name: actor.fullName, email: actor.email, staff_role: actor.role },
@@ -156,21 +159,36 @@ export async function removeLockerApplication(
     released = r?.locker_released ?? null;
   } catch (e) {
     const msg = (e as Error).message ?? '';
-    const blocked = /payment_collected/i.test(msg) || /live_tenancy/i.test(msg);
+    const status = Number((e as { status?: unknown }).status) || 0;
     // LockerHub refuses to cancel a PAID or live-tenancy application — cancelling
     // would be a refund/surrender that only they can do. Normally we stop here
     // rather than let the two disagree. But the money can be genuinely test data,
     // or has to be settled with LockerHub out-of-band, and the owner still needs
     // it off NCD's screens (owner 2026-08-25). So a Super Admin may FORCE a
     // NCD-view-only removal: LockerHub keeps the record and the money, and both
-    // the returned flag and the audit note say so in plain words. Any OTHER
-    // failure is a real upstream error and still hard-fails.
-    if (blocked && opts.forceLocal) {
+    // the returned flag and the audit note say so in plain words.
+    //
+    // A REFUSAL IS A 4xx, AND NOTHING ELSE IDENTIFIES IT (2026-09-08).
+    // This used to test their message against /payment_collected/ and
+    // /live_tenancy/. Their actual wording is prose — "Application is approved
+    // into a live tenancy — that is a closure/refund, not a cancellation" — so
+    // neither pattern matched, every refusal fell through to the 502 branch,
+    // and the Super Admin was never offered the NCD-only removal. The owner
+    // simply could not delete an allotted locker at all.
+    //
+    // So branch on the STATUS, which is what it means: a 4xx from their cancel
+    // endpoint is "we will not do this", whatever words they choose and whether
+    // they pick 400, 404 or 409. A 5xx or a network fault is a real outage and
+    // still hard-fails, because retrying that one may well succeed.
+    const refused = status >= 400 && status < 500;
+    if (refused && opts.forceLocal) {
       cancelledOnLockerhub = false;
-    } else if (/payment_collected/i.test(msg)) {
-      throw errors.conflict('This locker has money already collected against it — cancelling would be a refund, which has to be handled with LockerHub. (A Super Admin can still remove it from NCD only.)');
-    } else if (/live_tenancy/i.test(msg)) {
-      throw errors.conflict('This application is already a live tenancy — close or surrender the locker instead of cancelling. (A Super Admin can still remove it from NCD only.)');
+      refusal = msg.slice(0, 300);
+    } else if (refused) {
+      // THEIR words, not a paraphrase of them. They know why they refused, and
+      // a summary written here goes stale the moment they add a reason.
+      throw errors.conflict(
+        `${msg.slice(0, 300)} (A Super Admin can still remove it from NCD only.)`);
     } else {
       throw errors.upstream(502, `LockerHub would not cancel this application: ${msg.slice(0, 200)}`);
     }
@@ -191,9 +209,10 @@ export async function removeLockerApplication(
       actorId: actor.id, action: 'locker.application.remove',
       entityType: 'locker_applications', entityId: applicationId.trim(),
       after: { reason: reason.trim(), cancelled_on_lockerhub: cancelledOnLockerhub, locker_released: released,
+               lockerhub_refusal: cancelledOnLockerhub ? null : (refusal || null),
                note: cancelledOnLockerhub
                  ? 'Cancelled on LockerHub via A23, and hidden here so no stale roster read resurfaces it'
-                 : 'LockerHub REFUSED cancel (payment collected / live tenancy). Super Admin removed it from NCD VIEW ONLY — LockerHub STILL holds the record and any collected money must be settled with LockerHub separately.' },
+                 : 'LockerHub REFUSED cancel. Super Admin removed it from NCD VIEW ONLY — LockerHub STILL holds the record and any collected money must be settled with LockerHub separately.' },
     });
     return { application_id: applicationId.trim(), cancelled: cancelledOnLockerhub, lockerhub_kept: !cancelledOnLockerhub, locker_released: released };
   });

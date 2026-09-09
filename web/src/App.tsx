@@ -48,7 +48,7 @@ import { EventsPage } from './pages/Events.js';
 import { PortalLogin } from './portal/PortalLogin.js';
 import { PortalHome } from './portal/PortalHome.js';
 import type { ReactNode } from 'react';
-import type { Permission } from '@new-wealth/shared';
+import type { Permission, Role } from '@new-wealth/shared';
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -78,9 +78,13 @@ function HomeRedirect() {
  * user's own landing page instead of rendering a page that just fails. Accepts
  * a single permission or a list (nav items are `anyOf`); access is granted when
  * the user holds ANY of them. */
-function RequirePerm({ perm, children }: { perm: Permission | Permission[]; children: ReactNode }) {
-  const { can, loading } = useAuth();
+function RequirePerm({ perm, notRoles, children }: { perm: Permission | Permission[]; notRoles?: Role[]; children: ReactNode }) {
+  const { can, loading, user } = useAuth();
   if (loading) return <div className="p-8 text-text-muted">Loading…</div>;
+  // Some sections are hidden from roles that hold the permission but shouldn't
+  // reach them (e.g. Outstanding for agents/branch staff) — mirrors nav.ts
+  // hideForRoles so a direct URL is bounced too, not just the sidebar link.
+  if (notRoles && user && notRoles.includes(user.role)) return <HomeRedirect />;
   const perms = Array.isArray(perm) ? perm : [perm];
   return can(...perms) ? <>{children}</> : <HomeRedirect />;
 }
@@ -125,7 +129,7 @@ export function App() {
           <Route path="locker-rent-report" element={<RequirePerm perm="lockers:enroll"><LockerRentReportPage /></RequirePerm>} />
           <Route path="applications" element={<RequirePerm perm="customers:read"><ApplicationsPage /></RequirePerm>} />
           <Route path="applications/:id" element={<RequirePerm perm="customers:read"><ApplicationDetailPage /></RequirePerm>} />
-          <Route path="outstanding" element={<RequirePerm perm="customers:read"><OutstandingPage /></RequirePerm>} />
+          <Route path="outstanding" element={<RequirePerm perm="customers:read" notRoles={['agent', 'branch_staff']}><OutstandingPage /></RequirePerm>} />
           <Route path="approvals" element={<RequirePerm perm={['approvals:check', 'approvals:check-premature', 'approvals:check-handover']}><ApprovalsPage /></RequirePerm>} />
           <Route path="agents" element={<RequirePerm perm="agents:manage"><AgentsPage /></RequirePerm>} />
           <Route path="allotments" element={<RequirePerm perm="allotments:execute"><AllotmentsPage /></RequirePerm>} />

@@ -80,6 +80,12 @@ export function createApp(): Express {
     '/api/lockers/applications/:id/agreement/signed-upload',
     '/api/applications/:id/signed-upload',
   ], express.json({ limit: '28mb' }));
+  // KYC scans go up to 10 MB decoded (validateUpload cap) ≈ 13.6 MB base64, so
+  // the parser must clear that — the 8 MB prefix limit below rejected a 6 MB+
+  // scan (413) before validateUpload could give its clean message, and the
+  // customer had already been created, orphaning them without docs (owner
+  // 2026-09-09). Scoped to the document POST only, like the signed-upload paths.
+  app.use(['/api/customers/:id/documents'], express.json({ limit: '16mb' }));
   app.use(['/api/applications', '/api/customers', '/api/integration', '/api/portal', '/api/escrow'], express.json({ limit: '8mb' }));
   app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());

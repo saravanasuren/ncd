@@ -26,6 +26,15 @@ describe('validateUpload', () => {
     big.set(Buffer.from('%PDF-'), 0);
     expect(() => validateUpload(big.toString('base64'))).toThrow(/too large/);
   });
+
+  it('accepts a scan right up to the 10 MB cap the wizard promises', () => {
+    // The wizard tells operators "max 10 MB each"; the cap must match so a scan
+    // it accepted is not rejected here after the customer is already created.
+    expect(MAX_UPLOAD_BYTES).toBe(10 * 1024 * 1024);
+    const atCap = Buffer.alloc(MAX_UPLOAD_BYTES, 0x41);
+    atCap.set(Buffer.from('%PDF-'), 0);
+    expect(validateUpload(atCap.toString('base64')).mime).toBe('application/pdf');
+  });
 });
 
 describe('serveHeaders', () => {

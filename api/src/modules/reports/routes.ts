@@ -218,6 +218,38 @@ reportsRouter.get('/series-holders.xlsx', requirePermission('reports:download'),
     res.end(buf);
   }));
 
+// Series-wise register — one row per investment in the series, with the full
+// customer profile (PAN/Aadhaar/address/phone/nominee/bank/demat) attached
+// (owner 2026-09-09). The JSON form drives an on-screen count/preview; the .xlsx
+// downloads the full file.
+reportsRouter.get('/series-wise', requirePermission('reports:download'),
+  asyncHandler(async (req, res) => {
+    const seriesId = Number(req.query.series_id);
+    if (!seriesId) { res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'series_id is required' } }); return; }
+    const meta = (await getDb().query<{ code: string; name: string }>('SELECT code, name FROM series WHERE id = $1', [seriesId])).rows[0];
+    if (!meta) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Series not found' } }); return; }
+    const rows = await book.seriesWiseReport(getDb(), req.user!, seriesId);
+    res.json({
+      series_code: meta.code, series_name: meta.name, rows, count: rows.length,
+      grand_total: rows.reduce((s, r) => s + r.amount, 0),
+      outstanding_total: rows.reduce((s, r) => s + r.outstanding, 0),
+    });
+  }));
+
+reportsRouter.get('/series-wise.xlsx', requirePermission('reports:download'),
+  asyncHandler(async (req, res) => {
+    const seriesId = Number(req.query.series_id);
+    if (!seriesId) { res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'series_id is required' } }); return; }
+    const meta = (await getDb().query<{ code: string }>('SELECT code FROM series WHERE id = $1', [seriesId])).rows[0];
+    if (!meta) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Series not found' } }); return; }
+    const rows = await book.seriesWiseReport(getDb(), req.user!, seriesId);
+    const { seriesWiseXlsx } = await import('./documents.js');
+    const buf = await seriesWiseXlsx(meta.code, rows);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="series-wise-${meta.code}.xlsx"`);
+    res.end(buf);
+  }));
+
 // 26Q quarterly TDS filing annexure. :quarter = 'YYYY-Qn'.
 reportsRouter.get('/tds-26q/:quarter.xlsx', requirePermission('reports:download'),
   asyncHandler(async (req, res) => {

@@ -226,3 +226,52 @@ describe('dashboard tiles + drill (range-aware)', () => {
     expect(all.json.kind).toBe('groups');
   });
 });
+
+describe('series-wise report', () => {
+  it('lists every investment in a series with the full customer profile', async () => {
+    const a = await admin();
+    const ncd = await as('ncd@demo.local');
+    // A customer with the full set of detail the report is meant to carry.
+    const cust = await a.post('/api/customers', {
+      full_name: 'Serieswise Investor', pan: 'AAAPS1234Q', aadhaar: '123412341234',
+      dob: '1990-02-10', gender: 'Male', phone: '9700001234', email: 'sw@example.com',
+      address: '12 Report Street', city: 'Hosur', district: 'Krishnagiri', state: 'Tamil Nadu', pincode: '635109',
+    });
+    const cid = cust.json.id;
+    await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '5566778899', ifsc: 'ICIC0001111', bank_name: 'ICICI' });
+    await a.put(`/api/customers/${cid}/nominees`, { nominees: [{ full_name: 'Nom Ee', share_pct: 100 }] });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 400000, date_money_received: '2026-07-10' });
+    await approveInvestment(ncd, app);
+
+    const rep = await a.get(`/api/reports/series-wise?series_id=${seriesId}`);
+    expect(rep.status).toBe(200);
+    const row = (rep.json.rows as any[]).find((r) => r.application_no === app.json.application_no);
+    expect(row).toBeTruthy();
+    expect(row.pan).toBe('AAAPS1234Q');
+    expect(row.aadhaar).toBe('123412341234');       // full 12-digit, by request
+    expect(row.phone).toBe('9700001234');
+    expect(row.address).toBe('12 Report Street');
+    expect(row.nominees).toContain('Nom Ee');
+    expect(row.bank_account).toBe('5566778899');
+    expect(Number(row.amount)).toBe(400000);
+    // Total across the series includes this one plus the two from the base book.
+    expect(Number(rep.json.grand_total)).toBeGreaterThanOrEqual(400000);
+  });
+
+  it('downloads an xlsx with the Aadhaar column', async () => {
+    const a = await admin();
+    const dl = await a.raw(`/api/reports/series-wise.xlsx?series_id=${seriesId}`);
+    expect(dl.status).toBe(200);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(dl.buffer);
+    const ws = wb.getWorksheet('Series-wise')!;
+    const headers = (ws.getRow(3).values as unknown[]).map((v) => String(v ?? ''));
+    expect(headers).toContain('Aadhaar');
+    expect(headers).toContain('Application No');
+  });
+
+  it('requires reports:download — branch staff cannot pull it', async () => {
+    const staff = await as('staff@demo.local');
+    expect((await staff.raw(`/api/reports/series-wise.xlsx?series_id=${seriesId}`)).status).toBe(403);
+  });
+});

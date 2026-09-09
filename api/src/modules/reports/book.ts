@@ -1225,3 +1225,68 @@ export async function seriesHoldersReport(db: Db, actor: AuthUser, seriesId: num
     is_dematerialised: (r.is_dematerialised as boolean) ?? null,
   }));
 }
+
+/** One row per INVESTMENT in a series, with the full customer profile attached —
+ *  the "series-wise" register (owner 2026-09-09: pick a series, get every
+ *  customer's complete details + investment details). All statuses ever booked
+ *  in the series (non-archived), so a redeemed/cancelled line still shows with
+ *  its status. Full Aadhaar is included by request — the file carries PII. */
+export interface SeriesWiseRow {
+  customer_code: string; full_name: string; pan: string | null; aadhaar: string | null;
+  dob: string | null; gender: string | null; phone: string | null; phone_secondary: string | null;
+  email: string | null; address: string | null; city: string | null; district: string | null;
+  state: string | null; pincode: string | null; category: string | null; nominees: string | null;
+  bank_account: string | null; bank_ifsc: string | null; bank_name: string | null;
+  depository: string | null; dp_id: string | null; client_id: string | null; referred_by: string | null;
+  application_no: string; series_code: string; amount: number; coupon_rate_pct: number | null;
+  tenure_months: number | null; payout_frequency: string | null; date_money_received: string | null;
+  maturity_date: string | null; status: string; outstanding: number;
+}
+
+export async function seriesWiseReport(db: Db, actor: AuthUser, seriesId: number): Promise<SeriesWiseRow[]> {
+  // No status filter → every non-archived investment ever in the series. appWhere
+  // already drops archived rows and applies the actor's branch scope.
+  const w = appWhere(actor, { seriesIds: [seriesId] }, ['c.archived_at IS NULL']);
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT c.customer_code, c.full_name, c.pan, COALESCE(c.aadhaar, c.aadhaar_last4) AS aadhaar,
+            c.dob, c.gender, c.phone, c.phone_secondary, c.email, c.address, c.city, c.district,
+            c.state, c.pincode, c.investor_category AS category,
+            c.depository, c.demat_dp_id, c.demat_client_id,
+            NULLIF(btrim(${REFERRER}), '') AS referred_by,
+            a.application_no, s.code AS series_code, a.total_amount AS amount, a.status,
+            a.date_money_received, a.maturity_date,
+            -- Representative tranche terms (most investments have one line); the
+            -- consolidated report keeps the amount at the application total.
+            (SELECT al.coupon_rate_pct FROM application_lines al WHERE al.application_id = a.id ORDER BY al.id LIMIT 1) AS coupon_rate_pct,
+            (SELECT al.tenure_months   FROM application_lines al WHERE al.application_id = a.id ORDER BY al.id LIMIT 1) AS tenure_months,
+            (SELECT al.payout_frequency FROM application_lines al WHERE al.application_id = a.id ORDER BY al.id LIMIT 1) AS payout_frequency,
+            COALESCE((SELECT SUM(al.outstanding_amount) FROM application_lines al WHERE al.application_id = a.id), 0) AS outstanding,
+            (SELECT string_agg(n.full_name || CASE WHEN n.share_pct IS NOT NULL THEN ' (' || n.share_pct || '%)' ELSE '' END, '; ' ORDER BY n.id)
+               FROM nominees n WHERE n.customer_id = c.id) AS nominees,
+            (SELECT b.account_number FROM customer_bank_accounts b WHERE b.customer_id = c.id ORDER BY b.is_active DESC, b.id LIMIT 1) AS bank_account,
+            (SELECT b.ifsc           FROM customer_bank_accounts b WHERE b.customer_id = c.id ORDER BY b.is_active DESC, b.id LIMIT 1) AS bank_ifsc,
+            (SELECT b.bank_name      FROM customer_bank_accounts b WHERE b.customer_id = c.id ORDER BY b.is_active DESC, b.id LIMIT 1) AS bank_name
+     ${FROM_ATTR} WHERE ${w.sql}
+     ORDER BY c.full_name, a.date_money_received, a.id`, w.params);
+  return rows.map((r) => ({
+    customer_code: r.customer_code as string, full_name: r.full_name as string,
+    pan: (r.pan as string) ?? null, aadhaar: (r.aadhaar as string) ?? null,
+    dob: (r.dob as string) ?? null, gender: (r.gender as string) ?? null,
+    phone: (r.phone as string) ?? null, phone_secondary: (r.phone_secondary as string) ?? null,
+    email: (r.email as string) ?? null, address: (r.address as string) ?? null,
+    city: (r.city as string) ?? null, district: (r.district as string) ?? null,
+    state: (r.state as string) ?? null, pincode: (r.pincode as string) ?? null,
+    category: (r.category as string) ?? null, nominees: (r.nominees as string) ?? null,
+    bank_account: (r.bank_account as string) ?? null, bank_ifsc: (r.bank_ifsc as string) ?? null,
+    bank_name: (r.bank_name as string) ?? null, depository: (r.depository as string) ?? null,
+    dp_id: (r.demat_dp_id as string) ?? null, client_id: (r.demat_client_id as string) ?? null,
+    referred_by: (r.referred_by as string) ?? null,
+    application_no: r.application_no as string, series_code: r.series_code as string,
+    amount: round2(Number(r.amount)), coupon_rate_pct: r.coupon_rate_pct != null ? Number(r.coupon_rate_pct) : null,
+    tenure_months: r.tenure_months != null ? Number(r.tenure_months) : null,
+    payout_frequency: (r.payout_frequency as string) ?? null,
+    date_money_received: (r.date_money_received as string) ?? null,
+    maturity_date: (r.maturity_date as string) ?? null,
+    status: r.status as string, outstanding: round2(Number(r.outstanding)),
+  }));
+}

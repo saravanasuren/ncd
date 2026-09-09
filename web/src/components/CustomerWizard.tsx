@@ -49,6 +49,12 @@ const EMPTY = {
 type Form = typeof EMPTY;
 type DocKey = 'pan_card' | 'aadhaar_card' | 'customer_photo' | 'customer_signature' | 'address_proof' | 'cml' | 'bank_proof' | 'nominee_kyc' | 'form_121';
 
+// Must match the backend cap (lib/uploads MAX_UPLOAD_BYTES). Checked BEFORE the
+// customer is created, so an oversized scan is refused up-front instead of after
+// the customer commits (which orphaned them without docs — owner 2026-09-09).
+const MAX_DOC_MB = 10;
+const MAX_DOC_BYTES = MAX_DOC_MB * 1024 * 1024;
+
 // Autosave the in-progress enrolment to the browser so an accidental close /
 // navigation never loses typed data. Files aren't serialisable, so only text
 // fields survive a full close.
@@ -188,6 +194,9 @@ export function CustomerWizard(
   });
   const [err, setErr] = useState('');
   const [dup, setDup] = useState<{ id: number; customer_code: string; full_name: string } | null>(null);
+  // The customer was created but an attachment (doc/bank/nominee) failed — shown
+  // so the operator adds the rest on the profile instead of re-saving into a 409.
+  const [partial, setPartial] = useState<{ id: number; code: string; reason: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [pinState, setPinState] = useState<'idle' | 'looking' | 'ok' | 'miss'>('idle');
   const [ifscState, setIfscState] = useState<'idle' | 'looking' | 'ok' | 'miss'>('idle');
@@ -286,7 +295,7 @@ export function CustomerWizard(
     setFiles({ pan_card: null, aadhaar_card: null, customer_photo: null, customer_signature: null, address_proof: null, cml: null, bank_proof: null, nominee_kyc: null, form_121: null });
   };
 
-  async function persist(): Promise<number> {
+  function buildPersonal(): Record<string, unknown> {
     // TDS is an explicit Yes/No the operator picks (no default) — finish()
     // blocks submit until one is chosen, so f.tds is 'yes' or 'no' here.
     const personal: Record<string, unknown> = { full_name: f.full_name.trim(), is_nri: f.is_nri, tds_applicable: f.tds === 'yes' };
@@ -303,9 +312,14 @@ export function CustomerWizard(
     const aadhaarDigits = f.aadhaar.replace(/\D/g, '');
     if (aadhaarDigits.length === 12) personal.aadhaar = aadhaarDigits;
     else if (aadhaarDigits.length >= 4) personal.aadhaar_last4 = aadhaarDigits.slice(-4);
+    return personal;
+  }
 
-    const { id } = await api.post<{ id: number }>('/api/customers', personal);
-
+  // Everything that hangs off the customer — demat, KYC scans, bank, nominee.
+  // Each needs the customer id, so this runs AFTER the row exists; a failure here
+  // leaves a created customer missing some of these, which finish() turns into a
+  // "created — add the rest" message rather than a bare failure + duplicate retry.
+  async function attachExtras(id: number) {
     if (f.dp_id.trim() || f.client_id.trim() || f.depository)
       await api.put(`/api/customers/${id}/demat`, { dp_id: f.dp_id.trim(), client_id: f.client_id.trim(), depository: f.depository || null });
 
@@ -329,8 +343,6 @@ export function CustomerWizard(
         phone: f.nom_phone.trim() || null, address: f.nom_address.trim() || null,
         guardian_name: f.guardian_name.trim() || null, guardian_pan: f.guardian_pan.trim() || null,
       }] });
-
-    return id;
   }
 
   // Customer is created live (no approval — owner 2026-07-21). goInvest → open
@@ -344,17 +356,38 @@ export function CustomerWizard(
     if (f.dp_id.trim() && !DP_ID_RE.test(f.dp_id.trim())) { setErr('DP ID must be 8 characters — two letters + six digits (e.g. IN300456) or eight digits (CDSL).'); setStep(1); return; }
     if (f.account_number.trim() && f.ifsc.trim() && !IFSC_RE.test(f.ifsc.trim())) { setErr('IFSC must be 11 characters like SBIN0001234.'); setStep(3); return; }
     if (f.tds !== 'yes' && f.tds !== 'no') { setErr('Please choose whether TDS applies on interest payouts — Yes or No.'); setStep(3); return; }
-    setErr(''); setDup(null); setBusy(true);
+    // Refuse an oversized scan BEFORE the customer is created. Otherwise the
+    // customer commits, the doc upload then fails on size, and the operator is
+    // left with a customer missing its docs plus a "save again" that hits
+    // "already exists" (owner 2026-09-09).
+    const big = Object.values(files).find((file) => file && file.size > MAX_DOC_BYTES);
+    if (big) { setErr(`"${big.name}" is ${(big.size / (1024 * 1024)).toFixed(1)} MB — each document must be under ${MAX_DOC_MB} MB. Replace it with a smaller scan, then save.`); setStep(2); return; }
+    setErr(''); setDup(null); setPartial(null); setBusy(true);
+    // Kept in scope so the catch can tell "the customer never got created"
+    // (a duplicate / validation error to retry) from "created, but an attachment
+    // failed" (nothing to retry — the row exists).
+    let created: { id: number; customer_code: string } | null = null;
     try {
-      const id = await persist();
+      created = await api.post<{ id: number; customer_code: string }>('/api/customers', buildPersonal());
+      await attachExtras(created.id);
       clearDraft(); // saved server-side now — drop the local autosave
       // Link the originating lead (if any) BEFORE we navigate away, so a link
       // failure is shown here rather than lost.
-      if (onCreated) await onCreated(id);
+      if (onCreated) await onCreated(created.id);
       qc.invalidateQueries({ queryKey: ['customers'] });
       onClose();
-      if (goInvest) nav(`/app/customers/${id}`);
+      if (goInvest) nav(`/app/customers/${created.id}`);
     } catch (e) {
+      if (created) {
+        // The customer IS saved; an attachment step (doc / bank / nominee) failed.
+        // Re-saving would only 409, so drop the draft and point the operator at the
+        // profile to add whatever didn't attach — instead of a bare "Save failed".
+        clearDraft();
+        qc.invalidateQueries({ queryKey: ['customers'] });
+        setPartial({ id: created.id, code: created.customer_code,
+          reason: e instanceof ApiError ? [e.message, fieldReason(e.detail)].filter(Boolean).join(' — ') : 'the upload failed' });
+        return;
+      }
       const d = e instanceof ApiError ? (e.detail as { existing_customer?: { id: number; customer_code: string; full_name: string } } | undefined) : undefined;
       if (d?.existing_customer) setDup(d.existing_customer);
       // The API puts the FIELD-LEVEL reason in `detail` and leaves `message` as
@@ -567,6 +600,11 @@ export function CustomerWizard(
         {dup && (
           <div className="text-xs px-5 pb-2">
             Existing customer: <button className="font-mono text-primary underline" onClick={() => { onClose(); nav(`/app/customers/${dup.id}`); }}>{dup.customer_code}</button> ({dup.full_name}) — open them to book the new investment and use <b>Request handover</b> there (Admin/CXO/BM approve).
+          </div>
+        )}
+        {partial && (
+          <div className="text-xs px-5 pb-2 text-warn">
+            Customer <button className="font-mono text-primary underline" onClick={() => { onClose(); nav(`/app/customers/${partial.id}`); }}>{partial.code}</button> was created, but something didn’t attach ({partial.reason}). Open them to add the remaining documents/details — do <b>not</b> save again (it already exists).
           </div>
         )}
         <div className="flex items-center justify-between gap-2 px-5 py-3.5 border-t border-border">

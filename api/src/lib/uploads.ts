@@ -7,7 +7,12 @@
  */
 import { errors } from './errors.js';
 
-export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // decoded bytes
+// 10 MB decoded — matches what the enrolment wizard tells operators ("max 10 MB
+// each"). It was 5 MB, so a 5–10 MB scan the UI accepted was rejected here after
+// the customer had already been created, orphaning them without documents (owner
+// 2026-09-09). The request-body limits (app.ts) sit above this so validateUpload
+// stays the single, clear gate.
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // decoded bytes
 
 const SNIFF: [string, (b: Buffer) => boolean][] = [
   ['application/pdf', (b) => b.subarray(0, 5).toString('latin1') === '%PDF-'],

@@ -133,8 +133,50 @@ lockersRouter.get('/customers/by-pan/:pan', asyncHandler(async (req, res) => {
   res.json({ found_in_ncd: true, customer: { ...c, id: Number(c.id) }, locker });
 }));
 
-lockersRouter.get('/customers/:phone', asyncHandler(async (req, res) =>
-  res.json(await lh.getCustomer(String(req.params.phone)))));
+/**
+ * LockerHub's record for a phone — PLUS the NCD customer on that number.
+ *
+ * The `ncd_customer` half is the fix for a silent gap (owner 2026-09-09).
+ * Enrolling by PAN resolved the NCD customer and therefore sent `customer_id`
+ * on create, which is what makes the server attach the applicant block —
+ * nominee, address, KYC, bank. Enrolling by PHONE resolved nothing, so
+ * `customer_id` was omitted and LockerHub received a bare name and phone.
+ *
+ * 43 of 56 locker applications were created that way, and 42 of those 43 match
+ * an NCD customer on the phone we already had. The whole point of the applicant
+ * block — "so nobody has to open LockerHub to finish a tenancy" — was inactive
+ * for three quarters of enrolments, and it looked like it was working.
+ *
+ * SCOPED, unlike the by-PAN lookup. An id the caller cannot see would be sent
+ * on create and rejected there with a 404, which reads as "the enrolment
+ * broke" rather than "not your customer". Returning null instead degrades to
+ * exactly the old behaviour: the enrolment proceeds without the block.
+ */
+lockersRouter.get('/customers/:phone', asyncHandler(async (req, res) => {
+  const digits = String(req.params.phone ?? '').replace(/\D/g, '').slice(-10);
+  const { scopeFor, scopeWhere } = await import('../../lib/scope.js');
+  const sc = scopeWhere(scopeFor(req.user!), {
+    userCol: 'c.enrolled_by_user_id', agentCol: 'c.enrolled_by_agent_id',
+    branchCol: 'c.branch_id', selfIdCol: 'c.id', refCol: 'c.referred_by_text',
+  }, 1);
+  const ncd = digits.length === 10
+    ? (await getDb().query<{ id: string; customer_code: string; full_name: string; phone: string | null; email: string | null }>(
+        `SELECT c.id, c.customer_code, c.full_name, c.phone, c.email
+           FROM customers c
+          WHERE right(regexp_replace(coalesce(c.phone, ''), '[^0-9]', '', 'g'), 10) = $1
+            AND c.archived_at IS NULL AND ${sc.sql}
+          ORDER BY c.id LIMIT 1`, [digits, ...sc.params])).rows[0]
+    : undefined;
+  // The NCD half is OURS and must not depend on their uptime. When LockerHub
+  // is not configured at all (tests, and any environment without the key) this
+  // answers with our side rather than a 503 that hides it. A configured
+  // LockerHub that then FAILS still surfaces — an outage mid-enrolment is
+  // something staff need to see, not a silent "new customer".
+  const hub = lh.lockerHubConfigured()
+    ? await lh.getCustomer(String(req.params.phone)) as Record<string, unknown>
+    : { found: false };
+  res.json({ ...hub, ncd_customer: ncd ? { ...ncd, id: Number(ncd.id) } : null });
+}));
 // The locker applications NCD has created — the list that did not exist until
 // 2026-09-08. LockerHub publishes no list endpoint, so this reads OUR index
 // (085); statuses are what they last told us, refreshed on open or on demand.

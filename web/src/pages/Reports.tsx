@@ -116,6 +116,13 @@ export function ReportsPage() {
             <a href="/app/reports/series-holders" className={dl}>Open report →</a>
           </div>
         )}
+        {can('reports:download') && (
+          <div className={card}>
+            <h2 className="text-sm font-semibold mb-2">Series-wise report</h2>
+            <p className="text-xs text-text-muted mb-2">Pick a series → every investment in it, one row each, with the customer’s complete details (PAN, Aadhaar, address, phone, nominee, bank, demat) and investment terms.</p>
+            <a href="/app/reports/series-wise" className={dl}>Open report →</a>
+          </div>
+        )}
         {can('settings:manage') && (
           <div className={card}>
             <h2 className="text-sm font-semibold mb-2">Full database dump</h2>

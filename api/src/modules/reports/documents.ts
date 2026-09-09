@@ -225,6 +225,52 @@ export async function seriesHoldersXlsx(seriesLabel: string, rows: import('./boo
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+/** Series-wise register: one row per INVESTMENT in the series, each carrying the
+ *  customer's complete details (owner 2026-09-09). Full Aadhaar is included by
+ *  request — the file is PII-heavy, treat it accordingly. */
+export async function seriesWiseXlsx(seriesLabel: string, rows: import('./book.js').SeriesWiseRow[]): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Series-wise');
+  ws.addRow([`Series ${seriesLabel} — customers & investments`]).eachCell((c) => { c.font = { bold: true, size: 13 }; });
+  ws.addRow([]);
+  const headers = [
+    'S.No', 'Customer Code', 'Name', 'PAN', 'Aadhaar', 'DOB', 'Gender', 'Phone', 'Alt Phone', 'Email',
+    'Address', 'City', 'District', 'State', 'Pincode', 'Category', 'Nominees',
+    'Bank A/C', 'IFSC', 'Bank Name', 'Depository', 'DP ID', 'Client ID', 'Referred By',
+    'Application No', 'Series', 'Amount', 'Coupon %', 'Tenure (m)', 'Payout Frequency',
+    'Money Received', 'Maturity', 'Status', 'Outstanding',
+  ];
+  ws.addRow(headers).eachCell((c) => { c.font = { bold: true }; });
+  rows.forEach((r, i) => {
+    ws.addRow([
+      i + 1, r.customer_code, r.full_name, r.pan ?? '', r.aadhaar ?? '', ddmmyyyy(r.dob), r.gender ?? '',
+      r.phone ?? '', r.phone_secondary ?? '', r.email ?? '',
+      r.address ?? '', r.city ?? '', r.district ?? '', r.state ?? '', r.pincode ?? '', r.category ?? '', r.nominees ?? '',
+      r.bank_account ?? '', r.bank_ifsc ?? '', r.bank_name ?? '', r.depository ?? '', r.dp_id ?? '', r.client_id ?? '', r.referred_by ?? '',
+      r.application_no, r.series_code, r.amount, r.coupon_rate_pct ?? '', r.tenure_months ?? '', r.payout_frequency ?? '',
+      ddmmyyyy(r.date_money_received), ddmmyyyy(r.maturity_date), r.status, r.outstanding,
+    ]);
+  });
+  ws.addRow([]);
+  // Total row under Amount + Outstanding columns (27 = Amount, 34 = Outstanding).
+  const total = ws.addRow([]);
+  total.getCell(2).value = 'TOTAL'; total.getCell(2).font = { bold: true };
+  total.getCell(27).value = rows.reduce((s, r) => s + r.amount, 0); total.getCell(27).font = { bold: true };
+  total.getCell(34).value = rows.reduce((s, r) => s + r.outstanding, 0); total.getCell(34).font = { bold: true };
+  // PAN, Aadhaar, Phone, Alt Phone, Pincode, Bank A/C, IFSC stay TEXT so Excel
+  // keeps leading zeros and never renders long numbers in scientific notation.
+  const textCols = [4, 5, 8, 9, 15, 18, 19];
+  ws.eachRow((row, n) => { if (n > 3) for (const c of textCols) row.getCell(c).numFmt = '@'; });
+  ws.columns = [
+    { width: 6 }, { width: 15 }, { width: 26 }, { width: 13 }, { width: 15 }, { width: 12 }, { width: 8 },
+    { width: 13 }, { width: 13 }, { width: 24 }, { width: 34 }, { width: 14 }, { width: 14 }, { width: 14 },
+    { width: 9 }, { width: 12 }, { width: 26 }, { width: 18 }, { width: 13 }, { width: 20 }, { width: 11 },
+    { width: 12 }, { width: 12 }, { width: 22 }, { width: 18 }, { width: 12 }, { width: 15 }, { width: 9 },
+    { width: 10 }, { width: 16 }, { width: 14 }, { width: 12 }, { width: 16 }, { width: 15 },
+  ];
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
 /** Full DB dump — key tables as sheets (admin). STREAMS to the response so the
  * large Schedule sheet (~tens of thousands of rows) never buffers the whole
  * workbook in memory (that OOM-killed the 512M service → nginx 502). */

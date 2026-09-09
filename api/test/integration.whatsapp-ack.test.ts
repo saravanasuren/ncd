@@ -85,4 +85,32 @@ describe('WhatsApp acknowledgement', () => {
       document: { url: 'https://ncd.test/x.pdf?vt=abc', filename: 'Ravi - NCD Acknowledgment.pdf' },
     });
   });
+
+  // ── Who may send it (owner 2026-09-09: "cxo also needs that access") ───────
+  // CXO had no way to send an acknowledgement while 23 external agents did.
+  // The fix is a NARROW permission, because both shortcuts were worse:
+  // applications:update also grants investment-date and payout-bank edits, and
+  // notifications:admin also grants the per-batch interest send.
+  describe('who may send it', () => {
+    it('CXO can send — the button they were missing', async () => {
+      const c = await as('cxo@demo.local');
+      const r = await c.post(`/api/applications/${appId}/whatsapp-ack`);
+      expect(r.status).toBe(200);
+    });
+
+    it('and CXO still cannot edit the investment behind it', async () => {
+      // The whole point of the narrow permission. If these ever start passing,
+      // someone has widened CXO to applications:update and should not have.
+      const c = await as('cxo@demo.local');
+      expect((await c.patch(`/api/applications/${appId}/investment-date`,
+        { date_money_received: '2026-07-01', reason: 'nope' })).status).toBe(403);
+      expect((await c.post(`/api/applications/${appId}/payout-account`,
+        { bank_account_id: 1 })).status).toBe(403);
+    });
+
+    it('and CXO does not gain the notification queue or the batch interest send', async () => {
+      const c = await as('cxo@demo.local');
+      expect((await c.get('/api/system/notifications')).status).toBe(403);
+    });
+  });
 });

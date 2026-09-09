@@ -208,7 +208,7 @@ applicationsRouter.get('/:id/lines/:lineId/receipt', requirePermission('customer
     res.end(r.buffer);
   }));
 
-applicationsRouter.post('/:id/whatsapp-ack', requirePermission('notifications:admin', 'applications:update'),
+applicationsRouter.post('/:id/whatsapp-ack', requirePermission('notifications:admin', 'applications:update', 'notifications:send-customer'),
   asyncHandler(async (req, res) => { res.json(await s.sendWhatsappAck(getDb(), Number(req.params.id))); }));
 
 // ── Super-admin delete / archive (applications:delete → super_admin only) ──

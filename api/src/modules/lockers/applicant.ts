@@ -44,7 +44,13 @@ const iso = (v: unknown): string =>
 export type ApplicantBlock = {
   dob?: string; gender?: string; guardian_name?: string; occupation?: string;
   address: { flat_building: string; road_name: string; landmark: string; city: string; state: string; pincode: string };
-  nominee?: { name: string; phone: string; relation: string; dob: string; pan: string; aadhaar_last4: string };
+  nominee?: {
+    name: string; phone: string; relation: string; dob: string; pan: string; aadhaar_last4: string;
+    /** Same shape as the applicant's own address, and the same caveat: we hold
+     *  ONE free-text line, so only `road_name` is ever populated. Sent only
+     *  when we actually have it. */
+    address?: { flat_building: string; road_name: string; landmark: string; city: string; state: string; pincode: string };
+  };
   kyc: { pan: string; aadhaar_last4: string; verified: boolean; method?: string };
   bank?: { name: string; account_last4: string; ifsc: string; branch: string };
 }
@@ -230,7 +236,7 @@ export async function buildApplicantBlock(db: Db, customerId: number): Promise<A
   // Highest-share nominee — the one a locker tenancy would name. share_pct can
   // be NULL (see the "no stated share" rule), so NULLs sort last, not first.
   const n = (await db.query<Record<string, unknown>>(
-    `SELECT full_name, relationship, dob, pan, phone, kyc_id_type, kyc_id_number
+    `SELECT full_name, relationship, dob, pan, phone, address, kyc_id_type, kyc_id_number
        FROM nominees WHERE customer_id = $1
       ORDER BY share_pct DESC NULLS LAST, id ASC LIMIT 1`, [customerId])).rows[0];
 
@@ -260,6 +266,26 @@ export async function buildApplicantBlock(db: Db, customerId: number): Promise<A
       nominee: {
         name: clean(n.full_name), phone: clean(n.phone), relation: clean(n.relationship),
         dob: iso(n.dob), pan: clean(n.pan), aadhaar_last4: nomineeAadhaar ?? '',
+        // The nominee's OWN address, when we hold one (LockerHub 2026-09-09).
+        //
+        // Until now we sent none, and LockerHub back-filled the nominee's city,
+        // state and pincode from the APPLICANT's address to satisfy their
+        // completeness gate. That guess was being printed on a signed contract:
+        // a nominee who lives elsewhere had a stranger's town on their locker
+        // agreement, stated as fact.
+        //
+        // OMITTED ENTIRELY when we have none (71 of 507 nominees have one), so
+        // absent means "we do not know" rather than an empty object that reads
+        // as "no address exists". city/state/pincode stay blank even when the
+        // line is present: we hold one free-text field, and filling those from
+        // the customer's would recreate on our side the exact guess we are
+        // asking them to stop making.
+        ...(clean(n.address) ? {
+          address: {
+            flat_building: '', road_name: clean(n.address), landmark: '',
+            city: '', state: '', pincode: '',
+          },
+        } : {}),
       },
     } : {}),
     kyc: {

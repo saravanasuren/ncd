@@ -12,6 +12,10 @@
  *   · principal and interest are stated SEPARATELY — the old text read as
  *     though interest were paid with the principal at redemption, which is not
  *     what the system does.
+ *
+ * Owner 2026-09-09: the closing Private Placement Offer Letter sentence was
+ * removed. Its absence is pinned below for the same reason its presence was —
+ * it changes what the Company has undertaken.
  */
 import { describe, it, expect } from 'vitest';
 import { bondLegalParagraph } from '../src/modules/reports/forms/bond.js';
@@ -31,9 +35,7 @@ describe('bond certificate — promise to pay', () => {
       + 'redemption as mentioned above. The principal amount shall be payable on redemption, while interest '
       + 'shall be paid separately at the rate specified above, subject to deduction of tax at source at the '
       + 'rate prevailing from time to time under the provisions of the Income-tax Act, 1961, or any statutory '
-      + 'modification or re-enactment thereof. The NCD is issued subject to and with the benefit of the '
-      + 'conditions mentioned in the Private Placement Offer Letter, which shall be binding on the Company, '
-      + 'the NCD Holders, and persons claiming by, through, or under any of them.');
+      + 'modification or re-enactment thereof.');
   });
 
   it('states the sum in figures AND words — the protection against an altered figure', () => {
@@ -51,11 +53,20 @@ describe('bond certificate — promise to pay', () => {
     expect(p).not.toContain('including interest');
   });
 
-  it('keeps the TDS and Private Placement Offer Letter undertakings', () => {
+  it('keeps the TDS undertaking, and ends there', () => {
     expect(p).toContain('deduction of tax at source');
     expect(p).toContain('Income-tax Act, 1961');
-    expect(p).toContain('Private Placement Offer Letter');
-    expect(p).toContain('binding on the Company, the NCD Holders');
+    expect(p.trimEnd().endsWith('or any statutory modification or re-enactment thereof.')).toBe(true);
+  });
+
+  it('no longer incorporates the Private Placement Offer Letter by reference', () => {
+    // Removed at the owner's instruction 2026-09-09. This clause bound the
+    // holder to a document they are not handed with the certificate, so its
+    // removal changes what the instrument says — assert it stays gone rather
+    // than let it drift back in with a later wording edit.
+    expect(p).not.toContain('Private Placement Offer Letter');
+    expect(p).not.toContain('binding on the Company');
+    expect(p).not.toContain('persons claiming by, through, or under any of them');
   });
 
   it('carries the real company name and office, not a hardcoded one', () => {

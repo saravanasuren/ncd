@@ -292,6 +292,92 @@ describe('customer writes', () => {
     expect(lookup.json.customer_id).toBe(first.json.customer_id);
   });
 
+  /**
+   * The explicit KYC verdict fields (LockerHub 2026-09-09).
+   *
+   * We read this only from `kyc.attempts` — an audit trail — and DigiLocker,
+   * the only route by which an Aadhaar is verified on their side, never writes
+   * one. Across 363 real syncs covering 100 customers we stored a PAN ZERO
+   * times, an Aadhaar last-4 zero times, and elevated kyc_status zero times.
+   * Every one of those customers read "PAN —, Aadhaar —, KYC Pending" while
+   * having completed KYC in the app.
+   *
+   * So each test below is one of those three, and the last two are the guards
+   * that stop the fix creating a worse problem than it solves.
+   */
+  describe('KYC verdicts sent as fields, not buried in an audit trail', () => {
+    const syncKyc = (phone: string, kyc: Record<string, unknown>) =>
+      integ('POST', '/api/integration/customers/from-lockerhub', {
+        phone, name: 'Kyc Fields', trigger: 'kyc_completed', kyc,
+      });
+    const row = async (phone: string) => (await ctx.db.query<Record<string, unknown>>(
+      `SELECT pan, aadhaar, aadhaar_last4, kyc_status FROM customers
+        WHERE right(regexp_replace(phone,'\\D','','g'), 10) = $1`, [phone])).rows[0]!;
+
+    it('stores the PAN, the last four, and elevates KYC — with NO attempts array', async () => {
+      // The DigiLocker shape: verdicts as fields, no attempt rows at all. This
+      // is the case that used to store nothing whatsoever.
+      const r = await syncKyc('9733355501', {
+        pan: 'ABCDE1234F', pan_masked: 'AB****4F', pan_verified: true,
+        aadhaar_last4: '8081', aadhaar_verified: true,
+        aadhaar_verification_method: 'digilocker',
+      });
+      expect(r.status).toBe(200);
+      const c = await row('9733355501');
+      expect(c.pan).toBe('ABCDE1234F');
+      expect(c.aadhaar_last4).toBe('8081');
+      expect(c.kyc_status).toBe('Verified');
+    });
+
+    it('never writes the MASKED pan into the identity column', async () => {
+      // customers.pan is unique and statutory. "AB****4F" there is a fake
+      // identity that every downstream form would treat as real.
+      await syncKyc('9733355502', { pan_masked: 'AB****4F', pan_verified: true });
+      const c = await row('9733355502');
+      expect(c.pan == null || !String(c.pan).includes('*')).toBe(true);
+    });
+
+    it('never writes the last four into the FULL aadhaar column', async () => {
+      // customers.aadhaar holds twelve digits. Four digits sitting there would
+      // read as a real Aadhaar to everything that touches it.
+      await syncKyc('9733355503', { aadhaar_last4: '8081', aadhaar_verified: true });
+      const c = await row('9733355503');
+      expect(c.aadhaar_last4).toBe('8081');
+      expect(c.aadhaar).toBeNull();
+    });
+
+    it('REFUSES a full Aadhaar in the last-4 field rather than truncating it', async () => {
+      // They have undertaken never to send twelve digits (Aadhaar Act s.29).
+      // If one arrives it is a contract breach, not a value: storing its tail
+      // would make a broken sender look like a working one.
+      await syncKyc('9733355504', { aadhaar_last4: '123456789012' });
+      const c = await row('9733355504');
+      expect(c.aadhaar_last4).toBeNull();
+      expect(c.aadhaar).toBeNull();
+    });
+
+    it('PAN alone does not elevate KYC — both must be verified', async () => {
+      await syncKyc('9733355505', { pan: 'BBCDE1234F', pan_verified: true });
+      const c = await row('9733355505');
+      expect(c.pan).toBe('BBCDE1234F');
+      expect(c.kyc_status).not.toBe('Verified');
+    });
+
+    it('still honours the old attempts-only shape, for senders that have not caught up', async () => {
+      const r = await integ('POST', '/api/integration/customers/from-lockerhub', {
+        phone: '9733355506', name: 'Legacy Shape', trigger: 'kyc_completed',
+        kyc: { attempts: [
+          { document_type: 'PAN', status: 'verified', id_number: 'CBCDE1234F' },
+          { document_type: 'AADHAAR', status: 'verified', aadhaar_last4: '1234' },
+        ] },
+      });
+      expect(r.status).toBe(200);
+      const c = await row('9733355506');
+      expect(c.pan).toBe('CBCDE1234F');
+      expect(c.kyc_status).toBe('Verified');
+    });
+  });
+
   it('profile-update-request lands in the approval queue with a PCR ref', async () => {
     const r = await integ('POST', `/api/integration/customers/${customerId}/profile-update-request`, {
       changes: { full_name: 'Facade Customer Renamed', city: 'Salem', pan: 'AAAPF1111F' },

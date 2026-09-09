@@ -284,13 +284,64 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
       }
     }
 
-    // 2. KYC — append-only; only verified attempts count. ncd has no
-    // kyc_records / aadhaar_last4 columns: PAN lands on customers.pan, both-
-    // verified elevates kyc_status, doc images land in customer_documents.
+    // 2. KYC. PAN lands on customers.pan, the last four on aadhaar_last4,
+    // both-verified elevates kyc_status, doc images land in customer_documents.
+    //
+    // TWO SOURCES, AND THE EXPLICIT ONE WINS (LockerHub 2026-09-09).
+    //
+    // We used to read this ONLY from `kyc.attempts`, an audit trail. That was
+    // wrong on their side and ours: DigiLocker — the only route by which an
+    // Aadhaar gets verified over there — never writes an attempt row, it stamps
+    // the profile. So 104 of their 105 verified-Aadhaar customers reached us as
+    // unverified, the PAN arrived only as a masked string inside an attempt,
+    // and the last four never arrived at all. Across 363 syncs covering 100
+    // customers we stored a PAN zero times and elevated kyc_status zero times.
+    //
+    // They now send the verdicts as FIELDS. Those are authority; the attempts
+    // array stays as a fallback for any sender that has not caught up, and for
+    // the document images, which only live there.
     const pendingDocSaves: Array<{ docType: string; base64: string; mime: string }> = [];
+    const kycBlock = (b.kyc ?? {}) as Record<string, unknown>;
+    const bool = (v: unknown) => v === true || v === 'true' || v === 1 || v === '1';
+
+    // The full PAN, sent deliberately and matching what A13 already returns.
+    // `pan_masked` is display-only and must never reach customers.pan — a
+    // "AB****4F" in a unique identity column is a fake identity.
+    const kycPan = String(kycBlock.pan ?? '').trim().toUpperCase();
+    if (panTrusted && /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(kycPan)) {
+      const cur = (await tx.query<{ pan: string | null }>('SELECT pan FROM customers WHERE id = $1', [customerId])).rows[0];
+      const curPan = cur?.pan ?? '';
+      if (curPan === '' || curPan.startsWith('LH_') || curPan.startsWith('CGRP_')) {
+        try {
+          await tx.query('UPDATE customers SET pan = $2, updated_at = now() WHERE id = $1', [customerId, kycPan]);
+          updatedFields.push('pan');
+        } catch { /* that PAN belongs to another customer — keep what we have */ }
+      }
+    }
+
+    // FOUR digits, and it goes to aadhaar_last4 — never to `aadhaar`, which
+    // holds the full twelve. They have said they will never send a full number
+    // (Aadhaar Act s.29), so anything longer here is a contract breach, not a
+    // value to store: refuse it rather than truncate it into looking correct.
+    const last4 = String(kycBlock.aadhaar_last4 ?? '').replace(/\D/g, '');
+    if (last4.length === 4) {
+      const r = await tx.query(
+        'UPDATE customers SET aadhaar_last4 = $2, updated_at = now() WHERE id = $1 AND aadhaar_last4 IS DISTINCT FROM $2',
+        [customerId, last4]);
+      if (r.rowCount) updatedFields.push('aadhaar_last4');
+    } else if (last4.length > 4) {
+      console.warn(`[LH-KYC] refused aadhaar_last4 of ${last4.length} digits for customer ${customerId} — expected 4`);
+    }
+
+    // Seeded from the explicit verdicts and declared OUTSIDE the attempts loop,
+    // so a sender that supplies them needs no attempt row at all — which is
+    // exactly the DigiLocker case, and the reason nothing was elevating before.
+    let panVerified = bool(kycBlock.pan_verified);
+    let aadhaarVerified = bool(kycBlock.aadhaar_verified);
+    if (panVerified) updatedFields.push('kyc_pan_verified');
+    if (aadhaarVerified) updatedFields.push('kyc_aadhaar_verified');
+
     if (b.kyc && Array.isArray(b.kyc.attempts)) {
-      let panVerified = false;
-      let aadhaarVerified = false;
       for (const attempt of b.kyc.attempts as Array<Record<string, unknown>>) {
         const docType = String(attempt.document_type ?? '').toUpperCase();
         const isVer = String(attempt.status ?? '').toLowerCase() === 'verified';
@@ -318,15 +369,21 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
         if (!isVer) continue;
         if (docType === 'PAN') panVerified = true;
         if (docType === 'AADHAAR') aadhaarVerified = true;
-        updatedFields.push(`kyc_${docType.toLowerCase()}_verified`);
+        const flag = `kyc_${docType.toLowerCase()}_verified`;
+        if (!updatedFields.includes(flag)) updatedFields.push(flag);
       }
-      if (panVerified && aadhaarVerified) {
-        await tx.query(
-          `UPDATE customers SET kyc_status = 'Verified', updated_at = now() WHERE id = $1 AND kyc_status != 'Verified'`,
-          [customerId]
-        );
-        if (!updatedFields.includes('kyc_status')) updatedFields.push('kyc_status');
-      }
+    }
+
+    // Outside the attempts block on purpose: this is the line that never ran.
+    // kyc_status elevated ZERO times across 363 syncs because the only way to
+    // reach it was through an attempts array that never carried a verified
+    // Aadhaar. It now runs on whichever source said so.
+    if (panVerified && aadhaarVerified) {
+      await tx.query(
+        `UPDATE customers SET kyc_status = 'Verified', updated_at = now() WHERE id = $1 AND kyc_status != 'Verified'`,
+        [customerId]
+      );
+      if (!updatedFields.includes('kyc_status')) updatedFields.push('kyc_status');
     }
 
     // 3. Bank account rotation (customer_bank_accounts; keeps history).

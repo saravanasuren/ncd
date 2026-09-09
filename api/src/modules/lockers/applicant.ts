@@ -179,12 +179,18 @@ export async function buildKycEvidence(db: Db, customerId: number): Promise<KycE
  * which never calls LockerHub's generator. Only the e-Sign is refused. Blocking
  * would remove a route that is in use.
  *
- * WHY ONLY THESE THREE. Their error also asks for `nominee_flat_building` and
- * `nominee_road_name`, and those are deliberately NOT listed as missing:
- * `ApplicantBlock.nominee` has no address at all, so NO amount of data entry in
- * NCD can satisfy them today. Demanding a field that cannot be delivered would
- * send staff to a screen that fixes nothing. That half is a contract change
- * (raised with LockerHub 2026-09-09); this half is ours and is fixable now.
+ * THE ADDRESS IS NOW IN SCOPE. It was excluded while `ApplicantBlock.nominee`
+ * carried no address at all — demanding a field that could not be delivered
+ * would have sent staff to a screen that fixed nothing. LockerHub answered on
+ * 2026-09-09: they now store `nominee.address`, a `road_name`-only nominee
+ * passes, and their gate wants at least ONE address field. We send the one line
+ * we hold, so the address is now something data entry can fix — and is
+ * therefore reported like the rest.
+ *
+ * Their gate reports a single `nominee_address` item rather than six field
+ * names, deliberately: "listing six invites whoever reads it to go and find all
+ * six". This mirrors that — one 'Address' item, not a list of parts we do not
+ * even store separately.
  *
  * Measured on production when this was written: of 505 nominees, 437 had no
  * phone, 324 no date of birth and 290 no relationship — so this is the common
@@ -204,14 +210,14 @@ export async function nomineeReadiness(db: Db, customerId: number): Promise<Nomi
   // The SAME nominee buildApplicantBlock sends — highest share, NULLs last —
   // or the check would pass on one nominee while the payload carried another.
   const n = (await db.query<Record<string, unknown>>(
-    `SELECT full_name, relationship, dob, phone
+    `SELECT full_name, relationship, dob, phone, address
        FROM nominees WHERE customer_id = $1
       ORDER BY share_pct DESC NULLS LAST, id ASC LIMIT 1`, [customerId])).rows[0];
 
   if (!n) {
     return {
       has_nominee: false,
-      missing: ['Nominee name', 'Relationship', 'Date of birth', 'Phone'],
+      missing: ['Nominee name', 'Relationship', 'Date of birth', 'Phone', 'Address'],
       ready: false,
       // Nothing to approve — the first nominee for a customer saves outright.
       needs_approval_to_fix: false,
@@ -222,6 +228,7 @@ export async function nomineeReadiness(db: Db, customerId: number): Promise<Nomi
   if (!clean(n.relationship)) missing.push('Relationship');
   if (!iso(n.dob)) missing.push('Date of birth');
   if (!clean(n.phone)) missing.push('Phone');
+  if (!clean(n.address)) missing.push('Address');
   return { has_nominee: true, missing, ready: missing.length === 0, needs_approval_to_fix: true };
 }
 

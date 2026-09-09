@@ -28,7 +28,10 @@ export const NAV: NavItem[] = [
   { to: '/app/locker-visits', label: 'Locker Visit Log', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/locker-rent-report', label: 'Locker Rent Report', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/applications', label: 'Applications', anyOf: ['customers:read'], group: 'Daily', hideForRoles: ['cxo'] },
-  { to: '/app/outstanding', label: 'Outstanding', anyOf: ['customers:read'], group: 'Daily' },
+  // Outstanding is a back-office queue (settle failures, pending items) — hidden
+  // from agents and branch staff (owner 2026-09-09); they hold customers:read for
+  // enrolment but shouldn't see it.
+  { to: '/app/outstanding', label: 'Outstanding', anyOf: ['customers:read'], group: 'Daily', hideForRoles: ['agent', 'branch_staff'] },
   { to: '/app/approvals', label: 'Approvals', anyOf: ['approvals:check', 'approvals:check-premature', 'approvals:check-handover'], group: 'Daily' },
   { to: '/app/allotments', label: 'Allotments', anyOf: ['allotments:execute'], group: 'Periodic' },
   { to: '/app/redemptions', label: 'Redemptions', anyOf: ['redemptions:initiate'], group: 'Periodic' },

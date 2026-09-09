@@ -71,8 +71,9 @@ beforeAll(async () => {
   });
   custId = Number(c.json.id);
   await ctx.db.query(
-    `INSERT INTO nominees (customer_id, full_name, relationship, share_pct, phone, kyc_id_type, kyc_id_number)
-     VALUES ($1, 'Nominee One', 'Spouse', 100, '9700000002', 'Aadhaar', $2)`, [custId, FULL_AADHAAR]);
+    `INSERT INTO nominees (customer_id, full_name, relationship, share_pct, phone, address, kyc_id_type, kyc_id_number)
+     VALUES ($1, 'Nominee One', 'Spouse', 100, '9700000002', '8 Nominee Street, Salem', 'Aadhaar', $2)`,
+    [custId, FULL_AADHAAR]);
   await a.post(`/api/customers/${custId}/bank-accounts`, { account_number: '112611500099', ifsc: 'KVBL0001126' });
 });
 
@@ -113,6 +114,45 @@ describe('applicant block on locker application create', () => {
     expect(a.nominee).toMatchObject({ name: 'Nominee One', relation: 'Spouse', phone: '9700000002' });
     expect(a.kyc.pan).toBe('ABCDE1234F');
     expect(a.bank).toMatchObject({ account_last4: '0099', ifsc: 'KVBL0001126' });
+  });
+
+  /**
+   * The nominee's OWN address (LockerHub 2026-09-09). We sent none, so their
+   * completeness gate was satisfied by back-filling the nominee's city, state
+   * and pincode from the APPLICANT — a guess, printed onto a signed contract.
+   */
+  it("sends the nominee's own address line", async () => {
+    const { sent } = await createWith(custId);
+    expect(sent.applicant.nominee.address).toMatchObject({ road_name: '8 Nominee Street, Salem' });
+  });
+
+  it("leaves the nominee city/state/pincode BLANK rather than copying the customer's", async () => {
+    // The whole point. We hold one free-text line; filling these from the
+    // customer's address would recreate on our side the exact guess we asked
+    // LockerHub to stop making.
+    const { sent } = await createWith(custId);
+    const addr = sent.applicant.nominee.address;
+    expect(addr.city).toBe('');
+    expect(addr.state).toBe('');
+    expect(addr.pincode).toBe('');
+    // ...and the customer's own address is still fully populated, so this is a
+    // deliberate blank rather than a broken block.
+    expect(sent.applicant.address.city).toBe('Coimbatore');
+  });
+
+  it('omits the address ENTIRELY when we hold none - absent means "we do not know"', async () => {
+    const a = await admin();
+    const c2 = await a.post('/api/customers', {
+      full_name: 'No Nominee Address', phone: '9700000044', email: 'nna@example.com',
+    });
+    const id2 = Number(c2.json.id);
+    await ctx.db.query(
+      `INSERT INTO nominees (customer_id, full_name, relationship, share_pct)
+       VALUES ($1, 'Addressless Nominee', 'Son', 100)`, [id2]);
+    const { sent } = await createWith(id2);
+    expect(sent.applicant.nominee.name).toBe('Addressless Nominee');
+    // Not an empty object, which would read as "no address exists".
+    expect(sent.applicant.nominee.address).toBeUndefined();
   });
 
   it('omits kyc.method rather than inventing a provenance we do not record', async () => {

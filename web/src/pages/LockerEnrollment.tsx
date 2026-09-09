@@ -202,6 +202,9 @@ export function LockerEnrollmentPage() {
       // Schedule §5. Optional: unchosen prints as the uncircled list of options,
       // which is what every agreement signed before today already shows.
       ...(mandate ? { locker_operation_mandate: mandate } : {}),
+      // Joint hirers ride on the create — it is the ONE call that can carry
+      // them, because A7 creates and a second call would mint a duplicate.
+      ...(hirers.length ? { hirers } : {}),
     }));
     if (r?.application_id) { setApp(r); setCheques([]); setFeeWaivers([]); }
   };
@@ -540,6 +543,21 @@ export function LockerEnrollmentPage() {
   const [lockerId, setLockerId] = useState('');
   /** Schedule §5 — who may operate the locker. '' = not yet chosen. */
   const [mandate, setMandate] = useState<LockerOperationMandate | ''>('');
+  /** Joint hirers — holders 2 and 3 on the agreement. Hirer 1 IS the applicant
+   *  and is never in this list; the agreement has three blocks in total. */
+  const [hirers, setHirers] = useState<Array<{
+    position: number; full_name: string; phone: string; email: string;
+    dob: string; pan: string; aadhaar_last4: string; address: string;
+  }>>([]);
+  const addHirer = () => setHirers((h) => h.length >= 2 ? h : [...h, {
+    position: h.length + 2, full_name: '', phone: '', email: '',
+    dob: '', pan: '', aadhaar_last4: '', address: '',
+  }]);
+  const setHirerField = (i: number, k: string, v: string) =>
+    setHirers((h) => h.map((x, j) => j === i ? { ...x, [k]: v } : x));
+  /** Renumbered on removal so positions stay 2 then 3 with no gap. */
+  const removeHirer = (i: number) =>
+    setHirers((h) => h.filter((_, j) => j !== i).map((x, j) => ({ ...x, position: j + 2 })));
   /**
    * Is the nominee complete enough for LockerHub to generate the agreement?
    *
@@ -710,6 +728,60 @@ export function LockerEnrollmentPage() {
             </select>
           )}
         </div>
+        {/* ── Joint hirers ───────────────────────────────────────────────
+            The agreement has three hirer blocks and three signature columns.
+            Hirer 1 is the customer above; these are 2 and 3.
+
+            Captured HERE, before the application is created, because that is
+            the only call that carries them to LockerHub — editing afterwards
+            saves locally but cannot reach them.
+
+            Every joint hirer signs their own column and needs full KYC before
+            the agreement will generate, so the fields are the ones LockerHub
+            gates on. Left incomplete the enrolment still proceeds; only the
+            agreement waits. */}
+        <div className="mt-4 pt-3 border-t border-border">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-text-label uppercase tracking-wide">Joint hirers</span>
+            <span className="text-xs text-text-muted">optional · up to 2 more holders</span>
+            {hirers.length < 2 && (
+              <button type="button" className={btnGhost} onClick={addHirer}>+ Add a joint hirer</button>
+            )}
+          </div>
+          {hirers.length > 0 && (
+            <p className="text-xs text-text-muted mt-2">
+              Each one signs their own column of the agreement, so each needs their <b>own phone number</b> and
+              full KYC — name, phone, address, PAN, Aadhaar last 4 and date of birth. The locker can still be
+              enrolled and allotted with these blank; only the agreement waits.
+            </p>
+          )}
+          {hirers.map((h, i) => (
+            <div key={i} className="mt-3 p-3 rounded border border-border bg-bg">
+              <div className="flex items-center justify-between mb-2">
+                <b className="text-xs">Hirer {h.position}</b>
+                <button type="button" className="text-xs text-danger hover:underline"
+                        onClick={() => removeHirer(i)}>Remove</button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <input className={inp} placeholder="Full name" value={h.full_name}
+                       onChange={(e) => setHirerField(i, 'full_name', e.target.value)} />
+                <input className={inp} placeholder="Phone (must differ from the others)" value={h.phone}
+                       onChange={(e) => setHirerField(i, 'phone', e.target.value)} />
+                <input className={inp} placeholder="PAN" value={h.pan}
+                       onChange={(e) => setHirerField(i, 'pan', e.target.value.toUpperCase())} />
+                <input className={inp} placeholder="Aadhaar — LAST 4 ONLY" maxLength={4} value={h.aadhaar_last4}
+                       onChange={(e) => setHirerField(i, 'aadhaar_last4', e.target.value.replace(/\D/g, ''))} />
+                <input className={inp} type="date" value={h.dob}
+                       onChange={(e) => setHirerField(i, 'dob', e.target.value)} />
+                <input className={inp} placeholder="Email (optional)" value={h.email}
+                       onChange={(e) => setHirerField(i, 'email', e.target.value)} />
+              </div>
+              <input className={`${inp} w-full mt-2`} placeholder="Address" value={h.address}
+                     onChange={(e) => setHirerField(i, 'address', e.target.value)} />
+            </div>
+          ))}
+        </div>
+
         {/* Their API has no reserve call — A7 takes branch + size only, and a
             locker is not assigned until A11 at allotment. So this is a
             PREFERENCE we hold and use later, and saying so here is the

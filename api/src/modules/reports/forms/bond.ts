@@ -211,6 +211,13 @@ function _drawDetailTable(doc: Doc, y: number, rows: Array<[string, string, numb
  *     though interest were paid together with the principal at redemption. It is
  *     not: interest is paid on the monthly payout run, principal at redemption.
  *     The certificate now says exactly what the system actually does.
+ *
+ * Owner 2026-09-09: the closing sentence incorporating the Private Placement
+ * Offer Letter by reference ("The NCD is issued subject to and with the benefit
+ * of the conditions mentioned in the Private Placement Offer Letter, which shall
+ * be binding on the Company, the NCD Holders, and persons claiming by, through,
+ * or under any of them.") was REMOVED at their instruction. The paragraph now
+ * ends with the TDS undertaking. Nothing else in the wording changed.
  */
 export function bondLegalParagraph(legalName: string, corporateOffice: string, totalAmount: number): string {
   return `For Value Received, ${legalName}, having its Corporate Office at ${corporateOffice}, `
@@ -219,10 +226,7 @@ export function bondLegalParagraph(legalName: string, corporateOffice: string, t
     + `and discharge of this NCD Certificate on the date of redemption as mentioned above. `
     + `The principal amount shall be payable on redemption, while interest shall be paid separately at the `
     + `rate specified above, subject to deduction of tax at source at the rate prevailing from time to time `
-    + `under the provisions of the Income-tax Act, 1961, or any statutory modification or re-enactment thereof. `
-    + `The NCD is issued subject to and with the benefit of the conditions mentioned in the Private Placement `
-    + `Offer Letter, which shall be binding on the Company, the NCD Holders, and persons claiming by, through, `
-    + `or under any of them.`;
+    + `under the provisions of the Income-tax Act, 1961, or any statutory modification or re-enactment thereof.`;
 }
 
 function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHeader>, totalAmount: number, signatures: Array<Buffer | null>) {

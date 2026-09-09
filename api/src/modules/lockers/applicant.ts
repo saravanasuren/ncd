@@ -156,6 +156,69 @@ export async function buildKycEvidence(db: Db, customerId: number): Promise<KycE
   };
 }
 
+/**
+ * Whether this customer's nominee is complete enough for LockerHub to generate
+ * the locker agreement (owner 2026-09-09, after a live enrolment was stopped at
+ * the agreement step by their `nominee_incomplete`).
+ *
+ * The failure it exists to move EARLIER: LockerHub validates the nominee when
+ * the agreement is generated, which is several steps after the application has
+ * already been created on their side. So a missing date of birth is discovered
+ * at the worst possible moment, by which point staff have done the work twice.
+ *
+ * It TELLS, it does not enforce (owner 2026-09-09: "say them to go fill the
+ * nominee name and continue with the enrollment"). A locker can be enrolled AND
+ * allotted with no nominee at all — measured: 5 of 8 recorded allotments had
+ * none or an incomplete one — and the agreement can still be signed on paper,
+ * which never calls LockerHub's generator. Only the e-Sign is refused. Blocking
+ * would remove a route that is in use.
+ *
+ * WHY ONLY THESE THREE. Their error also asks for `nominee_flat_building` and
+ * `nominee_road_name`, and those are deliberately NOT listed as missing:
+ * `ApplicantBlock.nominee` has no address at all, so NO amount of data entry in
+ * NCD can satisfy them today. Demanding a field that cannot be delivered would
+ * send staff to a screen that fixes nothing. That half is a contract change
+ * (raised with LockerHub 2026-09-09); this half is ours and is fixable now.
+ *
+ * Measured on production when this was written: of 505 nominees, 437 had no
+ * phone, 324 no date of birth and 290 no relationship — so this is the common
+ * case, not an edge one.
+ */
+export interface NomineeReadiness {
+  has_nominee: boolean;
+  /** Field labels as the customer screen shows them, for a message staff can act on. */
+  missing: string[];
+  ready: boolean;
+  /** True when a nominee already exists, so any correction goes via a checker
+   *  (owner 2026-08-19) — the operator needs to know it is not a quick edit. */
+  needs_approval_to_fix: boolean;
+}
+
+export async function nomineeReadiness(db: Db, customerId: number): Promise<NomineeReadiness> {
+  // The SAME nominee buildApplicantBlock sends — highest share, NULLs last —
+  // or the check would pass on one nominee while the payload carried another.
+  const n = (await db.query<Record<string, unknown>>(
+    `SELECT full_name, relationship, dob, phone
+       FROM nominees WHERE customer_id = $1
+      ORDER BY share_pct DESC NULLS LAST, id ASC LIMIT 1`, [customerId])).rows[0];
+
+  if (!n) {
+    return {
+      has_nominee: false,
+      missing: ['Nominee name', 'Relationship', 'Date of birth', 'Phone'],
+      ready: false,
+      // Nothing to approve — the first nominee for a customer saves outright.
+      needs_approval_to_fix: false,
+    };
+  }
+  const missing: string[] = [];
+  if (!clean(n.full_name)) missing.push('Nominee name');
+  if (!clean(n.relationship)) missing.push('Relationship');
+  if (!iso(n.dob)) missing.push('Date of birth');
+  if (!clean(n.phone)) missing.push('Phone');
+  return { has_nominee: true, missing, ready: missing.length === 0, needs_approval_to_fix: true };
+}
+
 export async function buildApplicantBlock(db: Db, customerId: number): Promise<ApplicantBlock | null> {
   // NOTE: `customers.aadhaar` (the full 12 digits) is deliberately NOT selected.
   const c = (await db.query<Record<string, unknown>>(

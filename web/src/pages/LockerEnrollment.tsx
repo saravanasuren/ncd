@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { useConfirm } from '../components/Confirm.js';
@@ -517,6 +517,23 @@ export function LockerEnrollmentPage() {
   const allotSize = String(app?.locker_size ?? size ?? '');
   const [picking, setPicking] = useState(false);
   const [lockerId, setLockerId] = useState('');
+  /**
+   * Is the nominee complete enough for LockerHub to generate the agreement?
+   *
+   * Asked HERE, before the application exists. LockerHub validates the nominee
+   * only when the agreement is generated — several steps later — and their
+   * applications cannot be deleted, so the old failure left a half-finished
+   * tenancy on their book that nobody could clear. Only meaningful when we have
+   * matched an NCD customer: without one we send no applicant block and the
+   * nominee is whatever LockerHub already holds.
+   */
+  const nominee = useQuery({
+    queryKey: ['locker-nominee-readiness', ncdCust?.id],
+    enabled: !!ncdCust?.id,
+    queryFn: () => api.get<{ has_nominee: boolean; missing: string[]; ready: boolean; needs_approval_to_fix: boolean }>(
+      `/api/lockers/customers/${Number(ncdCust!.id)}/nominee-readiness`),
+  });
+
   const vacant = useQuery({
     queryKey: ['locker-vacant', allotBranch, allotSize],
     queryFn: () => api.get<{ lockers: { id: string; locker_number: string; size: string; status?: string }[] }>(
@@ -588,6 +605,11 @@ export function LockerEnrollmentPage() {
     // their box at the counter, so it is chosen up front, not at allotment.
     : !lockerId ? 'Pick a locker number in step 1 — it is required.'
     : '';
+  // The nominee is deliberately NOT in createBlocker (owner 2026-09-09: "say
+  // them to go fill the nominee name and continue with the enrollment"). It is
+  // told, not enforced — a locker CAN be enrolled and allotted without one, and
+  // the agreement can still be signed on paper, so blocking would remove a
+  // route the owner uses. The banner in step 2 says what to fill.
 
   return (
     <div className="w-full max-w-3xl">
@@ -697,6 +719,39 @@ export function LockerEnrollmentPage() {
           )}
           {notFound && (
             <div className="text-xs text-warn mt-2">No customer with that PAN in NCD — look them up by phone, or enrol the customer first.</div>
+          )}
+          {/* The nominee gate, said where staff can act on it. LockerHub refuses
+              to generate the agreement without these, and it only says so
+              several steps later — by which point their application exists and
+              cannot be deleted. */}
+          {ncdCust?.id && nominee.data && !nominee.data.ready && (
+            <div className="text-xs mt-2 rounded border border-[color:var(--danger)] bg-[color:var(--danger-bg)] px-3 py-2">
+              <div className="text-danger font-semibold">
+                Fill in the nominee for this customer, then carry on with the enrolment.
+              </div>
+              <div className="text-text-muted mt-1">
+                Missing: <b className="text-text">{nominee.data.missing.join(', ')}</b>.{' '}
+                <Link className="text-primary hover:underline" to={`/app/customers/${Number(ncdCust.id)}`} target="_blank" rel="noreferrer">
+                  Open {ncdCust.full_name}'s profile
+                </Link>{' '}to add {nominee.data.has_nominee ? 'the missing details' : 'a nominee'}.
+              </div>
+              {/* Said plainly, because it is the consequence staff will meet
+                  later and cannot otherwise predict. Enrolment and allotment
+                  work fine without a nominee — only the e-Sign does not. */}
+              <div className="text-text-muted mt-1">
+                You can still enrol and allot the locker. Only the <b className="text-text">e-Sign</b> will be
+                refused by LockerHub — a paper agreement can be printed and signed either way.
+              </div>
+              {nominee.data.needs_approval_to_fix && (
+                // Worth saying plainly: once a nominee exists, ANY correction
+                // becomes an approval request (owner 2026-08-19). Staff who
+                // expect a quick edit will otherwise think the fix failed.
+                <div className="text-text-muted mt-1">
+                  This customer already has a nominee, so the correction goes to the approvals
+                  queue and only takes effect once a checker approves it.
+                </div>
+              )}
+            </div>
           )}
           {cust && (
             <div className="mt-3 grid grid-cols-2 gap-2 max-w-lg">

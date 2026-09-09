@@ -426,6 +426,19 @@ lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) =
 // each is still free. Registered before the ':linkId' routes.
 // Everything NCD knows about one customer's lockers — their LockerHub record
 // plus our own pledges and cheques. Powers the Lockers card on customer 360.
+// Is this customer's nominee complete enough for LockerHub to generate the
+// agreement? Asked by the enrolment screen BEFORE the application is created,
+// because LockerHub only validates the nominee at agreement time — several
+// steps later, by which point their application exists and cannot be deleted
+// (owner 2026-09-09).
+lockersRouter.get('/customers/:customerId/nominee-readiness', asyncHandler(async (req, res) => {
+  const { assertCustomerVisible } = await import('../../lib/visibility.js');
+  const id = Number(req.params.customerId);
+  await assertCustomerVisible(getDb(), req.user!, id);
+  const { nomineeReadiness } = await import('./applicant.js');
+  res.json(await nomineeReadiness(getDb(), id));
+}));
+
 lockersRouter.get('/customers/:customerId/lockers', asyncHandler(async (req, res) => {
   const { assertCustomerVisible } = await import('../../lib/visibility.js');
   const id = Number(req.params.customerId);

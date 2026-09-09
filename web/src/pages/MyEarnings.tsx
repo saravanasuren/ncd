@@ -11,32 +11,27 @@ interface PaidItem {
   customer_name: string | null; customer_code: string | null;
   accrual_date: string; paid_at: string; amount: string;
 }
-interface SeriesRow { series_code: string; series_name: string; investments: number; customers: number; amount: string }
-interface MonthRow { month: string; investments: number; customers: number; amount: string }
-/** A row on the CREDITED basis — what the incentive is actually paid on. */
+/**
+ * A month or a series, on the CREDITED basis — the investments this person's
+ * incentive is worked out on, which is the same basis the Incentives page uses.
+ *
+ * The response also carries the ENROLLED basis (what they keyed in themselves)
+ * and a three-way split of the credited figure. This page deliberately shows
+ * neither any more: two different totals side by side, plus a split, is what
+ * made the screen unreadable (owner 2026-09-09: "i feel this screen so
+ * complicated"). They stay in the payload because the Incentives page's own
+ * reconciliation tests measure against them.
+ */
 interface CreditRow {
   month?: string; series_code?: string; series_name?: string;
-  investments: number; customers: number; amount: string; incentive_paid: string;
-  enrolled_amount: string; referred_amount: string; earlier_amount: string;
-  enrolled_investments?: number; referred_investments?: number;
+  investments: number; customers: number; amount: string;
 }
 interface MyEarnings {
+  /** Paid to date. Accrued and balance are never in this response, for any
+   *  role — see the note on the tile below. */
   paid: number;
   paid_items: PaidItem[];
-  totals: { investments: number; customers: number; amount: number };
-  by_series: SeriesRow[];
-  by_month: MonthRow[];
-  /** The same basis the Incentives page uses, so the two reconcile. */
-  credited: {
-    totals: {
-      investments: number; customers: number; amount: number; incentive_paid: number;
-      referred_investments: number; referred_amount: number;
-      enrolled_investments: number; enrolled_amount: number;
-      earlier_investments: number; earlier_amount: number;
-    };
-    by_series: CreditRow[];
-    by_month: CreditRow[];
-  };
+  credited: { by_series: CreditRow[]; by_month: CreditRow[] };
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -46,11 +41,11 @@ function monthLabel(m: string): string {
 }
 const day = (d: string | null) => (d ? String(d).slice(0, 10) : '—');
 
-function Tile({ label, value, sub, highlight, title }: { label: string; value: string; sub: string; highlight?: boolean; title?: string }) {
+function Tile({ label, value, sub, title }: { label: string; value: string; sub: string; title?: string }) {
   return (
-    <div className={`bg-surface border rounded-lg shadow-card p-4 ${highlight ? 'border-primary' : 'border-border'}`} title={title}>
+    <div className="bg-surface border border-primary rounded-lg shadow-card p-4" title={title}>
       <div className="text-xs font-semibold text-text-label uppercase tracking-wide">{label}</div>
-      <div className={`mt-1 text-lg font-bold mono ${highlight ? 'text-primary' : ''}`}>{value}</div>
+      <div className="mt-1 text-lg font-bold mono text-primary">{value}</div>
       <div className="text-xs text-text-muted mt-1">{sub}</div>
     </div>
   );
@@ -59,7 +54,7 @@ function Tile({ label, value, sub, highlight, title }: { label: string; value: s
 /**
  * Branch staff see WHICH customers they were paid for, but not how much each
  * one earned them (owner 2026-07-24) — the per-customer split isn't theirs to
- * see; their total is already on the tiles above. Agents keep the breakdown,
+ * see; their total is already on the tile above. Agents keep the breakdown,
  * since it's how they reconcile their own commission.
  */
 function paidColumnsFor(hideAmount: boolean): Column<PaidItem>[] {
@@ -90,54 +85,33 @@ function paidColumnsFor(hideAmount: boolean): Column<PaidItem>[] {
   return cols;
 }
 
+/**
+ * Three figures per row, in the owner's own words (2026-09-09: "month - no of
+ * cust, application, investments. thats it").
+ *
+ * Note the vocabulary, which is a change: the count of applications used to be
+ * headed "Investments", while the rupee figure was headed "Credited to you".
+ * Reading a count under "Investments" and money under something else is most of
+ * why the page did not parse. Now the count is Applications and the money is
+ * Investments, which is how people here actually speak.
+ */
+const figureCols: Column<CreditRow>[] = [
+  { key: 'customers', header: 'Customers', align: 'right', value: (r) => r.customers },
+  { key: 'investments', header: 'Applications', align: 'right', value: (r) => r.investments },
+  { key: 'amount', header: 'Investments', align: 'right',
+    value: (r) => Number(r.amount),
+    render: (r) => <span className="mono">{formatINR(Number(r.amount))}</span> },
+];
+
 export function MyEarningsPage() {
   const { user } = useAuth();
   const hideAmount = user?.role === 'branch_staff';
   const { data, isLoading, error } = useQuery({ queryKey: ['my-earnings'], queryFn: () => api.get<MyEarnings>('/api/incentives/my-earnings') });
+  const [month, setMonth] = useState<string | null>(null);
+  const [series, setSeries] = useState<string | null>(null);
   if (isLoading) return <div className="text-text-muted">Loading…</div>;
   if (error) return <div className="text-danger">Failed to load earnings.</div>;
   const d = data!;
-
-  /** Clicking a month or a series filters the payout list below (owner
-   *  2026-09-07). Null = show everything. */
-  const [month, setMonth] = useState<string | null>(null);
-  const [series, setSeries] = useState<string | null>(null);
-
-  const money = (v: unknown) => <span className="mono">{formatINR(Number(v ?? 0))}</span>;
-
-  /**
-   * Both bases, side by side, because they are DIFFERENT sets of investments
-   * and the difference is what confused people (owner 2026-09-07: "show both
-   * lines in my earnings so it reconciles").
-   *
-   *   Enrolled by you  — investments you keyed in
-   *   Credited to you  — investments your incentive is actually paid on
-   *
-   * They are not subsets of each other. One branch staff member's August was 8
-   * enrolled (₹34L) against 10 credited (₹38L), with only ONE investment on
-   * both lists — the rest credited to her as the REFERRER on colleagues' work.
-   */
-  const creditCols: Column<CreditRow>[] = [
-    { key: 'amount', header: 'Credited to you', align: 'right',
-      value: (r) => Number(r.amount), render: (r) => money(r.amount) },
-    { key: 'enrolled_amount', header: '— you enrolled', align: 'right',
-      value: (r) => Number(r.enrolled_amount),
-      render: (r) => <span className="mono text-text-muted">{formatINR(Number(r.enrolled_amount))}</span> },
-    { key: 'referred_amount', header: '— you referred', align: 'right',
-      value: (r) => Number(r.referred_amount),
-      render: (r) => <span className="mono text-text-muted">{formatINR(Number(r.referred_amount))}</span> },
-    // Imported accruals carry no side. Shown as their own column rather than
-    // folded into "you enrolled" — the side was never recorded, and claiming
-    // somebody enrolled work we cannot attribute would be a made-up number.
-    // The three columns add up to Credited; that is the point of the third one.
-    { key: 'earlier_amount', header: '— earlier records', align: 'right',
-      value: (r) => Number(r.earlier_amount),
-      render: (r) => (
-        <span className="mono text-text-muted" title="Brought over from the previous system — recorded before we tracked whether it was enrolled or referred">
-          {formatINR(Number(r.earlier_amount))}
-        </span>
-      ) },
-  ];
 
   const monthCols: Column<CreditRow>[] = [
     { key: 'month', header: 'Month', tdClassName: 'font-semibold',
@@ -148,16 +122,7 @@ export function MyEarningsPage() {
           {monthLabel(r.month ?? '')}
         </button>
       ) },
-    { key: 'investments', header: 'Investments', align: 'right', value: (r) => r.investments },
-    { key: 'customers', header: 'Customers', align: 'right', value: (r) => r.customers },
-    ...creditCols,
-    // PAID, never accrued: a staff member sees what they have been paid, not
-    // what is owed (owner 2026-07-20).
-    ...(hideAmount ? [] : [{
-      key: 'incentive_paid', header: 'Incentive paid', align: 'right' as const,
-      value: (r: CreditRow) => Number(r.incentive_paid),
-      render: (r: CreditRow) => <span className="mono text-primary">{formatINR(Number(r.incentive_paid))}</span>,
-    }]),
+    ...figureCols,
   ];
 
   const seriesCols: Column<CreditRow>[] = [
@@ -168,20 +133,12 @@ export function MyEarningsPage() {
           className="text-primary hover:underline">{r.series_code}</button>
       ) },
     { key: 'series_name', header: 'Name', value: (r) => r.series_name ?? '' },
-    { key: 'investments', header: 'Investments', align: 'right', value: (r) => r.investments },
-    { key: 'customers', header: 'Customers', align: 'right', value: (r) => r.customers },
-    ...creditCols,
-    ...(hideAmount ? [] : [{
-      key: 'incentive_paid', header: 'Incentive paid', align: 'right' as const,
-      value: (r: CreditRow) => Number(r.incentive_paid),
-      render: (r: CreditRow) => <span className="mono text-primary">{formatINR(Number(r.incentive_paid))}</span>,
-    }]),
+    ...figureCols,
   ];
 
   const c = d.credited;
   // The payout list, narrowed by whichever month is selected. Series is not on
-  // a payout row, so selecting a series filters the tables above only and says
-  // so rather than silently doing nothing.
+  // a payout row, so selecting a series filters the table above only.
   const paidRows = month
     ? d.paid_items.filter((p) => String(p.accrual_date ?? p.paid_at).slice(0, 7) === month)
     : d.paid_items;
@@ -190,30 +147,17 @@ export function MyEarningsPage() {
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">My Earnings</h1>
       <p className="text-sm text-text-muted mt-1 mb-5">
-        What you brought in, what your incentive is paid on, and what Dhanam has paid you.
+        The business your incentive is worked out on, and what Dhanam has paid you.
       </p>
 
-      <div className="grid gap-3 mb-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
-        <Tile label="Incentive paid" value={formatINR(d.paid)} sub="Paid to you till date" highlight />
-        <Tile label="Credited to you" value={formatINR(c.totals.amount)}
-          sub={`${c.totals.investments} investment${c.totals.investments === 1 ? '' : 's'} your incentive is paid on`}
-          title="The same basis the Incentives page uses" />
-        <Tile label="Enrolled by you" value={formatINR(d.totals.amount)}
-          sub={`${d.totals.investments} you keyed in · ${d.totals.customers} investor${d.totals.customers === 1 ? '' : 's'}`}
-          title="Investments you entered — not the same list as what you are paid on" />
+      {/* One tile, and it is PAID — never accrued, never a balance, for any
+          role (owner 2026-07-20, restated 2026-09-09: "need not show how much
+          we owe to them, in their login"). What is owed lives on the admin
+          Incentives page, which is unchanged. */}
+      <div className="mb-6" style={{ maxWidth: 320 }}>
+        <Tile label="Incentive paid" value={formatINR(d.paid)} sub="Paid to you till date"
+          title="What Dhanam has actually paid you" />
       </div>
-
-      {/* Said plainly, because the two tiles above will not match for most
-          people and the reason is not guessable. */}
-      {c.totals.referred_amount > 0 && (
-        <div className="text-xs text-text-muted bg-surface border border-border rounded p-3 mb-6">
-          Of the {formatINR(c.totals.amount)} you are paid on, {formatINR(c.totals.enrolled_amount)} is
-          from investments you enrolled and {formatINR(c.totals.referred_amount)} from investments you
-          referred that a colleague keyed in
-          {c.totals.earlier_amount > 0 && <>, with {formatINR(c.totals.earlier_amount)} carried over from the previous system</>}.
-          That is why this differs from what you enrolled.
-        </div>
-      )}
 
       <h2 className="text-xs font-semibold text-text-label uppercase tracking-wide mb-2">
         Month-wise {month && <button onClick={() => setMonth(null)} className="ml-2 font-normal normal-case text-primary hover:underline">clear {monthLabel(month)}</button>}

@@ -233,7 +233,7 @@ describe('series-wise report', () => {
     const ncd = await as('ncd@demo.local');
     // A customer with the full set of detail the report is meant to carry.
     const cust = await a.post('/api/customers', {
-      full_name: 'Serieswise Investor', pan: 'AAAPS1234Q', aadhaar: '123412341234',
+      full_name: 'Serieswise Investor', father_name: 'Reportfather S', pan: 'AAAPS1234Q', aadhaar: '123412341234',
       dob: '1990-02-10', gender: 'Male', phone: '9700001234', email: 'sw@example.com',
       address: '12 Report Street', city: 'Hosur', district: 'Krishnagiri', state: 'Tamil Nadu', pincode: '635109',
     });
@@ -247,6 +247,7 @@ describe('series-wise report', () => {
     expect(rep.status).toBe(200);
     const row = (rep.json.rows as any[]).find((r) => r.application_no === app.json.application_no);
     expect(row).toBeTruthy();
+    expect(row.father_name).toBe('Reportfather S');
     expect(row.pan).toBe('AAAPS1234Q');
     expect(row.aadhaar).toBe('123412341234');       // full 12-digit, by request
     expect(row.phone).toBe('9700001234');
@@ -267,6 +268,7 @@ describe('series-wise report', () => {
     const ws = wb.getWorksheet('Series-wise')!;
     const headers = (ws.getRow(3).values as unknown[]).map((v) => String(v ?? ''));
     expect(headers).toContain('Aadhaar');
+    expect(headers).toContain('Father / Spouse');
     expect(headers).toContain('Application No');
   });
 

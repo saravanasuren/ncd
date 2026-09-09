@@ -1232,7 +1232,7 @@ export async function seriesHoldersReport(db: Db, actor: AuthUser, seriesId: num
  *  in the series (non-archived), so a redeemed/cancelled line still shows with
  *  its status. Full Aadhaar is included by request — the file carries PII. */
 export interface SeriesWiseRow {
-  customer_code: string; full_name: string; pan: string | null; aadhaar: string | null;
+  customer_code: string; full_name: string; father_name: string | null; pan: string | null; aadhaar: string | null;
   dob: string | null; gender: string | null; phone: string | null; phone_secondary: string | null;
   email: string | null; address: string | null; city: string | null; district: string | null;
   state: string | null; pincode: string | null; category: string | null; nominees: string | null;
@@ -1248,7 +1248,7 @@ export async function seriesWiseReport(db: Db, actor: AuthUser, seriesId: number
   // already drops archived rows and applies the actor's branch scope.
   const w = appWhere(actor, { seriesIds: [seriesId] }, ['c.archived_at IS NULL']);
   const { rows } = await db.query<Record<string, unknown>>(
-    `SELECT c.customer_code, c.full_name, c.pan, COALESCE(c.aadhaar, c.aadhaar_last4) AS aadhaar,
+    `SELECT c.customer_code, c.full_name, c.father_name, c.pan, COALESCE(c.aadhaar, c.aadhaar_last4) AS aadhaar,
             c.dob, c.gender, c.phone, c.phone_secondary, c.email, c.address, c.city, c.district,
             c.state, c.pincode, c.investor_category AS category,
             c.depository, c.demat_dp_id, c.demat_client_id,
@@ -1270,6 +1270,7 @@ export async function seriesWiseReport(db: Db, actor: AuthUser, seriesId: number
      ORDER BY c.full_name, a.date_money_received, a.id`, w.params);
   return rows.map((r) => ({
     customer_code: r.customer_code as string, full_name: r.full_name as string,
+    father_name: (r.father_name as string) ?? null,
     pan: (r.pan as string) ?? null, aadhaar: (r.aadhaar as string) ?? null,
     dob: (r.dob as string) ?? null, gender: (r.gender as string) ?? null,
     phone: (r.phone as string) ?? null, phone_secondary: (r.phone_secondary as string) ?? null,

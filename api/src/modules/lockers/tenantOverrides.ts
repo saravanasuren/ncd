@@ -65,10 +65,11 @@ export async function removeTenant(
       `INSERT INTO locker_tenant_overrides
          (lockerhub_tenant_id, removed_at, removed_reason, removed_by_user_id, tenant_name, locker_no, branch_id,
           lockerhub_cancelled)
-       -- FALSE, never NULL: removing a tenancy makes no upstream call at all,
-       -- because LockerHub's contract has no endpoint that closes one. The
-       -- locker stays let. Recording that plainly is what stops the roster
-       -- reading as though it were freed (087).
+       -- FALSE, never NULL: this path makes no upstream call, so the locker
+       -- stays let. Recording it plainly is what stops the roster reading as
+       -- though it were freed (087). LockerHub shipped A25 close / A26 delete
+       -- on 2026-09-08 — wiring this path to them is the follow-up, and until
+       -- it lands FALSE is the honest answer here.
        VALUES ($1, now(), $2, $3, $4, $5, $6, FALSE)
        ON CONFLICT (lockerhub_tenant_id) DO UPDATE
          SET removed_at = now(), removed_reason = EXCLUDED.removed_reason,

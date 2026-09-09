@@ -202,7 +202,7 @@ export function LockerApplicationsPage() {
               <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn"
                     title={r.lockerhub_refusal
                       ? `LockerHub refused: ${r.lockerhub_refusal}`
-                      : 'LockerHub has no way to close a tenancy, so this was removed from NCD only. The locker is still let.'}>
+                      : 'Removed from NCD only — no closure reached LockerHub. The locker is still let there.'}>
                 NCD only — still let
               </span>
             );
@@ -280,7 +280,8 @@ export function LockerApplicationsPage() {
         <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-3 mt-3">
           <b>{stillLet}</b> of these {stillLet === 1 ? 'is' : 'are'} removed from NCD only — LockerHub still holds
           {stillLet === 1 ? ' it' : ' them'} and the locker{stillLet === 1 ? ' is' : 's are'} still let.
-          LockerHub has no endpoint that closes a tenancy, so these can only be closed by them.
+          These were removed before a closure could be sent, so the locker{stillLet === 1 ? '' : 's'} still
+          read{stillLet === 1 ? 's' : ''} as occupied on LockerHub.
         </div>
       )}
 

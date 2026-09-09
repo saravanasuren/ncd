@@ -5,12 +5,16 @@
 -- their cancel endpoint shipped on 24 Aug, 4 of 4 deletions cancelled on their
 -- side and released the locker.
 --
--- It CANNOT for an allotted one. LockerHub's contract has no endpoint that
--- closes a tenancy at all, so a Super Admin's force-removal hides our row while
--- the customer still holds the locker. 8 tenancies are in that state today.
+-- It could NOT for an allotted one when this was written: LockerHub had no
+-- endpoint that closed a tenancy, so a Super Admin's force-removal hid our row
+-- while the customer still held the locker. 8 tenancies are in that state.
 --
--- Until they build one, the least we owe the reader is the truth about which is
--- which. A row that says "deleted" while the locker is still let is the exact
+-- They shipped A25 (close) and A26 (delete) on 2026-09-08, so that gap is
+-- closing — but these columns stay useful either way: the 8 historical rows
+-- still need marking, and a closure can still be refused (an open refund, for
+-- one), which is exactly when FALSE must be visible.
+--
+-- A row that says "deleted" while the locker is still let is the exact
 -- two-systems-disagreeing failure the removal code was written to avoid, and
 -- right now nothing on screen distinguishes them.
 --

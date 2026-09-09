@@ -39,6 +39,8 @@ interface Row {
   created_by_name: string | null;
   removed_at: string | null;
   removed_reason: string | null;
+  lockerhub_cancelled: boolean | null;
+  lockerhub_refusal: string | null;
 }
 interface Resp {
   rows: Row[];
@@ -192,8 +194,27 @@ export function LockerApplicationsPage() {
       value: (r) => r.removed_at ? 'deleted' : (r.status ?? ''),
       render: (r) => {
         if (r.removed_at) {
-          return <span className="text-xs rounded px-1.5 py-0.5 bg-bg text-text-muted"
-                       title={r.removed_reason ?? undefined}>deleted</span>;
+          // "deleted" meant two very different things and looked identical:
+          // gone from both systems, or gone from OUR screen while the customer
+          // still holds the locker. The second is the one that gets believed.
+          if (r.lockerhub_cancelled === false) {
+            return (
+              <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn"
+                    title={r.lockerhub_refusal
+                      ? `LockerHub refused: ${r.lockerhub_refusal}`
+                      : 'Removed from NCD only — no closure reached LockerHub. The locker is still let there.'}>
+                NCD only — still let
+              </span>
+            );
+          }
+          return (
+            <span className="text-xs rounded px-1.5 py-0.5 bg-bg text-text-muted"
+                  title={[r.removed_reason, r.lockerhub_cancelled === true
+                    ? 'Cancelled on LockerHub — the locker was released.'
+                    : 'Removed before NCD recorded whether LockerHub cancelled it.'].filter(Boolean).join(' · ')}>
+              {r.lockerhub_cancelled === true ? 'deleted' : 'deleted (unknown)'}
+            </span>
+          );
         }
         if (!r.status) {
           return <span className="text-xs text-text-muted italic" title="Never read from LockerHub — use Refresh">not checked</span>;
@@ -217,6 +238,7 @@ export function LockerApplicationsPage() {
   ];
 
   const rows = list.data?.rows ?? [];
+  const stillLet = rows.filter((r) => r.removed_at && r.lockerhub_cancelled === false).length;
   const tabs: TabDef<Tab>[] = [
     { key: 'live', label: 'Live' },
     { key: 'removed', label: 'Deleted' },
@@ -251,6 +273,17 @@ export function LockerApplicationsPage() {
       </div>
 
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
+
+      {/* The rows that matter most on this tab: hidden here, still let there.
+          Counted rather than left for the reader to spot among the others. */}
+      {tab !== 'live' && stillLet > 0 && (
+        <div className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-3 py-2 mb-3 mt-3">
+          <b>{stillLet}</b> of these {stillLet === 1 ? 'is' : 'are'} removed from NCD only — LockerHub still holds
+          {stillLet === 1 ? ' it' : ' them'} and the locker{stillLet === 1 ? ' is' : 's are'} still let.
+          These were removed before a closure could be sent, so the locker{stillLet === 1 ? '' : 's'} still
+          read{stillLet === 1 ? 's' : ''} as occupied on LockerHub.
+        </div>
+      )}
 
       {list.isLoading ? <div className="text-text-muted">Loading…</div>
         : list.error ? <div className="text-danger">Failed to load locker applications.</div>

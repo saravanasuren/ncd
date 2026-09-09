@@ -63,14 +63,21 @@ export async function removeTenant(
   return db.withTx(async (tx) => {
     await tx.query(
       `INSERT INTO locker_tenant_overrides
-         (lockerhub_tenant_id, removed_at, removed_reason, removed_by_user_id, tenant_name, locker_no, branch_id)
-       VALUES ($1, now(), $2, $3, $4, $5, $6)
+         (lockerhub_tenant_id, removed_at, removed_reason, removed_by_user_id, tenant_name, locker_no, branch_id,
+          lockerhub_cancelled)
+       -- FALSE, never NULL: this path makes no upstream call, so the locker
+       -- stays let. Recording it plainly is what stops the roster reading as
+       -- though it were freed (087). LockerHub shipped A25 close / A26 delete
+       -- on 2026-09-08 — wiring this path to them is the follow-up, and until
+       -- it lands FALSE is the honest answer here.
+       VALUES ($1, now(), $2, $3, $4, $5, $6, FALSE)
        ON CONFLICT (lockerhub_tenant_id) DO UPDATE
          SET removed_at = now(), removed_reason = EXCLUDED.removed_reason,
              removed_by_user_id = EXCLUDED.removed_by_user_id,
              tenant_name = COALESCE(EXCLUDED.tenant_name, locker_tenant_overrides.tenant_name),
              locker_no = COALESCE(EXCLUDED.locker_no, locker_tenant_overrides.locker_no),
              branch_id = COALESCE(EXCLUDED.branch_id, locker_tenant_overrides.branch_id),
+             lockerhub_cancelled = FALSE,
              updated_at = now()`,
       [tenantId, reason.trim(), actor.id, snap.tenant_name ?? null, snap.locker_no ?? null, snap.branch_id ?? null]);
     await writeAudit(tx, {
@@ -87,7 +94,8 @@ export async function restoreTenant(db: Db, actor: AuthUser, tenantId: string) {
   return db.withTx(async (tx) => {
     const r = await tx.query(
       `UPDATE locker_tenant_overrides
-          SET removed_at = NULL, removed_reason = NULL, removed_by_user_id = NULL, updated_at = now()
+          SET removed_at = NULL, removed_reason = NULL, removed_by_user_id = NULL,
+              lockerhub_cancelled = NULL, lockerhub_refusal = NULL, updated_at = now()
         WHERE lockerhub_tenant_id = $1 AND removed_at IS NOT NULL`, [tenantId]);
     if (!r.rowCount) throw errors.notFound('No removed tenancy with that id');
     await writeAudit(tx, { actorId: actor.id, action: 'locker.tenant.restore', entityType: 'locker_tenant_overrides', entityId: null, after: { tenant_id: tenantId } });
@@ -204,14 +212,21 @@ export async function removeLockerApplication(
   return db.withTx(async (tx) => {
     await tx.query(
       `INSERT INTO locker_tenant_overrides
-         (lockerhub_tenant_id, removed_at, removed_reason, removed_by_user_id, tenant_name, locker_no, branch_id)
-       VALUES ($1, now(), $2, $3, $4, $5, $6)
+         (lockerhub_tenant_id, removed_at, removed_reason, removed_by_user_id, tenant_name, locker_no, branch_id,
+          lockerhub_cancelled, lockerhub_refusal)
+       VALUES ($1, now(), $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (lockerhub_tenant_id) DO UPDATE
          SET removed_at = now(), removed_reason = EXCLUDED.removed_reason,
              removed_by_user_id = EXCLUDED.removed_by_user_id,
+             -- Overwritten, not COALESCEd: this is the outcome of THIS removal.
+             -- A re-delete that finally succeeded upstream must not keep saying
+             -- LockerHub still holds it.
+             lockerhub_cancelled = EXCLUDED.lockerhub_cancelled,
+             lockerhub_refusal   = EXCLUDED.lockerhub_refusal,
              updated_at = now()`,
       [applicationId.trim(), reason.trim(), actor.id,
-       snap.tenant_name ?? null, snap.locker_no ?? null, snap.branch_id ?? null]);
+       snap.tenant_name ?? null, snap.locker_no ?? null, snap.branch_id ?? null,
+       cancelledOnLockerhub, refusal || null]);
     await writeAudit(tx, {
       actorId: actor.id, action: 'locker.application.remove',
       entityType: 'locker_applications', entityId: applicationId.trim(),

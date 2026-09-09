@@ -311,6 +311,59 @@ describe('locker applications list', () => {
     expect(live.json.rows.some((x: any) => x.lockerhub_application_id === id)).toBe(true);
   });
 
+  // ── "Deleted" must not mean two different things ───────────────────────────
+  // Owner 2026-09-08: "if i delete in ncd i want it to get deleted in locker hub
+  // also". For an un-allotted application it already does. For an allotted one
+  // LockerHub has NO endpoint that closes a tenancy, so a force-removal hides
+  // our row while the customer still holds the locker — and the list showed
+  // both outcomes as an identical grey "deleted".
+  it('records that a real cancel reached LockerHub', async () => {
+    const c = await create(await manager(), { phone: '9876500099', name: 'Clean Delete' });
+    const id = String(c.json.id);
+    await (await superAdmin()).post(`/api/lockers/applications/${id}/remove`, { reason: 'entered by mistake' });
+
+    const gone = await listOf(await superAdmin(), '?show=removed');
+    const row = gone.json.rows.find((x: any) => x.lockerhub_application_id === id);
+    expect(row.lockerhub_cancelled).toBe(true);      // genuinely gone on both sides
+    expect(row.lockerhub_refusal).toBeNull();
+  });
+
+  it('records that a forced removal did NOT reach LockerHub, and why', async () => {
+    const c = await create(await manager(), { phone: '9876500100', name: 'Still Let' });
+    const id = String(c.json.id);
+    const u = upstream.get(id)!;
+    u.cancellable = false;
+    u.refuseWith = { code: 409, message: LIVE_TENANCY };
+
+    await (await superAdmin()).post(`/api/lockers/applications/${id}/remove`,
+      { reason: 'settled by phone', force_local: true });
+
+    const gone = await listOf(await superAdmin(), '?show=removed');
+    const row = gone.json.rows.find((x: any) => x.lockerhub_application_id === id);
+    // FALSE, not null: the screen keys on this to warn that the locker is let.
+    expect(row.lockerhub_cancelled).toBe(false);
+    expect(row.lockerhub_refusal).toContain('live tenancy');
+  });
+
+  it('a re-delete that finally succeeds stops saying LockerHub holds it', async () => {
+    const c = await create(await manager(), { phone: '9876500111', name: 'Second Try' });
+    const id = String(c.json.id);
+    const u = upstream.get(id)!;
+    u.cancellable = false;
+    u.refuseWith = { code: 409, message: LIVE_TENANCY };
+    await (await superAdmin()).post(`/api/lockers/applications/${id}/remove`,
+      { reason: 'first go', force_local: true });
+
+    // LockerHub closes it on their side; we delete again and it goes through.
+    u.cancellable = true;
+    await (await superAdmin()).post(`/api/lockers/applications/${id}/remove`, { reason: 'now closed there' });
+
+    const gone = await listOf(await superAdmin(), '?show=removed');
+    const row = gone.json.rows.find((x: any) => x.lockerhub_application_id === id);
+    expect(row.lockerhub_cancelled).toBe(true);       // overwritten, not stuck on FALSE
+    expect(row.lockerhub_refusal).toBeNull();
+  });
+
   it('CONTROL: only a Super Admin may delete', async () => {
     const c = await create(await manager(), { phone: '9876500044', name: 'Not Yours' });
     const id = String(c.json.id);

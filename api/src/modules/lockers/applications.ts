@@ -27,6 +27,7 @@ export interface LockerApplicationRow {
   branch_name: string | null;
   locker_size: string | null;
   locker_number: string | null;
+  operation_mandate: string | null;
   status: string | null;
   status_checked_at: string | null;
   created_at: string;
@@ -59,6 +60,8 @@ export async function recordApplication(db: Db, input: {
   branchName?: string | null;
   lockerSize?: string | null;
   lockerNumber?: string | null;
+  /** Schedule §5 — who may operate the locker. */
+  operationMandate?: string | null;
   status?: string | null;
   createdByUserId?: number | null;
 }): Promise<void> {
@@ -67,8 +70,8 @@ export async function recordApplication(db: Db, input: {
   await db.query(
     `INSERT INTO locker_applications
        (lockerhub_application_id, application_no, customer_id, customer_name, phone, branch_id, branch_name,
-        locker_size, locker_number, status, status_checked_at, created_by_user_id)
-     VALUES ($1,$11,$2,$3,$4,$5,$6,$7,$8,$9, CASE WHEN $9::text IS NULL THEN NULL ELSE now() END, $10)
+        locker_size, locker_number, status, status_checked_at, created_by_user_id, operation_mandate)
+     VALUES ($1,$11,$2,$3,$4,$5,$6,$7,$8,$9, CASE WHEN $9::text IS NULL THEN NULL ELSE now() END, $10, $12)
      ON CONFLICT (lockerhub_application_id) DO UPDATE SET
        application_no = COALESCE(EXCLUDED.application_no, locker_applications.application_no),
        customer_id   = COALESCE(EXCLUDED.customer_id,   locker_applications.customer_id),
@@ -79,17 +82,18 @@ export async function recordApplication(db: Db, input: {
        locker_size   = COALESCE(EXCLUDED.locker_size,   locker_applications.locker_size),
        locker_number = COALESCE(EXCLUDED.locker_number, locker_applications.locker_number),
        status        = COALESCE(EXCLUDED.status,        locker_applications.status),
+       operation_mandate = COALESCE(EXCLUDED.operation_mandate, locker_applications.operation_mandate),
        status_checked_at = COALESCE(EXCLUDED.status_checked_at, locker_applications.status_checked_at),
        updated_at    = now()`,
     [id, input.customerId ?? null, input.customerName ?? null, input.phone ?? null,
      input.branchId ?? null, input.branchName ?? null, input.lockerSize ?? null,
      input.lockerNumber ?? null, input.status ?? null, input.createdByUserId ?? null,
-     input.applicationNo ?? null]);
+     input.applicationNo ?? null, input.operationMandate ?? null]);
 }
 
 const COLS = `
   a.lockerhub_application_id, a.application_no, a.customer_id, a.branch_id, a.branch_name,
-  a.locker_size, a.locker_number, a.status, a.status_checked_at, a.created_at,
+  a.locker_size, a.locker_number, a.status, a.status_checked_at, a.created_at, a.operation_mandate,
   COALESCE(c.full_name, a.customer_name) AS customer_name,
   COALESCE(c.phone, a.phone)             AS phone,
   u.full_name                            AS created_by_name,

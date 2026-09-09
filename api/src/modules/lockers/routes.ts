@@ -43,6 +43,7 @@ import './offlinePayments.js';
 import { linkTenant, removeTenant, restoreTenant, removeLockerApplication } from './tenantOverrides.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
+import { LOCKER_OPERATION_MANDATES } from '@new-wealth/shared';
 
 export const lockersRouter = Router();
 lockersRouter.use(requirePermission('lockers:enroll'));
@@ -287,8 +288,13 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
     // hold a preferred locker, so we remember it ourselves to allot it later.
     locker_id: z.string().trim().nullish(),
     locker_number: z.string().trim().nullish(),
+    // Schedule §5. A fixed enumeration, not free text: it decides who may open
+    // the locker without the other holders (LockerHub 2026-09-09, and they 400
+    // anything else). Optional — an unchosen mandate blocks nothing, and every
+    // locker enrolled before today has one.
+    locker_operation_mandate: z.enum(LOCKER_OPERATION_MANDATES).nullish(),
   }).parse(req.body ?? {});
-  const { customer_id, locker_id, locker_number, ...input } = b;
+  const { customer_id, locker_id, locker_number, locker_operation_mandate, ...input } = b;
 
   let applicant: Record<string, unknown> | undefined;
   if (customer_id) {
@@ -307,7 +313,14 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
   const priceFields: Record<string, number> = {};
   if (pricing?.annual_rent != null) priceFields.annual_rent = pricing.annual_rent;
 
-  const created = await lh.createLockerApplication(staffOf(req), { ...input, ...priceFields, ...(applicant ? { applicant } : {}) }) as Record<string, unknown>;
+  // The mandate travels on the applicant block (their spec), but it is a
+  // property of the LOCKER, not of the customer — so it must still reach them
+  // when there is no NCD customer to build an applicant block from.
+  const applicantOut = locker_operation_mandate
+    ? { ...(applicant ?? {}), locker_operation_mandate }
+    : applicant;
+
+  const created = await lh.createLockerApplication(staffOf(req), { ...input, ...priceFields, ...(applicantOut ? { applicant: applicantOut } : {}) }) as Record<string, unknown>;
 
   // RENT-ONLY: auto-waive the deposit LockerHub priced for this size, so the
   // tenant allots on rent alone (Prem 2026-08-12 — A21, after create/before
@@ -330,6 +343,7 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
       branchName: (created.branch_name as string) ?? null,
       lockerSize: b.locker_size,
       lockerNumber: locker_number ?? null,
+      operationMandate: locker_operation_mandate ?? null,
       status: String(created.status ?? '') || null,
       createdByUserId: req.user!.id,
     });

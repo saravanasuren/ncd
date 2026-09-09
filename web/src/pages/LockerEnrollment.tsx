@@ -77,7 +77,22 @@ export function LockerEnrollmentPage() {
 
   const lookup = async () => {
     const r = await run(api.get<any>(`/api/lockers/customers/${encodeURIComponent(phone)}`));
-    if (r) { setCust(r); if (r.found && r.profile) { setName(r.profile.name ?? ''); setEmail(r.profile.email ?? ''); } }
+    if (!r) return;
+    setCust(r);
+    if (r.found && r.profile) { setName(r.profile.name ?? ''); setEmail(r.profile.email ?? ''); }
+    // Link the NCD customer, exactly as the PAN lookup does. Without this
+    // `customer_id` is never sent on create, so no applicant block goes with
+    // it — no nominee, address, KYC or bank — and LockerHub receives a bare
+    // name and phone. That was true of 43 of 56 locker applications, and it
+    // looked like it was working (owner 2026-09-09).
+    setNcdCust(r.ncd_customer ?? null);
+    if (r.ncd_customer) {
+      setNotFound(false);
+      // LockerHub's own profile still wins where it has one — it is their
+      // record being enrolled against. Ours only fills the gaps.
+      if (!r.profile?.name) setName(r.ncd_customer.full_name ?? '');
+      if (!r.profile?.email) setEmail(r.ncd_customer.email ?? '');
+    }
   };
   /** PAN-first: find them in NCD's book, then carry their phone into the
    * LockerHub flow (LockerHub is phone-keyed). */

@@ -234,7 +234,7 @@ export async function seriesWiseXlsx(seriesLabel: string, rows: import('./book.j
   ws.addRow([`Series ${seriesLabel} — customers & investments`]).eachCell((c) => { c.font = { bold: true, size: 13 }; });
   ws.addRow([]);
   const headers = [
-    'S.No', 'Customer Code', 'Name', 'PAN', 'Aadhaar', 'DOB', 'Gender', 'Phone', 'Alt Phone', 'Email',
+    'S.No', 'Customer Code', 'Name', 'Father / Spouse', 'PAN', 'Aadhaar', 'DOB', 'Gender', 'Phone', 'Alt Phone', 'Email',
     'Address', 'City', 'District', 'State', 'Pincode', 'Category', 'Nominees',
     'Bank A/C', 'IFSC', 'Bank Name', 'Depository', 'DP ID', 'Client ID', 'Referred By',
     'Application No', 'Series', 'Amount', 'Coupon %', 'Tenure (m)', 'Payout Frequency',
@@ -243,7 +243,7 @@ export async function seriesWiseXlsx(seriesLabel: string, rows: import('./book.j
   ws.addRow(headers).eachCell((c) => { c.font = { bold: true }; });
   rows.forEach((r, i) => {
     ws.addRow([
-      i + 1, r.customer_code, r.full_name, r.pan ?? '', r.aadhaar ?? '', ddmmyyyy(r.dob), r.gender ?? '',
+      i + 1, r.customer_code, r.full_name, r.father_name ?? '', r.pan ?? '', r.aadhaar ?? '', ddmmyyyy(r.dob), r.gender ?? '',
       r.phone ?? '', r.phone_secondary ?? '', r.email ?? '',
       r.address ?? '', r.city ?? '', r.district ?? '', r.state ?? '', r.pincode ?? '', r.category ?? '', r.nominees ?? '',
       r.bank_account ?? '', r.bank_ifsc ?? '', r.bank_name ?? '', r.depository ?? '', r.dp_id ?? '', r.client_id ?? '', r.referred_by ?? '',
@@ -251,23 +251,27 @@ export async function seriesWiseXlsx(seriesLabel: string, rows: import('./book.j
       ddmmyyyy(r.date_money_received), ddmmyyyy(r.maturity_date), r.status, r.outstanding,
     ]);
   });
+  // Column positions are looked up by header name so adding/moving a column can
+  // never silently mis-align the TEXT formats or the total cells (owner 2026-09-09).
+  const col = (h: string) => headers.indexOf(h) + 1; // 1-based
   ws.addRow([]);
-  // Total row under Amount + Outstanding columns (27 = Amount, 34 = Outstanding).
   const total = ws.addRow([]);
-  total.getCell(2).value = 'TOTAL'; total.getCell(2).font = { bold: true };
-  total.getCell(27).value = rows.reduce((s, r) => s + r.amount, 0); total.getCell(27).font = { bold: true };
-  total.getCell(34).value = rows.reduce((s, r) => s + r.outstanding, 0); total.getCell(34).font = { bold: true };
-  // PAN, Aadhaar, Phone, Alt Phone, Pincode, Bank A/C, IFSC stay TEXT so Excel
-  // keeps leading zeros and never renders long numbers in scientific notation.
-  const textCols = [4, 5, 8, 9, 15, 18, 19];
+  total.getCell(col('Customer Code')).value = 'TOTAL'; total.getCell(col('Customer Code')).font = { bold: true };
+  total.getCell(col('Amount')).value = rows.reduce((s, r) => s + r.amount, 0); total.getCell(col('Amount')).font = { bold: true };
+  total.getCell(col('Outstanding')).value = rows.reduce((s, r) => s + r.outstanding, 0); total.getCell(col('Outstanding')).font = { bold: true };
+  // These stay TEXT so Excel keeps leading zeros and never renders long numbers
+  // in scientific notation.
+  const textCols = ['PAN', 'Aadhaar', 'Phone', 'Alt Phone', 'Pincode', 'Bank A/C', 'IFSC'].map(col);
   ws.eachRow((row, n) => { if (n > 3) for (const c of textCols) row.getCell(c).numFmt = '@'; });
-  ws.columns = [
-    { width: 6 }, { width: 15 }, { width: 26 }, { width: 13 }, { width: 15 }, { width: 12 }, { width: 8 },
-    { width: 13 }, { width: 13 }, { width: 24 }, { width: 34 }, { width: 14 }, { width: 14 }, { width: 14 },
-    { width: 9 }, { width: 12 }, { width: 26 }, { width: 18 }, { width: 13 }, { width: 20 }, { width: 11 },
-    { width: 12 }, { width: 12 }, { width: 22 }, { width: 18 }, { width: 12 }, { width: 15 }, { width: 9 },
-    { width: 10 }, { width: 16 }, { width: 14 }, { width: 12 }, { width: 16 }, { width: 15 },
-  ];
+  const widthOf: Record<string, number> = {
+    'S.No': 6, 'Customer Code': 15, 'Name': 26, 'Father / Spouse': 24, 'PAN': 13, 'Aadhaar': 15, 'DOB': 12,
+    'Gender': 8, 'Phone': 13, 'Alt Phone': 13, 'Email': 24, 'Address': 34, 'City': 14, 'District': 14,
+    'State': 14, 'Pincode': 9, 'Category': 12, 'Nominees': 26, 'Bank A/C': 18, 'IFSC': 13, 'Bank Name': 20,
+    'Depository': 11, 'DP ID': 12, 'Client ID': 12, 'Referred By': 22, 'Application No': 18, 'Series': 12,
+    'Amount': 15, 'Coupon %': 9, 'Tenure (m)': 10, 'Payout Frequency': 16, 'Money Received': 14,
+    'Maturity': 12, 'Status': 16, 'Outstanding': 15,
+  };
+  ws.columns = headers.map((h) => ({ width: widthOf[h] ?? 14 }));
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 

@@ -97,6 +97,18 @@ export const PERMISSIONS = [
   'audit:read',
   'imports:run',
   'notifications:admin',
+  // Send a customer-facing message from a record screen (today: the
+  // acknowledgement on WhatsApp). Deliberately NARROW and separate from
+  // notifications:admin, which also opens the queue, the manual drain and the
+  // per-batch interest send — the one that messaged 61 real customers by
+  // accident on 2026-07-21.
+  //
+  // It exists because CXO needed the acknowledgement button (owner 2026-09-09)
+  // and both shortcuts were worse: applications:update would also have let them
+  // change investment dates and payout bank accounts, and notifications:admin
+  // would have handed them bulk interest messaging. This grants the button and
+  // nothing else.
+  'notifications:send-customer',
   // portal
   'portal:self-service',
 ] as const;
@@ -154,6 +166,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     // them hand over a locker for the same money unilaterally would be the
     // weaker control for the identical outcome.
     'lockers:allot-override',
+    // The acknowledgement on WhatsApp (owner 2026-09-09: "cxo also needs that
+    // access"). Every other role that can send it holds applications:update,
+    // which CXO deliberately does not — this is the send, without the power to
+    // edit the investment behind it.
+    'notifications:send-customer',
   ],
 
   ncd_manager: [

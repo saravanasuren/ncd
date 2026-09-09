@@ -318,7 +318,11 @@ export function ApplicationDetailPage() {
         {a.receipt_file_path && <a href={`/api/applications/${id}/receipt`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">View receipt</a>}
         <a href={`/api/reports/application-form/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Application form</a>
         {a.status === 'Active' && <a href={`/api/reports/acknowledgment/${id}.pdf`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">Acknowledgement</a>}
-        {a.status === 'Active' && can('applications:update') && (
+        {/* Mirrors the ROUTE's permissions, which this used to disagree with:
+            the API accepted notifications:admin too, but the button never
+            appeared for it. Same list, one place to change. */}
+        {a.status === 'Active'
+          && (can('applications:update') || can('notifications:admin') || can('notifications:send-customer')) && (
           <button
             onClick={() => run(api.post<{ ok: boolean; status: string; error: string | null; phone: string }>(`/api/applications/${id}/whatsapp-ack`)
               .then((r) => setNote(r.ok ? `Acknowledgement sent on WhatsApp to ${r.phone}.` : `WhatsApp send ${r.status}${r.error ? ' — ' + r.error : ''}.`)))}

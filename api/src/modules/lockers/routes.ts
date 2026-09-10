@@ -227,6 +227,24 @@ lockersRouter.get('/applications/:id', asyncHandler(async (req, res) => {
   const intended = (await getDb().query<{ locker_id: string; locker_number: string | null }>(
     'SELECT locker_id, locker_number FROM locker_intended_locker WHERE lockerhub_application_id = $1', [String(req.params.id)])).rows[0];
   if (intended) app.intended_locker = { locker_id: intended.locker_id, locker_number: intended.locker_number };
+  // LockerHub's GET does not echo the allotment block while an application is
+  // esign_pending, so a resumed application looked UNALLOTTED and the screen
+  // offered "Allot" for a box already handed over — press it and a second
+  // locker lands on the same application, replacing the first (owner
+  // 2026-09-10). We recorded the allotment ourselves; fall back to it, and say
+  // it came from here so nobody mistakes it for their answer.
+  if (!app.allotment) {
+    try {
+      const ours = await getAllotment(getDb(), String(req.params.id));
+      if (ours?.locker_no) {
+        app.allotment = {
+          locker_number: ours.locker_no,
+          allotted_on: ours.lockerhub_allotted_on ?? ours.allotted_on,
+          source: 'ncd-record',
+        };
+      }
+    } catch (e) { console.warn('[locker] allotment fallback unavailable (non-fatal):', (e as Error).message); }
+  }
   res.json(app);
 }));
 
@@ -406,11 +424,18 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
   // fails the enrolment.
   const appId = String(created.id ?? created.application_id ?? '');
   if (appId) {
+    // Did they CREATE, or hand back one this customer already has? A7 answers
+    // with an existing unfinished application rather than opening a second, and
+    // says nothing about having done so — so a second locker would silently
+    // inherit the first's rent, waiver and premium. Checked before the row is
+    // touched: it throws only for an application we already hold, which is by
+    // definition already indexed, so nothing can be lost here.
+    const { assertNotAReusedApplication, recordApplication } = await import('./applications.js');
+    await assertNotAReusedApplication(getDb(), appId, b.locker_size);
     // Index it in NCD FIRST, before anything that can fail (085). An
     // application we created but did not record is one nobody can ever reach
     // again — LockerHub has no list endpoint, so this row is the only way back
     // to it. Everything below here is allowed to fail; this is not.
-    const { recordApplication } = await import('./applications.js');
     await recordApplication(getDb(), {
       applicationId: appId,
       applicationNo: (created.application_no as string) ?? null,
@@ -477,6 +502,10 @@ lockersRouter.post('/applications/:id/payment-link', asyncHandler(async (req, re
 lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) => {
   const b = z.object({
     locker_id: z.string().optional(),
+    // The NUMBER behind that id, sent so the server can tell "re-drive the
+    // same allotment" apart from "put a second locker on this application".
+    // Their A11 takes the id; this never leaves NCD.
+    locker_number: z.string().trim().optional(),
     lease_months: z.number().int().positive().optional(),
     // When the locker was REALLY handed over. Optional — omitted means today,
     // so an ordinary same-day allotment is unchanged (owner 2026-09-04).
@@ -492,6 +521,43 @@ lockersRouter.post('/applications/:id/allocate', asyncHandler(async (req, res) =
   // allotment: once they allocate, the locker is handed over and there is no
   // undo. This throws 400 and nothing has happened yet.
   checkAllottedOn(b.allotted_on, b.backdate_reason);
+
+  // ── ONE APPLICATION, ONE LOCKER ─────────────────────────────────────────
+  // `locker_allotments` is keyed on the application, so a second locker allotted
+  // through the same one does not add a row: it OVERWRITES the first, and the
+  // first locker leaves no trace but the audit log. The customer is then holding
+  // two boxes against a single rent — "for each locker it has its own payment
+  // collections" (owner 2026-09-10). LockerHub's GET does not echo the allotment
+  // for an esign_pending application, so the screen offers "Allot" again with
+  // nothing on it to say the box has already been handed over; our own record is
+  // the only thing that knows.
+  //
+  // Narrow on purpose: refused only when the request NAMES a different locker.
+  // An unnamed allot (auto-allot, or a client that sends only LockerHub's
+  // opaque locker id) is not judged here — it is far more likely a re-drive of
+  // a lost response, which still goes through and comes back `already: true`
+  // exactly as before. The GET above is what keeps the screen from offering
+  // that button in the first place.
+  //
+  // FAIL OPEN, like every other piece of allotment bookkeeping here: if the
+  // lookup itself cannot run, the locker is still allotted. A record we cannot
+  // read is not evidence of a second locker.
+  {
+    const prior = await getAllotment(getDb(), String(req.params.id))
+      .catch((e: Error) => { console.warn('[locker] prior-allotment check unavailable (non-fatal):', e.message); return null; });
+    if (prior?.locker_no && b.locker_number) {
+      const norm = (s?: string | null) => String(s ?? '').trim().toLowerCase();
+      if (norm(b.locker_number) !== norm(prior.locker_no)) {
+        throw errors.conflict(
+          `Locker ${prior.locker_no} is already allotted on this application`
+          + `${prior.allotted_on ? ` (${String(prior.allotted_on).slice(0, 10)})` : ''}. `
+          + 'A second locker needs its own application, with its own rent and its own collection — '
+          + 'allotting it here would replace the first one and leave both boxes on a single rent. '
+          + 'Start a fresh enrolment for this customer instead.',
+          { allotted_locker_no: prior.locker_no, requested_locker_no: b.locker_number ?? null });
+      }
+    }
+  }
 
   if (b.override) {
     await writeAudit(getDb(), {

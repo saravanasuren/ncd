@@ -45,6 +45,13 @@ export function LockerEnrollmentPage() {
   // Positive feedback, separate from the red error line — a waiver that went
   // through is news worth showing, not an error.
   const [note, setNote] = useState('');
+  /**
+   * LockerHub answered a create with the application this customer ALREADY has
+   * open (A7 will not open a second while one is unfinished). Held separately
+   * because it is not really an error: it names an application, and the two
+   * ways forward are to open that one or to delete it.
+   */
+  const [reused, setReused] = useState<any | null>(null);
   const [busy, setBusy] = useState(false);
   const run = async <T,>(p: Promise<T>): Promise<T | undefined> => {
     setErr(''); setBusy(true);
@@ -151,27 +158,31 @@ export function LockerEnrollmentPage() {
    * application is the identical shape as a freshly created one — legs,
    * allotment, KYC and all — and the rest of the page needs no special case.
    */
+  const openApplication = async (id: string) => {
+    const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(id)}`));
+    if (!r?.application_id) return;
+    setReused(null);
+    setApp(r);
+    // Carry the identity across too, so step 2 shows who this is rather than
+    // an empty form sitting above a live application.
+    if (r.phone) setPhone(String(r.phone).replace(/\D/g, '').slice(-10));
+    if (r.name) setName(String(r.name));
+    if (r.email) setEmail(String(r.email));
+    if (r.branch_id) setBranchId(String(r.branch_id));
+    if (r.locker_size) setSize(String(r.locker_size));
+    // Restore the locker chosen at enrolment (owner 2026-08-22) so allotment
+    // uses it instead of re-asking. If it was since taken, `preferred` won't
+    // resolve and the picker appears — the one case a re-pick is warranted.
+    if (r.intended_locker?.locker_id) setLockerId(String(r.intended_locker.locker_id));
+    setCust({ found: true, phone: r.phone, profile: { name: r.name, email: r.email } });
+  };
   const resumed = useRef(false);
   useEffect(() => {
     const id = (params.get('application_id') ?? '').trim();
     if (!id || resumed.current) return;
     resumed.current = true;
-    void run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(id)}`)).then((r) => {
-      if (!r?.application_id) return;
-      setApp(r);
-      // Carry the identity across too, so step 2 shows who this is rather than
-      // an empty form sitting above a live application.
-      if (r.phone) setPhone(String(r.phone).replace(/\D/g, '').slice(-10));
-      if (r.name) setName(String(r.name));
-      if (r.email) setEmail(String(r.email));
-      if (r.branch_id) setBranchId(String(r.branch_id));
-      if (r.locker_size) setSize(String(r.locker_size));
-      // Restore the locker chosen at enrolment (owner 2026-08-22) so allotment
-      // uses it instead of re-asking. If it was since taken, `preferred` won't
-      // resolve and the picker appears — the one case a re-pick is warranted.
-      if (r.intended_locker?.locker_id) setLockerId(String(r.intended_locker.locker_id));
-      setCust({ found: true, phone: r.phone, profile: { name: r.name, email: r.email } });
-    });
+    void openApplication(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 
   const saveCustomer = async () => {
@@ -193,7 +204,7 @@ export function LockerEnrollmentPage() {
     // profile in by hand: the exact thing the applicant block exists to avoid
     // (owner, 29 Jul 2026). We already know who they are — send it.
     const chosen = (vacant.data?.lockers ?? []).find((l) => l.id === lockerId);
-    const r = await run(api.post<any>('/api/lockers/applications', {
+    const body = {
       phone, name: name || undefined, email: email || undefined,
       branch_id: branchId, locker_size: size,
       ...(ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}),
@@ -205,8 +216,20 @@ export function LockerEnrollmentPage() {
       // Joint hirers ride on the create — it is the ONE call that can carry
       // them, because A7 creates and a second call would mint a duplicate.
       ...(hirers.length ? { hirers } : {}),
-    }));
-    if (r?.application_id) { setApp(r); setCheques([]); setFeeWaivers([]); }
+    };
+    setErr(''); setReused(null); setBusy(true);
+    try {
+      const r = await api.post<any>('/api/lockers/applications', body);
+      if (r?.application_id) { setApp(r); setCheques([]); setFeeWaivers([]); }
+    } catch (e) {
+      // LockerHub handed back the application this customer already has open
+      // instead of opening a second one. Shown as its own banner, not as a red
+      // line of JSON: the operator needs to know WHICH application, and that
+      // the way forward is to finish or delete it — not to press create again.
+      const detail = (e instanceof ApiError ? e.detail : null) as any;
+      if (detail?.reused_application_id) setReused({ ...detail, message: (e as ApiError).message });
+      else setErr(e instanceof ApiError ? e.message : 'Failed');
+    } finally { setBusy(false); }
   };
   const refreshApp = async () => {
     if (!app?.application_id) return;
@@ -618,8 +641,15 @@ export function LockerEnrollmentPage() {
       // 2026-08-22) — send the §A20 override automatically, recorded against
       // them. When the rent is settled, no override is sent (the normal path).
       const outstanding = app?.obligations_settled === false;
+      // The NUMBER as well as the id: the server uses it to tell a re-drive of
+      // this allotment apart from a SECOND locker being put on the same
+      // application, which would silently replace the first (owner 2026-09-10).
+      const chosenNo = chosen
+        ? (vacant.data?.lockers ?? []).find((l) => l.id === chosen)?.locker_number
+        : undefined;
       await api.post(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/allocate`, {
         ...(chosen ? { locker_id: chosen } : {}),
+        ...(chosenNo ? { locker_number: chosenNo } : {}),
         // Omitted when blank — the server then records today.
         ...(allottedOn ? { allotted_on: allottedOn } : {}),
         ...(isBackdated && backdateReason.trim() ? { backdate_reason: backdateReason.trim() } : {}),
@@ -936,6 +966,28 @@ export function LockerEnrollmentPage() {
             <div className="flex flex-wrap items-center gap-2">
               <button className={btn} disabled={!!createBlocker || busy} onClick={createApp}>Create application</button>
               {createBlocker && <span className="text-xs text-text-muted">{createBlocker}</span>}
+              {/* LockerHub would not open a second application while this
+                  customer still has one unfinished — it answered with that one.
+                  Continuing on it would put this locker on the earlier locker's
+                  rent, waiver and premium (owner 2026-09-10). */}
+              {reused && (
+                <div className="w-full text-sm rounded px-3 py-2 bg-[color:var(--warn-bg)] text-warn">
+                  <div className="font-medium">
+                    {reused.application_no ?? reused.reused_application_id} is already open for this customer
+                  </div>
+                  <div className="mt-1">{reused.message}</div>
+                  <div className="mt-2 flex items-center gap-2 flex-wrap">
+                    <button className={btnGhost} disabled={busy}
+                      onClick={() => void openApplication(String(reused.reused_application_id))}>
+                      Open {reused.application_no ?? 'it'}
+                    </button>
+                    <span className="text-xs">
+                      Delete it there if this customer is taking a different locker — each locker
+                      needs its own application, so each has its own rent to collect.
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-sm">

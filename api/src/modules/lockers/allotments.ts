@@ -172,12 +172,15 @@ export interface AllotmentView {
   backdate_reason: string | null;
   /** True when our date and LockerHub's disagree — what the renewals screen flags. */
   date_differs: boolean;
+  /** WHICH box this application handed over. One application, one locker. */
+  locker_no: string | null;
 }
 
 const shape = (r: Record<string, unknown>): AllotmentView => {
   const ours = iso(r.allotted_on);
   const theirs = r.lockerhub_allotted_on ? iso(r.lockerhub_allotted_on) : null;
   return {
+    locker_no: (r.locker_no as string) ?? null,
     allotted_on: ours,
     lockerhub_allotted_on: theirs,
     backdated: !!r.backdated,
@@ -189,7 +192,7 @@ const shape = (r: Record<string, unknown>): AllotmentView => {
 /** Our recorded allotment for one locker application, or null. */
 export async function getAllotment(db: Db, applicationId: string): Promise<AllotmentView | null> {
   const r = (await db.query<Record<string, unknown>>(
-    `SELECT allotted_on, lockerhub_allotted_on, backdated, backdate_reason
+    `SELECT locker_no, allotted_on, lockerhub_allotted_on, backdated, backdate_reason
        FROM locker_allotments WHERE lockerhub_application_id = $1`, [applicationId])).rows[0];
   return r ? shape(r) : null;
 };
@@ -205,7 +208,7 @@ export async function getAllotment(db: Db, applicationId: string): Promise<Allot
  */
 export async function backdatedByApplication(db: Db): Promise<Map<string, AllotmentView>> {
   const { rows } = await db.query<Record<string, unknown>>(
-    `SELECT lockerhub_application_id, allotted_on, lockerhub_allotted_on, backdated, backdate_reason
+    `SELECT lockerhub_application_id, locker_no, allotted_on, lockerhub_allotted_on, backdated, backdate_reason
        FROM locker_allotments WHERE backdated`);
   return new Map(rows.map((r) => [String(r.lockerhub_application_id), shape(r)]));
 }

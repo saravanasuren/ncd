@@ -185,4 +185,74 @@ describe('joint hirers', () => {
     expect(put.status).toBe(200);
     expect(put.json.hirers).toHaveLength(0);
   });
+
+  // ── A sole hirer must nominate (owner 2026-09-10) ─────────────────────────
+  // "if there are more than one hirer, nominee can be optional. if there is
+  // only one holder then nominee is mandatory."
+  //
+  // With one holder the nomination is the only instruction for what happens to
+  // the contents if they die. With joint holders there is a surviving holder
+  // who can already operate the locker.
+  //
+  // This REVERSES 2026-09-09, where the owner asked for the nominee to be told
+  // and not enforced. The banner still tells; for a sole hirer it now blocks
+  // too. If someone later "restores" the old behaviour, the first test fails.
+  describe('a sole hirer must nominate', () => {
+    let soleId = 0;
+    let jointId = 0;
+
+    beforeAll(async () => {
+      const a = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+      const c1 = await a.post('/api/customers', {
+        full_name: 'Sole No Nominee', phone: '9812200001', email: 'sole@example.com',
+      });
+      soleId = Number(c1.json.id);
+      const c2 = await a.post('/api/customers', {
+        full_name: 'Joint No Nominee', phone: '9812200002', email: 'joint@example.com',
+      });
+      jointId = Number(c2.json.id);
+    });
+
+    it('REFUSES a single-holder locker when the customer has no nominee', async () => {
+      const r = await (await staff()).post('/api/lockers/applications', {
+        phone: '9812200001', name: 'Sole No Nominee', branch_id: 'br_1',
+        locker_size: 'Medium', customer_id: soleId,
+      });
+      expect(r.status).toBe(400);
+      expect(r.json.error.message).toMatch(/single holder/i);
+      // ...and it names the way out, both of them.
+      expect(r.json.error.message).toMatch(/joint hirer/i);
+    });
+
+    it('ALLOWS it once a nominee exists — only the NAME is required to enrol', async () => {
+      // The rest of the nominee (relationship, dob, phone, address) is what
+      // LockerHub's agreement gate wants and stays reported, not enforced.
+      await ctx.db.query(
+        `INSERT INTO nominees (customer_id, full_name, share_pct) VALUES ($1, 'A Nominee', 100)`, [soleId]);
+      const r = await (await staff()).post('/api/lockers/applications', {
+        phone: '9812200001', name: 'Sole No Nominee', branch_id: 'br_1',
+        locker_size: 'Medium', customer_id: soleId,
+      });
+      expect(r.status).toBe(201);
+    });
+
+    it('ALLOWS a JOINT locker with no nominee at all — that is the point of the rule', async () => {
+      const r = await (await staff()).post('/api/lockers/applications', {
+        phone: '9812200002', name: 'Joint No Nominee', branch_id: 'br_1',
+        locker_size: 'Medium', customer_id: jointId,
+        hirers: [{ position: 2, full_name: 'The Other Holder', phone: '9812200033',
+                   pan: 'AAAPJ9999J', aadhaar_last4: '9999', dob: '1979-01-01', address: '9 Joint Road' }],
+      });
+      expect(r.status).toBe(201);
+    });
+
+    it('does not block a walk-in we hold no customer record for', async () => {
+      // Nothing to check a nominee against. Refusing here would stop an
+      // enrolment over a record that does not exist.
+      const r = await (await staff()).post('/api/lockers/applications', {
+        phone: '9812200044', name: 'Walk In', branch_id: 'br_1', locker_size: 'Medium',
+      });
+      expect(r.status).toBe(201);
+    });
+  });
 });

@@ -645,12 +645,27 @@ export function LockerEnrollmentPage() {
     // Locker number is now MANDATORY (owner 2026-08-22) — the customer is told
     // their box at the counter, so it is chosen up front, not at allotment.
     : !lockerId ? 'Pick a locker number in step 1 — it is required.'
+    // A SOLE HIRER MUST NOMINATE (owner 2026-09-10): "if there are more than
+    // one hirer, nominee can be optional. if there is only one holder then
+    // nominee is mandatory."
+    //
+    // With one holder the nomination is the only instruction for what happens
+    // to the contents if they die. With joint holders there is a surviving
+    // holder who can already operate the locker, so it stops being the sole
+    // route in — hence optional there.
+    //
+    // Checked HERE as well as on the server so the branch is stopped before
+    // they have typed a whole enrolment, not after. The server is the rule;
+    // this is the courtesy.
+    : (hirers.length === 0 && ncdCust?.id && nominee.data && !nominee.data.has_nominee)
+      ? 'A single-holder locker needs a nominee. Add one to the customer, or add a joint hirer below.'
     : '';
-  // The nominee is deliberately NOT in createBlocker (owner 2026-09-09: "say
-  // them to go fill the nominee name and continue with the enrollment"). It is
-  // told, not enforced — a locker CAN be enrolled and allotted without one, and
-  // the agreement can still be signed on paper, so blocking would remove a
-  // route the owner uses. The banner in step 2 says what to fill.
+  // NOTE: the nominee BANNER below is unchanged and still says-rather-than-
+  // blocks (owner 2026-09-09). That remains right for a JOINT locker, and for a
+  // sole hirer it is what tells the branch which fields are still missing once
+  // the name exists. Only the NAME blocks; the rest of the nominee detail is
+  // what LockerHub's agreement gate wants, and stopping a locker at the counter
+  // over a missing nominee phone would be a heavier rule than the one asked for.
 
   return (
     <div className="w-full max-w-3xl">
@@ -841,7 +856,9 @@ export function LockerEnrollmentPage() {
           {ncdCust?.id && nominee.data && !nominee.data.ready && (
             <div className="text-xs mt-2 rounded border border-[color:var(--danger)] bg-[color:var(--danger-bg)] px-3 py-2">
               <div className="text-danger font-semibold">
-                Fill in the nominee for this customer, then carry on with the enrolment.
+                {hirers.length === 0
+                  ? 'This locker has a single holder, so a nominee is required.'
+                  : 'Fill in the nominee for this customer, then carry on with the enrolment.'}
               </div>
               <div className="text-text-muted mt-1">
                 Missing: <b className="text-text">{nominee.data.missing.join(', ')}</b>.{' '}

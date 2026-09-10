@@ -384,6 +384,26 @@ export function LockerEnrollmentPage() {
   };
 
   /**
+   * Re-issue the agreement (owner 2026-09-10). A Digio document is frozen the
+   * moment it is created, so a link already sent can never pick up a later change
+   * (a joint hirer added, the rent corrected). This regenerates the agreement
+   * from the current details and sends a FRESH link; the old one is retired
+   * server-side so it can no longer be signed.
+   */
+  const resendEsign = async () => {
+    if (!app?.application_id) return;
+    const ok = await confirm({
+      title: 'Re-send a fresh agreement?',
+      body: 'Generates the agreement again with the latest details (joint hirers, rent) and texts the customer a NEW signing link. The previous link stops working.',
+      confirmLabel: 'Re-send',
+    });
+    if (!ok) return;
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement/esign-initiate`,
+      ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}));
+    if (r) { setEsign({ auth_url: r.sign_url, status: 'pending' }); await loadSigning(); }
+  };
+
+  /**
    * How the agreement gets signed (owner 2026-09-03). Two paths that differ ONLY
    * in how the signature is captured — Digio, or a printed pre-filled agreement
    * the customer signs by hand. Printing and uploading arrive in the next two
@@ -1302,10 +1322,11 @@ export function LockerEnrollmentPage() {
                           <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">{signing.label}</span>
                           {awaitingCustomer && custUrl && <a className={btnGhost} href={custUrl} target="_blank" rel="noopener noreferrer">Open signing link</a>}
                           <button className={btnGhost} disabled={busy} onClick={loadSigning}>Check again</button>
+                          {awaitingCustomer && <button className={btnGhost} disabled={busy} onClick={resendEsign}>Re-send a fresh copy</button>}
                         </div>
                         <span className="text-xs text-text-muted">
                           {awaitingCustomer
-                            ? 'Digio texts the customer a link. Once they sign, it appears in Locker Agreements for the CEO to countersign.'
+                            ? 'Digio texts the customer a link. Once they sign, it appears in Locker Agreements for the CEO to countersign. Added a joint hirer or fixed a detail after sending? Re-send a fresh copy — the old link freezes the moment it is created.'
                             : 'Customer signed — waiting for the CEO to countersign it from Locker Agreements.'}
                         </span>
                       </div>

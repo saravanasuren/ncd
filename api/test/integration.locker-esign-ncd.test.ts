@@ -93,6 +93,35 @@ describe('locker agreement e-sign on our own copy', () => {
     expect(withJoint.buffer.length).toBeGreaterThan(blank.buffer.length);
   });
 
+  it('re-sending retires the old link and hands out a fresh one', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Resend Cust', phone: '9700003333', pan: 'AAAPS9876Q', address: '4 Resend St' });
+    const first = await a.post('/api/lockers/applications/la_ncd_resend/agreement/esign-initiate', { customer_id: Number(cust.json.id) });
+    expect(first.status).toBe(200);
+    const firstReq = first.json.digio_request_id as string;
+
+    // Re-send: a brand-new request, and the signing now references it.
+    const second = await a.post('/api/lockers/applications/la_ncd_resend/agreement/esign-initiate', {});
+    expect(second.status).toBe(200);
+    const secondReq = second.json.digio_request_id as string;
+    expect(secondReq).not.toBe(firstReq);
+
+    // The OLD session is retired (cancelled) so the poller ignores it and a stale
+    // link can't complete; the NEW one is the live 'requested' link.
+    const sessions = (await ctx.db.query<{ digio_request_id: string; status: string }>(
+      `SELECT d.digio_request_id, d.status FROM digio_signing_sessions d
+         JOIN locker_agreement_signings s ON s.id = d.locker_agreement_signing_id
+        WHERE s.lockerhub_application_id = 'la_ncd_resend' AND d.document_type = 'locker_agreement'`)).rows;
+    const old = sessions.find((r) => r.digio_request_id === firstReq)!;
+    const fresh = sessions.find((r) => r.digio_request_id === secondReq)!;
+    expect(old.status).toBe('cancelled');
+    expect(fresh.status).toBe('requested');
+
+    // getSigning points the enroller at the fresh link, not the retired one.
+    const view = await getSigning(ctx.db, 'la_ncd_resend');
+    expect(view!.esign_reference).toBe(secondReq);
+  });
+
   it('the CEO counter-signs a customer-signed agreement, then it is fully Signed', async () => {
     const a = await admin();
     const cust = await a.post('/api/customers', { full_name: 'CEO Flow Hirer', phone: '9700000066', pan: 'AAAPC1234Q', address: '3 Sign St' });

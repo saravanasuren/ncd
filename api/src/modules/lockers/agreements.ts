@@ -449,6 +449,15 @@ export async function initiateCustomerEsign(
   });
 
   await db.withTx(async (tx) => {
+    // Re-sending supersedes any earlier open link for THIS signing: retire the
+    // old sessions so the poller stops watching them and a customer who kept an
+    // old SMS link can't sign a stale copy (e.g. one made before a re-send that
+    // corrected the document). Only 'requested' rows — a signed one is history.
+    await tx.query(
+      `UPDATE digio_signing_sessions SET status = 'cancelled', updated_at = now()
+        WHERE locker_agreement_signing_id = $1 AND document_type = 'locker_agreement'
+          AND status = 'requested' AND digio_request_id <> $2`,
+      [signing.id, req.digioRequestId]);
     await tx.query(
       `INSERT INTO digio_signing_sessions
          (application_id, digio_request_id, sign_url, signer_email, signer_phone, status, created_by_user_id, document_type, locker_agreement_signing_id)

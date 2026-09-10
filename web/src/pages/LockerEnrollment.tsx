@@ -563,14 +563,17 @@ export function LockerEnrollmentPage() {
   const removeHirer = (i: number) =>
     setHirers((h) => h.filter((_, j) => j !== i).map((x, j) => ({ ...x, position: j + 2 })));
   /**
-   * Is the nominee complete enough for LockerHub to generate the agreement?
+   * What the customer's nominee is missing, if anything.
    *
-   * Asked HERE, before the application exists. LockerHub validates the nominee
-   * only when the agreement is generated — several steps later — and their
-   * applications cannot be deleted, so the old failure left a half-finished
-   * tenancy on their book that nobody could clear. Only meaningful when we have
-   * matched an NCD customer: without one we send no applicant block and the
-   * nominee is whatever LockerHub already holds.
+   * Originally this asked "will LockerHub generate the agreement?" — they
+   * validated the nominee at agreement time, several steps after their
+   * application existed and could no longer be deleted. That gate is no longer
+   * in the path: the agreement is OURS and is signed through our own e-sign.
+   *
+   * So this is now only about OUR rule — a sole hirer must nominate, and
+   * nothing else does. Asked here, before the application exists, because that
+   * is the moment staff can still add a joint hirer instead. Only meaningful
+   * once an NCD customer is matched: without one we send no applicant block.
    */
   const nominee = useQuery({
     queryKey: ['locker-nominee-readiness', ncdCust?.id],
@@ -664,12 +667,11 @@ export function LockerEnrollmentPage() {
     : (hirers.length === 0 && ncdCust?.id && nominee.data && !nominee.data.has_nominee)
       ? 'A single-holder locker needs a nominee. Add one to the customer, or add a joint hirer below.'
     : '';
-  // NOTE: the nominee BANNER below is unchanged and still says-rather-than-
-  // blocks (owner 2026-09-09). That remains right for a JOINT locker, and for a
-  // sole hirer it is what tells the branch which fields are still missing once
-  // the name exists. Only the NAME blocks; the rest of the nominee detail is
-  // what LockerHub's agreement gate wants, and stopping a locker at the counter
-  // over a missing nominee phone would be a heavier rule than the one asked for.
+  // Only the NAME blocks, and only for a sole hirer. The rest of the nominee
+  // detail is reported in the banner below and never enforced — stopping a
+  // locker at the counter over a missing nominee phone would be a far heavier
+  // rule than the one asked for. A JOINT locker is not asked for a nominee at
+  // all any more (owner 2026-09-10).
 
   return (
     <div className="w-full max-w-3xl">
@@ -853,16 +855,19 @@ export function LockerEnrollmentPage() {
           {notFound && (
             <div className="text-xs text-warn mt-2">No customer with that PAN in NCD — look them up by phone, or enrol the customer first.</div>
           )}
-          {/* The nominee gate, said where staff can act on it. LockerHub refuses
-              to generate the agreement without these, and it only says so
-              several steps later — by which point their application exists and
-              cannot be deleted. */}
-          {ncdCust?.id && nominee.data && !nominee.data.ready && (
+          {/* THE NOMINEE IS COMPULSORY FOR A SOLE HIRER AND NOTHING ELSE
+              (owner 2026-09-10: "except for sole everything else no need of
+              nominee as compulsory one").
+
+              A joint locker used to get this same red block — a demand dressed
+              as a warning, for something the owner had already ruled optional.
+              It also promised a refusal that no longer happens: since the
+              agreement moved onto OUR e-sign, LockerHub's `nominee_incomplete`
+              gate is no longer in the signing path at all. Both are gone. */}
+          {ncdCust?.id && nominee.data && !nominee.data.ready && (hirers.length === 0 ? (
             <div className="text-xs mt-2 rounded border border-[color:var(--danger)] bg-[color:var(--danger-bg)] px-3 py-2">
               <div className="text-danger font-semibold">
-                {hirers.length === 0
-                  ? 'This locker has a single holder, so a nominee is required.'
-                  : 'Fill in the nominee for this customer, then carry on with the enrolment.'}
+                This locker has a single holder, so a nominee is required.
               </div>
               <div className="text-text-muted mt-1">
                 Missing: <b className="text-text">{nominee.data.missing.join(', ')}</b>.{' '}
@@ -870,12 +875,11 @@ export function LockerEnrollmentPage() {
                   Open {ncdCust.full_name}'s profile
                 </Link>{' '}to add {nominee.data.has_nominee ? 'the missing details' : 'a nominee'}.
               </div>
-              {/* Said plainly, because it is the consequence staff will meet
-                  later and cannot otherwise predict. Enrolment and allotment
-                  work fine without a nominee — only the e-Sign does not. */}
+              {/* The way out that is not "go and find a nominee": with a second
+                  holder there is someone who can already operate the locker, so
+                  the nomination stops being the only route in. */}
               <div className="text-text-muted mt-1">
-                You can still enrol and allot the locker. Only the <b className="text-text">e-Sign</b> will be
-                refused by LockerHub — a paper agreement can be printed and signed either way.
+                Or add a joint hirer below — a jointly held locker needs no nominee.
               </div>
               {nominee.data.needs_approval_to_fix && (
                 // Worth saying plainly: once a nominee exists, ANY correction
@@ -887,7 +891,14 @@ export function LockerEnrollmentPage() {
                 </div>
               )}
             </div>
-          )}
+          ) : (
+            // Joint locker: one muted line, so nobody reads the blank nominee as
+            // an oversight — and nothing that looks like a thing to go and fix.
+            <div className="text-xs text-text-muted mt-2">
+              No nominee on file — not needed, this locker is jointly held. The agreement
+              prints and signs without one.
+            </div>
+          ))}
           {cust && (
             <div className="mt-3 grid grid-cols-2 gap-2 max-w-lg">
               <input className={inp} placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} />

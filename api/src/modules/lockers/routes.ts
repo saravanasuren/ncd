@@ -336,11 +336,15 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
   // it is what tells a sole hirer's branch what to fill in. What changed is
   // that for a sole hirer it now blocks as well as tells.
   //
-  // Only the NAME is required to enrol, not the full set. The complete nominee
-  // (relationship, dob, phone, address) is what LockerHub's agreement gate
-  // wants, and that is still reported rather than enforced — blocking a locker
-  // at the counter over a missing nominee phone would be a different and much
-  // heavier rule than the one asked for.
+  // Only the NAME is required to enrol, not the full set. The rest
+  // (relationship, dob, phone, address) is reported on the screen and never
+  // enforced — blocking a locker at the counter over a missing nominee phone
+  // would be a different and much heavier rule than the one asked for. It used
+  // to be enforced downstream by LockerHub's agreement gate; that gate left the
+  // path when the agreement moved onto our own e-sign, so OUR rule below is now
+  // the only one there is. It applies to a sole hirer and to nothing else
+  // (owner 2026-09-10: "except for sole everything else no need of nominee as
+  // compulsory one").
   if (!pendingHirers.length && customer_id) {
     const nom = (await getDb().query<{ n: string }>(
       `SELECT count(*) AS n FROM nominees

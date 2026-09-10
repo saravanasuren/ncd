@@ -398,7 +398,7 @@ function LockersCard({ customerId, customerName }: { customerId: number; custome
 }
 
 /** The nominee the editor has open. `index` -1 is a new one. */
-interface NomineeDraft { index: number; full_name: string; relationship: string; share_pct: string }
+interface NomineeDraft { index: number; full_name: string; relationship: string; share_pct: string; dob: string; phone: string; address: string }
 
 /** The standard relationships, plus whatever is already on the row if it is not
  *  one of them — a picker must never blank a value just because it is unusual. */
@@ -481,6 +481,9 @@ export function CustomerDetailPage() {
     // id ride through an edit of the three fields shown here.
     const edited: NomineeInput = { ...(d.index >= 0 ? rows[d.index]! : { full_name: name }), full_name: name };
     edited.relationship = d.relationship.trim() || null;
+    edited.dob = d.dob.trim() || null;
+    edited.phone = d.phone.trim() || null;
+    edited.address = d.address.trim() || null;
     if (share !== null) edited.share_pct = share; else delete edited.share_pct;
 
     const next = d.index >= 0 ? rows.map((r, i) => (i === d.index ? edited : r)) : [...rows, edited];
@@ -626,7 +629,7 @@ export function CustomerDetailPage() {
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[11px] font-semibold text-text-label uppercase tracking-wide">Nominees</span>
               {can('customers:update') && (
-                <button onClick={() => { setMsg(''); setNomEdit({ index: -1, full_name: '', relationship: '', share_pct: '' }); }}
+                <button onClick={() => { setMsg(''); setNomEdit({ index: -1, full_name: '', relationship: '', share_pct: '', dob: '', phone: '', address: '' }); }}
                   className="text-xs text-primary hover:underline"
                   title={(data.nominees ?? []).length
                     ? 'Nominee changes go to a checker before they take effect'
@@ -645,7 +648,7 @@ export function CustomerDetailPage() {
                   {can('customers:update') && (
                     <span className="ml-auto shrink-0 flex gap-2">
                       <button
-                        onClick={() => { setMsg(''); setNomEdit({ index: i, full_name: n.full_name ?? '', relationship: n.relationship ?? '', share_pct: Number(n.share_pct) > 0 ? String(Number(n.share_pct)) : '' }); }}
+                        onClick={() => { setMsg(''); setNomEdit({ index: i, full_name: n.full_name ?? '', relationship: n.relationship ?? '', share_pct: Number(n.share_pct) > 0 ? String(Number(n.share_pct)) : '', dob: String(n.dob ?? '').slice(0, 10), phone: n.phone ?? '', address: n.address ?? '' }); }}
                         className="text-xs text-primary hover:underline">Edit</button>
                       <button onClick={() => void removeNominee(i)}
                         className="text-xs text-danger hover:underline">Remove</button>
@@ -681,6 +684,21 @@ export function CustomerDetailPage() {
                     Share %
                     <input className={`${inp} w-full mt-1`} value={nomEdit.share_pct} placeholder="blank = the rest"
                       onChange={(e) => setNomEdit({ ...nomEdit, share_pct: e.target.value })} />
+                  </label>
+                  <label className="text-xs text-text-muted">
+                    Date of birth
+                    <input type="date" className={`${inp} w-full mt-1`} value={nomEdit.dob}
+                      onChange={(e) => setNomEdit({ ...nomEdit, dob: e.target.value })} />
+                  </label>
+                  <label className="text-xs text-text-muted">
+                    Phone
+                    <input className={`${inp} w-full mt-1`} value={nomEdit.phone} maxLength={10} inputMode="numeric"
+                      onChange={(e) => setNomEdit({ ...nomEdit, phone: e.target.value.replace(/\D/g, '') })} />
+                  </label>
+                  <label className="text-xs text-text-muted col-span-3">
+                    Address
+                    <input className={`${inp} w-full mt-1`} value={nomEdit.address}
+                      onChange={(e) => setNomEdit({ ...nomEdit, address: e.target.value })} />
                   </label>
                 </div>
                 <div className="flex items-center gap-2 mt-3">

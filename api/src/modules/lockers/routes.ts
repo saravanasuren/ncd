@@ -318,6 +318,40 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
   const pendingHirers = (reqHirers ?? []).map((h) => ({ ...h }));
   if (pendingHirers.length) validateHirers(pendingHirers, b.phone);
 
+  // ── A SOLE HIRER MUST NOMINATE (owner 2026-09-10) ────────────────────────
+  //
+  //   "if there are more than one hirer, nominee can be optional. if there is
+  //    only one holder then nominee is mandatory."
+  //
+  // The reasoning is the locker itself: with one holder, the nomination is the
+  // only instruction for what happens to the contents if they die — without it
+  // the family is left to probate over a box nobody can open. With joint
+  // holders there is a surviving holder who can already operate it, so the
+  // nomination stops being the sole route in.
+  //
+  // THIS REVERSES YESTERDAY'S INSTRUCTION, deliberately. On 2026-09-09 the
+  // owner asked for the nominee to be TOLD and not enforced ("say them to go
+  // fill the nominee name and continue with the enrollment"), and the banner
+  // built for that stays — it is still the right thing for a JOINT locker, and
+  // it is what tells a sole hirer's branch what to fill in. What changed is
+  // that for a sole hirer it now blocks as well as tells.
+  //
+  // Only the NAME is required to enrol, not the full set. The complete nominee
+  // (relationship, dob, phone, address) is what LockerHub's agreement gate
+  // wants, and that is still reported rather than enforced — blocking a locker
+  // at the counter over a missing nominee phone would be a different and much
+  // heavier rule than the one asked for.
+  if (!pendingHirers.length && customer_id) {
+    const nom = (await getDb().query<{ n: string }>(
+      `SELECT count(*) AS n FROM nominees
+        WHERE customer_id = $1 AND COALESCE(btrim(full_name), '') <> ''`, [customer_id])).rows[0];
+    if (!Number(nom?.n ?? 0)) {
+      throw errors.badRequest(
+        'This locker has a single holder, so a nominee is required. Add a nominee to the customer, '
+        + 'or add a joint hirer if the locker is to be held jointly.');
+    }
+  }
+
   let applicant: Record<string, unknown> | undefined;
   if (customer_id) {
     const { assertCustomerVisible } = await import('../../lib/visibility.js');

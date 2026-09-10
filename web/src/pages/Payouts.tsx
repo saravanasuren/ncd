@@ -95,10 +95,11 @@ function BatchComparison({ last, now }: {
         </table>
         {m && (
           <div className="text-[11px] text-text-muted mt-1.5 max-w-[760px]">
-            Added / Redeemed is the movement since {m.since} — {m.added.investments} investment(s)
-            in, {m.redeemed.redemptions} redemption(s) out. They record the period; they do not add
-            up from Last batch to This batch, because Last batch shows each line's outstanding as it
-            stands today, so redeemed money has already dropped out of it.
+            Outstanding splits on the money-received date. Last batch is the book as it stood on
+            {m.since} — everything that had landed by then, including the {m.redeemed.redemptions} since
+            redeemed. Added is the {m.added.investments} investment(s) that landed after it. The three
+            reconcile exactly: Last batch + Added − Redeemed = This batch. Gross / TDS / Net above
+            are what that batch actually paid.
           </div>
         )}
       </div>
@@ -181,7 +182,9 @@ export function PayoutsPage() {
   const [confirming, setConfirming] = useState(false);
 
   const preview = useQuery({ queryKey: ['payout-preview', date], queryFn: () => api.get<any>(`/api/payouts/preview?date=${date}`) });
-  const lastBatch = useQuery({ queryKey: ['payout-last-interest'], queryFn: () => api.get<{ summary: LastInterestSummary | null }>('/api/payouts/last-interest-summary') });
+  // Keyed on the date, like the preview: the comparison is against THIS run,
+  // so changing the date must re-ask rather than show the previous answer.
+  const lastBatch = useQuery({ queryKey: ['payout-last-interest', date], queryFn: () => api.get<{ summary: LastInterestSummary | null }>(`/api/payouts/last-interest-summary?date=${date}`) });
   const batches = useQuery({ queryKey: ['payout-batches'], queryFn: () => api.get<{ rows: any[] }>('/api/payouts') });
   // Investments whose accrual start disagrees with the day their money arrived.
   // Warning only (owner 2026-08-26) — a false positive must never be able to

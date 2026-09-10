@@ -34,8 +34,15 @@ payoutsRouter.get('/preview', requirePermission('payouts:generate'),
   asyncHandler(async (req, res) => res.json(await s.previewDue(getDb(), sheetDate(req.query.date), productOf(req.query.product)))));
 
 // The last batch actually marked Paid — for the "last vs this" comparison box.
+// `date` is the payout date the screen is previewing. The summary compares the
+// last batch's rows against THAT run's rows, so the two halves of the panel
+// describe the same period; without it the comparison silently uses today.
 payoutsRouter.get('/last-interest-summary', requirePermission('payouts:generate'),
-  asyncHandler(async (_req, res) => res.json({ summary: await s.lastPaidInterestSummary(getDb()) })));
+  asyncHandler(async (req, res) => {
+    const date = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? req.query.date : undefined;
+    res.json({ summary: await s.lastPaidInterestSummary(getDb(), date) });
+  }));
 
 /**
  * Investments whose accrual start disagrees with the day their money arrived —

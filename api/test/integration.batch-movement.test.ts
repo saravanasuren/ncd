@@ -3,16 +3,38 @@
  * "get me the current month addition and redemption data in a separate column
  * in between last batch and this batch."
  *
- * Two columns, covering the movement SINCE the last paid batch — the period the
- * comparison is about.
+ * ─── THE COLUMNS NOW BRIDGE. Reversed 2026-09-10, on the owner's data ────────
  *
- * What these numbers are NOT: an arithmetic bridge from Last batch to This
- * batch. Measured on production the day this was written — last 60.17Cr + added
- * 7.23Cr = this 67.40Cr exactly, while 1.20Cr was redeemed in the same window.
- * The redeemed principal is missing from the sum because `outstanding` re-reads
- * each line's LIVE value, so a redemption is already gone from the Last batch
- * figure too. Subtracting it again would double-count. The last test here pins
- * that, so nobody "fixes" the column into a bridge it cannot be.
+ * This file used to pin the OPPOSITE — a test called "NOT a bridge between the
+ * two columns", written because a redemption reads 0 in `outstanding` on both
+ * sides, so subtracting it again double-counted.
+ *
+ * The owner found the flaw in that reasoning by checking the screen against
+ * their own book, twice. First: money received ON the payout date, and money
+ * keyed in later with a backdated date, appeared in NEITHER Last batch nor
+ * Added — ₹1.31 crore missing from both. Then: our corrected Last batch was
+ * still ₹20 lakh under theirs, because three investments redeemed since had
+ * silently fallen out of a figure read LIVE, even though they genuinely were
+ * in that period's book.
+ *
+ * Fixing the second makes the first reasoning obsolete. Last batch is now the
+ * book AS IT STOOD then — live outstanding plus what has since been redeemed —
+ * so the redeemed principal IS on the last-batch side, and subtracting it once
+ * is correct rather than double-counting:
+ *
+ *     Last + Added − Redeemed = This
+ *
+ * Verified on production: 69,49,00,000 + 2,90,00,000 − 20,00,000 =
+ * 72,19,00,000, residual zero. The last test here pins the identity, where it
+ * used to pin its absence.
+ *
+ * ─── WHAT THE COLUMNS MEASURE ───────────────────────────────────────────────
+ *
+ * The BOOK, not raw application rows. An investment reaches these figures once
+ * it is Active and accruing — which is why every fixture below approves its
+ * investments, where the old date-only query counted them from creation. That
+ * is deliberate: "This batch" has always counted the book, and a comparison
+ * whose two sides count different populations is the bug being fixed.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
@@ -57,20 +79,22 @@ describe('Added / Redeemed since the last paid batch', () => {
     const a = await admin();
     await paidBatchOn('2026-06-30');
 
-    // Before the cut-off — must NOT be counted.
+    // Before the cut-off — belongs to LAST batch, must NOT be in Added.
     const before = await a.post('/api/customers', { full_name: 'Before Cutoff', phone: '9704000001' });
-    await a.post('/api/applications', { ...requiredInvestmentFields(),
+    const beforeApp = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: before.json.id, series_id: seriesId, scheme_id: schemeId,
       amount: 500000, date_money_received: '2026-06-15' });
+    await approveInvestment(await as('ncd@demo.local'), beforeApp);
 
     const base = await summary();
     expect(base.movement.since).toBe('2026-06-30');
 
     // After the cut-off — must be counted.
     const after = await a.post('/api/customers', { full_name: 'After Cutoff', phone: '9704000002' });
-    await a.post('/api/applications', { ...requiredInvestmentFields(),
+    const afterApp = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: after.json.id, series_id: seriesId, scheme_id: schemeId,
       amount: 300000, date_money_received: '2026-07-10' });
+    await approveInvestment(await as('ncd@demo.local'), afterApp);
 
     const now = await summary();
     expect(now.movement.added.investments).toBe(base.movement.added.investments + 1);
@@ -86,9 +110,10 @@ describe('Added / Redeemed since the last paid batch', () => {
     const cust = await a.post('/api/customers', { full_name: 'Top Up Twice', phone: '9704000003' });
     const base = await summary();
     for (const amt of [100000, 200000]) {
-      await a.post('/api/applications', { ...requiredInvestmentFields(),
+      const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
         customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
         amount: amt, date_money_received: '2026-07-11' });
+      await approveInvestment(await as('ncd@demo.local'), app);
     }
     const now = await summary();
     expect(now.movement.added.investments).toBe(base.movement.added.investments + 2);
@@ -102,6 +127,7 @@ describe('Added / Redeemed since the last paid batch', () => {
     const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
       amount: 900000, date_money_received: '2026-07-12' });
+    await approveInvestment(await as('ncd@demo.local'), app);
     const base = await summary();
     await ctx.db.query("UPDATE applications SET status = 'Withdrawn' WHERE id = $1", [app.json.id]);
     const now = await summary();
@@ -111,10 +137,15 @@ describe('Added / Redeemed since the last paid batch', () => {
 
   it('a redemption raised after the batch shows in Redeemed, valued at the principal returned', async () => {
     const a = await admin();
+    // Money that landed BEFORE the batch date, so it was part of that period's
+    // book — which is what Redeemed now means: what has LEFT the last batch.
+    // An investment that arrives and is redeemed inside the same period was
+    // never in the last batch and is not reported here; it nets to zero across
+    // the row, so the bridge still holds.
     const cust = await a.post('/api/customers', { full_name: 'Redeemer', phone: '9704000005' });
     const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
       customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
-      amount: 400000, date_money_received: '2026-07-13' });
+      amount: 400000, date_money_received: '2026-06-20' });
     await approveInvestment(await as('ncd@demo.local'), app);
 
     const base = await summary();
@@ -134,19 +165,24 @@ describe('Added / Redeemed since the last paid batch', () => {
     expect(Number(now.movement.redeemed.amount)).toBe(Number(base.movement.redeemed.amount) + 400000);
   });
 
-  it('Added and Redeemed are a record of the period, NOT a bridge between the two columns', async () => {
-    // Pinning the property that surprised us on production, so a future change
-    // does not quietly turn these into a subtraction that does not hold.
-    // `outstanding` is each line's LIVE balance, so a redeemed line reads 0 on
-    // BOTH sides; the redeemed principal therefore appears in the Redeemed
-    // column while having already left the Last batch figure.
+  // The redeemed add-back itself is asserted before/after in
+  // integration.payout-added-bridges ("Last batch keeps money that has since
+  // been REDEEMED") — measuring the change rather than re-deriving the
+  // population here, which is what a first attempt at it got wrong.
+  it('Last + Added − Redeemed = This batch, exactly', async () => {
+    // The identity the screen now states, asserted against the LIVE preview
+    // rather than a re-derived figure, so the two cannot drift apart.
+    //
+    // This replaces a test that pinned the opposite. It was not wrong about the
+    // old data — it was right that the columns did not bridge — but the reason
+    // was a defect, not a law: Last batch was reading each line's balance TODAY
+    // and so had already lost money that was genuinely in that period's book.
+    const a = await admin();
     const s = await summary();
-    expect(s.movement.redeemed.amount).toBeGreaterThan(0);   // there IS redeemed money on record
-    const redeemedStillOutstanding = Number((await ctx.db.query<{ amt: string }>(
-      `SELECT COALESCE(sum(l.outstanding_amount), 0) AS amt
-         FROM redemptions r JOIN application_lines l ON l.application_id = r.application_id
-        WHERE r.redemption_date > $1::date`, [s.movement.since])).rows[0]!.amt);
-    // ...and none of it is still sitting in anybody's outstanding.
-    expect(redeemedStillOutstanding).toBe(0);
+    const preview = (await a.get('/api/payouts/preview?date=' + new Date().toISOString().slice(0, 10))).json;
+    expect(Number(s.movement.redeemed.amount)).toBeGreaterThan(0);   // the row is doing real work
+    expect(Number(s.outstanding) + Number(s.movement.added.amount) - Number(s.movement.redeemed.amount))
+      .toBe(Number(preview.totals.outstanding));
   });
+
 });

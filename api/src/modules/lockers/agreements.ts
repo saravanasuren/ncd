@@ -28,7 +28,9 @@ import { registerOnFinalApprove, registerOnReject } from '../approvals/service.j
 export type SignMethod = 'esign' | 'physical';
 
 /** Statuses a signing may still move on from — at most one of these per locker. */
-export const LIVE_STATUSES = ['Draft', 'AwaitingSignature', 'PendingApproval', 'Signed'] as const;
+// CustomerSigned + AwaitingCEO are the two-party e-sign's mid-states: the
+// customer has signed and the CEO's counter-sign is pending (owner 2026-09-10).
+export const LIVE_STATUSES = ['Draft', 'AwaitingSignature', 'CustomerSigned', 'AwaitingCEO', 'PendingApproval', 'Signed'] as const;
 
 const COLS = `id, lockerhub_application_id, customer_id, method, status,
   form_pdf_path, form_generated_at, signed_doc_path, signed_doc_filename,
@@ -414,6 +416,61 @@ export async function initiateCustomerEsign(
       actorId: actor.id, action: 'locker.agreement.esign.initiate',
       entityType: 'locker_agreement_signings', entityId: signing.id,
       after: { digio_request_id: req.digioRequestId },
+    });
+  });
+
+  return { sign_url: req.signUrl, digio_request_id: req.digioRequestId, stub: !digioConfigured() };
+}
+
+/**
+ * Start the CEO's counter-sign on the CUSTOMER-signed copy (owner 2026-09-10,
+ * stage 4). The company's authorised signatory (Settings) e-signs the SAME
+ * document the customer signed, placed at the "Authorised Signatory" box. Only
+ * a locker whose customer has already signed (status 'CustomerSigned') is
+ * eligible — this is the queue's action, done later, off the enrolment path.
+ */
+export async function initiateCeoEsign(
+  db: Db, actor: AuthUser, applicationId: string,
+): Promise<{ sign_url: string | null; digio_request_id: string; stub: boolean }> {
+  const signing = await getSigning(db, applicationId);
+  if (!signing) throw errors.badRequest('No agreement signing found for this locker.');
+  if (signing.status === 'Signed') throw errors.conflict('This agreement is already fully signed.');
+  if (signing.status !== 'CustomerSigned') {
+    throw errors.badRequest('The customer has not e-signed this agreement yet — the authorised signatory signs after them.');
+  }
+  const signed = await getSignedDocument(db, applicationId);
+  if (!signed) throw errors.badRequest('The customer-signed copy is not available yet — try again shortly.');
+
+  // Re-render for the signatory box only (deterministic; same layout as signed).
+  const { result } = await renderLockerAgreement(db, applicationId, signing.id);
+  const { getSettingsMap } = await import('../settings/service.js');
+  const s = await getSettingsMap(db);
+  const ceoName = String(s['lockers.agreement_signatory_name'] ?? 'Saravana Suren');
+  const ceoPhone = String(s['lockers.agreement_signatory_phone'] ?? '').replace(/\D/g, '') || undefined;
+
+  const { createSignRequest, digioConfigured } = await import('../../integrations/digio/index.js');
+  const req = await createSignRequest({
+    signerName: ceoName,
+    signerPhone: ceoPhone,
+    document: { fileName: `locker-agreement-${applicationId}.pdf`, contentBase64: signed.buffer.toString('base64') },
+    signature: { box: result.signatory, page: result.signatoryPage },
+  });
+
+  await db.withTx(async (tx) => {
+    await tx.query(
+      `INSERT INTO digio_signing_sessions
+         (application_id, digio_request_id, sign_url, signer_phone, status, created_by_user_id, document_type, locker_agreement_signing_id)
+       VALUES (NULL, $1, $2, $3, $4, $5, 'locker_agreement_ceo', $6)
+       ON CONFLICT (digio_request_id) DO UPDATE SET sign_url = EXCLUDED.sign_url, status = EXCLUDED.status, updated_at = now()`,
+      [req.digioRequestId, req.signUrl, ceoPhone ?? null, req.status, actor.id, signing.id]);
+    await tx.query(
+      `UPDATE locker_agreement_signings
+          SET status = 'AwaitingCEO', esign_reference = $1, updated_at = now()
+        WHERE id = $2`, [req.digioRequestId, signing.id]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'locker.agreement.esign.ceo-initiate',
+      entityType: 'locker_agreement_signings', entityId: signing.id,
+      after: { digio_request_id: req.digioRequestId, signatory: ceoName },
     });
   });
 

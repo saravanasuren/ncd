@@ -419,6 +419,27 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     default: defaultWhatsappConfig(def),
     editableBy: 'admin',
   })),
+
+  // The company's authorised signatory who counter-signs each locker agreement
+  // after the customer (owner 2026-09-10). Their e-Sign link goes to this phone.
+  {
+    key: 'lockers.agreement_signatory_name',
+    group: 'Lockers',
+    label: 'Locker agreement — authorised signatory',
+    description: 'Name of the company signatory (CEO) who counter-signs each locker agreement.',
+    type: 'string',
+    default: 'Saravana Suren',
+    editableBy: 'admin',
+  },
+  {
+    key: 'lockers.agreement_signatory_phone',
+    group: 'Lockers',
+    label: 'Locker agreement — signatory phone',
+    description: 'Mobile number the signatory’s e-Sign link is sent to.',
+    type: 'string',
+    default: '8925803983',
+    editableBy: 'admin',
+  },
 ];
 
 export function settingDefaults(): Record<string, unknown> {

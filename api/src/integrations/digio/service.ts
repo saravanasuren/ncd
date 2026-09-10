@@ -121,6 +121,24 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
               signed_doc_mime = COALESCE(signed_doc_mime, 'application/pdf'),
               signed_at = COALESCE(signed_at, now()), updated_at = now()
         WHERE id = $1`, [result.lockerAgreementSigningId, signedPath]);
+  } else if (result.ok && result.fresh && result.docType === 'locker_agreement_ceo' && result.lockerAgreementSigningId) {
+    // The CEO counter-signed. Store the FULLY-signed PDF (both signatures) and
+    // mark the agreement Signed. Hand-off to LockerHub is a separate best-effort
+    // step (their offline-signed endpoint).
+    let finalPath: string | null = null;
+    try {
+      const { downloadSignedDocument } = await import('./index.js');
+      const signed = await downloadSignedDocument(digioRequestId);
+      if (signed) { const { saveBuffer } = await import('../../lib/storage.js'); finalPath = saveBuffer('locker-agreements', `locker-agreement-final-${result.lockerAgreementSigningId}.pdf`, signed).path; }
+    } catch (e) {
+      console.warn(`[digio] locker-agreement CEO signed-document download failed for signing ${result.lockerAgreementSigningId}: ${(e as Error).message}`);
+    }
+    await db.query(
+      `UPDATE locker_agreement_signings
+          SET status = 'Signed',
+              signed_doc_path = COALESCE($2, signed_doc_path),
+              signed_at = COALESCE(signed_at, now()), updated_at = now()
+        WHERE id = $1`, [result.lockerAgreementSigningId, finalPath]);
   } else if (result.ok && result.fresh && result.applicationId) {
     try {
       const { downloadSignedDocument } = await import('./index.js');

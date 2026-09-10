@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, type TestCtx } from './helpers/server.js';
 import { completeSigning } from '../src/integrations/digio/service.js';
+import { getSigning } from '../src/modules/lockers/agreements.js';
 
 let ctx: TestCtx;
 let uid: number;
@@ -54,6 +55,24 @@ describe('locker agreement e-sign on our own copy', () => {
     const after = (await ctx.db.query<{ status: string }>(
       'SELECT status FROM locker_agreement_signings WHERE id = $1', [signingId])).rows[0]!;
     expect(after.status).toBe('CustomerSigned');
+  });
+
+  it('surfaces the customer sign-link on the signing view so the enroller can reopen it', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Reopen Link', phone: '9700000044', pan: 'AAAPR1234Q', address: '7 Link St' });
+    const init = await a.post('/api/lockers/applications/la_ncd_esign_link/agreement/esign-initiate', { customer_id: Number(cust.json.id) });
+    expect(init.status).toBe(200);
+
+    // The Digio session holds the customer's link; getSigning must echo it back
+    // so the enrolment screen shows "Open signing link" even after a reload.
+    const sess = (await ctx.db.query<{ sign_url: string }>(
+      'SELECT sign_url FROM digio_signing_sessions WHERE digio_request_id = $1', [init.json.digio_request_id as string])).rows[0]!;
+    const view = await getSigning(ctx.db, 'la_ncd_esign_link');
+    expect(view).toBeTruthy();
+    expect(view!.method).toBe('esign');
+    expect(view!.status).toBe('AwaitingSignature');
+    expect(view!.customer_sign_url).toBe(sess.sign_url);
+    expect(view!.customer_sign_url).toBeTruthy();
   });
 
   it('the CEO counter-signs a customer-signed agreement, then it is fully Signed', async () => {

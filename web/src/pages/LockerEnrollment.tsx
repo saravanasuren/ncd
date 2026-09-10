@@ -1229,6 +1229,11 @@ export function LockerEnrollmentPage() {
                   // Signed, either way. The method is always named — a bare
                   // "signed" that hides which way it happened is the thing this
                   // whole change exists to stop (owner 2026-09-03).
+                  // Our OWN e-Sign stores the final both-signed PDF, downloadable
+                  // via the signed.pdf route — prefer it over LockerHub's copy.
+                  const ourSignedDoc = signing?.has_signed_doc
+                    ? `/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement/signed.pdf`
+                    : null;
                   if (signing?.is_signed || st === 'signed' || st === 'completed') return (
                     <div className="mt-1 flex items-center gap-2 flex-wrap">
                       <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">
@@ -1236,9 +1241,9 @@ export function LockerEnrollmentPage() {
                       </span>
                       {physical
                         ? <span className="text-xs text-text-muted">Signed on paper — the scan is the agreement on file.</span>
-                        : doc
-                          ? <a className={btnGhost} href={doc} target="_blank" rel="noopener noreferrer">↓ Signed agreement</a>
-                          : <span className="text-xs text-text-muted">Signed, but LockerHub did not return an agreement id — ask them for the copy.</span>}
+                        : (ourSignedDoc || doc)
+                          ? <a className={btnGhost} href={ourSignedDoc || doc!} target="_blank" rel="noopener noreferrer">↓ Signed agreement</a>
+                          : <span className="text-xs text-text-muted">Signed — the copy is on file.</span>}
                     </div>
                   );
 
@@ -1279,6 +1284,35 @@ export function LockerEnrollmentPage() {
                     );
                   }
 
+                  // Our OWN e-Sign is in flight (the enrolment path since #421).
+                  // The customer signs first (AwaitingSignature) — hand them the
+                  // link here; then it moves to CustomerSigned/AwaitingCEO, where
+                  // the CEO countersigns from the Locker Agreements queue and the
+                  // enroller has nothing left to do but wait. This branch must key
+                  // off OUR signing row, not LockerHub's `esign.found` (which our
+                  // flow never sets — the bug that hid these buttons).
+                  if (signing && signing.method === 'esign' && !signing.is_signed) {
+                    const awaitingCustomer = signing.status === 'AwaitingSignature';
+                    // Prefer the durable link from the signing row (survives a
+                    // reload); fall back to the one just returned by initiate.
+                    const custUrl = signing.customer_sign_url || esign?.auth_url || url;
+                    return (
+                      <div className="mt-1 flex flex-col gap-1.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">{signing.label}</span>
+                          {awaitingCustomer && custUrl && <a className={btnGhost} href={custUrl} target="_blank" rel="noopener noreferrer">Open signing link</a>}
+                          <button className={btnGhost} disabled={busy} onClick={loadSigning}>Check again</button>
+                        </div>
+                        <span className="text-xs text-text-muted">
+                          {awaitingCustomer
+                            ? 'Digio texts the customer a link. Once they sign, it appears in Locker Agreements for the CEO to countersign.'
+                            : 'Customer signed — waiting for the CEO to countersign it from Locker Agreements.'}
+                        </span>
+                      </div>
+                    );
+                  }
+
+                  // Legacy fallback: a LockerHub-hosted e-Sign started before #421.
                   if (esign?.found) return (
                     <div className="mt-1 flex items-center gap-2 flex-wrap">
                       <span className="text-xs rounded px-1.5 py-0.5 bg-bg text-text-muted">awaiting signature{st ? ` · ${st}` : ''}</span>

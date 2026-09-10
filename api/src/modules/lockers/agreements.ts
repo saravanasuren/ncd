@@ -55,6 +55,10 @@ export interface SigningView {
   has_signed_doc: boolean;
   signed_doc_pages: number | null;
   esign_reference: string | null;
+  /** While the CUSTOMER's e-Sign is still out (status AwaitingSignature), the
+   *  Digio link to hand them on screen. Null once they have signed, or on the
+   *  physical path. Read from digio_signing_sessions so it survives a reload. */
+  customer_sign_url: string | null;
   lockerhub_synced: boolean;
   lockerhub_error: string | null;
   created_at: string | null;
@@ -89,6 +93,7 @@ const shape = (r: Record<string, unknown>): SigningView => ({
   has_signed_doc: r.signed_doc_path != null,
   signed_doc_pages: r.signed_doc_pages == null ? null : Number(r.signed_doc_pages),
   esign_reference: (r.esign_reference as string) ?? null,
+  customer_sign_url: (r.customer_sign_url as string) ?? null,
   lockerhub_synced: r.lockerhub_synced_at != null,
   lockerhub_error: (r.lockerhub_error as string) ?? null,
   created_at: (r.created_at as string) ?? null,
@@ -97,9 +102,14 @@ const shape = (r: Record<string, unknown>): SigningView => ({
 /** The live signing for a locker application, or null when none has started. */
 export async function getSigning(db: Db, applicationId: string): Promise<SigningView | null> {
   const r = (await db.query<Record<string, unknown>>(
-    `SELECT ${COLS} FROM locker_agreement_signings
-      WHERE lockerhub_application_id = $1 AND status = ANY($2::text[])
-      ORDER BY id DESC LIMIT 1`, [applicationId, [...LIVE_STATUSES]])).rows[0];
+    `SELECT ${COLS},
+       (SELECT d.sign_url FROM digio_signing_sessions d
+          WHERE d.locker_agreement_signing_id = s.id
+            AND d.document_type = 'locker_agreement'
+          ORDER BY d.id DESC LIMIT 1) AS customer_sign_url
+       FROM locker_agreement_signings s
+      WHERE s.lockerhub_application_id = $1 AND s.status = ANY($2::text[])
+      ORDER BY s.id DESC LIMIT 1`, [applicationId, [...LIVE_STATUSES]])).rows[0];
   return r ? shape(r) : null;
 }
 

@@ -99,4 +99,29 @@ describe('locker agreement e-sign on our own copy', () => {
     const r = await a.post('/api/lockers/applications/la_ncd_esign_3/agreement/ceo-esign-initiate', {});
     expect(r.status).toBe(400);
   });
+
+  it('starts the e-sign even with no signing row yet, given a customer id', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Fresh Start', phone: '9700000088', pan: 'AAAPF1234Q', address: '9 New St' });
+    // No locker_agreement_signings row exists — the enrolment button comes here.
+    const r = await a.post('/api/lockers/applications/la_ncd_esign_4/agreement/esign-initiate', { customer_id: Number(cust.json.id) });
+    expect(r.status).toBe(200);
+    expect(r.json.digio_request_id).toBeTruthy();
+    const row = (await ctx.db.query<{ status: string; method: string }>(
+      "SELECT status, method FROM locker_agreement_signings WHERE lockerhub_application_id = 'la_ncd_esign_4'")).rows[0]!;
+    expect(row.method).toBe('esign');
+    expect(row.status).toBe('AwaitingSignature');
+  });
+
+  it('the awaiting-CEO queue lists a customer-signed agreement', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Queue Cust', phone: '9700000099', pan: 'AAAPQ1234Q', address: '5 Queue St' });
+    const init = await a.post('/api/lockers/applications/la_ncd_esign_5/agreement/esign-initiate', { customer_id: Number(cust.json.id) });
+    await completeSigning(ctx.db, init.json.digio_request_id as string, {});
+    const q = await a.get('/api/lockers/agreements/awaiting-ceo');
+    expect(q.status).toBe(200);
+    const found = (q.json.rows as any[]).find((x) => x.application_id === 'la_ncd_esign_5');
+    expect(found).toBeTruthy();
+    expect(found.customer_name).toBe('Queue Cust');
+  });
 });

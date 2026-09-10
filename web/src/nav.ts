@@ -24,6 +24,7 @@ export const NAV: NavItem[] = [
   { to: '/app/locker-enrollment', label: 'Locker Enrollment', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/locker-applications', label: 'Locker Applications', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/locker-tenants', label: 'Locker Tenants', anyOf: ['lockers:enroll'], group: 'Daily' },
+  { to: '/app/locker-agreements', label: 'Locker Agreements', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/locker-renewals', label: 'Locker Renewals', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/locker-visits', label: 'Locker Visit Log', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/locker-rent-report', label: 'Locker Rent Report', anyOf: ['lockers:enroll'], group: 'Daily' },

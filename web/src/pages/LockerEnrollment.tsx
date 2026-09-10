@@ -352,8 +352,12 @@ export function LockerEnrollmentPage() {
       confirmLabel: 'Send for signing',
     });
     if (!ok) return;
-    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/esign/initiate`, {}));
-    if (r) { setEsign(r); await loadEsign(); await loadSigning(); }
+    // NCD-run e-Sign on OUR own copy of the agreement (with the rent filled) —
+    // the CEO counter-signs the SAME document later from the Locker Agreements
+    // queue (owner 2026-09-10). Digio texts/emails the customer the link.
+    const r = await run(api.post<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement/esign-initiate`,
+      ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}));
+    if (r) { setEsign({ auth_url: r.sign_url, status: 'pending' }); await loadSigning(); }
   };
 
   /**

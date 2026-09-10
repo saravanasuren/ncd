@@ -263,16 +263,17 @@ export async function syncFromEsignStatus(
  * "printed on the 3rd, still not back on the 20th" is a question the branch
  * needs to be able to ask.
  */
-export async function generateAgreementForm(
-  db: Db, actor: AuthUser, applicationId: string,
-): Promise<{ buffer: Buffer; filename: string }> {
-  const signing = await getSigning(db, applicationId);
-  if (!signing) throw errors.badRequest('Choose how this agreement will be signed first.');
-  if (signing.method !== 'physical') {
-    throw errors.badRequest('This agreement is set to e-Sign. Switch it to a physical signature to print a copy for signing.');
-  }
-  if (signing.status === 'Signed') throw errors.conflict('This agreement is already signed.');
-
+/**
+ * Assemble the agreement (customer on file + LockerHub's locker facts + the
+ * top-share nominee) and render our own copy — the one the CEO's counter-sign
+ * and the filled rent both live on. Shared by the print form and the e-sign, so
+ * the printed and the e-signed agreement are byte-for-byte the same document.
+ * Returns the full render result (buffer + both signature boxes) plus the
+ * customer row and the locker number for the caller's bookkeeping.
+ */
+async function renderLockerAgreement(
+  db: Db, applicationId: string, signingId: number,
+): Promise<{ result: import('../reports/forms/locker-agreement.js').LockerAgreementResult; customer: Record<string, unknown>; lockerNo: string | null }> {
   const [{ lockerAgreementPdf }, lh] = await Promise.all([
     import('../reports/forms/locker-agreement.js'),
     import('../../integrations/lockerhub/client.js'),
@@ -293,13 +294,11 @@ export async function generateAgreementForm(
   const allot = (app?.allotment ?? {}) as Record<string, unknown>;
   const legs = (app?.legs ?? {}) as Record<string, { amount?: number }>;
 
-  // The customer: the id on the signing row, else matched on the phone
-  // LockerHub holds, which is the key their side is organised around.
   const CUSTOMER_COLS = `id, full_name, customer_code, pan, phone, email, dob, father_name, occupation,
                          address, city, district, state, pincode`;
   let customer: Record<string, unknown> | null = null;
   const cid = (await db.query<{ customer_id: string | null }>(
-    'SELECT customer_id FROM locker_agreement_signings WHERE id = $1', [signing.id])).rows[0]?.customer_id;
+    'SELECT customer_id FROM locker_agreement_signings WHERE id = $1', [signingId])).rows[0]?.customer_id;
   if (cid) {
     customer = (await db.query<Record<string, unknown>>(
       `SELECT ${CUSTOMER_COLS} FROM customers WHERE id = $1`, [Number(cid)])).rows[0] ?? null;
@@ -313,19 +312,15 @@ export async function generateAgreementForm(
     }
   }
   if (!customer) {
-    // Printing an agreement with no hirer on it would produce a document whose
-    // most important field is blank — refuse, and say what to do about it.
     throw errors.badRequest('No NCD customer is linked to this locker application, so the agreement cannot be filled in. Link the customer first.');
   }
 
-  // The largest share is the one that belongs on the agreement when a customer
-  // has more than one nominee.
   const nom = (await db.query<Record<string, unknown>>(
     `SELECT full_name, relationship, phone FROM nominees
       WHERE customer_id = $1 ORDER BY share_pct DESC NULLS LAST, id LIMIT 1`,
     [Number(customer.id)])).rows[0] ?? null;
 
-  const { buffer } = await lockerAgreementPdf(db, {
+  const result = await lockerAgreementPdf(db, {
     customer: customer as never,
     locker: {
       lockerhub_application_id: applicationId,
@@ -343,6 +338,21 @@ export async function generateAgreementForm(
       phone: (nom.phone as string) ?? null,
     } : null,
   });
+  return { result, customer, lockerNo: (allot.locker_number as string) ?? null };
+}
+
+export async function generateAgreementForm(
+  db: Db, actor: AuthUser, applicationId: string,
+): Promise<{ buffer: Buffer; filename: string }> {
+  const signing = await getSigning(db, applicationId);
+  if (!signing) throw errors.badRequest('Choose how this agreement will be signed first.');
+  if (signing.method !== 'physical') {
+    throw errors.badRequest('This agreement is set to e-Sign. Switch it to a physical signature to print a copy for signing.');
+  }
+  if (signing.status === 'Signed') throw errors.conflict('This agreement is already signed.');
+
+  const { result, lockerNo } = await renderLockerAgreement(db, applicationId, signing.id);
+  const buffer = result.buffer;
 
   await db.query(
     `UPDATE locker_agreement_signings
@@ -352,10 +362,62 @@ export async function generateAgreementForm(
   await writeAudit(db, {
     actorId: actor.id, action: 'locker.agreement.form',
     entityType: 'locker_agreement_signings', entityId: signing.id,
-    after: { application: applicationId, locker: allot.locker_number ?? null },
+    after: { application: applicationId, locker: lockerNo },
   });
 
   return { buffer, filename: `locker-agreement-${applicationId}.pdf` };
+}
+
+/**
+ * Start the CUSTOMER's e-Sign on OUR OWN copy of the agreement (owner 2026-09-10),
+ * via OUR Digio — so the document that carries the filled rent is the one signed,
+ * and the company's authorised signatory (the CEO) can counter-sign the SAME
+ * document later (stage 4). The signature is placed on the "Signature of Hirer(s)"
+ * line reported by the renderer.
+ *
+ * Mirrors the investment e-Sign: a digio_signing_sessions row (document_type
+ * 'locker_agreement') carries it, so the existing poller + completeSigning drive
+ * it to done. Inert-but-recorded in stub mode (no Digio creds).
+ */
+export async function initiateCustomerEsign(
+  db: Db, actor: AuthUser, applicationId: string,
+): Promise<{ sign_url: string | null; digio_request_id: string; stub: boolean }> {
+  const signing = await getSigning(db, applicationId);
+  if (!signing) throw errors.badRequest('Choose how this agreement will be signed first.');
+  if (signing.status === 'Signed') throw errors.conflict('This agreement is already signed.');
+
+  const { result, customer } = await renderLockerAgreement(db, applicationId, signing.id);
+  const { createSignRequest, digioConfigured } = await import('../../integrations/digio/index.js');
+  const req = await createSignRequest({
+    signerName: customer.full_name as string,
+    signerPhone: (customer.phone as string) ?? undefined,
+    signerEmail: (customer.email as string) ?? undefined,
+    document: { fileName: `locker-agreement-${applicationId}.pdf`, contentBase64: result.buffer.toString('base64') },
+    signature: { box: result.hirer, page: result.hirerPage },
+  });
+
+  await db.withTx(async (tx) => {
+    await tx.query(
+      `INSERT INTO digio_signing_sessions
+         (application_id, digio_request_id, sign_url, signer_email, signer_phone, status, created_by_user_id, document_type, locker_agreement_signing_id)
+       VALUES (NULL, $1, $2, $3, $4, $5, $6, 'locker_agreement', $7)
+       ON CONFLICT (digio_request_id) DO UPDATE SET sign_url = EXCLUDED.sign_url, status = EXCLUDED.status, updated_at = now()`,
+      [req.digioRequestId, req.signUrl, (customer.email as string) ?? null, (customer.phone as string) ?? null, req.status, actor.id, signing.id]);
+    // The customer's e-Sign is out; the row awaits their signature. esign_reference
+    // holds OUR Digio request id (not LockerHub's) for this NCD-run signing.
+    await tx.query(
+      `UPDATE locker_agreement_signings
+          SET method = 'esign', status = 'AwaitingSignature',
+              esign_reference = $1, updated_at = now()
+        WHERE id = $2`, [req.digioRequestId, signing.id]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'locker.agreement.esign.initiate',
+      entityType: 'locker_agreement_signings', entityId: signing.id,
+      after: { digio_request_id: req.digioRequestId },
+    });
+  });
+
+  return { sign_url: req.signUrl, digio_request_id: req.digioRequestId, stub: !digioConfigured() };
 }
 
 /**

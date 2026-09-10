@@ -40,10 +40,11 @@ export async function initiateSigning(db: Db, actor: AuthUser, applicationId: nu
 /** Mark a session signed (from the webhook or the poller). Idempotent. */
 export async function completeSigning(db: Db, digioRequestId: string, opts: { signedAt?: string; signedDocumentUrl?: string; payload?: unknown }): Promise<{ ok: boolean; applicationId?: number }> {
   const result = await db.withTx(async (tx) => {
-    const sess = (await tx.query<{ id: string; application_id: string | null; status: string; document_type: string; locker_authorised_user_id: string | null }>(
-      'SELECT id, application_id, status, document_type, locker_authorised_user_id FROM digio_signing_sessions WHERE digio_request_id = $1', [digioRequestId])).rows[0];
+    const sess = (await tx.query<{ id: string; application_id: string | null; status: string; document_type: string; locker_authorised_user_id: string | null; locker_agreement_signing_id: string | null }>(
+      'SELECT id, application_id, status, document_type, locker_authorised_user_id, locker_agreement_signing_id FROM digio_signing_sessions WHERE digio_request_id = $1', [digioRequestId])).rows[0];
     if (!sess) { console.warn(`[digio] webhook for unknown request_id=${digioRequestId} — ignored`); return { ok: false, fresh: false }; }
     const authorisedUserId = sess.locker_authorised_user_id ? Number(sess.locker_authorised_user_id) : undefined;
+    const lockerAgreementSigningId = sess.locker_agreement_signing_id ? Number(sess.locker_agreement_signing_id) : undefined;
     const applicationId = sess.application_id ? Number(sess.application_id) : undefined;
     if (sess.status === 'signed') return { ok: true, applicationId, authorisedUserId, docType: sess.document_type, fresh: false }; // idempotent
     await tx.query(
@@ -53,6 +54,12 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
     // NOT apply; the authorised user is flipped to active after the commit.
     if (sess.document_type === 'locker_authorised_user_consent') {
       return { ok: true, authorisedUserId, docType: sess.document_type, fresh: true };
+    }
+    // The CUSTOMER's locker-agreement e-sign. The application/bond logic does NOT
+    // apply; the customer-signed PDF is stored and the row moved to await the CEO
+    // after the commit (stage 4 counter-signs it).
+    if (sess.document_type === 'locker_agreement' || sess.document_type === 'locker_agreement_ceo') {
+      return { ok: true, lockerAgreementSigningId, docType: sess.document_type, fresh: true };
     }
     // eSign is off the critical path — just stamp esigned_at if not already set.
     //
@@ -95,6 +102,25 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
     }
     const { completeAuthorisedUserConsent } = await import('../../modules/lockers/authorisedUsers.js');
     await completeAuthorisedUserConsent(db, result.authorisedUserId, { signedAt: opts.signedAt, signedPdfPath });
+  } else if (result.ok && result.fresh && result.docType === 'locker_agreement' && result.lockerAgreementSigningId) {
+    // The CUSTOMER signed our copy. Store the customer-signed PDF and move the
+    // agreement to await the CEO's counter-sign (stage 4 signs THIS file).
+    let signedPath: string | null = null;
+    try {
+      const { downloadSignedDocument } = await import('./index.js');
+      const signed = await downloadSignedDocument(digioRequestId);
+      if (signed) { const { saveBuffer } = await import('../../lib/storage.js'); signedPath = saveBuffer('locker-agreements', `locker-agreement-signed-${result.lockerAgreementSigningId}.pdf`, signed).path; }
+    } catch (e) {
+      console.warn(`[digio] locker-agreement signed-document download failed for signing ${result.lockerAgreementSigningId}: ${(e as Error).message}`);
+    }
+    await db.query(
+      `UPDATE locker_agreement_signings
+          SET status = 'CustomerSigned',
+              signed_doc_path = COALESCE($2, signed_doc_path),
+              signed_doc_filename = COALESCE(signed_doc_filename, 'locker-agreement-signed.pdf'),
+              signed_doc_mime = COALESCE(signed_doc_mime, 'application/pdf'),
+              signed_at = COALESCE(signed_at, now()), updated_at = now()
+        WHERE id = $1`, [result.lockerAgreementSigningId, signedPath]);
   } else if (result.ok && result.fresh && result.applicationId) {
     try {
       const { downloadSignedDocument } = await import('./index.js');

@@ -119,10 +119,17 @@ describe('the batch comparison carries outstanding', () => {
     expect(r.status).toBe(200);
     const sum = r.json.summary;
     expect(sum.batch_no).toBe('NEFT-TEST-0001');
-    // The principal behind that batch — the line's own outstanding, since this
-    // row carries no principal_basis (it is not a redemption slice).
-    expect(Number(sum.outstanding)).toBe(1300000);
     expect(Number(sum.net)).toBe(900);
+
+    // Outstanding changed MEANING on 2026-09-10 (owner): it is no longer the
+    // principal behind that batch's rows, but the book as at the batch's payout
+    // date — everything whose money landed on or before it. This investment's
+    // money arrived 2026-07-01, one day AFTER this batch's 2026-06-30, so it
+    // belongs on the other side of the split and Outstanding is 0.
+    expect(Number(sum.outstanding)).toBe(0);
+    // ...and the same ₹13,00,000 is what Added reports, which is the whole
+    // point: the two sides partition the run, so nothing can be in neither.
+    expect(Number(sum.movement.added.amount)).toBe(1300000);
   });
 
   it('outstanding is the base, so it is far larger than the interest on it', async () => {

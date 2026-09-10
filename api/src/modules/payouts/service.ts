@@ -379,9 +379,9 @@ export interface LastInterestBatchSummary {
  * gross/TDS/net over its paid interest rows. Feeds the "last batch vs this one"
  * comparison under the payouts total (owner 2026-08-10). Null if none paid yet.
  */
-export async function lastPaidInterestSummary(db: Db): Promise<LastInterestBatchSummary | null> {
-  const batch = (await db.query<{ id: string; batch_no: string; payout_date: string }>(
-    `SELECT id, batch_no, payout_date FROM payout_batches
+export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Promise<LastInterestBatchSummary | null> {
+  const batch = (await db.query<{ id: string; batch_no: string; payout_date: string; product_type: ProductType }>(
+    `SELECT id, batch_no, payout_date, product_type FROM payout_batches
       WHERE kind = 'interest' AND status = 'Paid'
       ORDER BY payout_date DESC, id DESC LIMIT 1`)).rows[0];
   if (!batch) return null;
@@ -394,9 +394,7 @@ export async function lastPaidInterestSummary(db: Db): Promise<LastInterestBatch
             count(DISTINCT ds.application_id) FILTER (WHERE ds.principal_basis IS NULL) AS investments,
             COALESCE(sum(ds.gross_amount), 0) AS gross,
             COALESCE(sum(ds.tds_amount), 0)   AS tds,
-            COALESCE(sum(ds.net_amount), 0)   AS net,
-            -- Only the live outstanding of the still-active (non-redemption) lines.
-            COALESCE(sum(l.outstanding_amount) FILTER (WHERE ds.principal_basis IS NULL), 0) AS outstanding
+            COALESCE(sum(ds.net_amount), 0)   AS net
        FROM disbursement_schedule ds
        JOIN applications a ON a.id = ds.application_id
        LEFT JOIN application_lines l ON l.id = ds.line_id
@@ -416,23 +414,77 @@ export async function lastPaidInterestSummary(db: Db): Promise<LastInterestBatch
   // Same definitions the Book report uses, so the two screens agree: an addition
   // is money RECEIVED in the window (date_money_received), a redemption is one
   // raised in the window, valued at the principal returned.
-  const add = (await db.query<{ investments: string; customers: string; amount: string }>(
-    `SELECT count(*) AS investments, count(DISTINCT customer_id) AS customers,
-            COALESCE(sum(total_amount), 0) AS amount
-       FROM applications
-      WHERE date_money_received > $1::date
-        AND status NOT IN ('Rejected', 'Withdrawn')`, [since])).rows[0]!;
+  // The two Outstanding figures are a PARTITION of this run by money date
+  // (owner 2026-09-10: "to the last batch outstanding only add those
+  // investments which landed on and before 28.8.26, investments after 28th
+  // have to come in added").
+  //
+  // Last batch's Outstanding used to be the principal behind the rows in that
+  // BATCH, and Added asked "did the money arrive after the payout date?". Two
+  // different tests, so money could satisfy neither and vanish from both
+  // columns — which is how it was found:
+  //   · money received ON the payout date. The batch was already built that
+  //     afternoon, so it was not in it, and `> since` excluded it from Added.
+  //     Four investments, ₹1.26 crore, in NEITHER column.
+  //   · anything keyed in later with a backdated money date — it can never
+  //     satisfy `> since`, however new it is to the book.
+  //
+  // Splitting ONE population on ONE date cannot have a gap: every investment in
+  // this run is on one side or the other, so the rows always bridge. Measured
+  // on production the day this was written: ₹69,29,00,000 + ₹2,90,00,000 =
+  // ₹72,19,00,000, residual zero.
+  //
+  // NOTE: gross/tds/net/customers above stay the batch's FACTUAL record — what
+  // was actually paid, and to how many people. Only Outstanding is "the book as
+  // at that date", because only Outstanding is the row Added has to bridge.
+  const due = await previewDue(db, payoutDate ?? new Date().toISOString().slice(0, 10), batch.product_type ?? 'ncd');
+  const runIds = [...new Set((due.rows as Record<string, unknown>[])
+    .filter((r) => !r.schedule_id)       // a redemption slice is money LEAVING
+    .map((r) => Number(r.application_id)))];
+  const split = runIds.length
+    ? (await db.query<{ before_amount: string; after_amount: string; after_investments: string; after_customers: string }>(
+        `SELECT COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received <= $2::date), 0) AS before_amount,
+                COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received >  $2::date), 0) AS after_amount,
+                count(DISTINCT a.id)          FILTER (WHERE a.date_money_received >  $2::date) AS after_investments,
+                count(DISTINCT a.customer_id) FILTER (WHERE a.date_money_received >  $2::date) AS after_customers
+           FROM applications a JOIN application_lines l ON l.application_id = a.id
+          WHERE a.id = ANY($1::bigint[])`, [runIds, since])).rows[0]!
+    : { before_amount: '0', after_amount: '0', after_investments: '0', after_customers: '0' };
+  const add = {
+    investments: split.after_investments, customers: split.after_customers, amount: split.after_amount,
+  };
+
+  // What LEFT the last batch's book: redeemed after that date, and whose money
+  // had landed on or before it — the same population `before_amount` measures,
+  // so the two are about one set of investments and the row subtracts cleanly.
   const red = (await db.query<{ redemptions: string; customers: string; amount: string }>(
     `SELECT count(*) AS redemptions, count(DISTINCT a.customer_id) AS customers,
             COALESCE(sum(r.principal), 0) AS amount
        FROM redemptions r JOIN applications a ON a.id = r.application_id
-      WHERE r.redemption_date > $1::date`, [since])).rows[0]!;
+      WHERE r.redemption_date > $1::date
+        AND a.date_money_received <= $1::date`, [since])).rows[0]!;
 
   return {
     batch_no: batch.batch_no, payout_date: since,
     customers: Number(agg.customers), investments: Number(agg.investments),
     gross: round2(Number(agg.gross)), tds: round2(Number(agg.tds)), net: round2(Number(agg.net)),
-    outstanding: round2(Number(agg.outstanding)),
+    // The book AS IT STOOD on that date, not as it stands today (owner
+    // 2026-09-10, who had ₹69,49,00,000 against our ₹69,29,00,000 — a ₹20 lakh
+    // gap that was exactly the three redemptions since).
+    //
+    // outstanding_amount is read LIVE, so an investment redeemed after the
+    // batch has already fallen to zero and silently left this figure — even
+    // though it was genuinely part of that period's book. Adding back what has
+    // since been redeemed restores the historical position, and it is what
+    // makes the row honest: a column headed "Last batch" should say what was
+    // outstanding THEN.
+    //
+    // It also makes Redeemed do real work. Before, the three columns did not
+    // reconcile and the screen carried a note explaining why not; now
+    //   Last (69,49) + Added (2,90) − Redeemed (0,20) = This (72,19)
+    // exactly, because the same figure that is added back here is the one
+    // subtracted there.
+    outstanding: round2(Number(split.before_amount) + Number(red.amount)),
     movement: {
       since,
       added: { customers: Number(add.customers), investments: Number(add.investments), amount: round2(Number(add.amount)) },

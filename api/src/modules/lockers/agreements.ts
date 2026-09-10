@@ -353,8 +353,22 @@ async function renderLockerAgreement(
       WHERE customer_id = $1 ORDER BY share_pct DESC NULLS LAST, id LIMIT 1`,
     [Number(customer.id)])).rows[0] ?? null;
 
+  // Joint hirers (holders 2 and 3) the branch added at enrolment. They belong on
+  // the very document the customer e-signs — without this they were saved but
+  // printed blank (owner 2026-09-10: "the joint applicant I added is missing").
+  const { listHirers } = await import('./hirers.js');
+  const jointHirers = await listHirers(db, applicationId).catch(() => []);
+
   const result = await lockerAgreementPdf(db, {
     customer: customer as never,
+    hirers: jointHirers.map((h) => ({
+      position: h.position,
+      full_name: h.full_name,
+      pan: h.pan ?? null,
+      address: h.address ?? null,
+      email: h.email ?? null,
+      phone: h.phone ?? null,
+    })),
     locker: {
       lockerhub_application_id: applicationId,
       locker_number: (allot.locker_number as string) ?? null,
@@ -429,6 +443,7 @@ export async function initiateCustomerEsign(
     signerName: customer.full_name as string,
     signerPhone: (customer.phone as string) ?? undefined,
     signerEmail: (customer.email as string) ?? undefined,
+    reason: 'Locker hire agreement',
     document: { fileName: `locker-agreement-${applicationId}.pdf`, contentBase64: result.buffer.toString('base64') },
     signature: { box: result.hirer, page: result.hirerPage },
   });
@@ -487,6 +502,7 @@ export async function initiateCeoEsign(
   const req = await createSignRequest({
     signerName: ceoName,
     signerPhone: ceoPhone,
+    reason: 'Locker hire agreement (company signatory)',
     document: { fileName: `locker-agreement-${applicationId}.pdf`, contentBase64: signed.buffer.toString('base64') },
     signature: { box: result.signatory, page: result.signatoryPage },
   });

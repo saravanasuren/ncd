@@ -62,7 +62,7 @@ function normalisePhone(phone?: string | null): string | undefined {
  *
  * Payload validated against live Digio 2026-07-21, matched to the wealth
  * adapter's production config. */
-export async function createSignRequest(input: { signerEmail?: string; signerPhone?: string; signerName?: string; document?: SignDocument; signature?: SignaturePlacement }): Promise<SignRequestResult> {
+export async function createSignRequest(input: { signerEmail?: string; signerPhone?: string; signerName?: string; reason?: string; document?: SignDocument; signature?: SignaturePlacement }): Promise<SignRequestResult> {
   const phone = normalisePhone(input.signerPhone);
   // Phone-first identifier so the link goes by SMS (Dhanam's customer base);
   // email + phone as separate fields so Digio delivers on BOTH channels.
@@ -71,7 +71,10 @@ export async function createSignRequest(input: { signerEmail?: string; signerPho
     signers: [{
       identifier,
       name: input.signerName || 'Customer',
-      reason: 'NCD subscription agreement',
+      // Shown to the signer as "Reasons for request". Defaults to the investment
+      // wording; the locker flows pass their own so a hirer doesn't see "NCD
+      // subscription agreement" on a locker document.
+      reason: input.reason || 'NCD subscription agreement',
       sign_type: 'aadhaar', // Aadhaar-OTP eSign — not draw-signature-after-login
       email: input.signerEmail || undefined,
       phone: phone || undefined,

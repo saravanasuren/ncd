@@ -62,10 +62,23 @@ export interface AgreementNominee {
   relationship?: string | null;
   phone?: string | null;
 }
+/** A joint hirer (holder 2 or 3) — printed into its own block on the agreement
+ *  so the person the branch added is on the document the customer e-signs. */
+export interface AgreementHirer {
+  position: number;
+  full_name?: string | null;
+  pan?: string | null;
+  address?: string | null;
+  email?: string | null;
+  phone?: string | null;
+}
 export interface AgreementInput {
   customer: AgreementCustomer;
   locker: AgreementLocker;
   nominee?: AgreementNominee | null;
+  /** Joint hirers (holders 2 and 3). Absent positions print as ruled lines so a
+   *  joint hiring can still be completed by hand at the counter. */
+  hirers?: AgreementHirer[] | null;
   date?: string;
   /** Where it is signed. Defaults to the branch. */
   place?: string | null;
@@ -275,9 +288,11 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.NAVY).text('1(B)  THE CUSTOMER', 50, doc.y, { width: W });
     doc.y += 4;
 
-    // Hirer 1 is the customer on file. NCD holds ONE hirer per locker; 2 and 3
-    // print as ruled lines so a joint hiring can still be completed at the
-    // counter rather than being silently impossible on our form.
+    // Hirer 1 is the customer on file. Holders 2 and 3 are the JOINT hirers the
+    // branch added (input.hirers, owner 2026-09-09) — printed here so the people
+    // added at enrolment are on the very document the customer e-signs. A
+    // position with no joint hirer prints as ruled lines, so a joint hiring can
+    // still be completed by hand at the counter.
     // PAN is carried even though the owner's Schedule lists only name, address,
     // email and mobile. It is a particular, not a term — adding it changes no
     // obligation — and the form it replaced printed it. A locker agreement that
@@ -297,9 +312,17 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
       row('Mobile Number', mobile);
       doc.y += 4;
     };
+    const jointBy = new Map<number, AgreementHirer>();
+    for (const h of input.hirers ?? []) jointBy.set(Number(h.position), h);
+    const jointHirer = (n: 2 | 3) => {
+      const h = jointBy.get(n);
+      hirer(n,
+        orBlank(h?.full_name), orBlank(h?.pan), orBlank(h?.address),
+        orBlank(h?.email), orBlank(h?.phone));
+    };
     hirer(1, orBlank(c.full_name), orBlank(c.pan), orBlank(customerAddress(c)), orBlank(c.email), orBlank(c.phone));
-    hirer(2, orBlank(null), orBlank(null), orBlank(null), orBlank(null), orBlank(null));
-    hirer(3, orBlank(null), orBlank(null), orBlank(null), orBlank(null), orBlank(null));
+    jointHirer(2);
+    jointHirer(3);
 
     need(80);
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.TEXT).text('Nomination', 50, doc.y, { width: W });

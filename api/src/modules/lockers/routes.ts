@@ -41,6 +41,7 @@ import {
 // Registers the locker_offline_payment approval handlers at boot (owner 2026-08-22).
 import './offlinePayments.js';
 import { linkTenant, removeTenant, restoreTenant, removeLockerApplication } from './tenantOverrides.js';
+import { listHirers, setHirers, incompleteHirers, validateHirers, HIRER_POSITIONS } from './hirers.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { LOCKER_OPERATION_MANDATES } from '@new-wealth/shared';
@@ -293,8 +294,29 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
     // anything else). Optional — an unchosen mandate blocks nothing, and every
     // locker enrolled before today has one.
     locker_operation_mandate: z.enum(LOCKER_OPERATION_MANDATES).nullish(),
+    // Joint hirers (holders 2 and 3). Accepted HERE because A7 is the only call
+    // that can carry them — see the PUT below for why a later edit cannot.
+    hirers: z.array(z.object({
+      position: z.number().int(),
+      full_name: z.string().trim().min(1),
+      phone: z.string().trim().nullish(),
+      email: z.string().trim().nullish(),
+      dob: z.string().trim().nullish(),
+      pan: z.string().trim().nullish(),
+      aadhaar_last4: z.string().trim().nullish(),
+      address: z.string().trim().nullish(),
+    })).max(2).optional(),
   }).parse(req.body ?? {});
-  const { customer_id, locker_id, locker_number, locker_operation_mandate, ...input } = b;
+  const {
+    customer_id, locker_id, locker_number, locker_operation_mandate,
+    hirers: reqHirers, ...input
+  } = b;
+
+  // Validate the SET before anything reaches LockerHub: the cross-row rules
+  // (distinct phones, no clash with the applicant) are the ones that would put
+  // a signature in the wrong column of a signed contract.
+  const pendingHirers = (reqHirers ?? []).map((h) => ({ ...h }));
+  if (pendingHirers.length) validateHirers(pendingHirers, b.phone);
 
   let applicant: Record<string, unknown> | undefined;
   if (customer_id) {
@@ -313,11 +335,29 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
   const priceFields: Record<string, number> = {};
   if (pricing?.annual_rent != null) priceFields.annual_rent = pricing.annual_rent;
 
-  // The mandate travels on the applicant block (their spec), but it is a
-  // property of the LOCKER, not of the customer — so it must still reach them
-  // when there is no NCD customer to build an applicant block from.
-  const applicantOut = locker_operation_mandate
-    ? { ...(applicant ?? {}), locker_operation_mandate }
+  // Joint hirers (holders 2 and 3) ride on the applicant block. This is the ONE
+  // place they can reach LockerHub: A7 creates, so there is no second call that
+  // could carry a later edit without minting a duplicate application.
+  const jointHirers = pendingHirers.length
+    ? pendingHirers.map((h) => ({
+        name: h.full_name, phone: h.phone ?? '', email: h.email ?? '', dob: h.dob ?? '',
+        pan: h.pan ?? '', aadhaar_last4: h.aadhaar_last4 ?? '',
+        address: {
+          flat_building: '', road_name: h.address ?? '', landmark: '',
+          city: '', state: '', pincode: '',
+        },
+      }))
+    : undefined;
+
+  // Both the mandate and the hirers travel on the applicant block (their spec),
+  // but both are properties of the LOCKER, not of the customer — so the block
+  // is built even when there is no NCD customer to build one from.
+  const applicantExtras = {
+    ...(locker_operation_mandate ? { locker_operation_mandate } : {}),
+    ...(jointHirers ? { hirers: jointHirers } : {}),
+  };
+  const applicantOut = Object.keys(applicantExtras).length
+    ? { ...(applicant ?? {}), ...applicantExtras }
     : applicant;
 
   const created = await lh.createLockerApplication(staffOf(req), { ...input, ...priceFields, ...(applicantOut ? { applicant: applicantOut } : {}) }) as Record<string, unknown>;
@@ -347,6 +387,13 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
       status: String(created.status ?? '') || null,
       createdByUserId: req.user!.id,
     });
+
+    // Store the hirers against the application now that it has an id. After
+    // recordApplication, so the row they hang off exists first.
+    if (pendingHirers.length) {
+      try { await setHirers(getDb(), req.user!, appId, pendingHirers, b.phone); }
+      catch (e) { console.warn('[locker] joint hirers not stored (already sent to LockerHub):', (e as Error).message); }
+    }
 
     const { autoWaiveDeposit } = await import('./feeWaivers.js');
     await autoWaiveDeposit(getDb(), req.user!, appId);
@@ -842,6 +889,59 @@ lockersRouter.post('/authorised-users/:id/sync-retry', asyncHandler(async (req, 
 // Real money, unlike the informational deposit waiver above. Maker requests,
 // Admin/CXO approves, and only THEN does it reach LockerHub — they apply it
 // approved-on-arrival, so our checker is the control.
+// ── Joint hirers (owner 2026-09-09) ──────────────────────────────────────
+// Holders 2 and 3 on the agreement. Hirer 1 is the applicant and is never in
+// this list — see hirers.ts for why the cross-row rules live in one place.
+lockersRouter.get('/applications/:id/hirers', asyncHandler(async (req, res) => {
+  const id = String(req.params.id);
+  res.json({
+    hirers: await listHirers(getDb(), id),
+    incomplete: await incompleteHirers(getDb(), id),
+    max: HIRER_POSITIONS.length,
+  });
+}));
+
+const HIRER = z.object({
+  position: z.number().int(),
+  full_name: z.string().trim().min(1),
+  phone: z.string().trim().nullish(),
+  email: z.string().trim().nullish(),
+  dob: z.string().trim().nullish(),
+  pan: z.string().trim().nullish(),
+  aadhaar_last4: z.string().trim().nullish(),
+  address: z.string().trim().nullish(),
+});
+
+// PUT, not POST: the agreement shows a fixed set of blocks, so "these are the
+// hirers" is the only coherent statement. An add-only API would leave no way to
+// remove one entered by mistake, and a removed hirer must stop being sent.
+lockersRouter.put('/applications/:id/hirers', asyncHandler(async (req, res) => {
+  const b = z.object({
+    hirers: z.array(HIRER).max(HIRER_POSITIONS.length),
+    /** So a hirer sharing the APPLICANT's phone is caught, not just two hirers sharing. */
+    applicant_phone: z.string().trim().nullish(),
+  }).parse(req.body ?? {});
+  const id = String(req.params.id);
+  const hirers = await setHirers(getDb(), req.user!, id, b.hirers, b.applicant_phone);
+
+  // NOT pushed upstream here, and that is deliberate rather than unfinished.
+  //
+  // LockerHub carry hirers on the A7 applicant block, and A7 CREATES an
+  // application. Calling it again to "update" the hirers would mint a second
+  // application for the same locker on their side. Their "re-sending corrects
+  // a hirer" refers to the array within one create, not to a second create.
+  //
+  // So hirers reach them when the application is created. Editing them after
+  // that is stored here and needs an upstream endpoint we do not have — raised
+  // with them; until it exists the screen says so rather than implying the
+  // change travelled.
+  res.json({
+    hirers,
+    incomplete: await incompleteHirers(getDb(), id),
+    synced_to_lockerhub: false,
+  });
+}));
+
 lockersRouter.get('/applications/:id/fee-waivers', asyncHandler(async (req, res) => {
   const { listFeeWaivers } = await import('./feeWaivers.js');
   res.json({ rows: await listFeeWaivers(getDb(), String(req.params.id)) });

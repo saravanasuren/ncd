@@ -79,6 +79,21 @@ const orBlank = (v: unknown): string => {
 };
 
 /**
+ * Fixed annual rent by locker size (owner 2026-09-10) — the round figure the
+ * customer pays after the standard waiver. Fills the Schedule's "Rent per Annum"
+ * when LockerHub hasn't sent a rent amount, so the agreement isn't printed blank.
+ * A size we hold no figure for (e.g. Small, until the owner sets one) stays blank
+ * rather than guessing.
+ */
+export function annualRentForSize(size: unknown): number | null {
+  const s = String(size ?? '').trim().toLowerCase();
+  if (s === 'medium') return 6000;
+  if (s === 'large') return 12000;
+  if (s === 'extra large' || s === 'xlarge' || s === 'x-large' || s === 'xl') return 20000;
+  return null;
+}
+
+/**
  * ANNEXURE II, verbatim. A clause is [number, text]; an empty number is a
  * continuation paragraph, and a text-only heading is marked with `head`.
  *
@@ -287,8 +302,10 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
     doc.y += 4;
 
     sect('3. LOCKER RENT PER ANNUM', 100);
-    row('Rs. (in figures)', l.rent_amount != null ? fmtINR(l.rent_amount) : orBlank(null), true);
-    row('Rupees (in words)', l.rent_amount != null ? amountInWords(l.rent_amount) : orBlank(null));
+    // LockerHub's rent leg first; otherwise the fixed annual rent for the size.
+    const rent = l.rent_amount != null ? l.rent_amount : annualRentForSize(l.size);
+    row('Rs. (in figures)', rent != null ? fmtINR(rent) : orBlank(null), true);
+    row('Rupees (in words)', rent != null ? amountInWords(rent) : orBlank(null));
     need(16);
     doc.font('Helvetica-Oblique').fontSize(8.5).fillColor(COLORS.MUTED)
       .text('(As may be revised from time to time)   (Payable in advance)', 50, doc.y, { width: W });

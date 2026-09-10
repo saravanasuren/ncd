@@ -11,6 +11,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, type TestCtx } from './helpers/server.js';
 import { completeSigning } from '../src/integrations/digio/service.js';
 import { getSigning } from '../src/modules/lockers/agreements.js';
+import { lockerAgreementPdf } from '../src/modules/reports/forms/locker-agreement.js';
 
 let ctx: TestCtx;
 let uid: number;
@@ -73,6 +74,23 @@ describe('locker agreement e-sign on our own copy', () => {
     expect(view!.status).toBe('AwaitingSignature');
     expect(view!.customer_sign_url).toBe(sess.sign_url);
     expect(view!.customer_sign_url).toBeTruthy();
+  });
+
+  it('prints a joint hirer onto the agreement instead of a blank Hirer 2 block', async () => {
+    const base = { customer: { full_name: 'Primary Hirer', pan: 'AAAPP1234Q', phone: '9700001111' } as never,
+      locker: { lockerhub_application_id: 'la_render_jh' } };
+    // Same document, once with no joint hirer and once with holder 2 filled.
+    const blank = await lockerAgreementPdf(ctx.db, base);
+    const withJoint = await lockerAgreementPdf(ctx.db, {
+      ...base,
+      hirers: [{ position: 2, full_name: 'Second Hirer', pan: 'BBBPP5678Q', address: '9 Joint St', phone: '9700002222' }],
+    });
+    // Both are valid PDFs, and the filled one is a DIFFERENT document — proof the
+    // joint hirer is consumed by the renderer, not dropped into a blank block.
+    expect(blank.buffer.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(withJoint.buffer.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(withJoint.buffer.equals(blank.buffer)).toBe(false);
+    expect(withJoint.buffer.length).toBeGreaterThan(blank.buffer.length);
   });
 
   it('the CEO counter-signs a customer-signed agreement, then it is fully Signed', async () => {

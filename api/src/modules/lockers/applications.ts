@@ -15,6 +15,7 @@
  */
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
+import { errors } from '../../lib/errors.js';
 import { lockerBranchScopeFor } from './branchScope.js';
 
 export interface LockerApplicationRow {
@@ -89,6 +90,98 @@ export async function recordApplication(db: Db, input: {
      input.branchId ?? null, input.branchName ?? null, input.lockerSize ?? null,
      input.lockerNumber ?? null, input.status ?? null, input.createdByUserId ?? null,
      input.applicationNo ?? null, input.operationMandate ?? null]);
+}
+
+/**
+ * A7 does not always CREATE. When a customer still has an unfinished locker
+ * application, `POST /locker-applications` answers with THAT one — same id,
+ * same APP-number — instead of opening a second. Nothing in their response
+ * says so; our own index is the only way to tell.
+ *
+ * Unchecked, the enrolment screen then dresses the earlier locker's
+ * application up as the new one, carrying its rent state with it: its waiver,
+ * its "★ Premium — rent free", its collected payment (owner 2026-09-10, on a
+ * second locker for the same customer — "for each locker it has its own
+ * payment collections"). Worse than a cosmetic tick: allot from there and TWO
+ * lockers hang off ONE application, so one rent is collected for both, and
+ * `locker_allotments` — keyed on the application — replaces the first locker
+ * with the second. That is exactly what happened to APP-2026-01280, where
+ * L10-1 became L10-10 with no trace but the audit log.
+ *
+ * A handed-back application is therefore let through only when NOTHING has
+ * happened on it yet and it is for the same size — the shape of a retried or
+ * double-clicked create, where carrying on is what the operator meant. The
+ * automatic 100% deposit waiver every application is born with does not count
+ * as something happening. Anything further along is refused, naming the
+ * application so the operator can finish it or delete it and start again.
+ */
+export async function assertNotAReusedApplication(
+  db: Db, applicationId: string, wantedSize?: string | null,
+): Promise<{ reused: boolean }> {
+  const id = String(applicationId ?? '').trim();
+  if (!id) return { reused: false };
+
+  // FAIL OPEN. By the time this runs LockerHub has already answered, and an
+  // application we do not index is one nobody can reach again — they publish no
+  // list endpoint. A bookkeeping query that cannot run must therefore not stop
+  // the enrolment; the guard is a safety net, not something that outranks the
+  // application itself.
+  let prior: {
+    application_no: string | null; locker_size: string | null; locker_number: string | null;
+    status: string | null; removed_at: string | null;
+  } | undefined;
+  let busy: { allotted: string; rent_waiver: string; payment: string } | undefined;
+  try {
+    prior = (await db.query<NonNullable<typeof prior>>(
+      `SELECT a.application_no, a.locker_size, a.locker_number, a.status, o.removed_at
+         FROM locker_applications a
+         LEFT JOIN locker_tenant_overrides o ON o.lockerhub_tenant_id = a.lockerhub_application_id
+        WHERE a.lockerhub_application_id = $1`, [id])).rows[0];
+    if (!prior) return { reused: false };   // genuinely a new application
+    busy = (await db.query<NonNullable<typeof busy>>(
+      `SELECT (SELECT count(*) FROM locker_allotments
+                WHERE lockerhub_application_id = $1) AS allotted,
+              (SELECT count(*) FROM locker_fee_waivers
+                WHERE lockerhub_application_id = $1 AND leg = 'rent'
+                  AND status IN ('PendingApproval','Approved')) AS rent_waiver,
+              (SELECT count(*) FROM locker_offline_payments
+                WHERE lockerhub_application_id = $1 AND status <> 'Rejected') AS payment`,
+      [id])).rows[0]!;
+  } catch (e) {
+    console.warn('[locker] could not check for a reused application (allowing it through):', (e as Error).message);
+    return { reused: false };
+  }
+
+  const norm = (s: string | null | undefined) => String(s ?? '').trim().toLowerCase();
+  const sameSize = !wantedSize || !prior.locker_size || norm(prior.locker_size) === norm(wantedSize);
+  const untouched = !Number(busy.allotted) && !Number(busy.rent_waiver) && !Number(busy.payment)
+    && !prior.removed_at;
+  if (untouched && sameSize) return { reused: true };
+
+  const ref = prior.application_no ?? id;
+  const what = [
+    Number(busy.allotted) ? `locker ${prior.locker_number ?? ''}`.trim() + ' is already allotted on it' : null,
+    Number(busy.rent_waiver) ? 'its rent already carries a waiver' : null,
+    Number(busy.payment) ? 'a rent payment is already recorded against it' : null,
+    prior.removed_at ? 'it was removed from NCD but LockerHub still holds it' : null,
+    !sameSize ? `it is a ${prior.locker_size} locker, not ${wantedSize}` : null,
+  ].filter(Boolean).join(', ');
+  throw errors.conflict(
+    `LockerHub answered with ${ref}, the locker application this customer already has open — `
+    + 'it will not open a second one while that is unfinished. '
+    + `This enrolment cannot continue on it: ${what}. `
+    + `Finish ${ref} or delete it, then start this locker again.`,
+    {
+      reused_application_id: id,
+      application_no: prior.application_no,
+      status: prior.status,
+      locker_size: prior.locker_size,
+      locker_number: prior.locker_number,
+      allotted: !!Number(busy.allotted),
+      rent_waiver: !!Number(busy.rent_waiver),
+      rent_payment: !!Number(busy.payment),
+      removed_from_ncd: !!prior.removed_at,
+    });
 }
 
 const COLS = `

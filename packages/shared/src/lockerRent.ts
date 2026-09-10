@@ -58,3 +58,29 @@ export function rentWaiverBreakdown(annualRent: number, gstPct: number): {
   const baseWaiver = round2(rent - rent / (1 + g / 100));
   return { gross: round2(gross), waived: round2(gross - payable), payable: round2(payable), waiverPct: pct, baseWaiver };
 }
+
+/**
+ * Who may operate the locker — Schedule §5 of the approved agreement, and a
+ * field NCD never captured, so it printed as the uncircled list of options on
+ * every locker agreement signed to date.
+ *
+ * These four values are LockerHub's (specified 2026-09-09). They refuse
+ * anything else with a 400, and so do we: this decides who can open a locker
+ * without the other holders, and a typo in free text is a dispute at the
+ * counter rather than an error at the door.
+ *
+ * The labels are the document's own wording, so the dropdown a branch sees and
+ * the line printed on the Schedule cannot drift apart.
+ */
+export const LOCKER_OPERATION_MANDATES = [
+  'sole', 'either_or_survivor', 'anyone_or_survivor', 'jointly',
+] as const;
+
+export type LockerOperationMandate = (typeof LOCKER_OPERATION_MANDATES)[number];
+
+export const LOCKER_OPERATION_MANDATE_LABELS: Record<LockerOperationMandate, string> = {
+  sole: 'Sole',
+  either_or_survivor: 'Either or Survivor',
+  anyone_or_survivor: 'Anyone or Survivor',
+  jointly: 'Jointly',
+};

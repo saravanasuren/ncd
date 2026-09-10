@@ -5,7 +5,10 @@ import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { useConfirm } from '../components/Confirm.js';
 import { LockerAuthorisedUsers } from '../components/LockerAuthorisedUsers.js';
-import { rentWaiverBreakdown } from '@new-wealth/shared';
+import {
+  rentWaiverBreakdown, LOCKER_OPERATION_MANDATES, LOCKER_OPERATION_MANDATE_LABELS,
+  type LockerOperationMandate,
+} from '@new-wealth/shared';
 
 /**
  * Staff locker enrollment (NCD_INTEGRATION_CONTRACT.md Part A). Drives the
@@ -196,6 +199,9 @@ export function LockerEnrollmentPage() {
       ...(ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}),
       // The chosen locker (now mandatory) — persisted so a resume allots it.
       ...(lockerId ? { locker_id: lockerId, locker_number: chosen?.locker_number } : {}),
+      // Schedule §5. Optional: unchosen prints as the uncircled list of options,
+      // which is what every agreement signed before today already shows.
+      ...(mandate ? { locker_operation_mandate: mandate } : {}),
     }));
     if (r?.application_id) { setApp(r); setCheques([]); setFeeWaivers([]); }
   };
@@ -532,6 +538,8 @@ export function LockerEnrollmentPage() {
   const allotSize = String(app?.locker_size ?? size ?? '');
   const [picking, setPicking] = useState(false);
   const [lockerId, setLockerId] = useState('');
+  /** Schedule §5 — who may operate the locker. '' = not yet chosen. */
+  const [mandate, setMandate] = useState<LockerOperationMandate | ''>('');
   /**
    * Is the nominee complete enough for LockerHub to generate the agreement?
    *
@@ -679,6 +687,25 @@ export function LockerEnrollmentPage() {
               <option value="">{vacant.isLoading ? 'Loading lockers…' : 'Locker number… (required)'}</option>
               {(vacant.data?.lockers ?? []).map((l) => (
                 <option key={l.id} value={l.id}>{l.locker_number}</option>
+              ))}
+            </select>
+          )}
+          {/* Schedule §5 — who may operate the locker. NCD never captured it,
+              so it has printed as the uncircled list of options on every locker
+              agreement signed to date. Chosen at enrolment, not at signing:
+              LockerHub prints it on the Schedule the customer signs.
+
+              Optional on purpose. It decides who may open the locker WITHOUT
+              the other holders, so on a sole locker it is academic and blocking
+              enrolment over it would be theatre; on a joint one the branch
+              should be picking it deliberately, not clicking past a required
+              field. */}
+          {branchId && size && (
+            <select className={inp} value={mandate}
+                    onChange={(e) => setMandate(e.target.value as LockerOperationMandate | '')}>
+              <option value="">Operation mandate… (optional)</option>
+              {LOCKER_OPERATION_MANDATES.map((m) => (
+                <option key={m} value={m}>{LOCKER_OPERATION_MANDATE_LABELS[m]}</option>
               ))}
             </select>
           )}

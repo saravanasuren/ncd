@@ -364,6 +364,56 @@ describe('locker applications list', () => {
     expect(row.lockerhub_refusal).toBeNull();
   });
 
+  // ── Schedule §5: who may operate the locker (LockerHub 2026-09-09) ─────────
+  // NCD never captured this, so it printed as the uncircled list of options on
+  // every locker agreement signed to date. On a sole locker that is academic;
+  // on a jointly-held one it is the whole question.
+  describe('locker operation mandate', () => {
+    it('is sent to LockerHub on the applicant block, and stored', async () => {
+      seen = [];
+      const r = await create(await manager(), {
+        phone: '9876500222', name: 'Mandate One', locker_operation_mandate: 'either_or_survivor',
+      });
+      expect(r.status).toBe(201);
+      const post = seen.find((x) => x.path === '/locker-applications' && x.method === 'POST');
+      expect(post!.body.applicant.locker_operation_mandate).toBe('either_or_survivor');
+
+      const l = await listOf(await manager());
+      const row = l.json.rows.find((x: any) => x.lockerhub_application_id === String(r.json.id));
+      expect(row.operation_mandate).toBe('either_or_survivor');
+    });
+
+    it('reaches them even with NO NCD customer to build an applicant block from', async () => {
+      // It is a property of the LOCKER, not the customer. Riding on the
+      // applicant block is their wire format, not a reason to drop it when
+      // there is no customer.
+      seen = [];
+      const r = await create(await manager(), {
+        phone: '9876500333', name: 'No Customer', locker_operation_mandate: 'jointly',
+      });
+      expect(r.status).toBe(201);
+      const post = seen.find((x) => x.path === '/locker-applications' && x.method === 'POST');
+      expect(post!.body.applicant.locker_operation_mandate).toBe('jointly');
+    });
+
+    it('REFUSES a value outside the four, rather than storing free text', async () => {
+      // This decides who may open a locker without the other holders. A typo
+      // should fail at the door, not surface as a dispute at the counter.
+      const r = await create(await manager(), {
+        phone: '9876500444', name: 'Bad Mandate', locker_operation_mandate: 'either/survivor',
+      });
+      expect(r.status).toBe(400);
+    });
+
+    it('is optional — an unchosen mandate blocks nothing', async () => {
+      const r = await create(await manager(), { phone: '9876500555', name: 'No Mandate' });
+      expect(r.status).toBe(201);
+      const l = await listOf(await manager());
+      const row = l.json.rows.find((x: any) => x.lockerhub_application_id === String(r.json.id));
+      expect(row.operation_mandate).toBeNull();
+    });
+  });
+
   it('CONTROL: only a Super Admin may delete', async () => {
     const c = await create(await manager(), { phone: '9876500044', name: 'Not Yours' });
     const id = String(c.json.id);

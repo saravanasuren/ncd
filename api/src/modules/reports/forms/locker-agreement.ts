@@ -193,14 +193,32 @@ const PERIOD_OF_LICENCE =
 
 const OPERATION_MANDATES = 'Sole / Either or Survivor / Anyone or Survivor / Jointly';
 
-export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise<Buffer> {
+/** A signature box in PDF coordinates (bottom-left origin), for Digio placement. */
+export interface LockerSignatureBox { llx: number; lly: number; urx: number; ury: number; }
+export interface LockerAgreementResult {
+  buffer: Buffer;
+  /** Where the CUSTOMER's e-signature goes (the "Signature of Hirer(s)" line). */
+  hirer: LockerSignatureBox; hirerPage: number;
+  /** Where the company AUTHORISED SIGNATORY (the CEO) e-signs. */
+  signatory: LockerSignatureBox; signatoryPage: number;
+}
+
+export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise<LockerAgreementResult> {
   const profile = (await db.query<Record<string, unknown>>('SELECT * FROM company_profile WHERE id = 1')).rows[0] ?? null;
   const co = companyHeader(profile);
   const c = input.customer;
   const l = input.locker;
   const when = input.date ?? new Date().toISOString();
 
-  return renderToBuffer((doc) => {
+  // Captured during the render pass so the caller can place each e-signature.
+  let hirerBox!: LockerSignatureBox, hirerPage = 1;
+  let signatoryBox!: LockerSignatureBox, signatoryPage = 1;
+
+  const buffer = await renderToBuffer((doc) => {
+    // renderToBuffer doesn't bufferPages, so track the page via the event.
+    let pageNo = 1;
+    doc.on('pageAdded', () => { pageNo++; });
+    const PAGE_H = doc.page.height;
     const W = 495;
     /** Room left before the bottom margin. */
     const room = () => doc.page.height - doc.page.margins.bottom - doc.y;
@@ -453,6 +471,10 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
 
     // ── Final signatures ─────────────────────────────────────────────────
     need(130);
+    // Customer e-sign sits just above the "Signature of Hirer(s)" ruled line.
+    const hirerY = doc.y;
+    hirerPage = pageNo;
+    hirerBox = { llx: 50, lly: PAGE_H - hirerY, urx: 290, ury: PAGE_H - hirerY + 32 };
     doc.font('Helvetica').fontSize(9).fillColor(COLORS.TEXT)
       .text('_________________________________________________________________', 50, doc.y, { width: W });
     doc.y += 2;
@@ -461,6 +483,11 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
     doc.y += 24;
     doc.font('Helvetica').fontSize(9).fillColor(COLORS.TEXT)
       .text(`For ${co.legal_name},`, 50, doc.y, { width: W });
+    // Authorised-signatory e-sign sits in the gap between "For <company>," and
+    // the designation line below it.
+    const sigY = doc.y;
+    signatoryPage = pageNo;
+    signatoryBox = { llx: 50, lly: PAGE_H - (sigY + 36), urx: 290, ury: PAGE_H - (sigY + 2) };
     doc.y += 40;
     doc.font('Helvetica').fontSize(8.5).fillColor(COLORS.MUTED)
       .text(co.signatory_designation, 50, doc.y, { width: W });
@@ -472,4 +499,6 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
       .text('Branch use: scan the signed agreement and upload it against this locker application in the NCD system.',
         50, doc.y, { width: W });
   });
+
+  return { buffer, hirer: hirerBox, hirerPage, signatory: signatoryBox, signatoryPage };
 }

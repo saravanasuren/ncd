@@ -325,7 +325,7 @@ export async function generateAgreementForm(
       WHERE customer_id = $1 ORDER BY share_pct DESC NULLS LAST, id LIMIT 1`,
     [Number(customer.id)])).rows[0] ?? null;
 
-  const buffer = await lockerAgreementPdf(db, {
+  const { buffer } = await lockerAgreementPdf(db, {
     customer: customer as never,
     locker: {
       lockerhub_application_id: applicationId,

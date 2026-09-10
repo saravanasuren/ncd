@@ -112,6 +112,27 @@ export async function listSignings(db: Db, applicationId: string): Promise<Signi
   return rows.map(shape);
 }
 
+export interface AwaitingCeoRow {
+  application_id: string; customer_name: string | null; customer_code: string | null;
+  signed_at: string | null;
+}
+/** Agreements the customer has e-signed and that await the CEO's counter-sign —
+ *  the "Locker agreements" queue (owner 2026-09-10). Oldest first. */
+export async function listAwaitingCeo(db: Db): Promise<AwaitingCeoRow[]> {
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT s.lockerhub_application_id, s.signed_at, c.full_name, c.customer_code
+       FROM locker_agreement_signings s
+       LEFT JOIN customers c ON c.id = s.customer_id
+      WHERE s.status = 'CustomerSigned'
+      ORDER BY s.signed_at ASC NULLS LAST, s.id ASC`);
+  return rows.map((r) => ({
+    application_id: r.lockerhub_application_id as string,
+    customer_name: (r.full_name as string) ?? null,
+    customer_code: (r.customer_code as string) ?? null,
+    signed_at: r.signed_at ? String(r.signed_at) : null,
+  }));
+}
+
 /**
  * Choose how this agreement gets signed.
  *
@@ -382,10 +403,14 @@ export async function generateAgreementForm(
  * it to done. Inert-but-recorded in stub mode (no Digio creds).
  */
 export async function initiateCustomerEsign(
-  db: Db, actor: AuthUser, applicationId: string,
+  db: Db, actor: AuthUser, applicationId: string, customerId?: number | null,
 ): Promise<{ sign_url: string | null; digio_request_id: string; stub: boolean }> {
-  const signing = await getSigning(db, applicationId);
-  if (!signing) throw errors.badRequest('Choose how this agreement will be signed first.');
+  // The enrolment's "Send agreement for signing" comes straight here, so start
+  // the signing on the e-sign path if one hasn't been chosen yet.
+  let signing = await getSigning(db, applicationId);
+  if (!signing) {
+    signing = await chooseMethod(db, actor, { lockerhub_application_id: applicationId, method: 'esign', customer_id: customerId ?? null });
+  }
   if (signing.status === 'Signed') throw errors.conflict('This agreement is already signed.');
 
   const { result, customer } = await renderLockerAgreement(db, applicationId, signing.id);

@@ -836,8 +836,9 @@ lockersRouter.get('/applications/:id/agreement/form.pdf', asyncHandler(async (re
 // (owner 2026-09-10) — the document that carries the filled rent, and the one the
 // CEO counter-signs later. Returns the customer's sign link.
 lockersRouter.post('/applications/:id/agreement/esign-initiate', asyncHandler(async (req, res) => {
+  const { customer_id } = z.object({ customer_id: z.number().int().positive().nullish() }).parse(req.body ?? {});
   const { initiateCustomerEsign } = await import('./agreements.js');
-  res.json(await initiateCustomerEsign(getDb(), req.user!, String(req.params.id)));
+  res.json(await initiateCustomerEsign(getDb(), req.user!, String(req.params.id), customer_id ?? null));
 }));
 
 // The CEO (authorised signatory) counter-signs a customer-signed agreement.
@@ -845,6 +846,12 @@ lockersRouter.post('/applications/:id/agreement/esign-initiate', asyncHandler(as
 lockersRouter.post('/applications/:id/agreement/ceo-esign-initiate', asyncHandler(async (req, res) => {
   const { initiateCeoEsign } = await import('./agreements.js');
   res.json(await initiateCeoEsign(getDb(), req.user!, String(req.params.id)));
+}));
+
+// The "Locker agreements" queue — customer-signed agreements awaiting the CEO.
+lockersRouter.get('/agreements/awaiting-ceo', asyncHandler(async (_req, res) => {
+  const { listAwaitingCeo } = await import('./agreements.js');
+  res.json({ rows: await listAwaitingCeo(getDb()) });
 }));
 
 // The signed scan comes back. This does NOT mark it signed — it raises an

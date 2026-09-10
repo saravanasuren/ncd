@@ -55,4 +55,48 @@ describe('locker agreement e-sign on our own copy', () => {
       'SELECT status FROM locker_agreement_signings WHERE id = $1', [signingId])).rows[0]!;
     expect(after.status).toBe('CustomerSigned');
   });
+
+  it('the CEO counter-signs a customer-signed agreement, then it is fully Signed', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'CEO Flow Hirer', phone: '9700000066', pan: 'AAAPC1234Q', address: '3 Sign St' });
+    const sig = await ctx.db.query<{ id: string }>(
+      `INSERT INTO locker_agreement_signings (lockerhub_application_id, customer_id, method, status, created_by_user_id)
+       VALUES ('la_ncd_esign_2', $1, 'esign', 'Draft', $2) RETURNING id`, [cust.json.id, uid]);
+    const signingId = Number(sig.rows[0]!.id);
+
+    // Customer signs first.
+    const custInit = await a.post('/api/lockers/applications/la_ncd_esign_2/agreement/esign-initiate', {});
+    await completeSigning(ctx.db, custInit.json.digio_request_id as string, {});
+    // In stub mode nothing is downloaded from Digio, so stand in the customer-
+    // signed copy the real flow would have stored (the CEO signs THIS file).
+    const { saveBuffer } = await import('../src/lib/storage.js');
+    const { path } = saveBuffer('locker-agreements', `signed-${signingId}.pdf`, Buffer.from('%PDF-1.4\n% customer signed\n'));
+    await ctx.db.query('UPDATE locker_agreement_signings SET signed_doc_path = $1, signed_doc_mime = $2 WHERE id = $3', [path, 'application/pdf', signingId]);
+
+    const ceo = await a.post('/api/lockers/applications/la_ncd_esign_2/agreement/ceo-esign-initiate', {});
+    expect(ceo.status).toBe(200);
+    const ceoReq = ceo.json.digio_request_id as string;
+    expect(ceoReq).toBeTruthy();
+
+    const sess = (await ctx.db.query<{ document_type: string }>(
+      'SELECT document_type FROM digio_signing_sessions WHERE digio_request_id = $1', [ceoReq])).rows[0]!;
+    expect(sess.document_type).toBe('locker_agreement_ceo');
+    const mid = (await ctx.db.query<{ status: string }>('SELECT status FROM locker_agreement_signings WHERE id = $1', [signingId])).rows[0]!;
+    expect(mid.status).toBe('AwaitingCEO');
+
+    // CEO signs → fully signed.
+    await completeSigning(ctx.db, ceoReq, {});
+    const done = (await ctx.db.query<{ status: string }>('SELECT status FROM locker_agreement_signings WHERE id = $1', [signingId])).rows[0]!;
+    expect(done.status).toBe('Signed');
+  });
+
+  it('refuses a CEO sign before the customer has signed', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Too Early', phone: '9700000077' });
+    await ctx.db.query(
+      `INSERT INTO locker_agreement_signings (lockerhub_application_id, customer_id, method, status, created_by_user_id)
+       VALUES ('la_ncd_esign_3', $1, 'esign', 'AwaitingSignature', $2)`, [cust.json.id, uid]);
+    const r = await a.post('/api/lockers/applications/la_ncd_esign_3/agreement/ceo-esign-initiate', {});
+    expect(r.status).toBe(400);
+  });
 });

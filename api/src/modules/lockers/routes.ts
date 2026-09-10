@@ -840,6 +840,13 @@ lockersRouter.post('/applications/:id/agreement/esign-initiate', asyncHandler(as
   res.json(await initiateCustomerEsign(getDb(), req.user!, String(req.params.id)));
 }));
 
+// The CEO (authorised signatory) counter-signs a customer-signed agreement.
+// Only lockers whose customer has already e-signed are eligible.
+lockersRouter.post('/applications/:id/agreement/ceo-esign-initiate', asyncHandler(async (req, res) => {
+  const { initiateCeoEsign } = await import('./agreements.js');
+  res.json(await initiateCeoEsign(getDb(), req.user!, String(req.params.id)));
+}));
+
 // The signed scan comes back. This does NOT mark it signed — it raises an
 // approval and the agreement stays unsigned until a checker has seen the
 // document (owner 2026-09-03).

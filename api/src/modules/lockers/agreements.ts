@@ -439,13 +439,47 @@ export async function initiateCustomerEsign(
 
   const { result, customer } = await renderLockerAgreement(db, applicationId, signing.id);
   const { createSignRequest, digioConfigured } = await import('../../integrations/digio/index.js');
+
+  // EVERY hirer signs, not just the first (owner 2026-09-12: "the joint
+  // applicant should also do the esigning"). A joint locker is hired by two or
+  // three people and binds all of them, so a document carrying only the primary
+  // signature is not the agreement it claims to be.
+  //
+  // ONE Digio request with all of them: Digio marks the document signed only
+  // once every signer has, which is exactly the semantics wanted — a joint
+  // hiring is not signed until it is signed by everyone. The existing poller
+  // and completeSigning need no change because they already work off that
+  // whole-document status.
+  const { listHirers } = await import('./hirers.js');
+  const joint = await listHirers(db, applicationId);
+  const byPosition = new Map(joint.map((h) => [Number(h.position), h]));
+  const parties = result.hirers.map((h) => {
+    if (h.position === 1) {
+      return {
+        name: (customer.full_name as string) ?? h.name,
+        phone: (customer.phone as string) ?? null,
+        email: (customer.email as string) ?? null,
+        box: h.box, page: h.page,
+      };
+    }
+    const jh = byPosition.get(h.position);
+    // A hirer printed on the page with nobody to send the link to would leave a
+    // document that can never complete — Digio waits for every signer forever.
+    // Phone is already required of a joint hirer and must differ from the
+    // others (hirers.ts), so this is a guard against a row that predates that
+    // rule, not an expected path.
+    if (!jh || !String(jh.phone ?? '').trim()) {
+      throw errors.badRequest(
+        `Hirer ${h.position}${h.name ? ` (${h.name})` : ''} has no phone number, so the e-Sign link cannot reach them. `
+        + 'Add it to the hirer, then send the agreement again.');
+    }
+    return { name: jh.full_name, phone: jh.phone ?? null, email: jh.email ?? null, box: h.box, page: h.page };
+  });
+
   const req = await createSignRequest({
-    signerName: customer.full_name as string,
-    signerPhone: (customer.phone as string) ?? undefined,
-    signerEmail: (customer.email as string) ?? undefined,
     reason: 'Locker hire agreement',
     document: { fileName: `locker-agreement-${applicationId}.pdf`, contentBase64: result.buffer.toString('base64') },
-    signature: { box: result.hirer, page: result.hirerPage },
+    parties,
   });
 
   await db.withTx(async (tx) => {

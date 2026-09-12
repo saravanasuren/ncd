@@ -46,6 +46,15 @@ export interface SignDocument { fileName: string; contentBase64: string; }
  *  1-indexed page (from the application-form renderer). */
 export interface SignaturePlacement { box: { llx: number; lly: number; urx: number; ury: number }; page: number; }
 
+/** One signer on a multi-party document, with their own signature box. */
+export interface SignParty {
+  name: string;
+  phone?: string | null;
+  email?: string | null;
+  box?: { llx: number; lly: number; urx: number; ury: number };
+  page?: number;
+}
+
 /** Normalise an Indian mobile to Digio's required +91XXXXXXXXXX. Bare 10-digit
  * numbers get dropped on the SMS channel, so the sign link never arrives
  * (a real Digio gotcha carried over from the wealth adapter). */
@@ -62,23 +71,49 @@ function normalisePhone(phone?: string | null): string | undefined {
  *
  * Payload validated against live Digio 2026-07-21, matched to the wealth
  * adapter's production config. */
-export async function createSignRequest(input: { signerEmail?: string; signerPhone?: string; signerName?: string; reason?: string; document?: SignDocument; signature?: SignaturePlacement }): Promise<SignRequestResult> {
+export async function createSignRequest(input: {
+  signerEmail?: string; signerPhone?: string; signerName?: string; reason?: string;
+  document?: SignDocument; signature?: SignaturePlacement;
+  /** EVERY signer, when a document is signed by more than one person — a joint
+   *  locker hiring (owner 2026-09-12). Digio takes an array natively and marks
+   *  the document signed only once all of them have signed, so one request
+   *  carries the whole hiring rather than a chain of separate documents.
+   *  Overrides the single-signer fields above when given. */
+  parties?: SignParty[];
+}): Promise<SignRequestResult> {
   const phone = normalisePhone(input.signerPhone);
   // Phone-first identifier so the link goes by SMS (Dhanam's customer base);
   // email + phone as separate fields so Digio delivers on BOTH channels.
   const identifier = phone || input.signerEmail || input.signerPhone || 'unknown';
+  const parties: SignParty[] = input.parties?.length
+    ? input.parties
+    : [{ name: input.signerName || 'Customer', phone: input.signerPhone, email: input.signerEmail,
+         box: input.signature?.box, page: input.signature?.page }];
+  const identifierOf = (p: SignParty) =>
+    normalisePhone(p.phone) || p.email || p.phone || 'unknown';
+  // sign_coordinates is keyed BY IDENTIFIER, so two signers sharing one would
+  // silently collapse into a single signature box — one of them would never be
+  // asked to sign and the document would still complete. Refuse instead.
+  const seen = new Set<string>();
+  for (const p of parties) {
+    const id = identifierOf(p);
+    if (seen.has(id)) {
+      throw new Error(`Two signers share the contact ${id} — each signer needs their own phone or email.`);
+    }
+    seen.add(id);
+  }
   const body: Record<string, unknown> = {
-    signers: [{
-      identifier,
-      name: input.signerName || 'Customer',
+    signers: parties.map((p) => ({
+      identifier: identifierOf(p),
+      name: p.name || 'Customer',
       // Shown to the signer as "Reasons for request". Defaults to the investment
       // wording; the locker flows pass their own so a hirer doesn't see "NCD
       // subscription agreement" on a locker document.
       reason: input.reason || 'NCD subscription agreement',
       sign_type: 'aadhaar', // Aadhaar-OTP eSign — not draw-signature-after-login
-      email: input.signerEmail || undefined,
-      phone: phone || undefined,
-    }],
+      email: p.email || undefined,
+      phone: normalisePhone(p.phone) || undefined,
+    })),
     expire_in_days: 10,
     notify_signers: true,
     send_sign_link: true,
@@ -89,15 +124,17 @@ export async function createSignRequest(input: { signerEmail?: string; signerPho
   // Place the eSignature in the form's 1st-applicant box. 'custom' is only valid
   // WITH sign_coordinates (Digio rejects it otherwise); without a box Digio
   // defaults to last-page placement (no display_on_page).
-  if (input.signature) {
+  const placed = parties.filter((p) => p.box && p.page);
+  if (placed.length) {
     body.display_on_page = 'custom';
-    body.sign_coordinates = { [identifier]: { [String(input.signature.page)]: [input.signature.box] } };
+    body.sign_coordinates = Object.fromEntries(placed.map((p) =>
+      [identifierOf(p), { [String(p.page)]: [p.box] }]));
   }
   const r = await call('POST', '/v2/client/document/uploadpdf', body);
   // Digio may return the signer link at signing_parties[0].authentication_url;
   // usually it's delivered to the signer directly (notify + send_sign_link).
-  const parties = Array.isArray(r.signing_parties) ? r.signing_parties : [];
-  const signUrl = parties[0]?.authentication_url
+  const returnedParties = Array.isArray(r.signing_parties) ? r.signing_parties : [];
+  const signUrl = returnedParties[0]?.authentication_url
     ?? (Array.isArray(r.signers) ? r.signers[0]?.sign_url : undefined)
     ?? r.sign_url ?? null;
   return { digioRequestId: String(r.id), signUrl: (signUrl as string | null) ?? null, status: String(r.status ?? 'requested') };

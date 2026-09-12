@@ -594,11 +594,11 @@ export function LockerEnrollmentPage() {
    *  and is never in this list; the agreement has three blocks in total. */
   const [hirers, setHirers] = useState<Array<{
     position: number; full_name: string; phone: string; email: string;
-    dob: string; pan: string; aadhaar_last4: string; address: string;
+    dob: string; pan: string; aadhaar: string; aadhaar_last4: string; address: string;
   }>>([]);
   const addHirer = () => setHirers((h) => h.length >= 2 ? h : [...h, {
     position: h.length + 2, full_name: '', phone: '', email: '',
-    dob: '', pan: '', aadhaar_last4: '', address: '',
+    dob: '', pan: '', aadhaar: '', aadhaar_last4: '', address: '',
   }]);
   const setHirerField = (i: number, k: string, v: string) =>
     setHirers((h) => h.map((x, j) => j === i ? { ...x, [k]: v } : x));
@@ -840,8 +840,12 @@ export function LockerEnrollmentPage() {
                        onChange={(e) => setHirerField(i, 'phone', e.target.value)} />
                 <input className={inp} placeholder="PAN" value={h.pan}
                        onChange={(e) => setHirerField(i, 'pan', e.target.value.toUpperCase())} />
-                <input className={inp} placeholder="Aadhaar — LAST 4 ONLY" maxLength={4} value={h.aadhaar_last4}
-                       onChange={(e) => setHirerField(i, 'aadhaar_last4', e.target.value.replace(/\D/g, ''))} />
+                {/* Full 12 digits (owner 2026-09-12), as the primary customer's
+                    has been captured since 026 — a joint hirer now eSigns the
+                    same agreement. Last-4 is derived server-side, and only the
+                    last four are ever sent on to LockerHub. */}
+                <input className={inp} placeholder="Aadhaar (12 digits)" maxLength={12} inputMode="numeric" value={h.aadhaar}
+                       onChange={(e) => setHirerField(i, 'aadhaar', e.target.value.replace(/\D/g, '').slice(0, 12))} />
                 <input className={inp} type="date" value={h.dob}
                        onChange={(e) => setHirerField(i, 'dob', e.target.value)} />
                 <input className={inp} placeholder="Email (optional)" value={h.email}

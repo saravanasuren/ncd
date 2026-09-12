@@ -41,6 +41,11 @@ export interface HirerInput {
   email?: string | null;
   dob?: string | null;
   pan?: string | null;
+  /** Full 12 digits, as captured. Mirrors customers.aadhaar (026): held so the
+   *  agreement this hirer now eSigns can carry it. NEVER pushed onward —
+   *  hirersForLockerHub sends last-4 alone. */
+  aadhaar?: string | null;
+  /** Derived from `aadhaar` when that is given; otherwise taken as supplied. */
   aadhaar_last4?: string | null;
   address?: string | null;
 }
@@ -71,6 +76,22 @@ const digits = (v: unknown): string => clean(v).replace(/\D/g, '');
  */
 export function missingFor(h: HirerInput): string[] {
   return REQUIRED.filter(({ key }) => clean(h[key]) === '').map(({ label }) => label);
+}
+
+/**
+ * Split a captured Aadhaar into what we store: the full twelve and the last
+ * four. Mirrors the customer path (customers/service.ts) so one person's number
+ * is not handled two different ways depending on which form took it.
+ *
+ * Anything that is not exactly twelve digits yields NO full number — a partial
+ * Aadhaar reads as captured while being unusable, and a last-4 derived from it
+ * would be wrong. The operator's own last-4 entry is used in that case.
+ */
+export function splitAadhaar(h: HirerInput): { full: string | null; last4: string | null } {
+  const d = digits(h.aadhaar);
+  if (d.length === 12) return { full: d, last4: d.slice(-4) };
+  const four = digits(h.aadhaar_last4).slice(-4);
+  return { full: null, last4: four.length === 4 ? four : null };
 }
 
 /**
@@ -142,15 +163,32 @@ export async function setHirers(
   validateHirers(hirers, applicantPhone);
 
   return db.withTx(async (tx) => {
+    // Carry a full Aadhaar we already hold across the delete-and-reinsert.
+    //
+    // listHirers deliberately does NOT return it — the same structural
+    // protection applicant.ts gives customers.aadhaar — so the screen re-sends
+    // the hirer WITHOUT it. Without this, editing a hirer's phone would erase
+    // their Aadhaar, silently, and nothing on the page would show it had gone.
+    // An incoming twelve digits still wins; this only fills the gap.
+    const kept = new Map<number, string | null>(
+      (await tx.query<{ position: number; aadhaar: string | null }>(
+        'SELECT position, aadhaar FROM locker_application_hirers WHERE lockerhub_application_id = $1',
+        [appId])).rows.map((r) => [Number(r.position), r.aadhaar]));
     await tx.query('DELETE FROM locker_application_hirers WHERE lockerhub_application_id = $1', [appId]);
     for (const h of hirers) {
+      const split = splitAadhaar(h);
+      const full = split.full ?? kept.get(Number(h.position)) ?? null;
+      // Keep last-4 answering to whichever full number we end up storing.
+      const last4 = split.full ? split.last4 : (full ? full.slice(-4) : split.last4);
       await tx.query(
         `INSERT INTO locker_application_hirers
-           (lockerhub_application_id, position, full_name, phone, email, dob, pan, aadhaar_last4, address, created_by_user_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+           (lockerhub_application_id, position, full_name, phone, email, dob, pan, aadhaar, aadhaar_last4, address, created_by_user_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
         [appId, h.position, clean(h.full_name), clean(h.phone) || null, clean(h.email) || null,
          clean(h.dob) || null, clean(h.pan).toUpperCase() || null,
-         digits(h.aadhaar_last4) || null, clean(h.address) || null, actor.id]);
+         // Both, from one source, so they can never disagree.
+         full, last4,
+         clean(h.address) || null, actor.id]);
     }
     await writeAudit(tx, {
       actorId: actor.id, action: 'locker.hirers.set',

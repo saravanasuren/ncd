@@ -321,6 +321,7 @@ lockersRouter.post('/applications', asyncHandler(async (req, res) => {
       email: z.string().trim().nullish(),
       dob: z.string().trim().nullish(),
       pan: z.string().trim().nullish(),
+      aadhaar: z.string().trim().nullish(),
       aadhaar_last4: z.string().trim().nullish(),
       address: z.string().trim().nullish(),
     })).max(2).optional(),
@@ -1034,6 +1035,9 @@ const HIRER = z.object({
   email: z.string().trim().nullish(),
   dob: z.string().trim().nullish(),
   pan: z.string().trim().nullish(),
+  // Full 12 digits (owner 2026-09-12). Derives last-4 server-side; only the
+  // last four are ever pushed to LockerHub.
+  aadhaar: z.string().trim().nullish(),
   aadhaar_last4: z.string().trim().nullish(),
   address: z.string().trim().nullish(),
 });

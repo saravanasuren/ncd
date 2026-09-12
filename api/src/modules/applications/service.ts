@@ -397,9 +397,47 @@ registerOnReject('club_into_active', async (_tx, req) => {
  * notice on the Approvals page. Idempotent per (app, payee): a clean unpaid
  * re-accrual, paid rows are never touched.
  */
-export async function attributeReferrer(db: Db, actor: AuthUser, appId: number, payee: string) {
+/**
+ * Assign the staff/agent who introduced an app investment that arrived with no
+ * referral code.
+ *
+ * `picked` is WHICH row the operator clicked, and it exists because
+ * `referred_by_text` is free text that the incentive engine re-resolves later
+ * through resolveReferrer — code first, then NAME. Two hazards follow, and both
+ * were live (owner 2026-09-12):
+ *
+ *   · 8 of 30 selectable staff have NO code, so the screen was posting an empty
+ *     string and every one of them failed with "Invalid request".
+ *   · resolveReferrer looks in `agents` BEFORE `users` and takes LIMIT 1, so a
+ *     code-less staff member sharing a name with an agent resolves to the
+ *     AGENT. Padhmanathan is exactly that, and assigning him by name would have
+ *     paid somebody else — silently, with the screen showing success.
+ *
+ * So the assignment is verified: resolve the text we are about to store and
+ * confirm it comes back as the person who was clicked. A name that cannot
+ * identify one person is REFUSED with what to do about it, rather than
+ * attributing money to whoever the query happened to return first.
+ */
+export async function attributeReferrer(
+  db: Db, actor: AuthUser, appId: number, payee: string,
+  picked?: { source: 'agents' | 'users'; id: number },
+) {
   const text = payee.trim();
   if (!text) throw errors.badRequest('Pick a staff or agent to assign');
+  if (picked) {
+    const { resolveReferrer } = await import('../agents/service.js');
+    // resolveReferrer answers in its own terms: an `agents` row is kind
+    // 'agent', a `users` row is kind 'staff' — whatever role that user holds.
+    const wantKind = picked.source === 'agents' ? 'agent' : 'staff';
+    const hit = await resolveReferrer(db, text);
+    if (!hit || hit.kind !== wantKind || hit.id !== picked.id) {
+      throw errors.badRequest(
+        hit
+          ? `"${text}" is not unique — it resolves to the ${hit.kind} ${hit.name}, not the person you picked. `
+            + 'Give them a code on their profile, then assign again.'
+          : `"${text}" does not match any staff or agent. Give them a code on their profile, then assign again.`);
+    }
+  }
   return db.withTx(async (tx) => {
     const app = (await tx.query<{ id: string }>('SELECT id FROM applications WHERE id = $1', [appId])).rows[0];
     if (!app) throw errors.notFound('Application not found');

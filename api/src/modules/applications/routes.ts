@@ -72,8 +72,16 @@ applicationsRouter.post('/:id/payout-account', requirePermission('applications:u
 // code was given) and re-accrue the referrer incentive.
 applicationsRouter.post('/:id/attribute-referrer', requirePermission('incentives:manage-eligibility'),
   asyncHandler(async (req, res) => {
-    const { payee } = z.object({ payee: z.string().min(1) }).parse(req.body);
-    res.json(await s.attributeReferrer(getDb(), req.user!, Number(req.params.id), payee));
+    // `payee_source` + `payee_id` say WHICH row the operator clicked, so the
+    // service can confirm its own resolution of `payee` lands on that person.
+    // Optional: an older page that posts only `payee` still works.
+    const b = z.object({
+      payee: z.string().min(1),
+      payee_source: z.enum(['agents', 'users']).optional(),
+      payee_id: z.number().int().positive().optional(),
+    }).parse(req.body);
+    const picked = b.payee_source && b.payee_id ? { source: b.payee_source, id: b.payee_id } : undefined;
+    res.json(await s.attributeReferrer(getDb(), req.user!, Number(req.params.id), b.payee, picked));
   }));
 
 // Start a Digio eSign session for this application (returns the sign URL).

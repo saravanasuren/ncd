@@ -165,6 +165,76 @@ describe('Added / Redeemed since the last paid batch', () => {
     expect(Number(now.movement.redeemed.amount)).toBe(Number(base.movement.redeemed.amount) + 400000);
   });
 
+  it('counts interest settled OUTSIDE the batch for that same date', async () => {
+    /**
+     * Owner 2026-09-10: "the payments were given in backend — changing the
+     * outstanding alone will not make sense, we need to change the interest
+     * also accordingly."
+     *
+     * An investment keyed in after the batch was built still earned that
+     * period's interest and was paid it by hand. Its principal already counts
+     * on the last-batch side, so ignoring its interest described half a
+     * customer. On production this was five investments and ₹5,292.
+     */
+    const a = await admin();
+    const s0 = await summary();
+    const cust = await a.post('/api/customers', { full_name: 'Paid In Backend', phone: '9704000007' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
+      customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
+      amount: 800000, date_money_received: '2026-06-20' });
+    await approveInvestment(await as('ncd@demo.local'), app);
+    // Settled by hand for the batch's own date, with NO batch_id — exactly the
+    // shape a backend payment leaves behind.
+    await ctx.db.query(
+      `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type,
+          gross_amount, tds_amount, net_amount, status, paid_at)
+       SELECT l.id, l.application_id, $2::date, 'Interest', 1000, 100, 900, 'Paid', $2::date
+         FROM application_lines l WHERE l.application_id = $1`,
+      [app.json.id, s0.movement.since]);
+
+    const s1 = await summary();
+    expect(Number(s1.gross)).toBe(Number(s0.gross) + 1000);
+    expect(Number(s1.tds)).toBe(Number(s0.tds) + 100);
+    expect(Number(s1.net)).toBe(Number(s0.net) + 900);
+    expect(s1.investments).toBe(s0.investments + 1);
+  });
+
+  it('does NOT drop what the batch paid under a different due date', async () => {
+    /**
+     * The trap in the obvious implementation. Switching the aggregate from
+     * `batch_id = X` to `due_date = payout_date` picks up the backend payments
+     * — and silently loses the redemption slices the batch also settled, whose
+     * own due_date is their redemption date, not the payout date. Measured on
+     * production before changing it: ₹41,234 of real interest would have
+     * vanished from the figure.
+     *
+     * So the rule is a UNION, and this pins it.
+     */
+    const a = await admin();
+    const s0 = await summary();
+    const batchId = (await ctx.db.query<{ id: string }>(
+      `SELECT id FROM payout_batches WHERE status = 'Paid' AND kind = 'interest'
+        ORDER BY payout_date DESC, id DESC LIMIT 1`)).rows[0]!.id;
+    const cust = await a.post('/api/customers', { full_name: 'Slice In Batch', phone: '9704000008' });
+    const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
+      customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
+      amount: 600000, date_money_received: '2026-06-21' });
+    await approveInvestment(await as('ncd@demo.local'), app);
+    // In the batch, but due on a DIFFERENT date — a redemption slice's shape.
+    await ctx.db.query(
+      `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type,
+          gross_amount, tds_amount, net_amount, status, paid_at, batch_id, principal_basis)
+       SELECT l.id, l.application_id, ($2::date + 3), 'BrokenInterest', 500, 0, 500, 'Paid', $2::date, $3, 600000
+         FROM application_lines l WHERE l.application_id = $1`,
+      [app.json.id, s0.movement.since, batchId]);
+
+    const s1 = await summary();
+    // Still counted, because it is in the batch — a date-only rule would miss it.
+    expect(Number(s1.gross)).toBe(Number(s0.gross) + 500);
+    // ...and a redemption slice never inflates the customer/investment counts.
+    expect(s1.investments).toBe(s0.investments);
+  });
+
   // The redeemed add-back itself is asserted before/after in
   // integration.payout-added-bridges ("Last batch keeps money that has since
   // been REDEEMED") — measuring the change rather than re-deriving the

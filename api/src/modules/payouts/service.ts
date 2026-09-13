@@ -385,6 +385,7 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
       WHERE kind = 'interest' AND status = 'Paid'
       ORDER BY payout_date DESC, id DESC LIMIT 1`)).rows[0];
   if (!batch) return null;
+  const since = String(batch.payout_date).slice(0, 10);
   const agg = (await db.query<{ customers: string; investments: string; gross: string; tds: string; net: string; outstanding: string }>(
     // Current-only (owner 2026-08-27): a redemption slice carries a principal_basis
     // and its principal is LEAVING — so it is excluded from the customer/investment
@@ -398,8 +399,24 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
        FROM disbursement_schedule ds
        JOIN applications a ON a.id = ds.application_id
        LEFT JOIN application_lines l ON l.id = ds.line_id
-      WHERE ds.batch_id = $1 AND ds.status = 'Paid' AND ds.due_type IN ${DUE_TYPES}`, [batch.id])).rows[0]!;
-  const since = String(batch.payout_date).slice(0, 10);
+      WHERE ds.status = 'Paid' AND ds.due_type IN ${DUE_TYPES}
+        AND (ds.batch_id = $1
+             -- ...plus interest for that same date that was settled OUTSIDE any
+             -- batch (owner 2026-09-10: "the payments were given in backend —
+             -- changing the outstanding alone will not make sense, we need to
+             -- change the interest also accordingly").
+             --
+             -- An investment keyed in after the batch was built still earned
+             -- that period's interest and was paid it by hand. Its principal is
+             -- already on the last-batch side, so counting the principal while
+             -- ignoring the interest described half a customer each.
+             --
+             -- A UNION with the batch, NOT a switch to due_date alone: the
+             -- batch also carries redemption slices whose own due_date differs,
+             -- and matching on the date would have silently dropped ₹41,234 of
+             -- interest this batch genuinely paid. Measured before changing it.
+             OR (ds.batch_id IS NULL AND ds.due_date = $2::date))`,
+    [batch.id, since])).rows[0]!;
 
   // Money in and money out since that batch (owner 2026-08-27).
   //

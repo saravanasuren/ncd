@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams, Link } from 'react-router-dom';
 import { api, ApiError } from '../api/client.js';
@@ -777,14 +777,57 @@ export function LockerEnrollmentPage() {
   // rule than the one asked for. A JOINT locker is not asked for a nominee at
   // all any more (owner 2026-09-10).
 
+  /**
+   * On a RESUME, steps 1 and 2 are history: the branch, size, locker and
+   * customer were settled when the application was created and cannot be
+   * changed on it now. Showing them open put two long forms between the
+   * operator and the thing they came to do — take a payment, allot, send the
+   * agreement. Collapsed by default, still one click away, because "already
+   * done" is not the same as "hidden" (owner 2026-09-14).
+   */
+  const [showDone, setShowDone] = useState(false);
+  const resuming = !!app?.application_id;
+  const DoneStep = ({ title, summary, children }: { title: string; summary: string; children: ReactNode }) => (
+    <div className={card}>
+      <button type="button" className="w-full flex items-center justify-between text-left"
+        onClick={() => setShowDone((v) => !v)}>
+        <span>
+          <span className="text-success mr-1">✓</span>
+          <span className={h2 + ' inline'}>{title}</span>
+          <span className="text-xs text-text-muted ml-2">{summary}</span>
+        </span>
+        <span className="text-xs text-primary">{showDone ? 'hide' : 'change'}</span>
+      </button>
+      {showDone && <div className="mt-3">{children}</div>}
+    </div>
+  );
+
   return (
     <div className="w-full max-w-3xl">
-      <h1 className="text-xl font-bold tracking-tight m-0">Locker enrollment</h1>
-      {/* Was "a locker is allotted automatically once rent and deposit are both
-          settled" — untrue since LockerHub removed auto-allocation (§A11,
-          2026-07-25). Staff reading that would wait for something that is never
-          coming. */}
-      <p className="text-sm text-text-muted mt-1 mb-4">Enroll a customer for a locker end-to-end. Pricing is handled by LockerHub. Pick the locker number below; it is allotted once the rent is settled and a staff member confirms.</p>
+      {/* RESUMING vs STARTING. The same screen does both, and it used to say
+          "Enroll a customer for a locker end-to-end" either way — so arriving
+          from Locker Applications, on a half-finished enrolment, read as
+          starting over: step 1 asking for a branch and size that were chosen
+          days ago (owner 2026-09-14: "why is there a open button"). The button
+          was doing a real job; the page it landed on denied it. */}
+      <h1 className="text-xl font-bold tracking-tight m-0">
+        {app?.application_id ? 'Resuming a locker enrolment' : 'Locker enrollment'}
+      </h1>
+      {app?.application_id ? (
+        <p className="text-sm text-text-muted mt-1 mb-4">
+          <span className="font-mono">{String(app.application_no ?? app.application_id)}</span>
+          {name ? <> · <b className="text-text">{name}</b></> : null}
+          {app.locker_size ? <> · {String(app.locker_size)}</> : null}
+          {app.branch_name ? <> · {String(app.branch_name)}</> : null}
+          {' '}— pick up where it left off. Everything already recorded is filled in below.
+        </p>
+      ) : (
+        // Was "a locker is allotted automatically once rent and deposit are both
+        // settled" — untrue since LockerHub removed auto-allocation (§A11,
+        // 2026-07-25). Staff reading that would wait for something that is never
+        // coming.
+        <p className="text-sm text-text-muted mt-1 mb-4">Enroll a customer for a locker end-to-end. Pricing is handled by LockerHub. Pick the locker number below; it is allotted once the rent is settled and a staff member confirms.</p>
+      )}
       {err && <div className="text-xs text-danger bg-[color:var(--danger-bg)] rounded px-3 py-2 mb-3">{err}</div>}
       {note && <div className="text-xs text-success bg-[color:var(--success-bg)] rounded px-3 py-2 mb-3">{note}</div>}
 
@@ -809,6 +852,16 @@ export function LockerEnrollmentPage() {
           the leg settle on LockerHub. Enrollment just records the cheque. */}
 
       {/* 1 — Branch + size */}
+      {resuming ? (
+        <DoneStep title="1 · Branch & locker size"
+          summary={[app?.branch_name, app?.locker_size, app?.allotment?.locker_no ?? app?.intended_locker?.locker_number]
+            .filter(Boolean).join(' · ') || 'chosen when this application was created'}>
+          <div className="text-xs text-text-muted">
+            The branch, size and locker were fixed when this application was created. Changing them means a new
+            application — delete this one from Locker Applications and start again.
+          </div>
+        </DoneStep>
+      ) : (
       <div className={card}>
         <h2 className={h2}>1 · Branch &amp; locker size</h2>
         <div className="flex flex-wrap gap-2 items-center">
@@ -853,86 +906,6 @@ export function LockerEnrollmentPage() {
             </select>
           )}
         </div>
-        {/* ── Joint hirers ───────────────────────────────────────────────
-            The agreement has three hirer blocks and three signature columns.
-            Hirer 1 is the customer above; these are 2 and 3.
-
-            Captured HERE, before the application is created, because that is
-            the only call that carries them to LockerHub — editing afterwards
-            saves locally but cannot reach them.
-
-            Every joint hirer signs their own column and needs full KYC before
-            the agreement will generate, so the fields are the ones LockerHub
-            gates on. Left incomplete the enrolment still proceeds; only the
-            agreement waits. */}
-        <div className="mt-4 pt-3 border-t border-border">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-text-label uppercase tracking-wide">Joint hirers</span>
-            <span className="text-xs text-text-muted">optional · up to 2 more holders</span>
-            {hirers.length < 2 && (
-              <button type="button" className={btnGhost} onClick={() => { setHirersSaved(false); addHirer(); }}>+ Add a joint hirer</button>
-            )}
-            {/* Only once the application EXISTS. Before that the create call
-                carries them, and a second write would be a duplicate. After it,
-                nothing sent them anywhere at all — which is the bug this
-                closes. */}
-            {app?.application_id && (
-              <button type="button" className={btnGhost} disabled={busy} onClick={saveHirers}>
-                Save joint hirers
-              </button>
-            )}
-            {hirersSaved && <span className="text-xs text-success">Saved.</span>}
-          </div>
-          {app?.application_id && (
-            <p className="text-xs text-text-muted mt-1">
-              This application already exists, so joint hirers must be <b>saved</b> here — and the agreement
-              re-sent afterwards, so the copy people sign carries them.
-            </p>
-          )}
-          {/* The server's own readiness list. A hirer missing a phone cannot be
-              sent an e-sign link at all, so the agreement would never complete. */}
-          {hirerGaps.map((g) => (
-            <p key={g.position} className="text-xs text-danger mt-1">
-              Hirer {g.position}{g.name ? ` (${g.name})` : ''} still needs: {g.missing.join(', ')}.
-            </p>
-          ))}
-          {hirers.length > 0 && (
-            <p className="text-xs text-text-muted mt-2">
-              Each one signs their own column of the agreement, so each needs their <b>own phone number</b> and
-              full KYC — name, phone, address, PAN, Aadhaar last 4 and date of birth. The locker can still be
-              enrolled and allotted with these blank; only the agreement waits.
-            </p>
-          )}
-          {hirers.map((h, i) => (
-            <div key={i} className="mt-3 p-3 rounded border border-border bg-bg">
-              <div className="flex items-center justify-between mb-2">
-                <b className="text-xs">Hirer {h.position}</b>
-                <button type="button" className="text-xs text-danger hover:underline"
-                        onClick={() => removeHirer(i)}>Remove</button>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <input className={inp} placeholder="Full name" value={h.full_name}
-                       onChange={(e) => setHirerField(i, 'full_name', e.target.value)} />
-                <input className={inp} placeholder="Phone (must differ from the others)" value={h.phone}
-                       onChange={(e) => setHirerField(i, 'phone', e.target.value)} />
-                <input className={inp} placeholder="PAN" value={h.pan}
-                       onChange={(e) => setHirerField(i, 'pan', e.target.value.toUpperCase())} />
-                {/* Full 12 digits (owner 2026-09-12), as the primary customer's
-                    has been captured since 026 — a joint hirer now eSigns the
-                    same agreement. Last-4 is derived server-side, and only the
-                    last four are ever sent on to LockerHub. */}
-                <input className={inp} placeholder="Aadhaar (12 digits)" maxLength={12} inputMode="numeric" value={h.aadhaar}
-                       onChange={(e) => setHirerField(i, 'aadhaar', e.target.value.replace(/\D/g, '').slice(0, 12))} />
-                <input className={inp} type="date" value={h.dob}
-                       onChange={(e) => setHirerField(i, 'dob', e.target.value)} />
-                <input className={inp} placeholder="Email (optional)" value={h.email}
-                       onChange={(e) => setHirerField(i, 'email', e.target.value)} />
-              </div>
-              <input className={`${inp} w-full mt-2`} placeholder="Address" value={h.address}
-                     onChange={(e) => setHirerField(i, 'address', e.target.value)} />
-            </div>
-          ))}
-        </div>
 
         {/* Their API has no reserve call — A7 takes branch + size only, and a
             locker is not assigned until A11 at allotment. So this is a
@@ -959,6 +932,7 @@ export function LockerEnrollmentPage() {
           )
         )}
       </div>
+      )}
 
       {/* 2 — Customer */}
       {branchId && size && (
@@ -1052,6 +1026,92 @@ export function LockerEnrollmentPage() {
               </div>
             </div>
           )}
+
+          {/* ── Joint hirers ───────────────────────────────────────────────
+              Moved here from step 1 (owner 2026-09-14). They are PEOPLE, and
+              they belong beside the customer, not beside the branch and locker
+              size — asking who else holds the locker before anyone has said who
+              the customer is read as a question about the locker.
+
+              The agreement has three hirer blocks and three signature columns.
+              Hirer 1 is the customer above; these are 2 and 3.
+
+              Captured HERE, before the application is created, because that is
+              the only call that carries them to LockerHub — editing afterwards
+              saves locally but cannot reach them.
+
+              Every joint hirer signs their own column and needs full KYC before
+              the agreement will generate, so the fields are the ones LockerHub
+              gates on. Left incomplete the enrolment still proceeds; only the
+              agreement waits. */}
+          <div className="mt-4 pt-3 border-t border-border">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-text-label uppercase tracking-wide">Joint hirers</span>
+              <span className="text-xs text-text-muted">optional · up to 2 more holders</span>
+              {hirers.length < 2 && (
+                <button type="button" className={btnGhost} onClick={() => { setHirersSaved(false); addHirer(); }}>+ Add a joint hirer</button>
+              )}
+              {/* Only once the application EXISTS. Before that the create call
+                  carries them, and a second write would be a duplicate. After it,
+                  nothing sent them anywhere at all — which is the bug this
+                  closes. */}
+              {app?.application_id && (
+                <button type="button" className={btnGhost} disabled={busy} onClick={saveHirers}>
+                  Save joint hirers
+                </button>
+              )}
+              {hirersSaved && <span className="text-xs text-success">Saved.</span>}
+            </div>
+            {app?.application_id && (
+              <p className="text-xs text-text-muted mt-1">
+                This application already exists, so joint hirers must be <b>saved</b> here — and the agreement
+                re-sent afterwards, so the copy people sign carries them.
+              </p>
+            )}
+            {/* The server's own readiness list. A hirer missing a phone cannot be
+                sent an e-sign link at all, so the agreement would never complete. */}
+            {hirerGaps.map((g) => (
+              <p key={g.position} className="text-xs text-danger mt-1">
+                Hirer {g.position}{g.name ? ` (${g.name})` : ''} still needs: {g.missing.join(', ')}.
+              </p>
+            ))}
+            {hirers.length > 0 && (
+              <p className="text-xs text-text-muted mt-2">
+                Each one signs their own column of the agreement, so each needs their <b>own phone number</b> and
+                full KYC — name, phone, address, PAN, Aadhaar last 4 and date of birth. The locker can still be
+                enrolled and allotted with these blank; only the agreement waits.
+              </p>
+            )}
+            {hirers.map((h, i) => (
+              <div key={i} className="mt-3 p-3 rounded border border-border bg-bg">
+                <div className="flex items-center justify-between mb-2">
+                  <b className="text-xs">Hirer {h.position}</b>
+                  <button type="button" className="text-xs text-danger hover:underline"
+                          onClick={() => removeHirer(i)}>Remove</button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input className={inp} placeholder="Full name" value={h.full_name}
+                         onChange={(e) => setHirerField(i, 'full_name', e.target.value)} />
+                  <input className={inp} placeholder="Phone (must differ from the others)" value={h.phone}
+                         onChange={(e) => setHirerField(i, 'phone', e.target.value)} />
+                  <input className={inp} placeholder="PAN" value={h.pan}
+                         onChange={(e) => setHirerField(i, 'pan', e.target.value.toUpperCase())} />
+                  {/* Full 12 digits (owner 2026-09-12), as the primary customer's
+                      has been captured since 026 — a joint hirer now eSigns the
+                      same agreement. Last-4 is derived server-side, and only the
+                      last four are ever sent on to LockerHub. */}
+                  <input className={inp} placeholder="Aadhaar (12 digits)" maxLength={12} inputMode="numeric" value={h.aadhaar}
+                         onChange={(e) => setHirerField(i, 'aadhaar', e.target.value.replace(/\D/g, '').slice(0, 12))} />
+                  <input className={inp} type="date" value={h.dob}
+                         onChange={(e) => setHirerField(i, 'dob', e.target.value)} />
+                  <input className={inp} placeholder="Email (optional)" value={h.email}
+                         onChange={(e) => setHirerField(i, 'email', e.target.value)} />
+                </div>
+                <input className={`${inp} w-full mt-2`} placeholder="Address" value={h.address}
+                       onChange={(e) => setHirerField(i, 'address', e.target.value)} />
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

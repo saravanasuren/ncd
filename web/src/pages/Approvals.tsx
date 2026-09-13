@@ -216,14 +216,23 @@ function AppInvestmentNotice({ appId, amount, needsAttribution, referredBy, onDo
   const [q, setQ] = useState('');
   const [err, setErr] = useState('');
   const [assigned, setAssigned] = useState<string | null>(null);
+  type Payee = { kind: string; source: 'agents' | 'users'; id: number; code: string | null; full_name: string };
   const search = useQuery({
     queryKey: ['payee-search', q],
-    queryFn: () => api.get<{ rows: Array<{ kind: string; id: number; code: string; full_name: string }> }>(`/api/agents/payee-search?q=${encodeURIComponent(q.trim())}`),
+    queryFn: () => api.get<{ rows: Payee[] }>(`/api/agents/payee-search?q=${encodeURIComponent(q.trim())}`),
     enabled: q.trim().length >= 2,
   });
   const assign = useMutation({
-    mutationFn: (payee: string) => api.post(`/api/applications/${appId}/attribute-referrer`, { payee }),
-    onSuccess: (_r, payee) => { setAssigned(payee); setQ(''); setErr(''); onDone(); },
+    // 8 of 30 selectable staff have NO code, and posting that empty string was
+    // rejected as "Invalid request" — which is what the operator saw. Fall back
+    // to the name, which is what resolveReferrer matches on next, and send the
+    // row we actually clicked so the server can refuse a name that identifies
+    // somebody else (owner 2026-09-12).
+    mutationFn: (p: Payee) => api.post(`/api/applications/${appId}/attribute-referrer`, {
+      payee: (p.code ?? '').trim() || p.full_name,
+      payee_source: p.source, payee_id: p.id,
+    }),
+    onSuccess: (_r, p) => { setAssigned(p.full_name); setQ(''); setErr(''); onDone(); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
   const showAssign = (needsAttribution || !referredBy) && !assigned;
@@ -242,9 +251,15 @@ function AppInvestmentNotice({ appId, amount, needsAttribution, referredBy, onDo
           {q.trim().length >= 2 && (search.data?.rows.length ?? 0) > 0 && (
             <div className="mt-1.5 flex flex-col gap-1 max-h-40 overflow-y-auto">
               {search.data!.rows.map((p) => (
-                <button key={`${p.kind}-${p.id}`} disabled={assign.isPending} onClick={() => assign.mutate(p.code)}
+                <button key={`${p.source}-${p.id}`} disabled={assign.isPending} onClick={() => assign.mutate(p)}
                   className="text-left text-xs px-2 py-1 rounded hover:bg-surface border border-transparent hover:border-border">
-                  {p.full_name} <span className="font-mono text-text-muted">{p.code}</span> <span className="text-text-muted">· {p.kind}</span>
+                  {p.full_name}{' '}
+                  {p.code
+                    ? <span className="font-mono text-text-muted">{p.code}</span>
+                    // Said out loud: an empty gap here is why the row looked
+                    // identical to a working one right up to the error.
+                    : <span className="text-text-muted italic">no code</span>}{' '}
+                  <span className="text-text-muted">· {p.kind}</span>
                 </button>
               ))}
             </div>

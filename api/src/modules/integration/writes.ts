@@ -87,6 +87,46 @@ customerWritesRouter.post('/penny-drop', asyncHandler(async (req, res) => {
 }));
 
 // ─── Customer profile sync from LockerHub self-signup ────────────────────
+/**
+ * Run one statement that is ALLOWED to fail, inside a transaction, without
+ * killing the transaction.
+ *
+ * Postgres aborts the WHOLE transaction on any failed statement. Catching the
+ * error in JavaScript does not undo that: every query afterwards returns
+ * "current transaction is aborted, commands ignored until end of transaction
+ * block". A `try { ... } catch { /* ignore *\/ }` around a tx query therefore
+ * does the opposite of what it reads like — it hides the real error and breaks
+ * everything downstream instead.
+ *
+ * That was live on the LockerHub customer sync (owner 2026-09-13): a PAN
+ * collision was swallowed, and the NEXT statement — an unrelated aadhaar_last4
+ * update — was the one that threw, 500ing the request and emailing an error
+ * that named the wrong line. LockerHub then retried the same customer every six
+ * hours, failing every time.
+ *
+ * A SAVEPOINT is the only way to recover: roll back to it and the transaction
+ * is usable again. Returns whether the statement succeeded, and logs WHY it did
+ * not — the swallowed error was the reason this took a stack trace to find.
+ */
+async function tryStatement(
+  tx: Db, what: string, run: (tx: Db) => Promise<unknown>,
+): Promise<boolean> {
+  const sp = 'sp_' + what.replace(/[^a-z0-9]/gi, '').slice(0, 24).toLowerCase();
+  await tx.query(`SAVEPOINT ${sp}`);
+  try {
+    await run(tx);
+    await tx.query(`RELEASE SAVEPOINT ${sp}`);
+    return true;
+  } catch (e) {
+    // Back to a usable transaction, then say what happened. Silence here is
+    // what made the original bug unreadable.
+    await tx.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+    await tx.query(`RELEASE SAVEPOINT ${sp}`);
+    console.warn(`[LH-SYNC] ${what} skipped: ${(e as Error).message}`);
+    return false;
+  }
+}
+
 customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, res) => {
   const b = req.body ?? {};
   const phone = normalisePhone(b.phone);
@@ -269,10 +309,13 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
         const cur = (await tx.query<{ pan: string | null }>('SELECT pan FROM customers WHERE id = $1', [customerId])).rows[0];
         const curPan = cur?.pan ?? '';
         if (curPan === '' || curPan.startsWith('LH_') || curPan.startsWith('CGRP_')) {
-          try {
-            await tx.query('UPDATE customers SET pan = $2, updated_at = now() WHERE id = $1', [customerId, pan]);
+          // A collision here is EXPECTED — that PAN belongs to another
+          // customer, so we keep what we have. It must not take the rest of
+          // the sync down with it, which is what a bare try/catch did.
+          if (await tryStatement(tx, 'pan', (t) =>
+            t.query('UPDATE customers SET pan = $2, updated_at = now() WHERE id = $1', [customerId, pan]))) {
             updatedFields.push('pan');
-          } catch { /* that PAN belongs to another customer — keep what we have */ }
+          }
         }
       }
       // Aadhaar: fill a blank, never replace. A stored Aadhaar has been through
@@ -312,10 +355,10 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
       const cur = (await tx.query<{ pan: string | null }>('SELECT pan FROM customers WHERE id = $1', [customerId])).rows[0];
       const curPan = cur?.pan ?? '';
       if (curPan === '' || curPan.startsWith('LH_') || curPan.startsWith('CGRP_')) {
-        try {
-          await tx.query('UPDATE customers SET pan = $2, updated_at = now() WHERE id = $1', [customerId, kycPan]);
+        if (await tryStatement(tx, 'kycpan', (t) =>
+          t.query('UPDATE customers SET pan = $2, updated_at = now() WHERE id = $1', [customerId, kycPan]))) {
           updatedFields.push('pan');
-        } catch { /* that PAN belongs to another customer — keep what we have */ }
+        }
       }
     }
 

@@ -75,9 +75,17 @@ export async function lockerProfile(db: Db, lockerApplicationId: string) {
   const { syncFromEsignStatus } = await import('./agreements.js');
   const signing = await syncFromEsignStatus(db, appId, esign).catch(() => null);
 
+  // Joint hirers. They have been saved since 089 and shown NOWHERE — not on
+  // this page, not on the tenant roster — so a jointly-held locker looked
+  // single-held everywhere except the agreement PDF, and staff reasonably
+  // concluded the second holder had not saved (owner 2026-09-14).
+  const { listHirers } = await import('./hirers.js');
+  const hirers = await listHirers(db, appId).catch(() => []);
+
   return {
     locker_application_id: appId,
     customer: customer && { id: Number(customer.id), full_name: customer.full_name, customer_code: customer.customer_code, phone: customer.phone },
+    hirers,
     lockerhub,          // raw LockerHub record: legs, payments[], allotment, lease, rent, deposit
     lockerhub_error,    // set only on a fetch failure, so "no data" ≠ "outage"
     esign,              // A19 status (null until signing starts / on outage)

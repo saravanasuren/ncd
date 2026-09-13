@@ -210,8 +210,13 @@ const OPERATION_MANDATES = 'Sole / Either or Survivor / Anyone or Survivor / Joi
 export interface LockerSignatureBox { llx: number; lly: number; urx: number; ury: number; }
 export interface LockerAgreementResult {
   buffer: Buffer;
-  /** Where the CUSTOMER's e-signature goes (the "Signature of Hirer(s)" line). */
+  /** Where the CUSTOMER's e-signature goes — hirer 1's line. Kept for callers
+   *  that only ever sign the primary. */
   hirer: LockerSignatureBox; hirerPage: number;
+  /** EVERY hirer's signature line, in order. A joint hiring is signed by all of
+   *  them (owner 2026-09-12), so each needs its own box: Digio places one
+   *  signature per signer and two signers cannot share coordinates. */
+  hirers: Array<{ position: number; name: string; box: LockerSignatureBox; page: number }>;
   /** Where the company AUTHORISED SIGNATORY (the CEO) e-signs. */
   signatory: LockerSignatureBox; signatoryPage: number;
 }
@@ -225,6 +230,7 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
 
   // Captured during the render pass so the caller can place each e-signature.
   let hirerBox!: LockerSignatureBox, hirerPage = 1;
+  const hirerBoxes: Array<{ position: number; name: string; box: LockerSignatureBox; page: number }> = [];
   let signatoryBox!: LockerSignatureBox, signatoryPage = 1;
 
   const buffer = await renderToBuffer((doc) => {
@@ -493,17 +499,35 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
     }
 
     // ── Final signatures ─────────────────────────────────────────────────
-    need(130);
-    // Customer e-sign sits just above the "Signature of Hirer(s)" ruled line.
-    const hirerY = doc.y;
-    hirerPage = pageNo;
-    hirerBox = { llx: 50, lly: PAGE_H - hirerY, urx: 290, ury: PAGE_H - hirerY + 32 };
-    doc.font('Helvetica').fontSize(9).fillColor(COLORS.TEXT)
-      .text('_________________________________________________________________', 50, doc.y, { width: W });
-    doc.y += 2;
-    doc.font('Helvetica').fontSize(8.5).fillColor(COLORS.MUTED)
-      .text('Signature of Customers / Hirer(s)', 50, doc.y, { width: W });
-    doc.y += 24;
+    // ONE ruled line per hirer, each named (owner 2026-09-12: "the joint
+    // applicant should also do the esigning").
+    //
+    // Stacked, not side by side. Digio needs a distinct box per signer, and a
+    // full-width line each keeps the signature legible and leaves no doubt on
+    // paper about who signed where — which is the point of a signature block on
+    // an agreement two or three people are bound by.
+    const signers: Array<{ position: number; name: string }> = [
+      { position: 1, name: orBlank(c.full_name) },
+      ...(input.hirers ?? [])
+        .slice()
+        .sort((a, b) => Number(a.position) - Number(b.position))
+        .map((h) => ({ position: Number(h.position), name: orBlank(h.full_name) })),
+    ];
+    need(90 + signers.length * 46);
+    for (const sgn of signers) {
+      const y = doc.y;
+      const box: LockerSignatureBox = { llx: 50, lly: PAGE_H - y, urx: 290, ury: PAGE_H - y + 32 };
+      if (sgn.position === 1) { hirerPage = pageNo; hirerBox = box; }
+      hirerBoxes.push({ position: sgn.position, name: sgn.name, box, page: pageNo });
+      doc.font('Helvetica').fontSize(9).fillColor(COLORS.TEXT)
+        .text('_________________________________________________________________', 50, doc.y, { width: W });
+      doc.y += 2;
+      doc.font('Helvetica').fontSize(8.5).fillColor(COLORS.MUTED)
+        .text(signers.length > 1
+          ? `Signature of Hirer ${sgn.position}${sgn.name ? ` — ${sgn.name}` : ''}`
+          : 'Signature of Customers / Hirer(s)', 50, doc.y, { width: W });
+      doc.y += 24;
+    }
     doc.font('Helvetica').fontSize(9).fillColor(COLORS.TEXT)
       .text(`For ${co.legal_name},`, 50, doc.y, { width: W });
     // Authorised-signatory e-sign sits in the gap between "For <company>," and
@@ -523,5 +547,5 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
         50, doc.y, { width: W });
   });
 
-  return { buffer, hirer: hirerBox, hirerPage, signatory: signatoryBox, signatoryPage };
+  return { buffer, hirer: hirerBox, hirerPage, hirers: hirerBoxes, signatory: signatoryBox, signatoryPage };
 }

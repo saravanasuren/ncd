@@ -39,13 +39,28 @@ export async function lockerProfile(db: Db, lockerApplicationId: string) {
        FROM locker_fee_waivers WHERE lockerhub_application_id = $1 ORDER BY id DESC`, [appId])).rows;
 
   // Resolve an NCD customer from whatever row carries one.
+  // locker_applications FIRST: it is the index NCD writes at create time and
+  // carries the customer for every application. Cheques and pledges only carry
+  // one when money happened to move that way, so a locker whose rent was waived
+  // and which backs no NCD had NO customer here at all — hirer 1 rendered as a
+  // dash on a page listing hirer 2 by name (owner 2026-09-14).
+  const indexed = (await db.query<{ customer_id: string | null; customer_name: string | null; phone: string | null }>(
+    'SELECT customer_id, customer_name, phone FROM locker_applications WHERE lockerhub_application_id = $1',
+    [appId])).rows[0];
   const customerId =
+    (indexed?.customer_id as string | null | undefined) ??
     (cheques.find((q) => q.customer_id != null)?.customer_id as string | undefined) ??
     (pledges.find((p) => p.customer_id != null)?.customer_id as string | undefined) ?? null;
   let customer: Record<string, unknown> | null = null;
   if (customerId != null) {
     customer = (await db.query<Record<string, unknown>>(
       'SELECT id, full_name, customer_code, phone FROM customers WHERE id = $1', [Number(customerId)])).rows[0] ?? null;
+  }
+  // A walk-in created straight on LockerHub has no NCD customer row, but the
+  // index still knows their name. Better a name than a dash on the line that
+  // says who holds the locker.
+  if (!customer && (indexed?.customer_name || indexed?.phone)) {
+    customer = { id: null, full_name: indexed.customer_name, customer_code: null, phone: indexed.phone };
   }
 
   // ── LockerHub-live: the application (payments/legs/allotment/lease) + e-sign ─
@@ -84,7 +99,12 @@ export async function lockerProfile(db: Db, lockerApplicationId: string) {
 
   return {
     locker_application_id: appId,
-    customer: customer && { id: Number(customer.id), full_name: customer.full_name, customer_code: customer.customer_code, phone: customer.phone },
+    // id stays NULL for a walk-in with no NCD record — Number(null) is 0, and a
+    // customer id of 0 would render as a link to a customer that does not exist.
+    customer: customer && {
+      id: customer.id == null ? null : Number(customer.id),
+      full_name: customer.full_name, customer_code: customer.customer_code, phone: customer.phone,
+    },
     hirers,
     lockerhub,          // raw LockerHub record: legs, payments[], allotment, lease, rent, deposit
     lockerhub_error,    // set only on a fetch failure, so "no data" ≠ "outage"

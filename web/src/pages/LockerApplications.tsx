@@ -80,7 +80,13 @@ export function LockerApplicationsPage() {
       `/api/lockers/applications?show=${tab}${q.trim() ? `&q=${encodeURIComponent(q.trim())}` : ''}`),
   });
 
-  const open = (r: Row) => nav(`/app/locker-enrollment?id=${encodeURIComponent(r.lockerhub_application_id)}`);
+  // `application_id`, NOT `id` — the enrolment page reads `application_id` and
+  // has since it gained the resume path. This link has carried `id` since the
+  // list was built, so Resume has NEVER resumed: the page found no id, fell
+  // through to its blank state, and looked like a fresh enrolment every time
+  // (owner 2026-09-14: "when i click on resume im still seeing fresh locker
+  // enrolment only"). One word, and none of the resume work ever ran.
+  const open = (r: Row) => nav(`/app/locker-enrollment?application_id=${encodeURIComponent(r.lockerhub_application_id)}`);
 
   /** Same three-outcome delete the enrolment screen has: cancel on LockerHub
    *  where they allow it, and a Super-Admin-only NCD-view removal where they

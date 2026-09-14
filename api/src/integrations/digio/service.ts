@@ -113,14 +113,42 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
     } catch (e) {
       console.warn(`[digio] locker-agreement signed-document download failed for signing ${result.lockerAgreementSigningId}: ${(e as Error).message}`);
     }
+    // WHO signed, and is anyone left? A joint agreement is a chain — hirer 1,
+    // then 2, then 3 — and only the LAST of them hands over to the CEO. Marking
+    // it CustomerSigned on the first signature would have offered the CEO a
+    // document the other holders had not signed (owner 2026-09-14).
+    //
+    // The stored file is REPLACED at every stage, not kept from the first: the
+    // next hirer signs this file, so it must carry every signature so far.
+    // COALESCE would have frozen it at hirer 1's copy and quietly dropped the
+    // rest.
+    const sess = (await db.query<{ signer_position: number | null; lockerhub_application_id: string }>(
+      `SELECT ds.signer_position, s.lockerhub_application_id
+         FROM digio_signing_sessions ds
+         JOIN locker_agreement_signings s ON s.id = ds.locker_agreement_signing_id
+        WHERE ds.digio_request_id = $1`, [digioRequestId])).rows[0];
+    const position = sess?.signer_position == null ? 1 : Number(sess.signer_position);
+    // How many hirers this agreement has: the customer, plus the joint ones.
+    const jointCount = sess
+      ? Number((await db.query<{ n: string }>(
+          'SELECT count(*) AS n FROM locker_application_hirers WHERE lockerhub_application_id = $1',
+          [sess.lockerhub_application_id])).rows[0]?.n ?? 0)
+      : 0;
+    const isLastHirer = position >= jointCount + 1;
+
     await db.query(
       `UPDATE locker_agreement_signings
-          SET status = 'CustomerSigned',
+          SET status = CASE WHEN $3 THEN 'CustomerSigned' ELSE 'AwaitingSignature' END,
               signed_doc_path = COALESCE($2, signed_doc_path),
               signed_doc_filename = COALESCE(signed_doc_filename, 'locker-agreement-signed.pdf'),
               signed_doc_mime = COALESCE(signed_doc_mime, 'application/pdf'),
-              signed_at = COALESCE(signed_at, now()), updated_at = now()
-        WHERE id = $1`, [result.lockerAgreementSigningId, signedPath]);
+              -- Only advance the watermark when a file actually arrived. A
+              -- failed download leaves it where it was, and the next hirer is
+              -- refused rather than signing a copy missing the one before them.
+              signed_doc_position = CASE WHEN $2 IS NULL THEN signed_doc_position ELSE $4 END,
+              signed_at = CASE WHEN $3 THEN COALESCE(signed_at, now()) ELSE signed_at END,
+              updated_at = now()
+        WHERE id = $1`, [result.lockerAgreementSigningId, signedPath, isLastHirer, position]);
   } else if (result.ok && result.fresh && result.docType === 'locker_agreement_ceo' && result.lockerAgreementSigningId) {
     // The CEO counter-signed. Store the FULLY-signed PDF (both signatures) and
     // mark the agreement Signed. Hand-off to LockerHub is a separate best-effort

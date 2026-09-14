@@ -434,6 +434,27 @@ export function LockerEnrollmentPage() {
    * PRs; this records the choice and shows which way a locker went.
    */
   const [signing, setSigning] = useState<any>(null);
+  /** One row per hirer, with its own state and its own button (owner
+   *  2026-09-14). Reloaded whenever the signing changes, so "who is next" is
+   *  the server's answer and not the screen's guess. */
+  const [signers, setSigners] = useState<Array<{
+    position: number; name: string; phone: string | null; status: 'pending' | 'sent' | 'signed';
+    sign_url: string | null; can_send: boolean; blocked_reason: string | null;
+  }>>([]);
+  const loadSigners = async () => {
+    if (!app?.application_id) return;
+    const r = await run(api.get<{ signers: typeof signers }>(
+      `/api/lockers/applications/${encodeURIComponent(String(app.application_id))}/agreement/signers`));
+    if (r?.signers) setSigners(r.signers);
+  };
+  const sendToHirer = async (position: number) => {
+    if (!app?.application_id) return;
+    const r = await run(api.post<{ sign_url: string | null }>(
+      `/api/lockers/applications/${encodeURIComponent(String(app.application_id))}/agreement/esign-initiate/${position}`,
+      { ...(ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}) }));
+    if (r) { await loadSigners(); await loadSigning(); }
+  };
+
   const loadSigning = async () => {
     if (!app?.application_id) return;
     const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement`));
@@ -592,7 +613,7 @@ export function LockerEnrollmentPage() {
   // Waivers belong to an application, so they follow it rather than the mount.
   useEffect(() => { void loadFeeWaivers(); void loadOfflinePayments(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id]);
   // There is no agreement until there is a locker — §A19 is post-allotment.
-  useEffect(() => { void loadEsign(); void loadSigning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id, app?.allotment?.locker_number]);
+  useEffect(() => { void loadEsign(); void loadSigning(); void loadSigners(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [app?.application_id, app?.allotment?.locker_number]);
   const chequeFor = (leg: string) => cheques.find((c) => c.leg === leg && c.status === 'Pending')
     ?? cheques.find((c) => c.leg === leg && c.status === 'Cleared');
   // Lockers and NCD are ONLINE-ONLY (contract v1.2 §A10): cash/cheque/transfer
@@ -1461,10 +1482,52 @@ export function LockerEnrollmentPage() {
                       <div className="mt-1 flex flex-col gap-1.5">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">{signing.label}</span>
-                          {awaitingCustomer && custUrl && <a className={btnGhost} href={custUrl} target="_blank" rel="noopener noreferrer">Open signing link</a>}
-                          <button className={btnGhost} disabled={busy} onClick={loadSigning}>Check again</button>
+                          <button className={btnGhost} disabled={busy} onClick={() => { void loadSigning(); void loadSigners(); }}>Check again</button>
                           {awaitingCustomer && <button className={btnGhost} disabled={busy} onClick={resendEsign}>Re-send a fresh copy</button>}
                         </div>
+
+                        {/* ── One row per hirer (owner 2026-09-14) ──────────────
+                            Each signs the document the one before them produced,
+                            so the buttons unlock in order. A single button and a
+                            single status could not say which of three people the
+                            agreement was waiting on. */}
+                        {signers.map((sg) => (
+                          <div key={sg.position} className="flex items-center gap-2 flex-wrap text-xs">
+                            <span className={sg.status === 'signed' ? 'text-success' : 'text-text-muted'}>
+                              {sg.status === 'signed' ? '✓' : '•'} Hirer {sg.position}
+                            </span>
+                            <b className="text-text">{sg.name}</b>
+                            {sg.status === 'signed' && <span className="text-success">signed</span>}
+                            {sg.status === 'sent' && <span className="text-warn">link sent — waiting</span>}
+                            {sg.status === 'sent' && sg.sign_url && (
+                              <a className={btnGhost} href={sg.sign_url} target="_blank" rel="noopener noreferrer">Open link</a>
+                            )}
+                            {sg.can_send && (
+                              <button className={btnGhost} disabled={busy} onClick={() => sendToHirer(sg.position)}>
+                                Send to Hirer {sg.position}
+                              </button>
+                            )}
+                            {/* Why it is locked, not just that it is. */}
+                            {sg.blocked_reason && <span className="text-text-muted">{sg.blocked_reason}</span>}
+                          </div>
+                        ))}
+
+                        {/* The document as it stands, at EVERY stage (owner
+                            2026-09-14) — labelled with how far along it is, so
+                            downloading it mid-chain is not mistaken for the
+                            finished agreement. */}
+                        {signers.some((x) => x.status === 'signed') && (
+                          <div className="flex items-center gap-2 flex-wrap text-xs">
+                            <a className={btnGhost}
+                              href={`/api/lockers/applications/${encodeURIComponent(String(app.application_id))}/agreement/signed.pdf`}
+                              target="_blank" rel="noreferrer">Download the signed copy</a>
+                            <span className="text-text-muted">
+                              signed so far by {signers.filter((x) => x.status === 'signed').length} of {signers.length}
+                              {' '}holder{signers.length === 1 ? '' : 's'}
+                              {signers.every((x) => x.status === 'signed') ? ' — next the CEO countersigns' : ''}
+                            </span>
+                          </div>
+                        )}
                         <span className="text-xs text-text-muted">
                           {awaitingCustomer
                             ? 'Digio texts the customer a link. Once they sign, it appears in Locker Agreements for the CEO to countersign. Added a joint hirer or fixed a detail after sending? Re-send a fresh copy — the old link freezes the moment it is created.'

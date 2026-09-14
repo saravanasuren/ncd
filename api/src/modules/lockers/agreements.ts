@@ -336,6 +336,18 @@ async function renderLockerAgreement(
     customer = (await db.query<Record<string, unknown>>(
       `SELECT ${CUSTOMER_COLS} FROM customers WHERE id = $1`, [Number(cid)])).rows[0] ?? null;
   }
+  // OUR OWN index next. locker_applications carries the customer for every
+  // application NCD creates, and it is the only source that does not depend on
+  // LockerHub being reachable — the agreement is our document now, so it should
+  // not fail to render because their API is down.
+  if (!customer) {
+    const idx = (await db.query<{ customer_id: string | null }>(
+      'SELECT customer_id FROM locker_applications WHERE lockerhub_application_id = $1', [applicationId])).rows[0];
+    if (idx?.customer_id) {
+      customer = (await db.query<Record<string, unknown>>(
+        `SELECT ${CUSTOMER_COLS} FROM customers WHERE id = $1`, [Number(idx.customer_id)])).rows[0] ?? null;
+    }
+  }
   if (!customer && app?.phone) {
     const digits = String(app.phone).replace(/\D/g, '').slice(-10);
     if (digits.length === 10) {
@@ -426,93 +438,157 @@ export async function generateAgreementForm(
  * 'locker_agreement') carries it, so the existing poller + completeSigning drive
  * it to done. Inert-but-recorded in stub mode (no Digio creds).
  */
-export async function initiateCustomerEsign(
-  db: Db, actor: AuthUser, applicationId: string, customerId?: number | null,
-): Promise<{ sign_url: string | null; digio_request_id: string; stub: boolean }> {
-  // The enrolment's "Send agreement for signing" comes straight here, so start
-  // the signing on the e-sign path if one hasn't been chosen yet.
+/**
+ * The signers of this agreement, in signing order: hirer 1 (the customer) then
+ * each joint hirer, with the signature box the renderer gave each of them.
+ *
+ * Exported so the SCREEN can draw one row per signer with its own button and
+ * its own state, rather than inferring who is next from a single status.
+ */
+export async function agreementSigners(db: Db, applicationId: string): Promise<Array<{
+  position: number; name: string; phone: string | null; email: string | null;
+  status: 'pending' | 'sent' | 'signed'; sign_url: string | null; can_send: boolean; blocked_reason: string | null;
+}>> {
+  const signing = await getSigning(db, applicationId);
+  const { result, customer } = await renderLockerAgreement(db, applicationId, signing?.id ?? 0);
+  const { listHirers } = await import('./hirers.js');
+  const joint = new Map((await listHirers(db, applicationId)).map((h) => [Number(h.position), h]));
+
+  const sessions = signing
+    ? (await db.query<{ signer_position: number; status: string; sign_url: string | null }>(
+        `SELECT signer_position, status, sign_url FROM digio_signing_sessions
+          WHERE locker_agreement_signing_id = $1 AND signer_position IS NOT NULL AND status <> 'cancelled'`,
+        [signing.id])).rows
+    : [];
+  const byPos = new Map(sessions.map((r) => [Number(r.signer_position), r]));
+
+  const out: Array<{ position: number; name: string; phone: string | null; email: string | null;
+    status: 'pending' | 'sent' | 'signed'; sign_url: string | null; can_send: boolean; blocked_reason: string | null }> = [];
+  let previousSigned = true;   // nobody comes before hirer 1
+  for (const h of result.hirers) {
+    const jh = h.position === 1 ? null : joint.get(h.position);
+    const name = h.position === 1 ? String(customer.full_name ?? h.name) : (jh?.full_name ?? h.name);
+    const phone = h.position === 1 ? ((customer.phone as string) ?? null) : (jh?.phone ?? null);
+    const email = h.position === 1 ? ((customer.email as string) ?? null) : (jh?.email ?? null);
+    const sess = byPos.get(h.position);
+    const status: 'pending' | 'sent' | 'signed' =
+      sess?.status === 'signed' ? 'signed' : sess ? 'sent' : 'pending';
+
+    // In ORDER (owner 2026-09-14). Each stage signs the file the stage before
+    // it produced, so sending out of order would put a signature on a document
+    // that is about to be replaced.
+    const blocked_reason =
+      status !== 'pending' ? null
+      : !previousSigned ? `Hirer ${h.position - 1} has to sign first.`
+      : !String(phone ?? '').trim() ? 'No phone number — the signing link cannot reach them.'
+      : null;
+    out.push({ position: h.position, name, phone, email, status,
+      sign_url: sess?.sign_url ?? null, can_send: status === 'pending' && !blocked_reason, blocked_reason });
+    previousSigned = status === 'signed';
+  }
+  return out;
+}
+
+/**
+ * Send ONE hirer their e-Sign, on the document every signature so far is
+ * already on (owner 2026-09-14: "make sure to use one single applicaition for
+ * all esigning. i dont need fresh one for all different hirer").
+ *
+ * Hirer 1 signs the freshly rendered agreement. Every hirer after them signs
+ * the FILE THE PREVIOUS STAGE PRODUCED, so signatures accumulate on one
+ * document instead of each person signing their own copy of it. The CEO stage
+ * has always worked this way; this generalises it.
+ *
+ * Refuses out of order, because a signature placed on a document that is then
+ * replaced by the next stage is a signature on nothing.
+ */
+export async function initiateHirerEsign(
+  db: Db, actor: AuthUser, applicationId: string, position: number, customerId?: number | null,
+): Promise<{ sign_url: string | null; digio_request_id: string; stub: boolean; position: number }> {
   let signing = await getSigning(db, applicationId);
   if (!signing) {
     signing = await chooseMethod(db, actor, { lockerhub_application_id: applicationId, method: 'esign', customer_id: customerId ?? null });
   }
-  if (signing.status === 'Signed') throw errors.conflict('This agreement is already signed.');
+  if (signing.status === 'Signed') throw errors.conflict('This agreement is already fully signed.');
 
-  const { result, customer } = await renderLockerAgreement(db, applicationId, signing.id);
-  const { createSignRequest, digioConfigured } = await import('../../integrations/digio/index.js');
+  const signers = await agreementSigners(db, applicationId);
+  const me = signers.find((x) => x.position === position);
+  if (!me) throw errors.badRequest(`There is no hirer ${position} on this agreement.`);
+  if (me.status === 'signed') throw errors.conflict(`Hirer ${position} (${me.name}) has already signed.`);
+  if (me.blocked_reason) throw errors.badRequest(me.blocked_reason);
 
-  // EVERY hirer signs, not just the first (owner 2026-09-12: "the joint
-  // applicant should also do the esigning"). A joint locker is hired by two or
-  // three people and binds all of them, so a document carrying only the primary
-  // signature is not the agreement it claims to be.
-  //
-  // ONE Digio request with all of them: Digio marks the document signed only
-  // once every signer has, which is exactly the semantics wanted — a joint
-  // hiring is not signed until it is signed by everyone. The existing poller
-  // and completeSigning need no change because they already work off that
-  // whole-document status.
-  const { listHirers } = await import('./hirers.js');
-  const joint = await listHirers(db, applicationId);
-  const byPosition = new Map(joint.map((h) => [Number(h.position), h]));
-  const parties = result.hirers.map((h) => {
-    if (h.position === 1) {
-      return {
-        name: (customer.full_name as string) ?? h.name,
-        phone: (customer.phone as string) ?? null,
-        email: (customer.email as string) ?? null,
-        box: h.box, page: h.page,
-      };
-    }
-    const jh = byPosition.get(h.position);
-    // A hirer printed on the page with nobody to send the link to would leave a
-    // document that can never complete — Digio waits for every signer forever.
-    // Phone is already required of a joint hirer and must differ from the
-    // others (hirers.ts), so this is a guard against a row that predates that
-    // rule, not an expected path.
-    if (!jh || !String(jh.phone ?? '').trim()) {
+  const { result } = await renderLockerAgreement(db, applicationId, signing.id);
+  const box = result.hirers.find((h) => h.position === position);
+  if (!box) throw errors.badRequest(`No signature box for hirer ${position} on this agreement.`);
+
+  // Hirer 1 signs the fresh render; everyone after signs what the last stage
+  // produced. Falling back to the fresh render would silently drop the earlier
+  // signatures, so a missing file is refused rather than papered over.
+  let document: { fileName: string; contentBase64: string };
+  if (position === 1) {
+    document = { fileName: `locker-agreement-${applicationId}.pdf`, contentBase64: result.buffer.toString('base64') };
+  } else {
+    const prior = await getSignedDocument(db, applicationId);
+    // WHOSE signatures that file carries. Existence is not enough: a failed
+    // download mid-chain leaves an EARLIER copy in place, and signing that
+    // would drop the signature in between without anything saying so.
+    const carries = (await db.query<{ signed_doc_position: number | null }>(
+      'SELECT signed_doc_position FROM locker_agreement_signings WHERE id = $1', [signing.id])).rows[0]?.signed_doc_position;
+    if (!prior || Number(carries ?? 0) !== position - 1) {
       throw errors.badRequest(
-        `Hirer ${h.position}${h.name ? ` (${h.name})` : ''} has no phone number, so the e-Sign link cannot reach them. `
-        + 'Add it to the hirer, then send the agreement again.');
+        `The copy signed by hirer ${position - 1} is not available yet — it arrives a moment after they sign. Try again shortly.`);
     }
-    return { name: jh.full_name, phone: jh.phone ?? null, email: jh.email ?? null, box: h.box, page: h.page };
-  });
+    document = { fileName: `locker-agreement-${applicationId}.pdf`, contentBase64: prior.buffer.toString('base64') };
+  }
 
+  const { createSignRequest, digioConfigured } = await import('../../integrations/digio/index.js');
   const req = await createSignRequest({
+    signerName: me.name, signerPhone: me.phone ?? undefined, signerEmail: me.email ?? undefined,
     reason: 'Locker hire agreement',
-    document: { fileName: `locker-agreement-${applicationId}.pdf`, contentBase64: result.buffer.toString('base64') },
-    parties,
+    document,
+    signature: { box: box.box, page: box.page },
   });
 
   await db.withTx(async (tx) => {
-    // Re-sending supersedes any earlier open link for THIS signing: retire the
-    // old sessions so the poller stops watching them and a customer who kept an
-    // old SMS link can't sign a stale copy (e.g. one made before a re-send that
-    // corrected the document). Only 'requested' rows — a signed one is history.
+    // Supersede any earlier open link for THIS hirer only — another hirer's
+    // live link must survive, which a signing-wide cancel would have killed.
     await tx.query(
       `UPDATE digio_signing_sessions SET status = 'cancelled', updated_at = now()
-        WHERE locker_agreement_signing_id = $1 AND document_type = 'locker_agreement'
-          AND status = 'requested' AND digio_request_id <> $2`,
-      [signing.id, req.digioRequestId]);
+        WHERE locker_agreement_signing_id = $1 AND signer_position = $2
+          AND status = 'requested' AND digio_request_id <> $3`,
+      [signing!.id, position, req.digioRequestId]);
     await tx.query(
       `INSERT INTO digio_signing_sessions
-         (application_id, digio_request_id, sign_url, signer_email, signer_phone, status, created_by_user_id, document_type, locker_agreement_signing_id)
-       VALUES (NULL, $1, $2, $3, $4, $5, $6, 'locker_agreement', $7)
+         (application_id, digio_request_id, sign_url, signer_email, signer_phone, status,
+          created_by_user_id, document_type, locker_agreement_signing_id, signer_position)
+       VALUES (NULL, $1, $2, $3, $4, $5, $6, 'locker_agreement', $7, $8)
        ON CONFLICT (digio_request_id) DO UPDATE SET sign_url = EXCLUDED.sign_url, status = EXCLUDED.status, updated_at = now()`,
-      [req.digioRequestId, req.signUrl, (customer.email as string) ?? null, (customer.phone as string) ?? null, req.status, actor.id, signing.id]);
-    // The customer's e-Sign is out; the row awaits their signature. esign_reference
-    // holds OUR Digio request id (not LockerHub's) for this NCD-run signing.
+      [req.digioRequestId, req.signUrl, me.email ?? null, me.phone ?? null, req.status, actor.id, signing!.id, position]);
     await tx.query(
       `UPDATE locker_agreement_signings
-          SET method = 'esign', status = 'AwaitingSignature',
-              esign_reference = $1, updated_at = now()
-        WHERE id = $2`, [req.digioRequestId, signing.id]);
+          SET status = CASE WHEN status = 'Draft' THEN 'AwaitingSignature' ELSE status END,
+              -- The LATEST request for this agreement, not the first: a
+              -- re-send has to point at the link that now works, and a test
+              -- pins that. Per-signer detail lives on the sessions.
+              esign_reference = $2, updated_at = now()
+        WHERE id = $1`, [signing!.id, req.digioRequestId]);
     await writeAudit(tx, {
-      actorId: actor.id, action: 'locker.agreement.esign.initiate',
-      entityType: 'locker_agreement_signings', entityId: signing.id,
-      after: { digio_request_id: req.digioRequestId },
+      actorId: actor.id, action: 'locker.agreement.esign-sent',
+      entityType: 'locker_agreement_signings', entityId: signing!.id,
+      after: { application: applicationId, position, signer: me.name },
     });
   });
 
-  return { sign_url: req.signUrl, digio_request_id: req.digioRequestId, stub: !digioConfigured() };
+  return { sign_url: req.signUrl, digio_request_id: req.digioRequestId, stub: !digioConfigured(), position };
+}
+
+/** Hirer 1 — kept so existing callers and the "Send agreement for signing"
+ *  button continue to mean "start the chain". */
+export async function initiateCustomerEsign(
+  db: Db, actor: AuthUser, applicationId: string, customerId?: number | null,
+): Promise<{ sign_url: string | null; digio_request_id: string; stub: boolean }> {
+  const r = await initiateHirerEsign(db, actor, applicationId, 1, customerId);
+  return { sign_url: r.sign_url, digio_request_id: r.digio_request_id, stub: r.stub };
 }
 
 /**

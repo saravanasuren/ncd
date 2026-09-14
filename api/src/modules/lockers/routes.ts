@@ -1019,6 +1019,21 @@ lockersRouter.post('/authorised-users/:id/sync-retry', asyncHandler(async (req, 
 // ── Joint hirers (owner 2026-09-09) ──────────────────────────────────────
 // Holders 2 and 3 on the agreement. Hirer 1 is the applicant and is never in
 // this list — see hirers.ts for why the cross-row rules live in one place.
+// One row per signer with its own state, so the screen can draw a button each
+// and show who is next (owner 2026-09-14).
+lockersRouter.get('/applications/:id/agreement/signers', asyncHandler(async (req, res) => {
+  const { agreementSigners } = await import('./agreements.js');
+  res.json({ signers: await agreementSigners(getDb(), String(req.params.id)) });
+}));
+
+// Send ONE hirer their link, on the document carrying every signature so far.
+lockersRouter.post('/applications/:id/agreement/esign-initiate/:position', asyncHandler(async (req, res) => {
+  const { initiateHirerEsign } = await import('./agreements.js');
+  const position = Number(req.params.position);
+  const { customer_id } = z.object({ customer_id: z.number().int().positive().nullish() }).parse(req.body ?? {});
+  res.status(201).json(await initiateHirerEsign(getDb(), req.user!, String(req.params.id), position, customer_id ?? null));
+}));
+
 lockersRouter.get('/applications/:id/hirers', asyncHandler(async (req, res) => {
   const id = String(req.params.id);
   res.json({

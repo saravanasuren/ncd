@@ -162,6 +162,22 @@ export async function setHirers(
   if (!appId) throw errors.badRequest('application id required');
   validateHirers(hirers, applicantPhone);
 
+  // READ-ONLY once anybody has signed (owner 2026-09-14). Each stage signs the
+  // file the one before produced, so changing who the hirers are after a
+  // signature would leave that signature on a document describing different
+  // people — and the agreement has one signature box per hirer, so adding a
+  // hirer changes the page the earlier signature was placed on.
+  const signed = (await db.query<{ n: string }>(
+    `SELECT count(*) AS n
+       FROM digio_signing_sessions ds
+       JOIN locker_agreement_signings s ON s.id = ds.locker_agreement_signing_id
+      WHERE s.lockerhub_application_id = $1 AND ds.status = 'signed'`, [appId])).rows[0];
+  if (Number(signed?.n ?? 0) > 0) {
+    throw errors.conflict(
+      'Somebody has already signed this agreement, so the hirers can no longer be changed. '
+      + 'Cancel the agreement and start it again if a holder is wrong.');
+  }
+
   return db.withTx(async (tx) => {
     // Carry a full Aadhaar we already hold across the delete-and-reinsert.
     //

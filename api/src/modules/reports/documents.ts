@@ -302,3 +302,122 @@ export async function dumpXlsx(out: Writable, db: Db): Promise<void> {
   }
   await wb.commit();
 }
+
+/**
+ * Incentives for one month, staff and agents, in one workbook
+ * (owner 2026-09-14: "i need a clear detailed report of incentives of each and
+ * every staffs for that particular month. for agents also the same ... no pdf
+ * files - i need it in excel").
+ *
+ * Three sheets, in the order the question is usually asked: Summary answers
+ * "what do I owe each person", and the two detail sheets answer "why".
+ *
+ * Staff and agents are SEPARATE SHEETS rather than one list with a column,
+ * because they are paid through different routes and the totals are wanted
+ * apart. Columns match between them so the two read the same.
+ *
+ * A person with nothing in the month is absent rather than present as a zero: a
+ * payout sheet listing 40 people who earned nothing buries the eight who did.
+ */
+export async function monthlyIncentivesXlsx(
+  month: string,
+  rows: import('../incentives/service.js').MonthlyIncentiveRow[],
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const money = '#,##0.00';
+
+  const staff = rows.filter((r) => r.is_staff);
+  const agents = rows.filter((r) => !r.is_staff);
+
+  const sum = wb.addWorksheet('Summary');
+  sum.addRow([`Incentives earned in ${month}`]).font = { bold: true, size: 14 };
+  sum.addRow([
+    'Everything arising from investments whose money was RECEIVED in this month, '
+    + 'whether or not it has been paid. This matches the Incentives page and My Earnings.',
+  ]);
+  sum.addRow([]);
+  sum.addRow(['Type', 'Name', 'Investments', 'Customers', 'Investment Amount', 'Incentive Earned', 'Paid', 'Outstanding'])
+    .eachCell((c) => { c.font = { bold: true }; });
+
+  interface Agg {
+    type: string; name: string; n: number; customers: Set<string>;
+    inv: number; earned: number; paid: number;
+  }
+  const byPayee = new Map<string, Agg>();
+  for (const r of rows) {
+    const key = `${r.payee_type}:${r.payee_id}`;
+    const e: Agg = byPayee.get(key) ?? {
+      type: r.is_staff ? 'Staff' : 'Agent', name: r.payee_name,
+      n: 0, customers: new Set<string>(), inv: 0, earned: 0, paid: 0,
+    };
+    e.n += 1;
+    if (r.customer_code) e.customers.add(r.customer_code);
+    e.inv += r.investment_amount;
+    e.earned += r.incentive_amount;
+    if (r.paid) e.paid += r.incentive_amount;
+    byPayee.set(key, e);
+  }
+  const summary = [...byPayee.values()].sort((a, b) =>
+    a.type === b.type ? b.earned - a.earned : (a.type === 'Staff' ? -1 : 1));
+  for (const e of summary) {
+    sum.addRow([e.type, e.name, e.n, e.customers.size, e.inv, e.earned, e.paid, e.earned - e.paid]);
+  }
+  if (summary.length) {
+    sum.addRow([]);
+    const total = sum.addRow([
+      'TOTAL', '', rows.length, '',
+      summary.reduce((t, e) => t + e.inv, 0),
+      summary.reduce((t, e) => t + e.earned, 0),
+      summary.reduce((t, e) => t + e.paid, 0),
+      summary.reduce((t, e) => t + (e.earned - e.paid), 0),
+    ]);
+    total.eachCell((c) => { c.font = { bold: true }; });
+  } else {
+    sum.addRow(['No incentives were earned in this month.']);
+  }
+  sum.columns = [
+    { width: 8 }, { width: 30 }, { width: 13 }, { width: 11 },
+    { width: 18, style: { numFmt: money } }, { width: 17, style: { numFmt: money } },
+    { width: 14, style: { numFmt: money } }, { width: 14, style: { numFmt: money } },
+  ];
+
+  const detail = (title: string, list: typeof rows) => {
+    const ws = wb.addWorksheet(title);
+    ws.addRow([
+      'Name', 'Role', 'Application No', 'Customer', 'Customer Code', 'Series',
+      'Money Received', 'Investment Amount', 'Rate', 'Incentive', 'Paid?', 'Paid On',
+    ]).eachCell((c) => { c.font = { bold: true }; });
+    for (const r of list) {
+      ws.addRow([
+        r.payee_name, r.role, r.application_no ?? '', r.customer ?? '', r.customer_code ?? '',
+        r.series_code ?? '', ddmmyyyy(r.date_money_received), r.investment_amount,
+        // The rate as it was actually applied, not one re-derived here — a
+        // payee's book is not all at one rate, and the mixture is usually the
+        // question being asked.
+        r.rate_value == null ? '' : (r.rate_mode === 'percent' ? `${r.rate_value}%` : String(r.rate_value)),
+        r.incentive_amount, r.paid ? 'Paid' : 'Unpaid', ddmmyyyy(r.paid_at),
+      ]);
+    }
+    if (list.length) {
+      ws.addRow([]);
+      const t = ws.addRow([
+        'TOTAL', '', '', '', '', '', '',
+        list.reduce((x, r) => x + r.investment_amount, 0), '',
+        list.reduce((x, r) => x + r.incentive_amount, 0), '', '',
+      ]);
+      t.eachCell((c) => { c.font = { bold: true }; });
+    } else {
+      ws.addRow(['Nobody in this group earned an incentive in this month.']);
+    }
+    ws.columns = [
+      { width: 28 }, { width: 10 }, { width: 18 }, { width: 26 }, { width: 15 }, { width: 12 },
+      { width: 15 }, { width: 18, style: { numFmt: money } }, { width: 9 },
+      { width: 14, style: { numFmt: money } }, { width: 9 }, { width: 13 },
+    ];
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+  };
+  detail('Staff', staff);
+  detail('Agents', agents);
+
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}

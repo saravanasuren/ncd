@@ -34,6 +34,34 @@ incentivesRouter.get('/payees/:type/:id/statement.pdf', requirePermission('incen
     res.end(buf);
   }));
 
+/**
+ * One month's incentives for everyone, as a spreadsheet (owner 2026-09-14).
+ *
+ * Lives on the incentives router because that is where the data and its
+ * permission are; the Reports page links to the same URL rather than growing a
+ * second copy that could drift.
+ *
+ * Gated on incentives:manage-eligibility, NOT reports:download. This is every
+ * person's earnings in one file — a branch manager with report access has no
+ * business reading the whole company's incentive book.
+ */
+incentivesRouter.get('/monthly-report.xlsx', requirePermission('incentives:manage-eligibility'),
+  asyncHandler(async (req, res) => {
+    const month = String(req.query.month ?? '').trim();
+    // YYYY-MM only. A loose parse here would silently return an empty sheet for
+    // "August", which reads as "nobody earned anything" rather than as an error.
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+      res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'month must be YYYY-MM, e.g. 2026-08' } });
+      return;
+    }
+    const rows = await s.monthlyIncentiveDetail(getDb(), month);
+    const { monthlyIncentivesXlsx } = await import('../reports/documents.js');
+    const buf = await monthlyIncentivesXlsx(month, rows);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="incentives-${month}.xlsx"`);
+    res.end(buf);
+  }));
+
 incentivesRouter.get('/payees/:type/:id/balance', requirePermission('incentives:manage-eligibility'),
   asyncHandler(async (req, res) => res.json(await s.payeeBalance(getDb(), req.params.type!, Number(req.params.id)))));
 

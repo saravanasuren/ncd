@@ -51,7 +51,23 @@ export function LockerProfilePage() {
   const size = pick(lh, 'locker_size', 'size') ?? data.pledges[0]?.locker_size ?? '—';
   const branch = pick(lh, 'branch_name', 'branch') ?? '—';
   const status = pick(lh, 'account_status', 'status') ?? '—';
-  const esignStatus = pick(data.esign, 'status', 'esign_status') ?? pick(lh, 'esign_status') ?? null;
+  /**
+   * OUR record first, LockerHub's only as a fallback.
+   *
+   * `data.esign` is LockerHub's A19 status, and the code that reads it was
+   * written when they owned the signing. Since #421 the agreement, the document
+   * and the Digio account are ALL ours — so their status sits at "not started"
+   * for ever, whatever actually happened. Reading it made a signed agreement
+   * look unsigned and left the Check button unable to ever say otherwise
+   * (owner 2026-09-14: "after esigning im not able to know if an aggrment is
+   * successfully esigned").
+   *
+   * `data.signing` is the record NCD keeps: Draft → AwaitingSignature →
+   * CustomerSigned → Signed, plus PendingApproval / Rejected for paper.
+   */
+  const ourStatus = pick(data.signing, 'status') ?? null;
+  const esignStatus = ourStatus ?? pick(data.esign, 'status', 'esign_status') ?? pick(lh, 'esign_status') ?? null;
+  const signMethod = pick(data.signing, 'method') ?? null;
   const esignId = pick(data.esign, 'esign_id', 'id') ?? null;
 
   const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
@@ -72,8 +88,15 @@ export function LockerProfilePage() {
       </div>
       {data.customer && (
         <p className="text-sm text-text-muted mb-4">
-          <Link to={`/app/customers/${data.customer.id}`} className="text-primary hover:underline">{data.customer.full_name}</Link>
-          {' '}<span className="font-mono">{data.customer.customer_code}</span>{data.customer.phone ? ` · ${data.customer.phone}` : ''}
+          {/* A walk-in created straight on LockerHub has a name but no NCD
+              record, so there is nothing to link TO — a link to
+              /app/customers/null is worse than plain text. */}
+          {data.customer.id != null
+            ? <Link to={`/app/customers/${data.customer.id}`} className="text-primary hover:underline">{data.customer.full_name}</Link>
+            : <span className="text-text">{data.customer.full_name}</span>}
+          {data.customer.customer_code ? <> <span className="font-mono">{data.customer.customer_code}</span></> : null}
+          {data.customer.phone ? ` · ${data.customer.phone}` : ''}
+          {data.customer.id == null ? <span className="text-text-muted"> · not linked to an NCD customer</span> : null}
         </p>
       )}
 
@@ -199,7 +222,10 @@ export function LockerProfilePage() {
       {/* Agreement / e-sign */}
       <div className={card}>
         <h2 className={h2}>Agreement &amp; e-sign</h2>
-        <Row label="e-Sign status">{esignStatus ? String(esignStatus) : <span className="text-text-muted">not started</span>}</Row>
+        <Row label="Signing status">
+          {esignStatus ? String(esignStatus) : <span className="text-text-muted">not started</span>}
+          {signMethod ? <span className="text-text-muted"> · {String(signMethod) === 'esign' ? 'e-Sign' : 'on paper'}</span> : null}
+        </Row>
         {esignId && (
           <Row label="Signed agreement">
             <a href={`/api/lockers/agreements/${encodeURIComponent(String(esignId))}/pdf`} target="_blank" rel="noreferrer" className="text-primary hover:underline">Download PDF</a>

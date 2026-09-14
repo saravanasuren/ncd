@@ -28,7 +28,7 @@ beforeAll(async () => { ctx = await startTestServer(); });
 afterAll(async () => { await ctx.close(); });
 
 describe('the agreement gives every hirer their own signature box', () => {
-  it('one box for a sole hirer, and it is hirer 1', async () => {
+  it('a sole hirer is hirer 1, signing in both of the document\'s signing places', async () => {
     const { lockerAgreementPdf } = await import('../src/modules/reports/forms/locker-agreement.js');
     const r = await lockerAgreementPdf(ctx.db, {
       customer: { full_name: 'Sole Hirer', pan: 'AAAPA1111A', phone: '9700111111' },
@@ -36,9 +36,12 @@ describe('the agreement gives every hirer their own signature box', () => {
     } as never);
     expect(r.hirers).toHaveLength(1);
     expect(r.hirers[0]!.position).toBe(1);
-    // The single-signer field still points at hirer 1, so callers that only
-    // ever sign the primary are unaffected.
-    expect(r.hirers[0]!.box).toEqual(r.hirer);
+    // Since 2026-09-14 the owner's document has TWO signing places and hirer 1
+    // is in both: the Schedule's witness table and the closing line.
+    expect(r.hirers[0]!.placements).toHaveLength(2);
+    // The single-signer field still points at hirer 1's CLOSING line, so callers
+    // that only ever sign the primary are unaffected.
+    expect(r.hirers[0]!.placements.map((p) => p.box)).toContainEqual(r.hirer);
   });
 
   it('a box PER hirer, at different places on the page', async () => {
@@ -53,9 +56,14 @@ describe('the agreement gives every hirer their own signature box', () => {
     } as never);
     expect(r.hirers.map((h) => h.position)).toEqual([1, 2, 3]);
     // Distinct boxes — two signers cannot share coordinates, or one signature
-    // lands on top of the other.
-    const keys = r.hirers.map((h) => `${h.page}:${h.box.lly}:${h.box.ury}`);
-    expect(new Set(keys).size).toBe(3);
+    // lands on top of the other. They sit SIDE BY SIDE in the witness table's
+    // three columns, so llx is what separates them; a key without it would call
+    // three stacked-identical boxes distinct.
+    const keys = r.hirers.flatMap((h) =>
+      h.placements.map((p) => `${p.page}:${p.box.llx}:${p.box.lly}:${p.box.urx}:${p.box.ury}`));
+    expect(new Set(keys).size).toBe(keys.length);
+    // Hirer 1 signs twice (table + closing line); the joint hirers once each.
+    expect(r.hirers.map((h) => h.placements.length)).toEqual([2, 1, 1]);
     // And each is named on the page, so the paper says who signed where.
     expect(r.hirers.map((h) => h.name)).toEqual(['First Hirer', 'Second Hirer', 'Third Hirer']);
   });

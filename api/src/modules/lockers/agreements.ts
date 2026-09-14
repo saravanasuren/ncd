@@ -371,7 +371,15 @@ async function renderLockerAgreement(
   const { listHirers } = await import('./hirers.js');
   const jointHirers = await listHirers(db, applicationId).catch(() => []);
 
+  // The authorised signatory is named on the Schedule's "For the Company" block
+  // because they e-sign it (owner 2026-09-14). Same setting the CEO stage uses,
+  // so the printed name and the Digio signer can never disagree.
+  const { getSettingsMap } = await import('../settings/service.js');
+  const signatoryName = String(
+    (await getSettingsMap(db))['lockers.agreement_signatory_name'] ?? 'Saravana Suren');
+
   const result = await lockerAgreementPdf(db, {
+    signatoryName,
     customer: customer as never,
     hirers: jointHirers.map((h) => ({
       position: h.position,
@@ -519,7 +527,8 @@ export async function initiateHirerEsign(
 
   const { result } = await renderLockerAgreement(db, applicationId, signing.id);
   const box = result.hirers.find((h) => h.position === position);
-  if (!box) throw errors.badRequest(`No signature box for hirer ${position} on this agreement.`);
+  const first = box?.placements[0];
+  if (!box || !first) throw errors.badRequest(`No signature box for hirer ${position} on this agreement.`);
 
   // Hirer 1 signs the fresh render; everyone after signs what the last stage
   // produced. Falling back to the fresh render would silently drop the earlier
@@ -546,7 +555,9 @@ export async function initiateHirerEsign(
     signerName: me.name, signerPhone: me.phone ?? undefined, signerEmail: me.email ?? undefined,
     reason: 'Locker hire agreement',
     document,
-    signature: { box: box.box, page: box.page },
+    // Hirer 1 signs the Schedule's witness table AND the closing line; hirers 2
+    // and 3 sign their table column only. One request covers every box.
+    signature: { box: first.box, page: first.page, also: box.placements.slice(1) },
   });
 
   await db.withTx(async (tx) => {
@@ -616,6 +627,8 @@ export async function initiateCeoEsign(
   const s = await getSettingsMap(db);
   const ceoName = String(s['lockers.agreement_signatory_name'] ?? 'Saravana Suren');
   const ceoPhone = String(s['lockers.agreement_signatory_phone'] ?? '').replace(/\D/g, '') || undefined;
+  const signatoryAt = result.signatoryPlacements[0];
+  if (!signatoryAt) throw errors.badRequest('No authorised-signatory box on this agreement.');
 
   const { createSignRequest, digioConfigured } = await import('../../integrations/digio/index.js');
   const req = await createSignRequest({
@@ -623,7 +636,12 @@ export async function initiateCeoEsign(
     signerPhone: ceoPhone,
     reason: 'Locker hire agreement (company signatory)',
     document: { fileName: `locker-agreement-${applicationId}.pdf`, contentBase64: signed.buffer.toString('base64') },
-    signature: { box: result.signatory, page: result.signatoryPage },
+    // The signatory signs the Schedule's "For the Company" block and the
+    // closing "Authorised Signatory" space (owner 2026-09-14).
+    signature: {
+      box: signatoryAt.box, page: signatoryAt.page,
+      also: result.signatoryPlacements.slice(1),
+    },
   });
 
   await db.withTx(async (tx) => {

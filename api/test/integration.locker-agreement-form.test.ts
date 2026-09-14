@@ -14,8 +14,8 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { inflateSync } from 'node:zlib';
 import { startTestServer, Client, type TestCtx } from './helpers/server.js';
+import { extractText } from './helpers/pdf-text.js';
 import { config } from '../src/config.js';
 
 let ctx: TestCtx;
@@ -57,45 +57,6 @@ afterAll(async () => {
 const as = async (email: string, password = 'Demo_1234') => { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; };
 const admin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
 
-/**
- * The PDF's visible text.
- *
- * PDFKit deflates its content streams, so reading the raw bytes finds nothing —
- * and a `not.toContain` against those raw bytes PASSES for every string on
- * earth, which is how the first cut of the Aadhaar test here passed while
- * proving nothing. Inflate every stream and pull the literals out of the text
- * operators, so both the positive and the negative assertions mean something.
- */
-function extractText(pdf: Buffer): string {
-  const out: string[] = [];
-  const raw = pdf.toString('latin1');
-  const re = /stream\r?\n/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(raw))) {
-    const start = m.index + m[0].length;
-    const end = raw.indexOf('endstream', start);
-    if (end < 0) continue;
-    let body: string;
-    try { body = inflateSync(Buffer.from(raw.slice(start, end), 'latin1')).toString('latin1'); }
-    catch { continue; }
-    // An embedded font inflates cleanly too, and its binary contains plenty of
-    // parenthesised byte runs — harvesting those produced convincing garbage.
-    // A CONTENT stream is the one with a BT/ET text block in it.
-    if (!body.includes('BT')) continue;
-    // PDFKit emits the text as HEX strings inside a TJ array —
-    // [<48454c4c4f> 0] TJ — not as (literal) strings, which is why the obvious
-    // paren-matching extraction reads an empty document. Handle both.
-    for (const t of body.matchAll(/<([0-9A-Fa-f\s]+)>/g)) {
-      const hex = t[1]!.replace(/\s+/g, '');
-      if (hex.length % 2) continue;
-      out.push(Buffer.from(hex, 'hex').toString('latin1'));
-    }
-    for (const t of body.matchAll(/\((?:\\.|[^\\()])*\)/g)) {
-      out.push(t[0].slice(1, -1).replace(/\\([()\\])/g, '$1'));
-    }
-  }
-  return out.join('');
-}
 
 async function pdfText(c: Client, path: string): Promise<{ status: number; text: string; raw: Buffer }> {
   const res = await fetch(`${ctx.base}${path}`, { headers: { cookie: c.cookieHeader(), 'X-Requested-With': 'dhanam' } });
@@ -151,9 +112,8 @@ describe('the printed agreement carries everything we already know', () => {
    * pdf-parse loses the spaces between words in a JUSTIFIED paragraph — PDFKit
    * positions each word itself, so the extractor has no space glyph to find.
    * The rendered page is correct (checked visually); only the extraction is
-   * lossy — it also drops the typographic apostrophe in "CUSTOMER'S". Compare
-   * with punctuation and spacing stripped from BOTH sides, so an assertion
-   * tests the words rather than the extractor's rendering of them.
+   * lossy. Compare with punctuation and spacing stripped from BOTH sides, so an
+   * assertion tests the words rather than the extractor's rendering of them.
    */
   const squash = (t: string) => t.replace(/[^A-Za-z0-9]/g, '');
   const has = (text: string, needle: string) => squash(text).includes(squash(needle));
@@ -176,8 +136,8 @@ describe('the printed agreement carries everything we already know', () => {
     const { text } = await pdfText(a, `/api/lockers/applications/${APP}/agreement/form.pdf`);
     for (const head of [
       '1. LOCKER LICENCE',
-      '2. CUSTOMERS UNDERTAKINGS AND OBLIGATIONS',   // apostrophe dropped by the extractor
-      '3. THE COMPANYS RIGHTS',
+      '2. CUSTOMER\u2019S UNDERTAKINGS AND OBLIGATIONS',
+      '3. THE COMPANY\u2019S RIGHTS',
       '3.2 Termination of License',
       '3.3 Breaking open of the Locker',
       '3.4 Delay in Payment',
@@ -189,7 +149,11 @@ describe('the printed agreement carries everything we already know', () => {
     // Clause 4 (Security Deposit) is struck (owner 2026-09-14: "remove the
     // deposit one completely"). The headings either side of the gap are asserted
     // above, so this is a real absence and not an unreadable page.
-    expect(has(text, 'SECURITY DEPOSIT')).toBe(false);
+    //
+    // Case-INSENSITIVE: the struck heading was title-case ("4. Security
+    // Deposit"), so an upper-case needle through has() would pass against a
+    // document that still carried the clause.
+    expect(squash(text).toLowerCase()).not.toContain(squash('security deposit'));
     // The last clause of the longest section: proof the terms are not truncated
     // part-way through a page break.
     expect(has(text, 'Auction Notice')).toBe(true);

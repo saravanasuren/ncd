@@ -12,27 +12,19 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { lockerAgreementPdf } from '../src/modules/reports/forms/locker-agreement.js';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { extractText } from './helpers/pdf-text.js';
 
 const stubDb = { query: async () => ({ rows: [] as unknown[] }) } as never;
-
-/** The PDF's text, lower-cased with ALL whitespace removed. */
-function agreementText(buf: Buffer): string {
-  const dir = mkdtempSync(join(tmpdir(), 'agr-'));
-  try {
-    const pdf = join(dir, 'a.pdf'), txt = join(dir, 'a.txt');
-    writeFileSync(pdf, buf);
-    execFileSync('pdftotext', [pdf, txt]);
-    return squash(readFileSync(txt, 'utf8'));
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-}
-/** Lower-case, no whitespace, straight quotes — the document uses typographic
- *  apostrophes, and justified text has no spaces between words at all. */
+/**
+ * Lower-case, no whitespace, no apostrophes.
+ *
+ * Justified text has no spaces between words at all, and the document's
+ * apostrophes are typographic — which the extractor drops entirely, since they
+ * are not Latin-1. Dropping them on both sides is the only comparison that
+ * survives both.
+ */
 const squash = (s: string) =>
-  s.toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\s+/g, '');
+  s.toLowerCase().replace(/[\u2018\u2019']/g, '').replace(/[\u201c\u201d]/g, '"').replace(/\s+/g, '');
 
 let text = '';
 beforeAll(async () => {
@@ -43,7 +35,7 @@ beforeAll(async () => {
     nominee: { name: 'Nom Ee', relationship: 'Brother', phone: '9700000000' },
     signatoryName: 'Saravana Suren',
   });
-  text = agreementText(r.buffer);
+  text = squash(extractText(r.buffer));
 });
 
 describe('locker agreement wording', () => {

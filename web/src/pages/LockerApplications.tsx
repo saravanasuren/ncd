@@ -227,7 +227,7 @@ export function LockerApplicationsPage() {
       key: 'actions', header: '', sortable: false, filterable: false, align: 'right',
       render: (r) => (
         <span className="whitespace-nowrap">
-          <button className="text-xs text-primary hover:underline" onClick={() => open(r)}>Open</button>
+          <button className="text-xs text-primary hover:underline" onClick={() => open(r)}>Resume</button>
           {!r.removed_at && (
             <button className="text-xs text-danger hover:underline ml-3" disabled={busy}
                     onClick={() => remove(r)}>Delete</button>
@@ -249,7 +249,7 @@ export function LockerApplicationsPage() {
     <div className="w-full">
       <h1 className="text-xl font-bold tracking-tight m-0">Locker Applications</h1>
       <p className="text-sm text-text-muted mt-1 mb-4">
-        Every locker application created in NCD. Open one to resume its enrolment, or delete one entered by mistake.
+        Every locker application created in NCD. Resume one to carry on where it left off — take the rent, allot the locker, send the agreement — or delete one entered by mistake.
       </p>
 
       {note && <div className="text-xs text-success bg-[color:var(--success-bg)] rounded px-3 py-2 mb-3">{note}</div>}

@@ -31,6 +31,9 @@ export function ReportsPage() {
   const { can } = useAuth();
   const [cust, setCust] = useState('');
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  /** Separate from the TDS month above: they are different reports and
+   *  changing one should not move the other. */
+  const [incMonth, setIncMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [quarter, setQuarter] = useState(currentFyQuarter());
   const [rows, setRows] = useState('');
   const [msg, setMsg] = useState('');
@@ -81,6 +84,26 @@ export function ReportsPage() {
             {cust && <a href={`/api/reports/soa/${cust}.pdf`} target="_blank" rel="noreferrer" className={dl}>↓ SOA</a>}
           </div>
         </div>
+        {/* Incentives for a month, staff AND agents, in one workbook
+            (owner 2026-09-14). Gated on incentives:manage-eligibility rather
+            than reports:download — this is every person's earnings in one
+            file, and report access alone should not open it. The same URL is
+            offered on the Incentives page; one endpoint, so the two cannot
+            drift. */}
+        {can('incentives:manage-eligibility') && (
+          <div className={card}>
+            <h2 className="text-sm font-semibold mb-2">Incentives (monthly)</h2>
+            <div className="flex gap-2 items-center">
+              <input className={inp} type="month" value={incMonth}
+                     onChange={(e) => setIncMonth(e.target.value)} />
+              <a href={`/api/incentives/monthly-report.xlsx?month=${incMonth}`} className={dl}>↓ Excel</a>
+            </div>
+            <p className="text-xs text-text-muted mt-2">
+              Every incentive <b>earned</b> in the chosen month — staff and agents on separate sheets,
+              with the investment behind each figure. Matches the Incentives page month-wise totals.
+            </p>
+          </div>
+        )}
         <div className={card}>
           <h2 className="text-sm font-semibold mb-2">TDS register (monthly)</h2>
           <div className="flex gap-2 items-center">

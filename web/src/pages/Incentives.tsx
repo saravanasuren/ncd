@@ -30,6 +30,9 @@ export function IncentivesPage() {
   const [msg, setMsg] = useState('');
   const [balTab, setBalTab] = useState<'staff' | 'agent'>('staff');
   const [expanded, setExpanded] = useState<string | null>(null);
+  /** Month for the Excel download. Defaults to this month; the owner picks
+   *  the one they are paying out for. */
+  const [repMonth, setRepMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const overview = useQuery({ queryKey: ['inc-overview'], queryFn: () => api.get<{ rows: Payee[] }>('/api/incentives/overview') });
   const agents = useQuery({ queryKey: ['inc-agents'], queryFn: () => api.get<{ rows: AgentRow[] }>('/api/incentives/agents'), enabled: can('incentives:manage-eligibility') });
   const [rate, setRate] = useState<Record<number, string>>({});
@@ -46,7 +49,26 @@ export function IncentivesPage() {
 
   return (
     <div className="w-full">
-      <h1 className="text-xl font-bold tracking-tight m-0">Incentives & commissions</h1>
+      <div className="flex items-center gap-3 flex-wrap">
+        <h1 className="text-xl font-bold tracking-tight m-0">Incentives &amp; commissions</h1>
+        {/* One month's incentives for everyone, staff and agents, as a
+            spreadsheet (owner 2026-09-14). Same endpoint the Reports page
+            links to — one URL, so the two places cannot drift apart. */}
+        {can('incentives:manage-eligibility') && (
+          <div className="ml-auto flex items-center gap-2">
+            <input
+              type="month"
+              className="px-2.5 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary"
+              value={repMonth}
+              onChange={(e) => setRepMonth(e.target.value)} />
+            <a href={`/api/incentives/monthly-report.xlsx?month=${repMonth}`}
+               className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg"
+               title="Every incentive earned in this month — staff and agents on separate sheets, with the investment behind each figure">
+              ↓ Download month (Excel)
+            </a>
+          </div>
+        )}
+      </div>
       <p className="text-sm text-text-muted mt-1 mb-5">Balances owed to staff and agents.</p>
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
 

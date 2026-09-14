@@ -97,6 +97,92 @@ export async function payeeMonthly(db: Db, payeeType: string, payeeId: number) {
   });
 }
 
+/**
+ * Every incentive EARNED in one month, for every payee, in one pass
+ * (owner 2026-09-14: "if i choose in august and click download - i need a clear
+ * detailed report of incentives of each and every staffs for that particular
+ * month. for agents also the same").
+ *
+ * EARNED, not paid — the owner chose this when asked, and it is the only
+ * grouping that agrees with the Incentives page and My Earnings. A June
+ * investment paid in August belongs to June here, exactly as those screens show
+ * it. `paid` / `paid_on` are carried as COLUMNS so the outstanding part is still
+ * visible without changing what a row means.
+ *
+ * The month is the money-received month, via the same COALESCE(date_money_
+ * received, created_at) payeeMonthly uses. Sharing the expression rather than
+ * writing a second one is the point: two month definitions would eventually
+ * disagree, and the disagreement would be in a payout report.
+ *
+ * ACCRUAL_FROM and NOT_SELF are reused for the same reason — a self-investment
+ * excluded on screen but included in the download is a number nobody can
+ * reconcile.
+ */
+export interface MonthlyIncentiveRow {
+  payee_type: string;
+  payee_id: number;
+  payee_name: string;
+  is_staff: boolean;
+  application_no: string | null;
+  customer: string | null;
+  customer_code: string | null;
+  series_code: string | null;
+  date_money_received: string | null;
+  investment_amount: number;
+  incentive_amount: number;
+  rate_value: number | null;
+  rate_mode: string | null;
+  role: string;
+  paid: boolean;
+  paid_at: string | null;
+}
+
+export async function monthlyIncentiveDetail(db: Db, month: string): Promise<MonthlyIncentiveRow[]> {
+  const { rows } = await db.query(
+    `SELECT ia.payee_type, ia.payee_id,
+            CASE ia.payee_type
+              WHEN 'staff' THEN (SELECT u.full_name FROM users u WHERE u.id = ia.payee_id)
+              WHEN 'agent' THEN (SELECT ag.full_name FROM agents ag WHERE ag.id = ia.payee_id)
+            END AS payee_name,
+            -- Same rule the overview uses: a user-payee counts as STAFF only
+            -- when is_staff is on. A CXO or an agent-role user is an external
+            -- earner and belongs on the Agents sheet, not the Staff one.
+            (ia.payee_type = 'staff'
+             AND COALESCE((SELECT u.is_staff FROM users u WHERE u.id = ia.payee_id), FALSE)) AS is_staff,
+            a.application_no, c.full_name AS customer, c.customer_code,
+            s.code AS series_code,
+            COALESCE(a.date_money_received, a.created_at::date) AS date_money_received,
+            a.total_amount AS investment_amount, ia.amount AS incentive_amount,
+            ia.rate_value, ia.rate_mode,
+            CASE WHEN ia.matrix_cell = 'referrer' THEN 'Referrer' ELSE 'Enroller' END AS role,
+            (ia.paid_at IS NOT NULL) AS paid, ia.paid_at
+     ${ACCRUAL_FROM}
+     WHERE ${NOT_SELF}
+       AND to_char(COALESCE(a.date_money_received, a.created_at::date), 'YYYY-MM') = $1
+     ORDER BY is_staff DESC, payee_name NULLS LAST, a.total_amount DESC`, [month]);
+  return rows.map((r) => ({
+    payee_type: String((r as any).payee_type),
+    payee_id: Number((r as any).payee_id),
+    // A payee whose user/agent row was deleted still has real money against it;
+    // naming it by id beats dropping the row out of a payout report.
+    payee_name: (r as any).payee_name ?? `(${(r as any).payee_type} #${(r as any).payee_id})`,
+    is_staff: Boolean((r as any).is_staff),
+    application_no: (r as any).application_no ?? null,
+    customer: (r as any).customer ?? null,
+    customer_code: (r as any).customer_code ?? null,
+    series_code: (r as any).series_code ?? null,
+    date_money_received: (r as any).date_money_received
+      ? String((r as any).date_money_received).slice(0, 10) : null,
+    investment_amount: round2(Number((r as any).investment_amount)),
+    incentive_amount: round2(Number((r as any).incentive_amount)),
+    rate_value: (r as any).rate_value == null ? null : Number((r as any).rate_value),
+    rate_mode: (r as any).rate_mode ?? null,
+    role: String((r as any).role),
+    paid: Boolean((r as any).paid),
+    paid_at: (r as any).paid_at ? String((r as any).paid_at).slice(0, 10) : null,
+  }));
+}
+
 /** Pay one customer's incentive in full — marks that accrual paid + logs the
  * payout against the application. Idempotent (a paid accrual is a no-op). */
 export async function payCustomerAccrual(db: Db, actor: AuthUser, payeeType: string, payeeId: number, applicationId: number) {

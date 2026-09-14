@@ -44,15 +44,56 @@ export interface SignDocument { fileName: string; contentBase64: string; }
 
 /** Where the sole/1st-applicant signature goes: PDF bottom-left coordinates +
  *  1-indexed page (from the application-form renderer). */
-export interface SignaturePlacement { box: { llx: number; lly: number; urx: number; ury: number }; page: number; }
+export interface SignaturePlacement {
+  box: { llx: number; lly: number; urx: number; ury: number }; page: number;
+  /** FURTHER boxes for the same signer. The locker agreement's hirer 1 and its
+   *  authorised signatory each sign twice — once in the Schedule's witness table
+   *  and once in the closing block — and Digio takes a list of boxes per page,
+   *  so both go on one request rather than asking the person to sign twice. */
+  also?: Array<{ box: { llx: number; lly: number; urx: number; ury: number }; page: number }>;
+}
 
-/** One signer on a multi-party document, with their own signature box. */
+/** One signer on a multi-party document, with their own signature box(es). */
 export interface SignParty {
   name: string;
   phone?: string | null;
   email?: string | null;
   box?: { llx: number; lly: number; urx: number; ury: number };
   page?: number;
+  also?: Array<{ box: { llx: number; lly: number; urx: number; ury: number }; page: number }>;
+}
+
+/**
+ * Digio's `sign_coordinates`: `{ identifier: { page: [box, ...] } }` — a LIST of
+ * boxes per page, so ONE signer can be placed in several spots across several
+ * pages. The locker agreement needs that: hirer 1 and the authorised signatory
+ * each sign the Schedule's witness table AND the closing block, and asking them
+ * to sign twice would mean two Digio requests over two different documents.
+ *
+ * Returns null when nobody has a box, because 'custom' placement without
+ * coordinates is rejected by Digio — the caller then leaves display_on_page
+ * unset and Digio falls back to its own last-page placement.
+ *
+ * Exported for testing: the grouping is silent in stub mode, and a signer whose
+ * second box quietly vanished would still produce a complete-looking signature.
+ */
+export function buildSignCoordinates(
+  parties: SignParty[], identifierOf: (p: SignParty) => string,
+): Record<string, Record<string, unknown[]>> | null {
+  const out: Record<string, Record<string, unknown[]>> = {};
+  let any = false;
+  for (const p of parties) {
+    const at = [
+      ...(p.box && p.page ? [{ box: p.box, page: p.page }] : []),
+      ...(p.also ?? []),
+    ];
+    if (!at.length) continue;
+    any = true;
+    const byPage: Record<string, unknown[]> = {};
+    for (const q of at) (byPage[String(q.page)] ??= []).push(q.box);
+    out[identifierOf(p)] = byPage;
+  }
+  return any ? out : null;
 }
 
 /** Normalise an Indian mobile to Digio's required +91XXXXXXXXXX. Bare 10-digit
@@ -88,7 +129,7 @@ export async function createSignRequest(input: {
   const parties: SignParty[] = input.parties?.length
     ? input.parties
     : [{ name: input.signerName || 'Customer', phone: input.signerPhone, email: input.signerEmail,
-         box: input.signature?.box, page: input.signature?.page }];
+         box: input.signature?.box, page: input.signature?.page, also: input.signature?.also }];
   const identifierOf = (p: SignParty) =>
     normalisePhone(p.phone) || p.email || p.phone || 'unknown';
   // sign_coordinates is keyed BY IDENTIFIER, so two signers sharing one would
@@ -124,12 +165,8 @@ export async function createSignRequest(input: {
   // Place the eSignature in the form's 1st-applicant box. 'custom' is only valid
   // WITH sign_coordinates (Digio rejects it otherwise); without a box Digio
   // defaults to last-page placement (no display_on_page).
-  const placed = parties.filter((p) => p.box && p.page);
-  if (placed.length) {
-    body.display_on_page = 'custom';
-    body.sign_coordinates = Object.fromEntries(placed.map((p) =>
-      [identifierOf(p), { [String(p.page)]: [p.box] }]));
-  }
+  const coords = buildSignCoordinates(parties, identifierOf);
+  if (coords) { body.display_on_page = 'custom'; body.sign_coordinates = coords; }
   const r = await call('POST', '/v2/client/document/uploadpdf', body);
   // Digio may return the signer link at signing_parties[0].authentication_url;
   // usually it's delivered to the signer directly (notify + send_sign_link).

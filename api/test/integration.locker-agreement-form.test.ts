@@ -180,11 +180,16 @@ describe('the printed agreement carries everything we already know', () => {
       '3. THE COMPANYS RIGHTS',
       '3.2 Termination of License',
       '3.3 Breaking open of the Locker',
-      '4. Security Deposit',
+      '3.4 Delay in Payment',
+      '3.5 Event of shifting of branch',
       '5. LAW AND JURISDICTION',
     ]) {
       expect(has(text, head), head).toBe(true);
     }
+    // Clause 4 (Security Deposit) is struck (owner 2026-09-14: "remove the
+    // deposit one completely"). The headings either side of the gap are asserted
+    // above, so this is a real absence and not an unreadable page.
+    expect(has(text, 'SECURITY DEPOSIT')).toBe(false);
     // The last clause of the longest section: proof the terms are not truncated
     // part-way through a page break.
     expect(has(text, 'Auction Notice')).toBe(true);

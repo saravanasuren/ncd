@@ -29,6 +29,9 @@ export const COMPANY = {
   legal_name: 'Dhanam Investment and Finance Private Limited',
   cin: 'U64920TZ2016PTC031308',
   rbi_registration_no: 'N-07.00831',
+  // Printed in the locker agreement's page footer, which reproduces the
+  // owner's supplied document line for line.
+  gstin: '33AAGCK3310G1Z2',
   // Pincode corrected 641 048 → 641 062 (owner 2026-08-28). This constant is
   // the ONLY source: company_profile has no address column, so getCompanyProfile's
   // pick() always falls through to here. It prints on the bond certificate, the
@@ -138,9 +141,21 @@ export function amountInWords(input: unknown): string {
 }
 
 /** Run a pdfkit builder and collect the output into a Buffer. */
-export function renderToBuffer(build: (doc: PDFKit.PDFDocument) => void): Promise<Buffer> {
+/**
+ * @param opts.bufferPages keep every page in memory until `doc.end()`, so the
+ *   builder can go back over them — needed for a footer that says "Page N of M",
+ *   since M isn't known until the last page is laid out. Off by default: it
+ *   holds the whole document in memory, and no other form needs it.
+ */
+export function renderToBuffer(
+  build: (doc: PDFKit.PDFDocument) => void,
+  opts?: { bufferPages?: boolean },
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margins: { top: 30, bottom: 50, left: 50, right: 50 } });
+    const doc = new PDFDocument({
+      size: 'A4', margins: { top: 30, bottom: 50, left: 50, right: 50 },
+      bufferPages: opts?.bufferPages ?? false,
+    });
     const chunks: Buffer[] = [];
     doc.on('data', (c: Buffer) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));

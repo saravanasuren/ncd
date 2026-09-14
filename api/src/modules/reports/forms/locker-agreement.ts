@@ -13,27 +13,31 @@
  * line rather than a dash, so it reads as "write here" on paper instead of
  * looking like an error.
  *
- * ─── Two things the owner must decide, flagged rather than silently settled ──
+ * ─── Deliberate departures from the supplied document ───────────────────────
  *
- * 1. CLAUSE 4 (Security Deposit) says the hirer pays a deposit at allotment.
- *    NCD lockers are RENT-ONLY (owner 2026-08-12) — no deposit is quoted or
- *    collected, and every application 100%-waives the one LockerHub prices. The
- *    clause is reproduced verbatim because it is the owner's legal text and
- *    editing someone's contract unasked is not our call; the Schedule carries no
- *    deposit field, so nothing here ASSERTS a payment. If lockers stay rent-only
- *    this clause should be struck from the source document.
+ * 1. CLAUSE 4 (Security Deposit) is STRUCK (owner 2026-09-14, "remove the
+ *    deposit one completely"). NCD lockers are rent-only: no deposit is quoted
+ *    or collected, and every application 100%-waives the one LockerHub prices,
+ *    so the clause described a payment that never happens. Clause 3.1(a)'s
+ *    trailing "in relation to the security deposit amount will be adjusted" went
+ *    with it (same instruction) — it was the only other mention, and leaving it
+ *    would point at a clause that no longer exists. Nothing else moved: the
+ *    later clauses keep the source's numbering, including its two clause 5s.
  *
- * 2. The VERNACULAR UNDERTAKING is Tamil / English / Hindi. Only the English is
- *    rendered: PDFKit ships the 14 standard PDF fonts, all Latin-1, and no
- *    Unicode font exists in this repo — Tamil and Devanagari would come out as
- *    blanks or mojibake, which on a declaration that the customer understood the
- *    terms is worse than absent. Adding Noto Sans Tamil + Noto Sans Devanagari
- *    (SIL OFL) to api/assets and registering them makes all three printable.
+ * 2. The VERNACULAR UNDERTAKING renders the ENGLISH limb only. The source has
+ *    five languages; PDFKit ships the 14 standard PDF fonts, all Latin-1, so
+ *    Tamil, Malayalam, Kannada and Devanagari would come out blank or as
+ *    mojibake — worse than absent on a declaration that the customer understood
+ *    the terms. Adding the Noto families (SIL OFL) to api/assets is approved and
+ *    tracked separately, because it is a binary-asset change with its own risks.
+ *
+ * 3. The footer prints the CORRECTED corporate-office pincode (641 062, owner
+ *    2026-08-28) rather than the 641048 still printed on the supplied PDF.
  */
 import type { Db } from '../../../db/types.js';
 import {
   renderToBuffer, drawHeader, section, kv, companyHeader, fmtDate, fmtINR,
-  customerAddress, amountInWords, COLORS,
+  customerAddress, amountInWords, COLORS, COMPANY,
 } from './shared.js';
 
 export interface AgreementCustomer {
@@ -82,6 +86,10 @@ export interface AgreementInput {
   date?: string;
   /** Where it is signed. Defaults to the branch. */
   place?: string | null;
+  /** The company's authorised signatory, printed under the Schedule's "For the
+   *  Company" block. They e-sign it, so the name beside the signature should be
+   *  theirs rather than a blank line. Falls back to a ruled line. */
+  signatoryName?: string | null;
 }
 
 /** A value we hold, or a ruled line to write on. Never a dash: on a printed
@@ -114,7 +122,9 @@ export function annualRentForSize(size: unknown): number | null {
  * the fact that "THE COMPANY'S DISCHARGE FROM OBLIGATIONS AND LIABILITY" and
  * "LAW AND JURISDICTION" are both numbered 5. Clauses are cited by number when
  * a branch queries one, so silently renumbering them here would make our
- * printed copy disagree with the signed originals already in circulation.
+ * printed copy disagree with the signed originals already in circulation. That
+ * is also why striking clause 4 leaves a gap in the sequence rather than pulling
+ * the clause 5s up to 4.
  */
 type Clause = { head: string } | { n: string; t: string; indent?: number };
 
@@ -156,7 +166,7 @@ const TERMS: Clause[] = [
 
   { head: '3. THE COMPANY’S RIGHTS' },
   { n: '3.1', t: 'the Company shall have a right to:' },
-  { n: '(a)', t: 'Recover the Rent and any other cost incurred by the Company in relation to the security deposit amount will be adjusted, in the event the same is not paid by the Customer, when due; and', indent: 1 },
+  { n: '(a)', t: 'Recover the Rent and any other cost incurred by the Company, in the event the same is not paid by the Customer, when due; and', indent: 1 },
   { n: '(b)', t: 'Refuse access to the Locker-', indent: 1 },
   { n: '(i)', t: 'In case the rent due on the Locker remains unpaid; and', indent: 2 },
   { n: '(ii)', t: 'Customer fails to provide proof of identity when demanded by the Company, at the time of seeking access to the Locker.', indent: 2 },
@@ -170,18 +180,27 @@ const TERMS: Clause[] = [
   { n: '(a)', t: 'In the event Termination Notice in accordance with Clause 3.2.1 hereof is served to the Customer and the Customer does not surrender and vacate the Locker after the end of the notice period stipulated under the Termination Notice;', indent: 1 },
   { n: '(b)', t: 'The Rent remains unpaid for 3 (three) consecutive years; and', indent: 1 },
   { n: '(c)', t: 'The Locker remains inoperative (irrespective of whether Rent is paid or not) for a period of 7 (seven) years or more; and the Customer cannot be located by the Company.', indent: 1 },
-  { n: '3.3.2', t: 'Before exercising the right to break open the Locker, the Company shall send to the Customer a notice (in addition to the Termination Notice under Clause 3.2.1 above) in writing of not less than 3 (three) months by registered post/ speed post (and also by (i) email where email id of the Customer is available; and (ii) SMS and/or WhatsApp where the mobile phone number of the Customer is available) of the Company’s proposed action of breaking open of the Locker ("Break Open Notice").' },
+  { n: '3.3.2', t: 'Before exercising the right to break open the Locker, the Company shall send to the Customer a notice his/her last known address (in addition to the Termination Notice under Clause 3.2.1 above) in writing of not less than 3 (three) months by registered post/ speed post (and also by (i) email where email id of the Customer is available; and (ii) SMS and/or WhatsApp where the mobile phone number of the Customer is available) of the Company’s proposed action of breaking open of the Locker ("Break Open Notice").' },
   { n: '3.3.3', t: 'Notwithstanding, anything contained under this Agreement the Company shall take all possible efforts to contact the Customer by sending messages on mobile phone of the Customer, sending a personal messenger to the Customer’s address, making phone calls on the Customer’s land line/ mobile phone etc. before breaking open of the Locker.' },
   { n: '3.3.4', t: 'In case the Termination Notice and the Breaking Open Notice as foresaid sent by the Company is returned undelivered or the Customer is not found to be traceable despite the Company having taken reasonable efforts including those stated under Clause 3.3.2 and 3.3.3 above, the Company shall, before breaking open the Locker, issue a public notice about the Company’s intention to break open the Locker, in minimum 2 (two) newspapers (one in English and another in local language) in the same location where the Customer resides as evidenced by the Customer’s address as stated in the Agreement or as further communicated by the Customer to the Company.' },
   { n: '3.3.5', t: 'The breaking open of a Locker shall be carried out in the presence of one authorized officer of the Company, two independent witnesses, and a Notary Public (Advocate), who shall prepare an inventory of the contents. The Company shall also record the entire locker-breaking process. In the case of electronically operated Lockers (including Smart Vaults), access for opening the Locker using the "Vault Administrator" password shall be assigned only to a senior official. A complete audit trail of all access and activities related to the opening of the Locker shall be maintained and preserved by the Company.' },
-  { n: '3.3.6', t: 'Upon breaking open of the Locker, having followed the procedure as set out above, the Notary Public shall prepare inventory of the contents of the Locker and the contents done by the Company’s approved Valuer and the contents of the Locker shall be kept in sealed envelope/ bag along with detailed inventory inside a fireproof safe in a tamper-proof way.' },
+  { n: '3.3.6', t: 'Upon breaking open of the Locker, having followed the procedure as set out above, the Notary Public shall prepare inventory of the contents of the Locker and get valuation of the contents done by the Company’s approved Valuer and the contents of the Locker shall be kept in sealed envelope/ bag along with detailed inventory inside a fireproof safe in a tamper-proof way.' },
   { n: '3.3.7', t: 'In addition to the above, the Company shall also record a video of the break open process together with inventory assessment and safe keep and preserve the same so as to provide evidence in case of any dispute or court case in future.' },
   { n: '3.3.8', t: 'Furthermore, the Company shall also ensure that the details of breaking open of locker is documented in the Company’s Core Banking System (CBS) or any other computerized system compliant with the Cyber Security Framework issued by RBI from time to time, apart from locker register.' },
   { n: '3.3.9', t: 'Disposal of the articles of the Locker as recorded in the inventory prepared in the manner as stated in the paragraphs above, shall be done either by sale in public auction and the sale proceeds shall be applied first towards the Customer’s dues to the Company (including outstanding Rent, breaking open charges and any other dues) and balance be refunded to the Customer or held for the disposal at the order of the Customer.' },
   { n: '3.3.10', t: 'Before sale of the contents of the Locker by conducting public auction, a notice of not less than 3 (three) months in writing by registered post/ speed post (and also by (i) email where email id of the Customer is available; and (ii) SMS and/or WhatsApp where the mobile phone number of the Customer is available) shall be issued by the Company to the Customer about the intention of the Company to auction the contents of the locker for recovery of the dues to the Company. The said notice ("Auction Notice") shall contain the date, time and place of auction and a copy of the inventory of the contents of the Locker made in terms hereof.' },
 
-  { head: '4. Security Deposit' },
-  { n: '', t: 'The Hirer shall pay the prescribed security deposit to the NBFC at the time of allotment of the locker. The security deposit shall be retained by the Company as security towards the Hirer’s obligations under this Agreement, including locker rent, applicable charges, damages or any other outstanding dues. The security deposit shall not carry any interest and shall not be treated as payment of locker rent unless otherwise specified by the Company. Upon surrender or closure of the locker, the security deposit shall be refunded to the Hirer after adjustment of all outstanding dues, charges or liabilities, if any, subject to the terms and conditions of the locker agreement and applicable RBI guidelines.' },
+  // 3.4 and 3.5 were MISSING from this file until 2026-09-14 — the version it
+  // was built from (the 04-Sep revision) predates them, and both use a
+  // number-then-title heading in the source rather than the numbered-bar style
+  // the other clauses use, so an earlier heading-by-heading check walked past
+  // them. Restored verbatim from "AGREEMENT 08-SEP - LOCKER".
+  { head: '3.4 Delay in Payment' },
+  { n: '', t: 'Delay in payment of locker rent, beyond 30 days from the due date, will attract an interest @12% p.a compounded quarterly. The Hirer is advised to pay the rent promptly and avoid liability for interest.' },
+
+  { head: '3.5 Event of shifting of branch' },
+  { n: '', t: 'In the event of shifting of branch on account or any reason including merger or closure of branch where the locker is located, warranting physical relocation of the lockers, the Company shall give public notice in two newspapers (English and one in vernacular language) in this regard and Customer shall be intimated at least one month in advance along with options for them to change or close the locker.' },
+
 
   { head: '5. THE COMPANY’S DISCHARGE FROM OBLIGATIONS AND LIABILITY' },
   { n: '5.1', t: 'the Company shall not be liable for in any case for deterioration or damage to the contents of the Locker whether caused by rain, flood, earthquake, lighting, civil disturbance or commotion, riot or war or in the event of any terrorist attack or by any other similar cause(s).' },
@@ -206,19 +225,49 @@ const PERIOD_OF_LICENCE =
 
 const OPERATION_MANDATES = 'Sole / Either or Survivor / Anyone or Survivor / Jointly';
 
+/** The DECLARATION that closes the owner's document, verbatim. It sits between
+ *  the vernacular undertaking and the signature block. */
+const DECLARATION_BULLETS = [
+  'I/We request you to allot me/us a Locker in your branch as per particulars furnished in this application.',
+  'I/We agree to abide by the rules and regulations of the Company as mentioned herein and in the Safe Deposit Locker Hiring Agreement.',
+  'I/We shall not assign or sublet the locker or any part of it, nor permit it to be used for any purpose other than for deposit of documents, jewellery or other valuables.',
+  'I/We shall not use the locker for the deposit of any property of an explosive or destructive nature, weapons and / or any other items / things prohibited under law.',
+];
+const DECLARATION_CLOSING =
+  'I / We have read and understood all the terms and conditions governing the hiring of safe deposit locker from '
+  + 'your company which are described on this form and agree to be bound by these terms and conditions at all times '
+  + 'while the locker is rented to me / us. I / We have also received a copy of the agreement.';
+
 /** A signature box in PDF coordinates (bottom-left origin), for Digio placement. */
 export interface LockerSignatureBox { llx: number; lly: number; urx: number; ury: number; }
+/** One place a given signer signs. A signer can have more than one: hirer 1 and
+ *  the authorised signatory each sign the Schedule AND the closing block. */
+export interface LockerSignaturePlacement { box: LockerSignatureBox; page: number }
 export interface LockerAgreementResult {
   buffer: Buffer;
-  /** Where the CUSTOMER's e-signature goes — hirer 1's line. Kept for callers
-   *  that only ever sign the primary. */
+  /** Where the CUSTOMER's e-signature goes — hirer 1's closing line. Kept for
+   *  callers that only ever sign the primary. */
   hirer: LockerSignatureBox; hirerPage: number;
-  /** EVERY hirer's signature line, in order. A joint hiring is signed by all of
-   *  them (owner 2026-09-12), so each needs its own box: Digio places one
-   *  signature per signer and two signers cannot share coordinates. */
-  hirers: Array<{ position: number; name: string; box: LockerSignatureBox; page: number }>;
-  /** Where the company AUTHORISED SIGNATORY (the CEO) e-signs. */
+  /**
+   * EVERY hirer, in order, with every box they sign in.
+   *
+   * A joint hiring is signed by all of them (owner 2026-09-12) and each needs
+   * their own coordinates: Digio places one signature per signer and two signers
+   * cannot share a box. `placements` is the whole list for that hirer — hirer 1
+   * has two (the Schedule's witness table and the closing line, owner
+   * 2026-09-14), hirers 2 and 3 have one each (their Schedule column). `box`
+   * and `page` are the FIRST placement, so older single-box callers still work.
+   */
+  hirers: Array<{
+    position: number; name: string;
+    box: LockerSignatureBox; page: number;
+    placements: LockerSignaturePlacement[];
+  }>;
+  /** Where the company AUTHORISED SIGNATORY (the CEO) e-signs — the closing
+   *  block. `signatoryPlacements` adds the Schedule's "For the Company" box,
+   *  which the same person signs (owner 2026-09-14). */
   signatory: LockerSignatureBox; signatoryPage: number;
+  signatoryPlacements: LockerSignaturePlacement[];
 }
 
 export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise<LockerAgreementResult> {
@@ -230,8 +279,16 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
 
   // Captured during the render pass so the caller can place each e-signature.
   let hirerBox!: LockerSignatureBox, hirerPage = 1;
-  const hirerBoxes: Array<{ position: number; name: string; box: LockerSignatureBox; page: number }> = [];
+  const hirerBoxes: Array<{
+    position: number; name: string;
+    box: LockerSignatureBox; page: number; placements: LockerSignaturePlacement[];
+  }> = [];
   let signatoryBox!: LockerSignatureBox, signatoryPage = 1;
+  let signatoryPlacements: LockerSignaturePlacement[] = [];
+  // The Schedule's witness table, filled on page 2 and merged into the signer
+  // list once the closing block has been laid out too.
+  const scheduleBoxes = new Map<number, LockerSignaturePlacement>();
+  let scheduleSignatoryBox: LockerSignaturePlacement | null = null;
 
   const buffer = await renderToBuffer((doc) => {
     // renderToBuffer doesn't bufferPages, so track the page via the event.
@@ -370,48 +427,111 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
     para(OPERATION_MANDATES + '     (circle the one that applies)');
 
     // ── Signatures for the Schedule ──────────────────────────────────────
-    need(190);
+    //
+    // The owner's document puts the witness table here, and EVERY hirer signs
+    // in it (owner 2026-09-14: "in the second page in that table - every hirer
+    // signs"). Three numbered columns, exactly as supplied — the fourth this
+    // file used to draw had no counterpart in the source and is gone.
+    //
+    // The "For the Company" block below it is signed by the SAME authorised
+    // signatory who signs the closing block (owner 2026-09-14), so it is a real
+    // e-signature box, not a ruled line for a wet signature.
+    need(240);
     doc.y += 6;
     para('IN WITNESS WHEREOF, the Parties hereto have executed this Agreement on this date (date as mentioned above)', { bold: true, gap: 10 });
 
-    const sigBox = (x: number, w: number, yTop: number, h: number) => {
+    /** A cell of the witness table. Returns the rect so a box can be captured. */
+    const cell = (x: number, yTop: number, w: number, h: number) => {
       doc.save().rect(x, yTop, w, h).strokeColor(COLORS.RULE).lineWidth(0.6).stroke().restore();
     };
+    /** PDF (bottom-left origin) coordinates for a top-left rect, inset so the
+     *  signature image sits inside the ruled cell rather than on its border. */
+    const boxOf = (x: number, yTop: number, w: number, h: number): LockerSignatureBox => ({
+      llx: x + 3, lly: PAGE_H - (yTop + h - 3), urx: x + w - 3, ury: PAGE_H - (yTop + 3),
+    });
+
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.NAVY).text('For the Customer', 50, doc.y, { width: W });
     doc.y += 4;
     {
-      const top = doc.y;
-      const colW = W / 4;
-      for (let i = 0; i < 4; i++) {
-        sigBox(50 + i * colW, colW, top, 60);
+      const labelW = 96;
+      const colW = (W - labelW) / 3;
+      const rowH = { head: 15, sign: 48, name: 20, desig: 20 };
+      let top = doc.y;
+      const rowTops = {
+        head: top,
+        sign: top + rowH.head,
+        name: top + rowH.head + rowH.sign,
+        desig: top + rowH.head + rowH.sign + rowH.name,
+      };
+      const label = (text: string, yTop: number, h: number) => {
+        cell(50, yTop, labelW, h);
         doc.font('Helvetica').fontSize(8).fillColor(COLORS.MUTED)
-          .text(String(i + 1), 50 + i * colW + 4, top + 3, { width: colW - 8 });
+          .text(text, 54, yTop + h / 2 - 5, { width: labelW - 8 });
+      };
+      cell(50, rowTops.head, labelW, rowH.head);
+      label('Signature', rowTops.sign, rowH.sign);
+      label('Name', rowTops.name, rowH.name);
+      label('Designation*', rowTops.desig, rowH.desig);
+
+      for (let i = 0; i < 3; i++) {
+        const position = i + 1;
+        const x = 50 + labelW + i * colW;
+        // Column heading: the source numbers them 1, 2, 3.
+        cell(x, rowTops.head, colW, rowH.head);
+        doc.font('Helvetica-Bold').fontSize(8).fillColor(COLORS.NAVY)
+          .text(String(position), x, rowTops.head + 4, { width: colW, align: 'center' });
+
+        cell(x, rowTops.sign, colW, rowH.sign);
+        // A box is captured only for a hirer who actually exists: the screen and
+        // the e-sign chain enumerate signers from this list, so recording an
+        // empty column 3 would offer a signing button for nobody.
+        const who = position === 1
+          ? String(c.full_name ?? '').trim()
+          : String(jointBy.get(position)?.full_name ?? '').trim();
+        if (position === 1 || jointBy.has(position)) {
+          scheduleBoxes.set(position, { box: boxOf(x, rowTops.sign, colW, rowH.sign), page: pageNo });
+        }
+
+        cell(x, rowTops.name, colW, rowH.name);
+        if (who) {
+          doc.font('Helvetica').fontSize(7.5).fillColor(COLORS.TEXT)
+            .text(who, x + 3, rowTops.name + 6, { width: colW - 6, ellipsis: true, height: 10 });
+        }
+        cell(x, rowTops.desig, colW, rowH.desig);
       }
-      doc.font('Helvetica').fontSize(7.5).fillColor(COLORS.MUTED)
-        .text('Signature', 52, top + 62, { width: colW });
-      doc.y = top + 60;
-      const labels = top + 72;
-      doc.font('Helvetica').fontSize(7.5).fillColor(COLORS.MUTED)
-        .text('Name  ______________   Designation*  ______________', 50, labels, { width: W });
-      doc.y = labels + 12;
+      doc.y = rowTops.desig + rowH.desig + 3;
       doc.font('Helvetica-Oblique').fontSize(7.5).fillColor(COLORS.MUTED)
-        .text('(*in case where the Customer is non individual / not signing in person)', 50, doc.y, { width: W, align: 'center' });
+        .text('(*in case where the Customer is non individual/ not signing in person)', 50, doc.y, { width: W });
       doc.y += 14;
     }
 
-    need(110);
+    need(96);
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.NAVY)
-      .text(`For the Company [${l.branch ?? 'Branch'}]`, 50, doc.y, { width: W });
+      .text(`For the Company [${l.branch ?? 'Branch'}]:`, 50, doc.y, { width: W });
     doc.y += 4;
     {
+      const labelW = 130;
       const top = doc.y;
-      sigBox(50, W, top, 56);
-      doc.font('Helvetica').fontSize(7.5).fillColor(COLORS.MUTED).text('Signature', 54, top + 3);
-      doc.y = top + 60;
-      doc.font('Helvetica').fontSize(8).fillColor(COLORS.MUTED)
-        .text(`Name of the signatory  ______________________          Designation  ${co.signatory_designation}`,
-          50, doc.y, { width: W });
-      doc.y += 14;
+      const rows: Array<[string, string, number]> = [
+        ['Signature:', '', 44],
+        ['Name of the signatory:', orBlank(input.signatoryName), 18],
+        ['Designation:', co.signatory_designation, 18],
+      ];
+      let yTop = top;
+      for (const [lab, val, h] of rows) {
+        cell(50, yTop, labelW, h);
+        doc.font('Helvetica').fontSize(8).fillColor(COLORS.MUTED)
+          .text(lab, 54, yTop + h / 2 - 5, { width: labelW - 8 });
+        cell(50 + labelW, yTop, W - labelW, h);
+        if (lab === 'Signature:') {
+          scheduleSignatoryBox = { box: boxOf(50 + labelW, yTop, W - labelW, h), page: pageNo };
+        } else if (val) {
+          doc.font('Helvetica').fontSize(8.5).fillColor(COLORS.TEXT)
+            .text(val, 50 + labelW + 4, yTop + h / 2 - 5, { width: W - labelW - 8 });
+        }
+        yTop += h;
+      }
+      doc.y = yTop + 14;
     }
 
     // ── ANNEXURE II — the agreement itself ───────────────────────────────
@@ -498,54 +618,125 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
       doc.y = bottom + 16;
     }
 
+    // ── Declaration ──────────────────────────────────────────────────────
+    need(150);
+    doc.font('Helvetica-Bold').fontSize(9.5).fillColor(COLORS.NAVY)
+      .text('DECLARATION', 50, doc.y, { width: W });
+    doc.y += 6;
+    for (const b of DECLARATION_BULLETS) {
+      need(26);
+      const top = doc.y;
+      doc.font('Helvetica').fontSize(9).fillColor(COLORS.TEXT).text('\u2022', 54, top, { width: 12 });
+      doc.font('Helvetica').fontSize(9).fillColor(COLORS.TEXT)
+        .text(b, 68, top, { width: W - 18, align: 'justify', lineGap: 1.4 });
+      doc.y += 4;
+    }
+    doc.y += 4;
+    para(DECLARATION_CLOSING, { gap: 12 });
+
     // ── Final signatures ─────────────────────────────────────────────────
-    // ONE ruled line per hirer, each named (owner 2026-09-12: "the joint
-    // applicant should also do the esigning").
+    // The source's closing block, restored: ONE line, "Signature of Customers/
+    // Hirer(s)" on the left and "Authorised Signatory" on the right under "For
+    // Dhanam Investment and Finance Pvt.Ltd.,".
     //
-    // Stacked, not side by side. Digio needs a distinct box per signer, and a
-    // full-width line each keeps the signature legible and leaves no doubt on
-    // paper about who signed where — which is the point of a signature block on
-    // an agreement two or three people are bound by.
-    const signers: Array<{ position: number; name: string }> = [
+    // Only hirer 1 signs here (owner 2026-09-14: "in the last page only the
+    // primary - hirer 1 signs and the ceo in the other space"). Hirers 2 and 3
+    // have already signed the Schedule's witness table on page 2; this file
+    // briefly drew a named line per hirer instead, which was never in the
+    // owner's document and is gone.
+    need(110);
+    const closeTop = doc.y;
+    doc.font('Helvetica').fontSize(9).fillColor(COLORS.TEXT)
+      .text(`For ${co.legal_name},`, 300, closeTop, { width: 245 });
+    // The signing band: hirer 1 on the left, the authorised signatory on the
+    // right, both above the rule that carries their labels.
+    const bandTop = closeTop + 14;
+    const bandH = 40;
+    const ruleY = bandTop + bandH;
+    doc.save().moveTo(50, ruleY).lineTo(545, ruleY).strokeColor(COLORS.TEXT).lineWidth(0.7).stroke().restore();
+    hirerPage = pageNo;
+    hirerBox = { llx: 50, lly: PAGE_H - ruleY, urx: 290, ury: PAGE_H - bandTop };
+    signatoryPage = pageNo;
+    signatoryBox = { llx: 320, lly: PAGE_H - ruleY, urx: 545, ury: PAGE_H - bandTop };
+    doc.font('Helvetica').fontSize(8.5).fillColor(COLORS.MUTED)
+      .text('Signature of Customers/ Hirer(s)', 50, ruleY + 4, { width: 240 });
+    doc.font('Helvetica').fontSize(8.5).fillColor(COLORS.MUTED)
+      .text(co.signatory_designation, 320, ruleY + 4, { width: 225, align: 'right' });
+    doc.y = ruleY + 22;
+
+    doc.font('Helvetica').fontSize(8).fillColor(COLORS.MUTED)
+      .text('Date  ______________________          Place  ______________________', 50, doc.y, { width: W });
+    doc.y += 14;
+    doc.font('Helvetica').fontSize(7.5).fillColor(COLORS.MUTED)
+      .text('Branch use: scan the signed agreement and upload it against this locker application in the NCD system.',
+        50, doc.y, { width: W });
+
+    // ── Merge the two signing places into one list per signer ────────────
+    // Hirer 1 signs the witness table AND this line; hirers 2 and 3 sign the
+    // table only. Digio takes a list of boxes per signer, so one request per
+    // person still covers every place they sign.
+    const roster: Array<{ position: number; name: string }> = [
       { position: 1, name: orBlank(c.full_name) },
       ...(input.hirers ?? [])
         .slice()
         .sort((a, b) => Number(a.position) - Number(b.position))
         .map((h) => ({ position: Number(h.position), name: orBlank(h.full_name) })),
     ];
-    need(90 + signers.length * 46);
-    for (const sgn of signers) {
-      const y = doc.y;
-      const box: LockerSignatureBox = { llx: 50, lly: PAGE_H - y, urx: 290, ury: PAGE_H - y + 32 };
-      if (sgn.position === 1) { hirerPage = pageNo; hirerBox = box; }
-      hirerBoxes.push({ position: sgn.position, name: sgn.name, box, page: pageNo });
-      doc.font('Helvetica').fontSize(9).fillColor(COLORS.TEXT)
-        .text('_________________________________________________________________', 50, doc.y, { width: W });
-      doc.y += 2;
-      doc.font('Helvetica').fontSize(8.5).fillColor(COLORS.MUTED)
-        .text(signers.length > 1
-          ? `Signature of Hirer ${sgn.position}${sgn.name ? ` — ${sgn.name}` : ''}`
-          : 'Signature of Customers / Hirer(s)', 50, doc.y, { width: W });
-      doc.y += 24;
+    for (const sgn of roster) {
+      const placements: LockerSignaturePlacement[] = [];
+      const sched = scheduleBoxes.get(sgn.position);
+      if (sched) placements.push(sched);
+      if (sgn.position === 1) placements.push({ box: hirerBox, page: hirerPage });
+      // A signer with no box at all would be offered a button that Digio cannot
+      // place; the roster is built from the same rows the table was, so this is
+      // a guard, not an expected branch.
+      const first = placements[0];
+      if (!first) continue;
+      hirerBoxes.push({
+        position: sgn.position, name: sgn.name,
+        box: first.box, page: first.page, placements,
+      });
     }
-    doc.font('Helvetica').fontSize(9).fillColor(COLORS.TEXT)
-      .text(`For ${co.legal_name},`, 50, doc.y, { width: W });
-    // Authorised-signatory e-sign sits in the gap between "For <company>," and
-    // the designation line below it.
-    const sigY = doc.y;
-    signatoryPage = pageNo;
-    signatoryBox = { llx: 50, lly: PAGE_H - (sigY + 36), urx: 290, ury: PAGE_H - (sigY + 2) };
-    doc.y += 40;
-    doc.font('Helvetica').fontSize(8.5).fillColor(COLORS.MUTED)
-      .text(co.signatory_designation, 50, doc.y, { width: W });
-    doc.y += 18;
-    doc.font('Helvetica').fontSize(8).fillColor(COLORS.MUTED)
-      .text(`Date  ______________________          Place  ______________________`, 50, doc.y, { width: W });
-    doc.y += 14;
-    doc.font('Helvetica').fontSize(7.5).fillColor(COLORS.MUTED)
-      .text('Branch use: scan the signed agreement and upload it against this locker application in the NCD system.',
-        50, doc.y, { width: W });
-  });
+    signatoryPlacements = [
+      ...(scheduleSignatoryBox ? [scheduleSignatoryBox] : []),
+      { box: signatoryBox, page: signatoryPage },
+    ];
 
-  return { buffer, hirer: hirerBox, hirerPage, hirers: hirerBoxes, signatory: signatoryBox, signatoryPage };
+    // ── Page furniture ───────────────────────────────────────────────────
+    // "Page N of M" at the top and the company block at the foot of EVERY page,
+    // as in the owner's document. Done last, over buffered pages, because M is
+    // only known once the clauses have finished paginating.
+    //
+    // The address is OURS, not the one printed on the supplied PDF: the
+    // corporate-office pincode was corrected to 641 062 (owner 2026-08-28) and
+    // COMPANY is the single source every other document already prints from.
+    const range = doc.bufferedPageRange();
+    for (let i = 0; i < range.count; i++) {
+      doc.switchToPage(range.start + i);
+      // text() paginates when it crosses the bottom margin, which would append
+      // a blank page per footer. Drawing below the margin needs it out of the way.
+      doc.page.margins.bottom = 0;
+      doc.font('Helvetica').fontSize(7.5).fillColor(COLORS.MUTED)
+        .text(`Page ${i + 1} of ${range.count}`, 50, 18, { width: W, align: 'right', lineBreak: false });
+      const lines = [
+        co.legal_name.toUpperCase(),
+        `RBI No: ${COMPANY.rbi_registration_no} | CIN: ${co.cin} | GST: ${COMPANY.gstin}`,
+        `Corporate Office: ${co.corporate_office_address}`,
+        `Registered Office: ${COMPANY.registered_office_address}`,
+        `Contact : ${co.general_phone} | ${co.general_email} | ${co.website}`,
+      ];
+      let fy = PAGE_H - 46;
+      for (const [n, line] of lines.entries()) {
+        doc.font(n === 0 ? 'Helvetica-Bold' : 'Helvetica').fontSize(6)
+          .fillColor(n === 0 ? COLORS.GOLD_DEEP : COLORS.MUTED)
+          .text(line, 50, fy, { width: W, align: 'center', lineBreak: false });
+        fy += 7;
+      }
+    }
+  }, { bufferPages: true });
+
+  return {
+    buffer, hirer: hirerBox, hirerPage, hirers: hirerBoxes,
+    signatory: signatoryBox, signatoryPage, signatoryPlacements,
+  };
 }

@@ -168,6 +168,34 @@ export function LockerProfilePage() {
         </div>
       )}
 
+      {/* Who else holds this locker. Saved since the joint-hirer release and
+          shown nowhere until now, so a jointly-held locker read as single-held
+          on every screen and staff concluded the second holder had not saved
+          (owner 2026-09-14). Every holder signs the agreement, so who they are
+          is not a detail. */}
+      <div className={card}>
+        <h2 className={h2}>Holders</h2>
+        <Row label="Hirer 1">
+          {data.customer
+            ? <>{data.customer.full_name}{data.customer.phone ? <span className="text-text-muted"> · {data.customer.phone}</span> : null}</>
+            : <span className="text-text-muted">—</span>}
+        </Row>
+        {(data.hirers ?? []).map((h: any) => (
+          <Row key={h.position} label={`Hirer ${h.position}`}>
+            {h.full_name}
+            {h.phone
+              ? <span className="text-text-muted"> · {h.phone}</span>
+              // Phone is how the e-sign link reaches them, so its absence is
+              // not cosmetic — the agreement cannot complete without it.
+              : <span className="text-danger"> · no phone — cannot be sent for e-sign</span>}
+            {h.pan ? <span className="text-text-muted font-mono"> · {h.pan}</span> : null}
+          </Row>
+        ))}
+        {(data.hirers ?? []).length === 0 && (
+          <div className="text-xs text-text-muted">Single holder — no joint hirers on this locker.</div>
+        )}
+      </div>
+
       {/* Agreement / e-sign */}
       <div className={card}>
         <h2 className={h2}>Agreement &amp; e-sign</h2>

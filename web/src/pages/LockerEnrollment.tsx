@@ -175,6 +175,30 @@ export function LockerEnrollmentPage() {
     // resolve and the picker appears — the one case a re-pick is warranted.
     if (r.intended_locker?.locker_id) setLockerId(String(r.intended_locker.locker_id));
     setCust({ found: true, phone: r.phone, profile: { name: r.name, email: r.email } });
+    // Load the joint hirers back. They have been SAVED since the joint-hirer
+    // release but never read, so reopening an application showed an empty
+    // "+ Add a joint hirer" and staff concluded the second holder had not
+    // saved — then re-typed them, into a form whose only write happens at
+    // CREATE, so the re-entry silently did nothing (owner 2026-09-14).
+    void loadHirers(String(r.application_id ?? id));
+  };
+
+  /** The joint hirers on file for an application, into the form. */
+  const loadHirers = async (applicationId: string) => {
+    if (!applicationId) return;
+    const r = await run(api.get<{ hirers: Array<Record<string, unknown>>; incomplete: Array<{ position: number; name: string; missing: string[] }> }>(
+      `/api/lockers/applications/${encodeURIComponent(applicationId)}/hirers`));
+    if (!r?.hirers) return;
+    setHirerGaps(r.incomplete ?? []);
+    setHirers(r.hirers.map((h) => ({
+      position: Number(h.position),
+      full_name: String(h.full_name ?? ''), phone: String(h.phone ?? ''),
+      email: String(h.email ?? ''), dob: String(h.dob ?? ''),
+      pan: String(h.pan ?? ''),
+      // The full Aadhaar is deliberately never returned; the last four are.
+      aadhaar: '', aadhaar_last4: String(h.aadhaar_last4 ?? ''),
+      address: String(h.address ?? ''),
+    })));
   };
   const resumed = useRef(false);
   useEffect(() => {
@@ -592,19 +616,49 @@ export function LockerEnrollmentPage() {
   const [mandate, setMandate] = useState<LockerOperationMandate | ''>('');
   /** Joint hirers — holders 2 and 3 on the agreement. Hirer 1 IS the applicant
    *  and is never in this list; the agreement has three blocks in total. */
+  /** Cleared on any edit, so the confirmation cannot outlive what it confirmed. */
+  const [hirersSaved, setHirersSaved] = useState(false);
+  /** What the server says each hirer is still missing — the same list that
+   *  decides whether the agreement can be sent, rather than a second opinion. */
+  const [hirerGaps, setHirerGaps] = useState<Array<{ position: number; name: string; missing: string[] }>>([]);
   const [hirers, setHirers] = useState<Array<{
     position: number; full_name: string; phone: string; email: string;
     dob: string; pan: string; aadhaar: string; aadhaar_last4: string; address: string;
   }>>([]);
+  /**
+   * Save the joint hirers on an application that ALREADY EXISTS.
+   *
+   * Before this, hirers could only ride on the create call. Once the
+   * application existed the form still accepted them and still looked like it
+   * had worked — and threw every keystroke away, because nothing sent them
+   * anywhere (owner 2026-09-14: "the joint applicant name is not getting
+   * properly saved"). The PUT has existed since the joint-hirer release; no
+   * screen ever called it.
+   */
+  const saveHirers = async () => {
+    if (!app?.application_id) return;
+    const r = await run(api.put<{ hirers: unknown[] }>(
+      `/api/lockers/applications/${encodeURIComponent(String(app.application_id))}/hirers`,
+      { hirers: hirers.map((h, i) => ({ ...h, position: i + 2 })) }));
+    if (r) {
+      setHirersSaved(true);
+      await loadHirers(String(app.application_id));
+    }
+  };
+
   const addHirer = () => setHirers((h) => h.length >= 2 ? h : [...h, {
     position: h.length + 2, full_name: '', phone: '', email: '',
     dob: '', pan: '', aadhaar: '', aadhaar_last4: '', address: '',
   }]);
-  const setHirerField = (i: number, k: string, v: string) =>
+  const setHirerField = (i: number, k: string, v: string) => {
+    setHirersSaved(false);
     setHirers((h) => h.map((x, j) => j === i ? { ...x, [k]: v } : x));
+  };
   /** Renumbered on removal so positions stay 2 then 3 with no gap. */
-  const removeHirer = (i: number) =>
+  const removeHirer = (i: number) => {
+    setHirersSaved(false);
     setHirers((h) => h.filter((_, j) => j !== i).map((x, j) => ({ ...x, position: j + 2 })));
+  };
   /**
    * What the customer's nominee is missing, if anything.
    *
@@ -816,9 +870,32 @@ export function LockerEnrollmentPage() {
             <span className="text-xs font-semibold text-text-label uppercase tracking-wide">Joint hirers</span>
             <span className="text-xs text-text-muted">optional · up to 2 more holders</span>
             {hirers.length < 2 && (
-              <button type="button" className={btnGhost} onClick={addHirer}>+ Add a joint hirer</button>
+              <button type="button" className={btnGhost} onClick={() => { setHirersSaved(false); addHirer(); }}>+ Add a joint hirer</button>
             )}
+            {/* Only once the application EXISTS. Before that the create call
+                carries them, and a second write would be a duplicate. After it,
+                nothing sent them anywhere at all — which is the bug this
+                closes. */}
+            {app?.application_id && (
+              <button type="button" className={btnGhost} disabled={busy} onClick={saveHirers}>
+                Save joint hirers
+              </button>
+            )}
+            {hirersSaved && <span className="text-xs text-success">Saved.</span>}
           </div>
+          {app?.application_id && (
+            <p className="text-xs text-text-muted mt-1">
+              This application already exists, so joint hirers must be <b>saved</b> here — and the agreement
+              re-sent afterwards, so the copy people sign carries them.
+            </p>
+          )}
+          {/* The server's own readiness list. A hirer missing a phone cannot be
+              sent an e-sign link at all, so the agreement would never complete. */}
+          {hirerGaps.map((g) => (
+            <p key={g.position} className="text-xs text-danger mt-1">
+              Hirer {g.position}{g.name ? ` (${g.name})` : ''} still needs: {g.missing.join(', ')}.
+            </p>
+          ))}
           {hirers.length > 0 && (
             <p className="text-xs text-text-muted mt-2">
               Each one signs their own column of the agreement, so each needs their <b>own phone number</b> and

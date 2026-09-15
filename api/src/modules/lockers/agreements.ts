@@ -73,6 +73,10 @@ export function signingLabel(method: string, status: string): string {
   if (status === 'Signed') return method === 'physical' ? 'Physically signed' : 'e-Signed';
   if (status === 'PendingApproval') return 'Scan awaiting approval';
   if (status === 'AwaitingSignature') return method === 'physical' ? 'Awaiting signature on paper' : 'Awaiting e-signature';
+  if (status === 'CustomerSigned') return 'Awaiting authorised signatory';
+  // Without this AwaitingCEO fell through to "e-Sign started", which reads
+  // like nobody has signed when in fact everyone but the company has.
+  if (status === 'AwaitingCEO') return 'Sent to authorised signatory';
   if (status === 'Rejected') return 'Scan rejected';
   if (status === 'Cancelled') return 'Cancelled';
   return method === 'physical' ? 'Physical signing started' : 'e-Sign started';
@@ -125,21 +129,39 @@ export async function listSignings(db: Db, applicationId: string): Promise<Signi
 export interface AwaitingCeoRow {
   application_id: string; customer_name: string | null; customer_code: string | null;
   signed_at: string | null;
+  /** 'CustomerSigned' = nobody has sent it yet; 'AwaitingCEO' = a link is out. */
+  status: string;
+  /** Digio says the signatory HAS signed, but we never got the file back. The
+   *  row needs "Fetch signed copy", not another signing link. */
+  final_copy_pending: boolean;
 }
 /** Agreements the customer has e-signed and that await the CEO's counter-sign —
- *  the "Locker agreements" queue (owner 2026-09-10). Oldest first. */
+ *  the "Locker agreements" queue (owner 2026-09-10). Oldest first.
+ *
+ *  AwaitingCEO belongs here just as much as CustomerSigned. Listing only the
+ *  latter meant that sending the link REMOVED the agreement from the only
+ *  screen that could act on it: a signatory who never opened the link, or a
+ *  counter-sign whose file failed to download, left the locker with no way
+ *  forward from any screen (initiateCeoEsign refused every status but
+ *  CustomerSigned, and the live-status index blocks starting a fresh signing). */
 export async function listAwaitingCeo(db: Db): Promise<AwaitingCeoRow[]> {
   const { rows } = await db.query<Record<string, unknown>>(
-    `SELECT s.lockerhub_application_id, s.signed_at, c.full_name, c.customer_code
+    `SELECT s.lockerhub_application_id, s.signed_at, s.status, c.full_name, c.customer_code,
+            EXISTS (SELECT 1 FROM digio_signing_sessions ds
+                     WHERE ds.locker_agreement_signing_id = s.id
+                       AND ds.document_type = 'locker_agreement_ceo'
+                       AND ds.status = 'signed') AS final_copy_pending
        FROM locker_agreement_signings s
        LEFT JOIN customers c ON c.id = s.customer_id
-      WHERE s.status = 'CustomerSigned'
+      WHERE s.status IN ('CustomerSigned', 'AwaitingCEO')
       ORDER BY s.signed_at ASC NULLS LAST, s.id ASC`);
   return rows.map((r) => ({
     application_id: r.lockerhub_application_id as string,
     customer_name: (r.full_name as string) ?? null,
     customer_code: (r.customer_code as string) ?? null,
     signed_at: r.signed_at ? String(r.signed_at) : null,
+    status: String(r.status),
+    final_copy_pending: r.status === 'AwaitingCEO' && Boolean(r.final_copy_pending),
   }));
 }
 
@@ -615,11 +637,35 @@ export async function initiateCeoEsign(
   const signing = await getSigning(db, applicationId);
   if (!signing) throw errors.badRequest('No agreement signing found for this locker.');
   if (signing.status === 'Signed') throw errors.conflict('This agreement is already fully signed.');
-  if (signing.status !== 'CustomerSigned') {
+  // AwaitingCEO is allowed: it means a link is already out, and re-sending is
+  // the ONLY way back from a signatory who never opened it. Refusing it made
+  // the status a dead end — the agreement was gone from the queue, could not be
+  // re-sent, and could not be replaced either (the live-status index).
+  if (signing.status !== 'CustomerSigned' && signing.status !== 'AwaitingCEO') {
     throw errors.badRequest('The customer has not e-signed this agreement yet — the authorised signatory signs after them.');
   }
   const signed = await getSignedDocument(db, applicationId);
   if (!signed) throw errors.badRequest('The customer-signed copy is not available yet — try again shortly.');
+
+  // WHOSE signatures that copy carries. On a joint agreement the last hirer's
+  // signed file can fail to download while the row still moves to
+  // CustomerSigned, and existence alone would then hand the signatory a
+  // document one holder short — countersigned, and unenforceable against them.
+  // The hirer-to-hirer hop already checks this watermark; the CEO hop did not.
+  // Single-hirer agreements are exempt: there is no chain to fall behind, and
+  // rows predating the watermark column carry no position.
+  const hirerCount = 1 + Number((await db.query<{ n: string }>(
+    'SELECT count(*) AS n FROM locker_application_hirers WHERE lockerhub_application_id = $1',
+    [applicationId])).rows[0]?.n ?? 0);
+  if (hirerCount > 1) {
+    const carries = Number((await db.query<{ signed_doc_position: number | null }>(
+      'SELECT signed_doc_position FROM locker_agreement_signings WHERE id = $1',
+      [signing.id])).rows[0]?.signed_doc_position ?? 0);
+    if (carries < hirerCount) {
+      throw errors.badRequest(
+        `The copy on file carries ${carries || 'no'} of ${hirerCount} hirers' signatures — use "Fetch signed copy" before the authorised signatory signs it.`);
+    }
+  }
 
   // Re-render for the signatory box only (deterministic; same layout as signed).
   const { result } = await renderLockerAgreement(db, applicationId, signing.id);
@@ -645,6 +691,13 @@ export async function initiateCeoEsign(
   });
 
   await db.withTx(async (tx) => {
+    // A re-send kills the earlier signatory link so the poller stops chasing it
+    // and only one live counter-sign request exists at a time.
+    await tx.query(
+      `UPDATE digio_signing_sessions SET status = 'cancelled', updated_at = now()
+        WHERE locker_agreement_signing_id = $1 AND document_type = 'locker_agreement_ceo'
+          AND status = 'requested' AND digio_request_id <> $2`,
+      [signing.id, req.digioRequestId]);
     await tx.query(
       `INSERT INTO digio_signing_sessions
          (application_id, digio_request_id, sign_url, signer_phone, status, created_by_user_id, document_type, locker_agreement_signing_id)
@@ -663,6 +716,34 @@ export async function initiateCeoEsign(
   });
 
   return { sign_url: req.signUrl, digio_request_id: req.digioRequestId, stub: !digioConfigured() };
+}
+
+/**
+ * Chase a signed copy Digio holds and we do not.
+ *
+ * Both hand-offs store the file best-effort: the signature is recorded from the
+ * webhook, the DOWNLOAD can still fail. Because the session is 'signed' by
+ * then, completeSigning treats any later webhook as a duplicate and the file is
+ * never fetched again — so this is the only route back for an agreement stuck
+ * mid-chain or counter-signed without its final copy. It records nothing new;
+ * it only fetches what Digio already says was signed.
+ */
+export async function fetchSignedCopy(
+  db: Db, actor: AuthUser, applicationId: string,
+): Promise<{ ok: boolean; status: string }> {
+  const signing = await getSigning(db, applicationId);
+  if (!signing) throw errors.notFound('No agreement signing found for this locker.');
+  const { refetchSignedCopy } = await import('../../integrations/digio/service.js');
+  const r = await refetchSignedCopy(db, signing.id);
+  if (!r.kind) throw errors.badRequest('Nobody has e-signed this agreement yet — there is no copy to fetch.');
+  if (!r.ok) throw errors.upstream(502, 'Digio did not return the signed copy. Try again in a few minutes.');
+  const after = await getSigning(db, applicationId);
+  await writeAudit(db, {
+    actorId: actor.id, action: 'locker.agreement.signed-copy-refetched',
+    entityType: 'locker_agreement_signings', entityId: signing.id,
+    after: { application: applicationId, kind: r.kind, status: after?.status ?? null },
+  });
+  return { ok: true, status: after?.status ?? signing.status };
 }
 
 /**

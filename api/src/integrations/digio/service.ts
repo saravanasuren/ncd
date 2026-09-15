@@ -37,6 +37,127 @@ export async function initiateSigning(db: Db, actor: AuthUser, applicationId: nu
   return { sign_url: req.signUrl, digio_request_id: req.digioRequestId, stub: !digioConfigured() };
 }
 
+/**
+ * Store the copy a HIRER just signed and move the chain on.
+ *
+ * WHO signed, and is anyone left? A joint agreement is a chain — hirer 1, then
+ * 2, then 3 — and only the LAST of them hands over to the CEO. Marking it
+ * CustomerSigned on the first signature would have offered the CEO a document
+ * the other holders had not signed (owner 2026-09-14).
+ *
+ * The stored file is REPLACED at every stage, not kept from the first: the next
+ * hirer signs this file, so it must carry every signature so far. COALESCE
+ * would have frozen it at hirer 1's copy and quietly dropped the rest.
+ *
+ * Returns whether the signed file actually arrived.
+ */
+async function storeHirerSignedCopy(db: Db, digioRequestId: string, signingId: number): Promise<boolean> {
+  let signedPath: string | null = null;
+  try {
+    const { downloadSignedDocument } = await import('./index.js');
+    const signed = await downloadSignedDocument(digioRequestId);
+    if (signed) { const { saveBuffer } = await import('../../lib/storage.js'); signedPath = saveBuffer('locker-agreements', `locker-agreement-signed-${signingId}.pdf`, signed).path; }
+  } catch (e) {
+    console.warn(`[digio] locker-agreement signed-document download failed for signing ${signingId}: ${(e as Error).message}`);
+  }
+  const sess = (await db.query<{ signer_position: number | null; lockerhub_application_id: string }>(
+    `SELECT ds.signer_position, s.lockerhub_application_id
+       FROM digio_signing_sessions ds
+       JOIN locker_agreement_signings s ON s.id = ds.locker_agreement_signing_id
+      WHERE ds.digio_request_id = $1`, [digioRequestId])).rows[0];
+  const position = sess?.signer_position == null ? 1 : Number(sess.signer_position);
+  // How many hirers this agreement has: the customer, plus the joint ones.
+  const jointCount = sess
+    ? Number((await db.query<{ n: string }>(
+        'SELECT count(*) AS n FROM locker_application_hirers WHERE lockerhub_application_id = $1',
+        [sess.lockerhub_application_id])).rows[0]?.n ?? 0)
+    : 0;
+  const isLastHirer = position >= jointCount + 1;
+
+  await db.query(
+    `UPDATE locker_agreement_signings
+        SET status = CASE WHEN $3 THEN 'CustomerSigned' ELSE 'AwaitingSignature' END,
+            signed_doc_path = COALESCE($2, signed_doc_path),
+            signed_doc_filename = COALESCE(signed_doc_filename, 'locker-agreement-signed.pdf'),
+            signed_doc_mime = COALESCE(signed_doc_mime, 'application/pdf'),
+            -- Only advance the watermark when a file actually arrived. A
+            -- failed download leaves it where it was, and the next hirer is
+            -- refused rather than signing a copy missing the one before them.
+            signed_doc_position = CASE WHEN $2 IS NULL THEN signed_doc_position ELSE $4 END,
+            signed_at = CASE WHEN $3 THEN COALESCE(signed_at, now()) ELSE signed_at END,
+            updated_at = now()
+      WHERE id = $1`, [signingId, signedPath, isLastHirer, position]);
+  return signedPath != null;
+}
+
+/**
+ * Store the FULLY-signed copy once the authorised signatory has counter-signed.
+ *
+ * Against a LIVE Digio the agreement is marked Signed only when that file
+ * actually arrives. The download is over the network and can fail; marking it
+ * Signed anyway left the CUSTOMER-signed copy (COALESCE keeps the old path)
+ * sitting behind a label reading "e-Signed" — an agreement presented as
+ * countersigned whose file carries no company signature. It now stays
+ * AwaitingCEO, visible in the queue, and `refetchSignedCopy` pulls the file
+ * once Digio is reachable again.
+ *
+ * Returns whether the agreement was completed.
+ */
+async function storeCeoSignedCopy(db: Db, digioRequestId: string, signingId: number): Promise<boolean> {
+  let finalPath: string | null = null;
+  try {
+    const { downloadSignedDocument } = await import('./index.js');
+    const signed = await downloadSignedDocument(digioRequestId);
+    if (signed) { const { saveBuffer } = await import('../../lib/storage.js'); finalPath = saveBuffer('locker-agreements', `locker-agreement-final-${signingId}.pdf`, signed).path; }
+  } catch (e) {
+    console.warn(`[digio] locker-agreement CEO signed-document download failed for signing ${signingId}: ${(e as Error).message}`);
+  }
+  // No file, and Digio is LIVE — that is an outage, not a stub. Leave the
+  // agreement AwaitingCEO so the queue still shows it and the copy can be
+  // chased; marking it Signed would have left the CUSTOMER-signed file
+  // (COALESCE keeps the old path) behind a label reading "e-Signed".
+  //
+  // Stub mode is the other case and is NOT a failure: nothing is downloaded for
+  // ANY document there by design, and refusing to complete would strand every
+  // development and demo agreement at the last hop.
+  if (!finalPath && digioConfigured()) {
+    console.warn(`[digio] signing ${signingId} stays AwaitingCEO — the counter-signed copy could not be fetched`);
+    return false;
+  }
+  await db.query(
+    `UPDATE locker_agreement_signings
+        SET status = 'Signed', signed_doc_path = COALESCE($2, signed_doc_path),
+            signed_at = COALESCE(signed_at, now()), updated_at = now()
+      WHERE id = $1`, [signingId, finalPath]);
+  return true;
+}
+
+/**
+ * Pull a signed copy that Digio has but we do not.
+ *
+ * Every store above is best-effort: the signature is real and recorded, the
+ * FILE may not have made it. Without this the session is already 'signed', so
+ * completeSigning short-circuits as a duplicate and the file is never chased
+ * again — the agreement would sit in the queue forever. Keyed on the session
+ * Digio already told us about, so it can only ever fetch a document that was
+ * genuinely signed.
+ */
+export async function refetchSignedCopy(db: Db, signingId: number): Promise<{ ok: boolean; kind: string | null }> {
+  const sess = (await db.query<{ digio_request_id: string; document_type: string }>(
+    `SELECT digio_request_id, document_type FROM digio_signing_sessions
+      WHERE locker_agreement_signing_id = $1 AND status = 'signed'
+        AND document_type IN ('locker_agreement', 'locker_agreement_ceo')
+      ORDER BY id DESC LIMIT 1`, [signingId])).rows[0];
+  if (!sess) return { ok: false, kind: null };
+  // Stub mode has no document to fetch; storeCeoSignedCopy would "succeed" on a
+  // no-op, so the caller is told plainly instead.
+  if (!digioConfigured()) return { ok: false, kind: sess.document_type };
+  const ok = sess.document_type === 'locker_agreement_ceo'
+    ? await storeCeoSignedCopy(db, sess.digio_request_id, signingId)
+    : await storeHirerSignedCopy(db, sess.digio_request_id, signingId);
+  return { ok, kind: sess.document_type };
+}
+
 /** Mark a session signed (from the webhook or the poller). Idempotent. */
 export async function completeSigning(db: Db, digioRequestId: string, opts: { signedAt?: string; signedDocumentUrl?: string; payload?: unknown }): Promise<{ ok: boolean; applicationId?: number }> {
   const result = await db.withTx(async (tx) => {
@@ -103,70 +224,9 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
     const { completeAuthorisedUserConsent } = await import('../../modules/lockers/authorisedUsers.js');
     await completeAuthorisedUserConsent(db, result.authorisedUserId, { signedAt: opts.signedAt, signedPdfPath });
   } else if (result.ok && result.fresh && result.docType === 'locker_agreement' && result.lockerAgreementSigningId) {
-    // The CUSTOMER signed our copy. Store the customer-signed PDF and move the
-    // agreement to await the CEO's counter-sign (stage 4 signs THIS file).
-    let signedPath: string | null = null;
-    try {
-      const { downloadSignedDocument } = await import('./index.js');
-      const signed = await downloadSignedDocument(digioRequestId);
-      if (signed) { const { saveBuffer } = await import('../../lib/storage.js'); signedPath = saveBuffer('locker-agreements', `locker-agreement-signed-${result.lockerAgreementSigningId}.pdf`, signed).path; }
-    } catch (e) {
-      console.warn(`[digio] locker-agreement signed-document download failed for signing ${result.lockerAgreementSigningId}: ${(e as Error).message}`);
-    }
-    // WHO signed, and is anyone left? A joint agreement is a chain — hirer 1,
-    // then 2, then 3 — and only the LAST of them hands over to the CEO. Marking
-    // it CustomerSigned on the first signature would have offered the CEO a
-    // document the other holders had not signed (owner 2026-09-14).
-    //
-    // The stored file is REPLACED at every stage, not kept from the first: the
-    // next hirer signs this file, so it must carry every signature so far.
-    // COALESCE would have frozen it at hirer 1's copy and quietly dropped the
-    // rest.
-    const sess = (await db.query<{ signer_position: number | null; lockerhub_application_id: string }>(
-      `SELECT ds.signer_position, s.lockerhub_application_id
-         FROM digio_signing_sessions ds
-         JOIN locker_agreement_signings s ON s.id = ds.locker_agreement_signing_id
-        WHERE ds.digio_request_id = $1`, [digioRequestId])).rows[0];
-    const position = sess?.signer_position == null ? 1 : Number(sess.signer_position);
-    // How many hirers this agreement has: the customer, plus the joint ones.
-    const jointCount = sess
-      ? Number((await db.query<{ n: string }>(
-          'SELECT count(*) AS n FROM locker_application_hirers WHERE lockerhub_application_id = $1',
-          [sess.lockerhub_application_id])).rows[0]?.n ?? 0)
-      : 0;
-    const isLastHirer = position >= jointCount + 1;
-
-    await db.query(
-      `UPDATE locker_agreement_signings
-          SET status = CASE WHEN $3 THEN 'CustomerSigned' ELSE 'AwaitingSignature' END,
-              signed_doc_path = COALESCE($2, signed_doc_path),
-              signed_doc_filename = COALESCE(signed_doc_filename, 'locker-agreement-signed.pdf'),
-              signed_doc_mime = COALESCE(signed_doc_mime, 'application/pdf'),
-              -- Only advance the watermark when a file actually arrived. A
-              -- failed download leaves it where it was, and the next hirer is
-              -- refused rather than signing a copy missing the one before them.
-              signed_doc_position = CASE WHEN $2 IS NULL THEN signed_doc_position ELSE $4 END,
-              signed_at = CASE WHEN $3 THEN COALESCE(signed_at, now()) ELSE signed_at END,
-              updated_at = now()
-        WHERE id = $1`, [result.lockerAgreementSigningId, signedPath, isLastHirer, position]);
+    await storeHirerSignedCopy(db, digioRequestId, result.lockerAgreementSigningId);
   } else if (result.ok && result.fresh && result.docType === 'locker_agreement_ceo' && result.lockerAgreementSigningId) {
-    // The CEO counter-signed. Store the FULLY-signed PDF (both signatures) and
-    // mark the agreement Signed. Hand-off to LockerHub is a separate best-effort
-    // step (their offline-signed endpoint).
-    let finalPath: string | null = null;
-    try {
-      const { downloadSignedDocument } = await import('./index.js');
-      const signed = await downloadSignedDocument(digioRequestId);
-      if (signed) { const { saveBuffer } = await import('../../lib/storage.js'); finalPath = saveBuffer('locker-agreements', `locker-agreement-final-${result.lockerAgreementSigningId}.pdf`, signed).path; }
-    } catch (e) {
-      console.warn(`[digio] locker-agreement CEO signed-document download failed for signing ${result.lockerAgreementSigningId}: ${(e as Error).message}`);
-    }
-    await db.query(
-      `UPDATE locker_agreement_signings
-          SET status = 'Signed',
-              signed_doc_path = COALESCE($2, signed_doc_path),
-              signed_at = COALESCE(signed_at, now()), updated_at = now()
-        WHERE id = $1`, [result.lockerAgreementSigningId, finalPath]);
+    await storeCeoSignedCopy(db, digioRequestId, result.lockerAgreementSigningId);
   } else if (result.ok && result.fresh && result.applicationId) {
     try {
       const { downloadSignedDocument } = await import('./index.js');

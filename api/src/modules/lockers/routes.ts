@@ -979,7 +979,9 @@ lockersRouter.post('/applications/:id/authorised-users', asyncHandler(async (req
     customer_id: z.number().int().positive().nullish(),
     name: z.string().trim().min(2, "The authorised user's name is required"),
     pan: z.string().trim().nullish(),
-    aadhaar: z.string().trim().nullish(),
+    // Reduced to the last four before storage — the full number is never kept,
+    // shown or printed for an authorised user (migration 094).
+    aadhaar: z.string().trim().max(12).nullish(),
     phone: z.string().trim().nullish(),
   }).parse(req.body ?? {});
   const { addAuthorisedUser } = await import('./authorisedUsers.js');
@@ -993,14 +995,14 @@ lockersRouter.post('/authorised-users/:id/revoke', asyncHandler(async (req, res)
 // Re-check the holder's consent against Digio on demand (owner 2026-08-22).
 lockersRouter.post('/authorised-users/:id/consent/refresh', asyncHandler(async (req, res) => {
   const { refreshConsent } = await import('./authorisedUsers.js');
-  const row = await refreshConsent(getDb(), Number(req.params.id));
+  const row = await refreshConsent(getDb(), req.user!, Number(req.params.id));
   if (!row) throw errors.notFound('Authorised user not found');
   res.json(row);
 }));
 // Download the signed consent letter.
 lockersRouter.get('/authorised-users/:id/consent.pdf', asyncHandler(async (req, res) => {
   const { consentPdf } = await import('./authorisedUsers.js');
-  const buf = await consentPdf(getDb(), Number(req.params.id));
+  const buf = await consentPdf(getDb(), req.user!, Number(req.params.id));
   if (!buf) throw errors.notFound('No signed consent yet');
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="locker-consent-${String(req.params.id)}.pdf"`);
@@ -1009,7 +1011,7 @@ lockersRouter.get('/authorised-users/:id/consent.pdf', asyncHandler(async (req, 
 // Re-push an active authorised user LockerHub didn't accept. Idempotent on ncd_ref.
 lockersRouter.post('/authorised-users/:id/sync-retry', asyncHandler(async (req, res) => {
   const { syncAuthorisedUserToLockerHub } = await import('./authorisedUsers.js');
-  res.json(await syncAuthorisedUserToLockerHub(getDb(), Number(req.params.id)));
+  res.json(await syncAuthorisedUserToLockerHub(getDb(), Number(req.params.id), req.user!));
 }));
 
 // ── A21 fee waivers: waiving rent/deposit OWED on an application ──────────

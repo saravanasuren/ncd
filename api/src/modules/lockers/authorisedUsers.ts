@@ -20,7 +20,7 @@ import { authorisedUserConsentPdf } from '../reports/forms/locker-authorisation-
 const DOC_TYPE = 'locker_authorised_user_consent';
 
 export interface AuthorisedUserRow {
-  id: number; name: string; pan: string | null; aadhaar: string | null; phone: string | null;
+  id: number; name: string; pan: string | null; aadhaar_last4: string | null; phone: string | null;
   status: string; consent_sign_url: string | null; consent_signed_at: string | null;
   consent_signed: boolean; created_at: string | null;
   lockerhub_synced: boolean; lockerhub_error: string | null;
@@ -29,7 +29,7 @@ export interface AuthorisedUserRow {
 
 const shape = (r: Record<string, unknown>): AuthorisedUserRow => ({
   id: Number(r.id), name: r.name as string,
-  pan: (r.pan as string) ?? null, aadhaar: (r.aadhaar as string) ?? null, phone: (r.phone as string) ?? null,
+  pan: (r.pan as string) ?? null, aadhaar_last4: (r.aadhaar_last4 as string) ?? null, phone: (r.phone as string) ?? null,
   status: r.status as string,
   consent_sign_url: (r.consent_sign_url as string) ?? null,
   consent_signed_at: (r.consent_signed_at as string) ?? null,
@@ -51,7 +51,7 @@ const aadhaarLast4 = (a: unknown): string | undefined => {
 /** Authorised users on a locker — active first, then those awaiting consent. */
 export async function listAuthorisedUsers(db: Db, lockerhubApplicationId: string): Promise<AuthorisedUserRow[]> {
   const { rows } = await db.query<Record<string, unknown>>(
-    `SELECT id, name, pan, aadhaar, phone, status, consent_sign_url, consent_signed_at, created_at,
+    `SELECT id, name, pan, aadhaar_last4, phone, status, consent_sign_url, consent_signed_at, created_at,
             lockerhub_synced_at, lockerhub_error, consent_pdf_path, consent_digio_request_id
        FROM locker_authorised_users
       WHERE lockerhub_application_id = $1 AND status <> 'revoked'
@@ -65,7 +65,8 @@ export async function listAuthorisedUsers(db: Db, lockerhubApplicationId: string
  * complete it (flips the user active + stores the signed PDF). Returns the
  * refreshed row.
  */
-export async function refreshConsent(db: Db, id: number): Promise<AuthorisedUserRow | null> {
+export async function refreshConsent(db: Db, actor: AuthUser, id: number): Promise<AuthorisedUserRow | null> {
+  await assertAuthorisedUserVisible(db, actor, id);
   const r = (await db.query<Record<string, unknown>>(
     'SELECT consent_digio_request_id, status FROM locker_authorised_users WHERE id = $1', [id])).rows[0];
   if (!r) return null;
@@ -78,14 +79,46 @@ export async function refreshConsent(db: Db, id: number): Promise<AuthorisedUser
     }
   }
   const row = (await db.query<Record<string, unknown>>(
-    `SELECT id, name, pan, aadhaar, phone, status, consent_sign_url, consent_signed_at, created_at,
+    `SELECT id, name, pan, aadhaar_last4, phone, status, consent_sign_url, consent_signed_at, created_at,
             lockerhub_synced_at, lockerhub_error, consent_pdf_path, consent_digio_request_id
        FROM locker_authorised_users WHERE id = $1`, [id])).rows[0];
   return row ? shape(row) : null;
 }
 
 /** The signed consent PDF — the stored copy, or fetched from Digio if not saved. */
-export async function consentPdf(db: Db, id: number): Promise<Buffer | null> {
+/**
+ * Who may touch THIS authorised user.
+ *
+ * These rows are addressed by a bare serial id, so without this any holder of
+ * lockers:enroll could walk 1..N and pull every signed consent letter in the
+ * company — each carrying the holder's name, PAN and phone, the locker and
+ * branch, and the authorised person's Aadhaar — or revoke anybody's access.
+ * lib/visibility.ts exists for exactly this class of hole; it had simply never
+ * been applied here.
+ *
+ * The guard is the holder's own visibility, NOT lockerBranchScopeFor. Branch
+ * scope is a deliberate fail-OPEN convenience (no branch mapping, no name match,
+ * or LockerHub unreachable all return UNRESTRICTED — branchScope.ts:43-68), so
+ * a control built on it would evaporate exactly when LockerHub is down. Customer
+ * scope is NCD's own, needs no network, and is already the rule on the sibling
+ * locker routes that take a customer (kyc, customer lockers, nominee-readiness).
+ *
+ * A locker with no NCD customer behind it (a walk-in created straight on
+ * LockerHub) has no owner to check, so it stays visible to anyone who can
+ * enrol — the same posture as the rest of those applications today.
+ */
+async function assertAuthorisedUserVisible(db: Db, actor: AuthUser, id: number): Promise<void> {
+  const r = (await db.query<{ customer_id: string | null }>(
+    'SELECT customer_id FROM locker_authorised_users WHERE id = $1', [id])).rows[0];
+  if (!r) throw errors.notFound('Authorised user not found');
+  if (r.customer_id != null) {
+    const { assertCustomerVisible } = await import('../../lib/visibility.js');
+    await assertCustomerVisible(db, actor, Number(r.customer_id));
+  }
+}
+
+export async function consentPdf(db: Db, actor: AuthUser, id: number): Promise<Buffer | null> {
+  await assertAuthorisedUserVisible(db, actor, id);
   const r = (await db.query<Record<string, unknown>>(
     'SELECT consent_pdf_path, consent_digio_request_id FROM locker_authorised_users WHERE id = $1', [id])).rows[0];
   if (!r) return null;
@@ -107,7 +140,8 @@ export async function consentPdf(db: Db, id: number): Promise<Buffer | null> {
  * stays retryable. Only pushes once consent is signed (status 'active'), and
  * only the LAST 4 of the Aadhaar ever leaves NCD.
  */
-export async function syncAuthorisedUserToLockerHub(db: Db, id: number): Promise<{ synced: boolean; error?: string; skipped?: string }> {
+export async function syncAuthorisedUserToLockerHub(db: Db, id: number, actor?: AuthUser): Promise<{ synced: boolean; error?: string; skipped?: string }> {
+  if (actor) await assertAuthorisedUserVisible(db, actor, id);
   const r = (await db.query<Record<string, unknown>>(
     `SELECT au.*, u.full_name AS creator_name, ro.name AS creator_role
        FROM locker_authorised_users au
@@ -121,7 +155,7 @@ export async function syncAuthorisedUserToLockerHub(db: Db, id: number): Promise
   try {
     await lh.pushAuthorisedUser(staff, String(r.lockerhub_application_id), {
       name: String(r.name), phone: (r.phone as string) ?? undefined, pan: (r.pan as string) ?? undefined,
-      aadhaar_last4: aadhaarLast4(r.aadhaar), consent_ref: (r.consent_digio_request_id as string) ?? undefined,
+      aadhaar_last4: (r.aadhaar_last4 as string) ?? undefined, consent_ref: (r.consent_digio_request_id as string) ?? undefined,
       ncd_ref: `au_${id}`,
     });
     await db.query('UPDATE locker_authorised_users SET lockerhub_synced_at = now(), lockerhub_error = NULL, updated_at = now() WHERE id = $1', [id]);
@@ -144,6 +178,11 @@ export async function addAuthorisedUser(db: Db, actor: AuthUser, input: AddInput
   const name = String(input.name || '').trim();
   if (!appId) throw errors.badRequest('lockerhub_application_id is required');
   if (name.length < 2) throw errors.badRequest("The authorised user's name is required");
+  // Last four ONLY, whatever we were handed. The screen now asks for four, but a
+  // full number pasted from an Aadhaar card must be reduced here rather than
+  // stored — migration 094 makes storing twelve impossible anyway (Aadhaar Act
+  // 2016 s.29, the same rule hirers.ts states).
+  const last4 = aadhaarLast4(input.aadhaar);
 
   // The holder giving consent — theirs is the signature and the contact Digio
   // notifies. Resolve from the passed customer, else the locker's own pledge.
@@ -176,14 +215,14 @@ export async function addAuthorisedUser(db: Db, actor: AuthUser, input: AddInput
 
   return db.withTx(async (tx) => {
     const ins = (await tx.query<{ id: string }>(
-      `INSERT INTO locker_authorised_users (lockerhub_application_id, customer_id, name, pan, aadhaar, phone, created_by_user_id)
+      `INSERT INTO locker_authorised_users (lockerhub_application_id, customer_id, name, pan, aadhaar_last4, phone, created_by_user_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-      [appId, owner!.id, name, input.pan ?? null, input.aadhaar ?? null, input.phone ?? null, actor.id])).rows[0]!;
+      [appId, owner!.id, name, input.pan ?? null, last4 ?? null, input.phone ?? null, actor.id])).rows[0]!;
     const id = Number(ins.id);
 
     const { buffer, signatureBox, signaturePage } = await authorisedUserConsentPdf(tx, {
       owner: { full_name: String(owner!.full_name), customer_code: owner!.customer_code as string, pan: owner!.pan as string, phone: owner!.phone as string },
-      authorised: { name, pan: input.pan ?? null, aadhaar: input.aadhaar ?? null, phone: input.phone ?? null },
+      authorised: { name, pan: input.pan ?? null, aadhaar_last4: last4 ?? null, phone: input.phone ?? null },
       locker: { ...locker, lockerhub_application_id: appId },
     });
     const req = await createSignRequest({
@@ -199,7 +238,7 @@ export async function addAuthorisedUser(db: Db, actor: AuthUser, input: AddInput
       [req.digioRequestId, req.signUrl, id]);
     await writeAudit(tx, {
       actorId: actor.id, action: 'locker.authorised_user.add', entityType: 'locker_authorised_users', entityId: id,
-      after: { application: appId, name, has_pan: !!input.pan, has_aadhaar: !!input.aadhaar, digio_request_id: req.digioRequestId },
+      after: { application: appId, name, has_pan: !!input.pan, has_aadhaar: !!last4, digio_request_id: req.digioRequestId },
     });
     return { id, sign_url: req.signUrl, stub: !digioConfigured() };
   });
@@ -230,6 +269,7 @@ export async function completeAuthorisedUserConsent(
 /** Withdraw an authorised user (owner can revoke in writing). */
 export async function revokeAuthorisedUser(db: Db, actor: AuthUser, id: number, reason: string): Promise<{ ok: true }> {
   if (!reason?.trim() || reason.trim().length < 3) throw errors.badRequest('A reason is required');
+  await assertAuthorisedUserVisible(db, actor, id);
   const row = (await db.query('SELECT id FROM locker_authorised_users WHERE id = $1', [id])).rows[0];
   if (!row) throw errors.notFound('Authorised user not found');
   await db.query("UPDATE locker_authorised_users SET status = 'revoked', revoked_at = now(), revoked_reason = $2, updated_at = now() WHERE id = $1", [id, reason.trim()]);

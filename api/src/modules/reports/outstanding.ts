@@ -29,7 +29,7 @@ const SCOPE_COLS = {
 };
 
 export interface OutstandingRow {
-  kind: 'part_payment' | 'awaiting_approval' | 'cheque_uncleared' | 'cheque_settle_failed';
+  kind: 'part_payment' | 'awaiting_approval' | 'cheque_uncleared' | 'cheque_settle_failed' | 'deposit_link_failed';
   id: number;
   customer_id: number | null;
   customer: string | null;
@@ -97,6 +97,20 @@ export async function outstandingItems(db: Db, actor: AuthUser, customerId?: num
              OR (q.status = 'Cleared' AND q.lockerhub_settled_at IS NULL))${chequeCust}
       ORDER BY q.received_on`)).rows;
 
+  // 5) NCD deposit pledges LockerHub refused. The money is already frozen from
+  //    redemption on our side while their deposit leg is still outstanding, so
+  //    the locker will not allot — the deposit-side twin of the cheque case
+  //    above, and previously visible nowhere at all (migration 093).
+  const linkCust = customerId ? ` AND a.customer_id = ${Number(customerId)}` : '';
+  const badLinks = (await db.query<Record<string, unknown>>(
+    `SELECT l.id, l.linked_amount, l.linked_at, l.locker_no, l.lockerhub_application_id, l.lockerhub_error,
+            a.application_no, a.customer_id, c.full_name AS customer, c.customer_code
+       FROM locker_deposit_links l
+       JOIN applications a ON a.id = l.application_id
+       LEFT JOIN customers c ON c.id = a.customer_id
+      WHERE l.status = 'active' AND l.lockerhub_error IS NOT NULL${linkCust}
+      ORDER BY l.linked_at`)).rows;
+
   const days = (v: unknown): number | null => {
     if (!v) return null;
     const t = new Date(typeof v === 'string' ? v : (v as Date).toISOString()).getTime();
@@ -155,5 +169,19 @@ export async function outstandingItems(db: Db, actor: AuthUser, customerId?: num
   }
 
   // Oldest first: the list is read top-down, and the top is where the risk is.
+  for (const r of badLinks) {
+    rows.push({
+      kind: 'deposit_link_failed', id: Number(r.id),
+      customer_id: r.customer_id ? Number(r.customer_id) : null,
+      customer: (r.customer as string) ?? null, customer_code: (r.customer_code as string) ?? null,
+      reference: `${r.application_no as string} · locker ${(r.locker_no as string) ?? (r.lockerhub_application_id as string)}`,
+      amount: String(r.linked_amount),
+      since: iso(r.linked_at), age_days: days(r.linked_at),
+      // Both halves matter: the customer cannot redeem this money, and the
+      // locker cannot allot, until the link is re-pushed.
+      detail: `Pledged here but LockerHub refused the link, so the deposit leg is still outstanding and this money cannot be redeemed. Retry it on the locker. (${String(r.lockerhub_error ?? '').slice(0, 120)})`,
+    });
+  }
+
   return rows.sort((x, y) => (y.age_days ?? 0) - (x.age_days ?? 0));
 }

@@ -130,7 +130,7 @@ export async function assertNotAReusedApplication(
     application_no: string | null; locker_size: string | null; locker_number: string | null;
     status: string | null; removed_at: string | null;
   } | undefined;
-  let busy: { allotted: string; rent_waiver: string; payment: string } | undefined;
+  let busy: { allotted: string; rent_waiver: string; payment: string; cheque: string; pledge: string } | undefined;
   try {
     prior = (await db.query<NonNullable<typeof prior>>(
       `SELECT a.application_no, a.locker_size, a.locker_number, a.status, o.removed_at
@@ -145,7 +145,16 @@ export async function assertNotAReusedApplication(
                 WHERE lockerhub_application_id = $1 AND leg = 'rent'
                   AND status IN ('PendingApproval','Approved')) AS rent_waiver,
               (SELECT count(*) FROM locker_offline_payments
-                WHERE lockerhub_application_id = $1 AND status <> 'Rejected') AS payment`,
+                WHERE lockerhub_application_id = $1 AND status <> 'Rejected') AS payment,
+              -- A cheque in hand and an NCD pledge are both "something has
+              -- happened on it" too. Without these, an application carrying a
+              -- ₹14,160 rent cheque or a ₹3L pledge read as untouched and was
+              -- handed to a second enrolment, which then inherited both.
+              (SELECT count(*) FROM locker_cheques
+                WHERE lockerhub_application_id = $1
+                  AND status IN ('Pending','Cleared')) AS cheque,
+              (SELECT count(*) FROM locker_deposit_links
+                WHERE lockerhub_application_id = $1 AND status = 'active') AS pledge`,
       [id])).rows[0]!;
   } catch (e) {
     console.warn('[locker] could not check for a reused application (allowing it through):', (e as Error).message);
@@ -155,6 +164,7 @@ export async function assertNotAReusedApplication(
   const norm = (s: string | null | undefined) => String(s ?? '').trim().toLowerCase();
   const sameSize = !wantedSize || !prior.locker_size || norm(prior.locker_size) === norm(wantedSize);
   const untouched = !Number(busy.allotted) && !Number(busy.rent_waiver) && !Number(busy.payment)
+    && !Number(busy.cheque) && !Number(busy.pledge)
     && !prior.removed_at;
   if (untouched && sameSize) return { reused: true };
 

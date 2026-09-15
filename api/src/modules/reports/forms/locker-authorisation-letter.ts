@@ -12,7 +12,7 @@ const PAGE_H = 842; // A4 height in points — for the top-left → bottom-left 
 export interface SignatureBox { llx: number; lly: number; urx: number; ury: number; }
 export interface AuthLetterInput {
   owner: { full_name: string; customer_code?: string | null; pan?: string | null; phone?: string | null };
-  authorised: { name: string; pan?: string | null; aadhaar?: string | null; phone?: string | null };
+  authorised: { name: string; pan?: string | null; aadhaar_last4?: string | null; phone?: string | null };
   locker: { locker_no?: string | null; branch?: string | null; size?: string | null; lockerhub_application_id: string };
   date?: string;
 }
@@ -44,7 +44,9 @@ export async function authorisedUserConsentPdf(db: Db, input: AuthLetterInput): 
     y = section(doc, y + 6, 'AUTHORISED USER');
     y = kv(doc, y, 'Name', input.authorised.name, { bold: true });
     if (input.authorised.pan) y = kv(doc, y, 'PAN', input.authorised.pan);
-    if (input.authorised.aadhaar) y = kv(doc, y, 'Aadhaar', input.authorised.aadhaar);
+    // Last four only — the full number is never stored, shown or printed
+    // (Aadhaar Act 2016 s.29; migration 094).
+    if (input.authorised.aadhaar_last4) y = kv(doc, y, 'Aadhaar', `XXXX XXXX ${input.authorised.aadhaar_last4}`);
     if (input.authorised.phone) y = kv(doc, y, 'Phone', input.authorised.phone);
 
     y = section(doc, y + 6, 'DECLARATION');

@@ -11,7 +11,7 @@ import { useConfirm } from './Confirm.js';
  * consent — passed so the server knows who signs.
  */
 interface AuthUser {
-  id: number; name: string; pan: string | null; aadhaar: string | null; phone: string | null;
+  id: number; name: string; pan: string | null; aadhaar_last4: string | null; phone: string | null;
   status: string; consent_sign_url: string | null; consent_signed_at: string | null; consent_signed: boolean;
   lockerhub_synced: boolean; lockerhub_error: string | null; has_consent_pdf: boolean;
 }
@@ -65,7 +65,7 @@ export function LockerAuthorisedUsers({ applicationId, customerId }: { applicati
             <div key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 border-b border-border last:border-0 text-sm">
               <span className="font-medium">{r.name}</span>
               {r.pan && <span className="font-mono text-xs text-text-muted">PAN {r.pan}</span>}
-              {r.aadhaar && <span className="font-mono text-xs text-text-muted">Aadhaar {r.aadhaar}</span>}
+              {r.aadhaar_last4 && <span className="font-mono text-xs text-text-muted">Aadhaar XXXX XXXX {r.aadhaar_last4}</span>}
               {r.phone && <span className="font-mono text-xs text-text-muted">{r.phone}</span>}
               {r.consent_signed
                 ? <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">✓ authorised</span>
@@ -113,7 +113,7 @@ export function LockerAuthorisedUsers({ applicationId, customerId }: { applicati
       <div className="flex flex-wrap gap-2 items-center">
         <input className={`${inp} w-44`} placeholder="Full name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
         <input className={`${inp} w-36 uppercase`} placeholder="PAN" value={f.pan} maxLength={10} onChange={(e) => setF({ ...f, pan: e.target.value.toUpperCase() })} />
-        <input className={`${inp} w-40`} placeholder="Aadhaar" value={f.aadhaar} maxLength={12} onChange={(e) => setF({ ...f, aadhaar: e.target.value.replace(/\D/g, '') })} />
+        <input className={`${inp} w-40`} placeholder="Aadhaar (last 4)" value={f.aadhaar} maxLength={4} onChange={(e) => setF({ ...f, aadhaar: e.target.value.replace(/\D/g, '') })} />
         <input className={`${inp} w-32`} placeholder="Phone" value={f.phone} maxLength={10} onChange={(e) => setF({ ...f, phone: e.target.value.replace(/\D/g, '') })} />
         <button className={btnGhost} disabled={f.name.trim().length < 2 || add.isPending} onClick={() => { setErr(''); setSignUrl(null); add.mutate(); }}>
           Add &amp; send consent

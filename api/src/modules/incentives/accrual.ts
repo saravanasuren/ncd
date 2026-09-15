@@ -1,7 +1,27 @@
 /**
  * Accrue staff + referrer incentives for an application at allotment
- * (docs/02 §6 matrix). Idempotent per (application, payee). Paid rows are
- * never touched.
+ * (docs/02 §6 matrix). Idempotent per (application, payee).
+ *
+ * An UNPAID accrual is REFRESHED, not skipped (owner 2026-09-15). It used to be
+ * `DO NOTHING`, which meant the first figure stood forever — and an incentive is
+ * a PERCENTAGE OF THE INVESTMENT, so the moment money was clubbed into an
+ * application that had already accrued, the two stopped agreeing. APP-2026-001105
+ * is the worked example: approved at ₹4,00,000 (2% = ₹8,000), then ₹26,00,000
+ * clubbed in four hours later, taking it to ₹30,00,000 — and the accrual still
+ * said ₹8,000 while its own stored rate said 2%. Three applications on the book
+ * were short by ₹64,000 between them, all still unpaid.
+ *
+ * Every caller already re-runs this after changing the amount; the write was the
+ * only thing standing in the way. The referrer-reassignment path in
+ * applications/service.ts had to DELETE the unpaid row first to work around it.
+ *
+ * PAID rows are still never touched — the `WHERE ... paid_at IS NULL` on the
+ * conflict clause is what guarantees it, so a settled incentive can never be
+ * restated by a later edit.
+ *
+ * accrual_date is deliberately NOT refreshed: My Earnings groups by it, so
+ * stamping today's date on a correction would move an August incentive into
+ * September and make both months wrong.
  */
 import type { Db } from '../../db/types.js';
 import { computeIncentives } from '../../lib/incentive.js';
@@ -71,13 +91,22 @@ export async function accrueForApplication(tx: Db, applicationId: number): Promi
     const payeeType = app.enrolled_by_agent_id ? 'agent' : 'staff';
     const payeeId = app.enrolled_by_agent_id ? Number(app.enrolled_by_agent_id) : app.enrolled_by_user_id ? Number(app.enrolled_by_user_id) : null;
     if (payeeId) {
-      const ins = await tx.query(
+      const ins = await tx.query<{ inserted: boolean }>(
         `INSERT INTO incentive_accruals (application_id, payee_type, payee_id, matrix_cell, rate_mode, rate_value, amount, accrual_date)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (application_id, payee_type, payee_id) DO NOTHING`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (application_id, payee_type, payee_id) DO UPDATE
+            SET matrix_cell = EXCLUDED.matrix_cell,
+                rate_mode   = EXCLUDED.rate_mode,
+                rate_value  = EXCLUDED.rate_value,
+                amount      = EXCLUDED.amount
+          WHERE incentive_accruals.paid_at IS NULL
+         RETURNING (xmax = 0) AS inserted`,
         [applicationId, payeeType, payeeId, isNew ? 'staff_new' : 'staff_existing', result.staffSpec.mode, result.staffSpec.value, result.staffAmount, today]
       );
-      // Only on a real insert — re-running accrual must not re-fire the event.
-      if (ins.rowCount && payeeType === 'agent') {
+      // Only on a real INSERT — a refresh must not re-fire the event. xmax is 0
+      // on a freshly inserted row and non-zero on one the conflict clause
+      // updated, which is the only thing that tells the two apart here.
+      if (ins.rows[0]?.inserted === true && payeeType === 'agent') {
         await emitAccrued(tx, payeeId, applicationId, result.staffAmount, today, isNew ? 'staff_new' : 'staff_existing');
       }
     }
@@ -92,12 +121,19 @@ export async function accrueForApplication(tx: Db, applicationId: number): Promi
     const { resolveReferrer, ensureReferralAgent } = await import('../agents/service.js');
     const payee = await resolveReferrer(tx, referrerName)
       ?? { kind: 'agent' as const, id: await ensureReferralAgent(tx, referrerName) };
-    const ins = await tx.query(
+    const ins = await tx.query<{ inserted: boolean }>(
       `INSERT INTO incentive_accruals (application_id, payee_type, payee_id, matrix_cell, rate_mode, rate_value, amount, accrual_date)
-       VALUES ($1,$2,$3,'referrer',$4,$5,$6,$7) ON CONFLICT (application_id, payee_type, payee_id) DO NOTHING`,
+       VALUES ($1,$2,$3,'referrer',$4,$5,$6,$7)
+       ON CONFLICT (application_id, payee_type, payee_id) DO UPDATE
+          SET matrix_cell = EXCLUDED.matrix_cell,
+              rate_mode   = EXCLUDED.rate_mode,
+              rate_value  = EXCLUDED.rate_value,
+              amount      = EXCLUDED.amount
+        WHERE incentive_accruals.paid_at IS NULL
+       RETURNING (xmax = 0) AS inserted`,
       [applicationId, payee.kind, payee.id, result.referrerSpec.mode, result.referrerSpec.value, result.referrerAmount, today]
     );
-    if (ins.rowCount && payee.kind === 'agent') {
+    if (ins.rows[0]?.inserted === true && payee.kind === 'agent') {
       await emitAccrued(tx, payee.id, applicationId, result.referrerAmount, today, 'referrer');
     }
   }

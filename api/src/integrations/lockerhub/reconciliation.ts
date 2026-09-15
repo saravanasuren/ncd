@@ -25,6 +25,27 @@ const ist = (d: Date) => new Date(d.getTime() + 5.5 * 3600 * 1000);
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
 const fmt = (n: number) => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+/**
+ * A real YYYY-MM-DD, or nothing.
+ *
+ * This value is interpolated into SQL that runs through the sqlite3 CLI against
+ * LockerHub's database, and it arrives from a request body. sqlite3 takes the
+ * statement as one argv string, so a crafted date could close the quote and read
+ * any table in it — customer PII and payment rows — despite -readonly. There is
+ * no placeholder to bind to on that path, so the input is pinned to a shape that
+ * cannot carry a quote, and round-tripped to reject things like 2026-02-31.
+ */
+function assertReportDate(d: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    throw new Error(`report_date must be YYYY-MM-DD (got ${JSON.stringify(d).slice(0, 40)})`);
+  }
+  const parsed = new Date(`${d}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== d) {
+    throw new Error(`report_date is not a real date: ${d}`);
+  }
+  return d;
+}
+
 async function querySqlite(sql: string): Promise<Record<string, unknown>[]> {
   const dbPath = config.LOCKERHUB_DB_PATH;
   if (!existsSync(dbPath)) throw new Error(`LockerHub SQLite not found at ${dbPath}`);
@@ -47,7 +68,7 @@ export interface ReconReport {
 
 /** Run for one IST day (default today, IST). Idempotent per (date, recipient). */
 export async function runReconciliation(db: Db, reportDate?: string): Promise<ReconReport> {
-  const reportIstDate = reportDate || ymd(ist(new Date()));
+  const reportIstDate = assertReportDate(reportDate || ymd(ist(new Date())));
   const startUtc = new Date(reportIstDate + 'T00:00:00+05:30').toISOString();
   const endUtc = new Date(reportIstDate + 'T23:59:59.999+05:30').toISOString();
 

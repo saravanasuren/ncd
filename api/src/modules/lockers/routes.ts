@@ -919,6 +919,13 @@ lockersRouter.post('/applications/:id/agreement/ceo-esign-initiate', asyncHandle
   res.json(await initiateCeoEsign(getDb(), req.user!, String(req.params.id)));
 }));
 
+// Chase a signed copy Digio holds and we do not — the way back for an agreement
+// whose signature landed but whose FILE download failed.
+lockersRouter.post('/applications/:id/agreement/fetch-signed-copy', asyncHandler(async (req, res) => {
+  const { fetchSignedCopy } = await import('./agreements.js');
+  res.json(await fetchSignedCopy(getDb(), req.user!, String(req.params.id)));
+}));
+
 // The "Locker agreements" queue — customer-signed agreements awaiting the CEO.
 lockersRouter.get('/agreements/awaiting-ceo', asyncHandler(async (_req, res) => {
   const { listAwaitingCeo } = await import('./agreements.js');

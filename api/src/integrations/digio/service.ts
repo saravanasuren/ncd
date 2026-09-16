@@ -7,7 +7,7 @@ import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
-import { createSignRequest, fetchStatus, isSignedStatus, digioConfigured, type SignaturePlacement } from './index.js';
+import { createSignRequest, fetchStatus, isSignedStatus, isFailedStatus, digioConfigured, type SignaturePlacement } from './index.js';
 
 /** Start a signing session for an application; returns the sign URL. */
 export async function initiateSigning(db: Db, actor: AuthUser, applicationId: number): Promise<{ sign_url: string | null; digio_request_id: string; stub: boolean }> {
@@ -252,9 +252,29 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
  */
 export const POLL_WINDOW_DAYS = 7;
 
+/**
+ * Record that a signature is never coming.
+ *
+ * The session's own vocabulary already allowed for this ("requested|signed|
+ * failed|expired" since 016) — nothing ever wrote it. An expired or declined
+ * request stayed 'requested', so the screen said "link sent — waiting" for
+ * ever and the dead link stayed on offer. Digio's own word for it is kept in
+ * the payload, because "expired" and "declined" need different answers from a
+ * person.
+ */
+export async function markSessionFailed(db: Db, digioRequestId: string, digioStatus: string | null): Promise<void> {
+  await db.query(
+    `UPDATE digio_signing_sessions
+        SET status = 'failed',
+            webhook_payload = COALESCE(webhook_payload, '{}'::jsonb) || jsonb_build_object('digio_status', $2::text, 'failed_at', now()::text),
+            updated_at = now()
+      WHERE digio_request_id = $1 AND status = 'requested'`,
+    [digioRequestId, digioStatus ?? 'unknown']);
+}
+
 /** Poll outstanding sessions against Digio (real mode only). Cron-gated. */
-export async function pollOutstanding(db: Db): Promise<{ checked: number; signed: number }> {
-  if (!digioConfigured()) return { checked: 0, signed: 0 };
+export async function pollOutstanding(db: Db): Promise<{ checked: number; signed: number; failed: number }> {
+  if (!digioConfigured()) return { checked: 0, signed: 0, failed: 0 };
   // Only chase RECENT signatures. A customer who never signs leaves the session
   // 'requested' forever — without this cutoff the 15s poller would hit Digio for
   // that abandoned request indefinitely. Newest first so live signings win the
@@ -265,11 +285,14 @@ export async function pollOutstanding(db: Db): Promise<{ checked: number; signed
         AND created_at > now() - interval '${POLL_WINDOW_DAYS} days'
       ORDER BY created_at DESC LIMIT 50`);
   let signed = 0;
+  let failed = 0;
   for (const r of rows) {
     const status = await fetchStatus(r.digio_request_id).catch(() => null);
     if (isSignedStatus(status)) { await completeSigning(db, r.digio_request_id, {}); signed++; }
+    // A dead request is chased no further and stops pretending to be live.
+    else if (isFailedStatus(status)) { await markSessionFailed(db, r.digio_request_id, status); failed++; }
   }
-  return { checked: rows.length, signed };
+  return { checked: rows.length, signed, failed };
 }
 
 /**
@@ -298,5 +321,39 @@ export async function checkOneApplication(db: Db, applicationId: number): Promis
     await completeSigning(db, row.digio_request_id, {});
     return { ok: true, signed: true, status };
   }
+  if (isFailedStatus(status)) await markSessionFailed(db, row.digio_request_id, status);
   return { ok: true, signed: false, status };
+}
+
+/**
+ * The same question, asked about a LOCKER agreement.
+ *
+ * checkOneApplication cannot answer it: it looks up sessions by
+ * `application_id`, which is NULL on every locker-agreement session (they hang
+ * off locker_agreement_signing_id instead). So the NCD side had a "check with
+ * Digio" button and lockers had nothing — and the poller gives up after
+ * POLL_WINDOW_DAYS, which left a signature arriving late with no way into the
+ * system at all.
+ *
+ * Checks every open session on the signing — hirer 2's link and the CEO's are
+ * different requests, and either may be the one that has moved.
+ */
+export async function checkOneLockerSigning(db: Db, signingId: number): Promise<
+  { ok: false; reason: 'not-configured' | 'no-session' } | { ok: true; signed: number; failed: number; statuses: Array<string | null> }
+> {
+  if (!digioConfigured()) return { ok: false, reason: 'not-configured' };
+  const { rows } = await db.query<{ digio_request_id: string }>(
+    `SELECT digio_request_id FROM digio_signing_sessions
+      WHERE locker_agreement_signing_id = $1 AND status = 'requested' AND digio_request_id IS NOT NULL
+      ORDER BY id DESC`, [signingId]);
+  if (rows.length === 0) return { ok: false, reason: 'no-session' };
+  let signed = 0; let failed = 0;
+  const statuses: Array<string | null> = [];
+  for (const r of rows) {
+    const status = await fetchStatus(r.digio_request_id).catch(() => null);
+    statuses.push(status);
+    if (isSignedStatus(status)) { await completeSigning(db, r.digio_request_id, {}); signed++; }
+    else if (isFailedStatus(status)) { await markSessionFailed(db, r.digio_request_id, status); failed++; }
+  }
+  return { ok: true, signed, failed, statuses };
 }

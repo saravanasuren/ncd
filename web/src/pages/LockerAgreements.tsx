@@ -7,6 +7,10 @@ interface Row {
   customer_name: string | null;
   customer_code: string | null;
   signed_at: string | null;
+  /** 'CustomerSigned' = not sent yet; 'AwaitingCEO' = a link is already out. */
+  status: string;
+  /** Signed, but we never got the file — needs fetching, not another link. */
+  final_copy_pending: boolean;
 }
 
 /** The "Locker agreements" queue: agreements the customer has e-signed, awaiting
@@ -31,6 +35,17 @@ export function LockerAgreementsPage() {
     },
     onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Could not start the signing.'),
   });
+  const fetchCopy = useMutation({
+    mutationFn: (applicationId: string) =>
+      api.post<{ status: string }>(`/api/lockers/applications/${encodeURIComponent(applicationId)}/agreement/fetch-signed-copy`, {}),
+    onSuccess: (r) => {
+      setMsg(r.status === 'Signed'
+        ? 'Signed copy fetched — the agreement is now complete.'
+        : 'Signed copy fetched.');
+      qc.invalidateQueries({ queryKey: ['locker-agreements-awaiting-ceo'] });
+    },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'Could not fetch the signed copy.'),
+  });
 
   const th = 'py-2 px-3 text-xs font-semibold text-text-label uppercase tracking-wide text-left';
   const td = 'py-2 px-3 align-middle';
@@ -41,7 +56,8 @@ export function LockerAgreementsPage() {
       <h1 className="text-lg font-semibold mb-1">Locker agreements</h1>
       <p className="text-sm text-text-muted mb-4">
         Agreements the customer has e-signed, waiting for the authorised signatory to counter-sign the same
-        document. Sending texts them a Digio link; once they sign, the agreement is complete.
+        document. Sending texts them a Digio link; once they sign, the agreement is complete. A row stays
+        here while that link is out, so it can always be re-sent.
       </p>
       {msg && <div className="text-xs text-primary mb-3">{msg}</div>}
       {q.isLoading && <div className="text-sm text-text-muted">Loading…</div>}
@@ -59,6 +75,7 @@ export function LockerAgreementsPage() {
                 <th className={th}>Customer</th>
                 <th className={th}>Application</th>
                 <th className={th}>Customer signed</th>
+                <th className={th}>Status</th>
                 <th className={`${th} text-right`}>Action</th>
               </tr>
             </thead>
@@ -70,15 +87,28 @@ export function LockerAgreementsPage() {
                   </td>
                   <td className={`${td} font-mono text-xs`}>{r.application_id}</td>
                   <td className={`${td} text-text-muted`}>{r.signed_at ? String(r.signed_at).slice(0, 10) : '—'}</td>
+                  <td className={`${td} text-xs text-text-muted`}>
+                    {r.final_copy_pending ? 'Signed — copy not fetched'
+                      : r.status === 'AwaitingCEO' ? 'Link sent to signatory'
+                      : 'Awaiting signatory'}
+                  </td>
                   <td className={`${td} text-right whitespace-nowrap`}>
                     <a href={`/api/lockers/applications/${encodeURIComponent(r.application_id)}/agreement/signed.pdf`}
                       target="_blank" rel="noreferrer"
                       className="text-xs text-text-muted hover:text-primary mr-3">View signed</a>
-                    <button disabled={sign.isPending}
-                      onClick={() => { setMsg(''); sign.mutate(r.application_id); }}
-                      className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
-                      CEO e-Sign
-                    </button>
+                    {r.final_copy_pending ? (
+                      <button disabled={fetchCopy.isPending}
+                        onClick={() => { setMsg(''); fetchCopy.mutate(r.application_id); }}
+                        className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
+                        Fetch signed copy
+                      </button>
+                    ) : (
+                      <button disabled={sign.isPending}
+                        onClick={() => { setMsg(''); sign.mutate(r.application_id); }}
+                        className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">
+                        {r.status === 'AwaitingCEO' ? 'Re-send link' : 'CEO e-Sign'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

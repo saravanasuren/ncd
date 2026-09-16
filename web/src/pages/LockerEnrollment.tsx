@@ -438,7 +438,7 @@ export function LockerEnrollmentPage() {
    *  2026-09-14). Reloaded whenever the signing changes, so "who is next" is
    *  the server's answer and not the screen's guess. */
   const [signers, setSigners] = useState<Array<{
-    position: number; name: string; phone: string | null; status: 'pending' | 'sent' | 'signed';
+    position: number; name: string; phone: string | null; status: 'pending' | 'sent' | 'signed' | 'failed';
     sign_url: string | null; can_send: boolean; blocked_reason: string | null;
   }>>([]);
   const loadSigners = async () => {
@@ -452,6 +452,16 @@ export function LockerEnrollmentPage() {
     const r = await run(api.post<{ sign_url: string | null }>(
       `/api/lockers/applications/${encodeURIComponent(String(app.application_id))}/agreement/esign-initiate/${position}`,
       { ...(ncdCust?.id ? { customer_id: Number(ncdCust.id) } : {}) }));
+    if (r) { await loadSigners(); await loadSigning(); }
+  };
+
+  /** Ask Digio where the signatures stand — for the stalled case. The 15s
+   *  poller has already asked about anything recent, so this earns its keep
+   *  only once that window has closed, or when a webhook was missed. */
+  const recheckEsign = async () => {
+    if (!app?.application_id) return;
+    const r = await run(api.post<{ signed: number; failed: number }>(
+      `/api/lockers/applications/${encodeURIComponent(String(app.application_id))}/agreement/esign-recheck`, {}));
     if (r) { await loadSigners(); await loadSigning(); }
   };
 
@@ -1499,6 +1509,10 @@ export function LockerEnrollmentPage() {
                             <b className="text-text">{sg.name}</b>
                             {sg.status === 'signed' && <span className="text-success">signed</span>}
                             {sg.status === 'sent' && <span className="text-warn">link sent — waiting</span>}
+                            {/* Nobody is coming: the link expired or they
+                                declined. Said plainly, because "waiting" here
+                                waits for ever. */}
+                            {sg.status === 'failed' && <span className="text-danger">link expired or declined — send again</span>}
                             {sg.status === 'sent' && sg.sign_url && (
                               <a className={btnGhost} href={sg.sign_url} target="_blank" rel="noopener noreferrer">Open link</a>
                             )}
@@ -1511,6 +1525,15 @@ export function LockerEnrollmentPage() {
                             {sg.blocked_reason && <span className="text-text-muted">{sg.blocked_reason}</span>}
                           </div>
                         ))}
+
+                        {/* Nothing has moved for a while? Ask Digio rather
+                            than waiting on a poller that stops after a week. */}
+                        {signers.some((x) => x.status === 'sent') && (
+                          <div className="text-xs">
+                            <button className={btnGhost} disabled={busy} onClick={recheckEsign}>Check with Digio</button>
+                            <span className="text-text-muted ml-2">Signed on their phone but still showing as waiting? This asks Digio directly.</span>
+                          </div>
+                        )}
 
                         {/* The document as it stands, at EVERY stage (owner
                             2026-09-14) — labelled with how far along it is, so

@@ -926,6 +926,14 @@ lockersRouter.post('/applications/:id/agreement/fetch-signed-copy', asyncHandler
   res.json(await fetchSignedCopy(getDb(), req.user!, String(req.params.id)));
 }));
 
+// Ask Digio where this agreement's signatures stand. The NCD side has had this
+// since "Mark eSigned" was removed; lockers had no equivalent, and the poller
+// gives up after a week.
+lockersRouter.post('/applications/:id/agreement/esign-recheck', asyncHandler(async (req, res) => {
+  const { recheckEsign } = await import('./agreements.js');
+  res.json(await recheckEsign(getDb(), req.user!, String(req.params.id)));
+}));
+
 // The "Locker agreements" queue — customer-signed agreements awaiting the CEO.
 lockersRouter.get('/agreements/awaiting-ceo', asyncHandler(async (_req, res) => {
   const { listAwaitingCeo } = await import('./agreements.js');

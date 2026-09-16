@@ -90,6 +90,6 @@ describe('esign auto-poll', () => {
   it('the poller is a no-op when Digio creds are absent (stub mode)', async () => {
     const { pollOutstanding } = await import('../src/integrations/digio/service.js');
     const out = await pollOutstanding(ctx.db);
-    expect(out).toEqual({ checked: 0, signed: 0 });
+    expect(out).toEqual({ checked: 0, signed: 0, failed: 0 });
   });
 });

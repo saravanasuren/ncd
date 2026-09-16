@@ -14,6 +14,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { fillBankBranchFromIfsc } from '../src/integrations/ifsc.js';
+import { readFile } from 'node:fs/promises';
 
 /** The directory's shape, without the network. */
 const directory = (body: Record<string, unknown> | null, ok = true) =>
@@ -75,5 +76,25 @@ describe('filling bank and branch from the IFSC', () => {
     const bad = await fillBankBranchFromIfsc('not-an-ifsc', { bank_name: undefined }, counting);
     expect(called).toBe(0);
     expect(bad.bank_name).toBeUndefined();
+  });
+});
+
+describe('the module stays loadable by offline scripts', () => {
+  it('is inert under NODE_ENV=test with no fetcher, so the suite makes no outbound calls', async () => {
+    expect(process.env.NODE_ENV).toBe('test');
+    // No fetcher injected → returns the input untouched without touching the network.
+    const input = { bank_name: undefined, branch_name: undefined, branch_city: undefined };
+    await expect(fillBankBranchFromIfsc('SBIN0000831', input)).resolves.toEqual(input);
+  });
+
+  it('does not import config — that would make every offline script need secrets first', async () => {
+    // config validates production secrets at MODULE LOAD. Importing it here made
+    // backfill-bank-branch die on "Refusing to boot in production with default
+    // secret(s)" before its first line ran: static imports resolve before
+    // loadSecretsFromSsm() is awaited. This module is a leaf those scripts pull
+    // in, so it reads process.env directly instead.
+    const src = await readFile(new URL('../src/integrations/ifsc.ts', import.meta.url), 'utf8');
+    expect(src).not.toMatch(/from\s+['"][^'"]*\/config\.js['"]/);
+    expect(src).toContain("process.env.NODE_ENV === 'test'");
   });
 });

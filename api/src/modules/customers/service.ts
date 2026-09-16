@@ -426,6 +426,15 @@ export async function addBankAccount(db: Db, actor: AuthUser, customerId: number
   // but a wrong holder name verified silently (inconsistent with enrolment,
   // which checks the name via /lookups/penny-drop). owner 2026-08-06.
   const pd = await kycProvider().pennyDrop(input.account_number, input.ifsc, input.holder_name);
+  // Bank and branch come from the IFSC when the caller did not send them. The
+  // console looks them up in the browser and posts the result, but only if that
+  // lookup beat the save — and when it did not, the account was stored with both
+  // fields blank and nothing ever filled them (74 accounts, still happening).
+  // Outside the transaction: it is a network call to an external directory.
+  const { fillBankBranchFromIfsc } = await import('../../integrations/ifsc.js');
+  const bb = await fillBankBranchFromIfsc(input.ifsc, {
+    bank_name: input.bank_name, branch_name: input.branch_name, branch_city: input.branch_city,
+  });
   return db.withTx(async (tx) => {
     const dup = await tx.query('SELECT 1 FROM customer_bank_accounts WHERE customer_id = $1 AND account_number = $2 AND ifsc = $3', [customerId, input.account_number, input.ifsc]);
     if (dup.rowCount) {
@@ -439,7 +448,7 @@ export async function addBankAccount(db: Db, actor: AuthUser, customerId: number
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO customer_bank_accounts (customer_id, account_number, ifsc, bank_name, branch_name, branch_city, account_type, holder_name, penny_drop_status, penny_drop_detail, is_active, verified_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-      [customerId, input.account_number, input.ifsc, input.bank_name ?? null, input.branch_name ?? null, input.branch_city ?? null,
+      [customerId, input.account_number, input.ifsc, bb.bank_name ?? null, bb.branch_name ?? null, bb.branch_city ?? null,
        input.account_type ?? null, input.holder_name ?? pd.holderName ?? null,
        pd.status, pd.detail, makeActive, pd.status === 'Verified' ? new Date().toISOString() : null]
     );

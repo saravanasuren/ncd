@@ -141,6 +141,22 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
   const settings = await getSettingsMap(db);
   const codeFmt = String(settings['numbering.customer_format'] ?? 'DHN{seq:6}');
 
+  // Resolve bank/branch from the IFSC BEFORE the transaction opens. LockerHub
+  // sends a bank name at best and never a branch, so an account arriving this
+  // way printed blank on the application form. It has to be out here: a 5s call
+  // to an external directory inside the transaction would hold it open, and a
+  // throw in there aborts the whole thing (see tryStatement below for why that
+  // matters on this route).
+  const inboundBank = (req.body?.bank_account ?? null) as Record<string, unknown> | null;
+  const bankFill = inboundBank?.account_number && inboundBank?.ifsc
+    ? await (await import('../../integrations/ifsc.js')).fillBankBranchFromIfsc(
+        String(inboundBank.ifsc), {
+          bank_name: (inboundBank.bank_name as string) ?? null,
+          branch_name: (inboundBank.branch_name as string) ?? null,
+          branch_city: (inboundBank.branch_city as string) ?? null,
+        })
+    : null;
+
   const result = await db.withTx(async (tx) => {
     // 1. Find (PAN first, then phone) or create the customer.
     const pan = String(b.pan ?? '').trim().toUpperCase();
@@ -440,11 +456,18 @@ customerWritesRouter.post('/customers/from-lockerhub', asyncHandler(async (req, 
       if (!isSame) {
         if (active) await tx.query('UPDATE customer_bank_accounts SET is_active = FALSE WHERE id = $1', [active.id]);
         await tx.query(
-          `INSERT INTO customer_bank_accounts (customer_id, account_number, ifsc, bank_name, holder_name, penny_drop_status, is_active, verified_at)
-           VALUES ($1,$2,$3,$4,$5,'Verified',TRUE, now())
+          `INSERT INTO customer_bank_accounts (customer_id, account_number, ifsc, bank_name, branch_name, branch_city, holder_name, penny_drop_status, is_active, verified_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'Verified',TRUE, now())
            ON CONFLICT (customer_id, account_number, ifsc)
-           DO UPDATE SET is_active = TRUE, penny_drop_status = 'Verified', bank_name = EXCLUDED.bank_name, holder_name = EXCLUDED.holder_name`,
-          [customerId, String(ba.account_number), ba.ifsc ?? null, ba.bank_name ?? null, ba.holder_name ?? null]
+           DO UPDATE SET is_active = TRUE, penny_drop_status = 'Verified',
+                         bank_name   = COALESCE(EXCLUDED.bank_name,   customer_bank_accounts.bank_name),
+                         branch_name = COALESCE(EXCLUDED.branch_name, customer_bank_accounts.branch_name),
+                         branch_city = COALESCE(EXCLUDED.branch_city, customer_bank_accounts.branch_city),
+                         holder_name = EXCLUDED.holder_name`,
+          [customerId, String(ba.account_number), ba.ifsc ?? null,
+           bankFill?.bank_name ?? ba.bank_name ?? null,
+           bankFill?.branch_name ?? null, bankFill?.branch_city ?? null,
+           ba.holder_name ?? null]
         );
         // The new default has to reach future unpaid payout rows too.
         const { resnapshotPayeeBank } = await import('../schedule/materialize.js');

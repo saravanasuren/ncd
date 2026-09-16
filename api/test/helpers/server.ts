@@ -1,4 +1,14 @@
-/** Test harness: PGlite-backed API on an ephemeral port + a cookie-aware client. */
+/**
+ * Test harness: PGlite-backed API on an ephemeral port + a cookie-aware client.
+ *
+ * KNOWN BLIND SPOT: PGlite is not node-postgres. Where production returns a
+ * BIGINT (every id in this schema) as a STRING, PGlite returns a NUMBER — so a
+ * body that a real browser posts as `"42"` arrives here as `42`, and a route
+ * that only accepts numbers passes CI while failing for every operator. That
+ * shipped once (#426, assigning a referrer on Approvals). When a test covers an
+ * id that has been out to the browser and come back, assert the STRING form
+ * too; parse such ids with `idFromJson` (api/src/lib/ids.ts).
+ */
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { PgliteDb } from '../../src/db/pglite.js';

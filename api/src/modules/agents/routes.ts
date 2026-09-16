@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
+import { idFromJson } from '../../lib/ids.js';
 import * as s from './service.js';
 
 export const agentsRouter = Router();
@@ -62,7 +63,7 @@ agentsRouter.get('/staff-candidates', requirePermission('agents:manage'),
 
 agentsRouter.post('/:id/merge-into-staff', requirePermission('agents:manage'),
   asyncHandler(async (req, res) => {
-    const { user_id } = z.object({ user_id: z.number().int().positive() }).parse(req.body);
+    const { user_id } = z.object({ user_id: idFromJson }).parse(req.body);
     res.json(await s.mergeAgentIntoStaff(getDb(), req.user!, Number(req.params.id), user_id));
   }));
 

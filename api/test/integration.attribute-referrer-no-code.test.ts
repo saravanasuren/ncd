@@ -117,6 +117,39 @@ describe('assigning a payee who has no code', () => {
     expect(app.referred_by_text ?? '').toBe('');
   });
 
+  /**
+   * The test that was missing, and the reason #426 shipped broken.
+   *
+   * The original tests posted `payee_id: Number(u.id)` — a payload the browser
+   * never sends. Every id here is BIGSERIAL and node-postgres hands BIGINT back
+   * as a STRING, so the page posted `"42"`, `z.number()` refused it, and EVERY
+   * assignment failed with "Invalid request" — the exact error the fix was for.
+   *
+   * MIND THE HARNESS: these tests run on PGlite, which returns BIGINT as a
+   * NUMBER. Posting the search row back verbatim therefore passes here even
+   * when production is broken, which is precisely how this shipped. So the
+   * round trip is asserted BOTH ways — as the row arrives, and as the string a
+   * real BIGINT becomes. The second half is the one that bites.
+   */
+  it('assigns a row from the search, posted back as-is AND as a BIGINT string', async () => {
+    const a = await admin();
+    const rows = (await a.get('/api/agents/payee-search?q=AG-DEMO')).json.rows as Array<{
+      source: 'agents' | 'users'; id: unknown; code: string | null; full_name: string;
+    }>;
+    const row = rows.find((r) => r.code === 'AG-DEMO');
+    expect(row, 'seeded agent should be searchable').toBeTruthy();
+    const payee = (row!.code ?? '').trim() || row!.full_name;
+
+    for (const [label, id] of [['as it arrived', row!.id], ['as a BIGINT string', String(row!.id)]] as const) {
+      const appId = await investment(a, `Verbatim Assign ${label}`, `95650001${label.length}`);
+      const r = await assign(a, appId, { payee, payee_source: row!.source, payee_id: id });
+      expect(r.status, `${label}: ${JSON.stringify(r.json)}`).toBe(200);
+      const app = (await ctx.db.query<{ referred_by_text: string }>(
+        'SELECT referred_by_text FROM applications WHERE id = $1', [appId])).rows[0]!;
+      expect(app.referred_by_text).toBe('AG-DEMO');
+    }
+  });
+
   it('still rejects an empty payee', async () => {
     const a = await admin();
     const appId = await investment(a, 'Empty Assign', '9565000003');

@@ -5,6 +5,7 @@ import { getDb } from '../../db/index.js';
 import { asyncHandler } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/auth.js';
 import { serveHeaders } from '../../lib/uploads.js';
+import { idFromJson } from '../../lib/ids.js';
 import * as s from './service.js';
 import * as purge from '../admin/purge.js';
 
@@ -75,10 +76,15 @@ applicationsRouter.post('/:id/attribute-referrer', requirePermission('incentives
     // `payee_source` + `payee_id` say WHICH row the operator clicked, so the
     // service can confirm its own resolution of `payee` lands on that person.
     // Optional: an older page that posts only `payee` still works.
+    // `payee_id` is parsed with idFromJson, not z.number(): the page posts back
+    // the id it was given, and a BIGINT id travels as a string. Requiring a
+    // number 400'd EVERY assignment as "Invalid request" — the very error this
+    // check was added to cure (#426). The search now casts on the way out, and
+    // this keeps a browser tab opened before that deploy working too.
     const b = z.object({
       payee: z.string().min(1),
       payee_source: z.enum(['agents', 'users']).optional(),
-      payee_id: z.number().int().positive().optional(),
+      payee_id: idFromJson.optional(),
     }).parse(req.body);
     const picked = b.payee_source && b.payee_id ? { source: b.payee_source, id: b.payee_id } : undefined;
     res.json(await s.attributeReferrer(getDb(), req.user!, Number(req.params.id), b.payee, picked));

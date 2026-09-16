@@ -17,8 +17,6 @@ export interface IfscInfo {
   address: string | null;
 }
 
-import { config } from '../config.js';
-
 const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 type Fetcher = typeof fetch;
 
@@ -79,11 +77,17 @@ export interface BankBranchFields {
  * Inert under NODE_ENV=test unless a fetcher is injected: 51 test files add a
  * bank account, and on a runner with no egress each one would sit through the
  * 5s timeout. Tests that care about the filling pass their own `doFetch`.
+ *
+ * Reads process.env DIRECTLY rather than importing config. This module is a leaf
+ * that offline scripts pull in, and config validates production secrets at
+ * MODULE LOAD — so importing it here made backfill-bank-branch die on
+ * "Refusing to boot in production with default secret(s)" before its first line
+ * ran, because static imports resolve before loadSecretsFromSsm() is awaited.
  */
 export async function fillBankBranchFromIfsc<T extends BankBranchFields>(
   ifsc: string, fields: T, doFetch?: Fetcher,
 ): Promise<T> {
-  if (!doFetch && config.NODE_ENV === 'test') return fields;
+  if (!doFetch && process.env.NODE_ENV === 'test') return fields;
   const fetcher = doFetch ?? fetch;
   const has = (v: unknown) => String(v ?? '').trim() !== '';
   if (has(fields.bank_name) && has(fields.branch_name) && has(fields.branch_city)) return fields;

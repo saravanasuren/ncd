@@ -203,6 +203,14 @@ export async function linkDeposit(
         : raw;
       console.warn(`[locker] deposit leg link-ncd failed for locker ${input.lockerApplicationId}: ${raw}`);
     }
+    // Record the outcome ON THE LINK. Without this a refusal lived only in the
+    // HTTP response and a console line: the pledge still stood (freezing that
+    // money from redemption), the deposit leg stayed outstanding upstream, the
+    // locker never allotted, and no table, report or retry knew — and 033's
+    // unique index made re-linking impossible. See migration 093.
+    await db.query(
+      'UPDATE locker_deposit_links SET lockerhub_settled_at = $2, lockerhub_error = $3 WHERE id = $1',
+      [link.id, settled ? new Date().toISOString() : null, settleError ? settleError.slice(0, 500) : null]);
   }
 
   return {
@@ -219,6 +227,43 @@ export async function linkDeposit(
     settle_error: settleError,
     locker_status: lockerStatus,
   };
+}
+
+/**
+ * Re-attempt the §A12 link for a pledge LockerHub refused.
+ *
+ * Safe to repeat — their link-ncd is idempotent — and it refuses anything that
+ * is not a live, not-yet-settled link, so it cannot be used to tell LockerHub a
+ * deposit is backed by an investment that was never pledged or has since been
+ * released.
+ */
+export async function retryDepositLink(db: Db, actor: AuthUser, linkId: number) {
+  const l = (await db.query<Record<string, unknown>>(
+    `SELECT l.id, l.status, l.lockerhub_application_id, l.lockerhub_settled_at, a.application_no
+       FROM locker_deposit_links l JOIN applications a ON a.id = l.application_id
+      WHERE l.id = $1`, [linkId])).rows[0];
+  if (!l) throw errors.notFound('Link not found');
+  if (l.status !== 'active') throw errors.unprocessable('That pledge has been released — there is nothing to settle.');
+  if (l.lockerhub_settled_at) return { ok: true, lockerhub_settled: true, settle_error: null };
+
+  try {
+    await lh.linkNcd(
+      { id: actor.id, name: actor.fullName, email: actor.email },
+      String(l.lockerhub_application_id),
+      { ncd_id: String(l.application_no) });
+    await db.query('UPDATE locker_deposit_links SET lockerhub_settled_at = now(), lockerhub_error = NULL WHERE id = $1', [linkId]);
+    await writeAudit(db, {
+      actorId: actor.id, action: 'locker.deposit.link-retry', entityType: 'locker_deposit_links', entityId: linkId,
+      after: { lockerhub_application_id: l.lockerhub_application_id, application_no: l.application_no, settled: true },
+    });
+    return { ok: true, lockerhub_settled: true, settle_error: null };
+  } catch (e) {
+    // Same rule as everywhere else on this boundary: their failure is recorded,
+    // never thrown — the pledge is a decision we already took.
+    const msg = (e as Error).message || 'LockerHub did not accept the link';
+    await db.query('UPDATE locker_deposit_links SET lockerhub_error = $2 WHERE id = $1', [linkId, msg.slice(0, 500)]);
+    return { ok: true, lockerhub_settled: false, settle_error: msg };
+  }
 }
 
 /** Release a link (locker closed) so the pledged amount becomes redeemable. */

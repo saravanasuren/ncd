@@ -1197,6 +1197,14 @@ lockersRouter.post('/deposit-links', asyncHandler(async (req, res) => {
   res.status(201).json(await linkDeposit(getDb(), req.user!, { applicationId: b.application_id, lockerApplicationId: b.lockerhub_application_id }));
 }));
 
+// Re-push a pledge LockerHub refused (§A12 is idempotent). Without this a
+// refused link left the money pledged and the deposit leg outstanding with no
+// way back — see migration 093.
+lockersRouter.post('/deposit-links/:linkId/settle-retry', asyncHandler(async (req, res) => {
+  const { retryDepositLink } = await import('./deposits.js');
+  res.json(await retryDepositLink(getDb(), req.user!, Number(req.params.linkId)));
+}));
+
 // Release a link once the locker is closed — frees the pledged amount to be redeemed.
 lockersRouter.post('/deposit-links/:linkId/release', asyncHandler(async (req, res) => {
   const { reason } = z.object({ reason: z.string().min(2) }).parse(req.body ?? {});

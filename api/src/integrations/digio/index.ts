@@ -190,6 +190,19 @@ export function isSignedStatus(s: string | null | undefined): boolean {
 }
 
 /**
+ * Digio states a request can never leave — the signer declined, the link
+ * expired, Digio gave up.
+ *
+ * Nothing used to read these: only "signed" was acted on, so a dead request sat
+ * at 'requested' for ever and every screen went on saying "waiting". A signature
+ * that is never coming is a fact about the signing, and has to be recorded as
+ * plainly as one that arrives.
+ */
+export function isFailedStatus(s: string | null | undefined): boolean {
+  return !!s && /^(expired|declined|rejected|failed|cancelled|canceled|revoked|aborted)$/i.test(String(s));
+}
+
+/**
  * Download the SIGNED PDF for a completed request. Binary, so it can't go
  * through `call()` (which parses JSON). Returns null in stub mode or on any
  * failure — the caller treats the signed copy as best-effort and never lets a

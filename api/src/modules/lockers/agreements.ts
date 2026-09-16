@@ -103,9 +103,11 @@ const shape = (r: Record<string, unknown>): SigningView => ({
 export async function getSigning(db: Db, applicationId: string): Promise<SigningView | null> {
   const r = (await db.query<Record<string, unknown>>(
     `SELECT ${COLS},
+       -- 'requested' only: a superseded, expired or declined request's link is
+       -- dead, and handing it to a customer wastes their trip to the branch.
        (SELECT d.sign_url FROM digio_signing_sessions d
           WHERE d.locker_agreement_signing_id = s.id
-            AND d.document_type = 'locker_agreement'
+            AND d.document_type = 'locker_agreement' AND d.status = 'requested'
           ORDER BY d.id DESC LIMIT 1) AS customer_sign_url
        FROM locker_agreement_signings s
       WHERE s.lockerhub_application_id = $1 AND s.status = ANY($2::text[])
@@ -455,7 +457,7 @@ export async function generateAgreementForm(
  */
 export async function agreementSigners(db: Db, applicationId: string): Promise<Array<{
   position: number; name: string; phone: string | null; email: string | null;
-  status: 'pending' | 'sent' | 'signed'; sign_url: string | null; can_send: boolean; blocked_reason: string | null;
+  status: 'pending' | 'sent' | 'signed' | 'failed'; sign_url: string | null; can_send: boolean; blocked_reason: string | null;
 }>> {
   const signing = await getSigning(db, applicationId);
   const { result, customer } = await renderLockerAgreement(db, applicationId, signing?.id ?? 0);
@@ -464,14 +466,20 @@ export async function agreementSigners(db: Db, applicationId: string): Promise<A
 
   const sessions = signing
     ? (await db.query<{ signer_position: number; status: string; sign_url: string | null }>(
+        // Oldest first, so the map below keeps each hirer's LATEST attempt: a
+        // re-send after a failure must not be shadowed by the failure it
+        // replaced. Unordered, which session won was down to the planner.
+        // 'failed' rows ARE read here — that is the state the screen has to
+        // show — and only superseded ones are dropped.
         `SELECT signer_position, status, sign_url FROM digio_signing_sessions
-          WHERE locker_agreement_signing_id = $1 AND signer_position IS NOT NULL AND status <> 'cancelled'`,
+          WHERE locker_agreement_signing_id = $1 AND signer_position IS NOT NULL AND status <> 'cancelled'
+          ORDER BY id ASC`,
         [signing.id])).rows
     : [];
   const byPos = new Map(sessions.map((r) => [Number(r.signer_position), r]));
 
   const out: Array<{ position: number; name: string; phone: string | null; email: string | null;
-    status: 'pending' | 'sent' | 'signed'; sign_url: string | null; can_send: boolean; blocked_reason: string | null }> = [];
+    status: 'pending' | 'sent' | 'signed' | 'failed'; sign_url: string | null; can_send: boolean; blocked_reason: string | null }> = [];
   let previousSigned = true;   // nobody comes before hirer 1
   for (const h of result.hirers) {
     const jh = h.position === 1 ? null : joint.get(h.position);
@@ -479,19 +487,27 @@ export async function agreementSigners(db: Db, applicationId: string): Promise<A
     const phone = h.position === 1 ? ((customer.phone as string) ?? null) : (jh?.phone ?? null);
     const email = h.position === 1 ? ((customer.email as string) ?? null) : (jh?.email ?? null);
     const sess = byPos.get(h.position);
-    const status: 'pending' | 'sent' | 'signed' =
-      sess?.status === 'signed' ? 'signed' : sess ? 'sent' : 'pending';
+    // 'failed' is a fourth state, not a flavour of 'sent': the link expired or
+    // the hirer declined, so nobody is coming and the row needs sending again.
+    // Collapsing it into 'sent' left the screen saying "waiting" for ever.
+    const status: 'pending' | 'sent' | 'signed' | 'failed' =
+      sess?.status === 'signed' ? 'signed'
+      : sess?.status === 'failed' ? 'failed'
+      : sess ? 'sent' : 'pending';
 
     // In ORDER (owner 2026-09-14). Each stage signs the file the stage before
     // it produced, so sending out of order would put a signature on a document
     // that is about to be replaced.
+    const sendable = status === 'pending' || status === 'failed';
     const blocked_reason =
-      status !== 'pending' ? null
+      !sendable ? null
       : !previousSigned ? `Hirer ${h.position - 1} has to sign first.`
       : !String(phone ?? '').trim() ? 'No phone number — the signing link cannot reach them.'
       : null;
     out.push({ position: h.position, name, phone, email, status,
-      sign_url: sess?.sign_url ?? null, can_send: status === 'pending' && !blocked_reason, blocked_reason });
+      // A dead link is not worth opening.
+      sign_url: status === 'failed' ? null : (sess?.sign_url ?? null),
+      can_send: sendable && !blocked_reason, blocked_reason });
     previousSigned = status === 'signed';
   }
   return out;
@@ -663,6 +679,39 @@ export async function initiateCeoEsign(
   });
 
   return { sign_url: req.signUrl, digio_request_id: req.digioRequestId, stub: !digioConfigured() };
+}
+
+/**
+ * Ask Digio where this locker agreement's signatures actually stand.
+ *
+ * The NCD side has had this since the manual "Mark eSigned" button was removed;
+ * lockers never did, because checkOneApplication looks sessions up by
+ * application_id and a locker agreement's are NULL there. Meanwhile the poller
+ * stops chasing after POLL_WINDOW_DAYS, so a customer who signed on day eight
+ * had no route into the system at all.
+ *
+ * Like its NCD twin it can only confirm what Digio reports — there is no path
+ * here that marks an unsigned document signed.
+ */
+export async function recheckEsign(
+  db: Db, actor: AuthUser, applicationId: string,
+): Promise<{ ok: boolean; signed: number; failed: number }> {
+  const signing = await getSigning(db, applicationId);
+  if (!signing) throw errors.notFound('No agreement signing found for this locker.');
+  const { checkOneLockerSigning } = await import('../../integrations/digio/service.js');
+  const r = await checkOneLockerSigning(db, signing.id);
+  if (!r.ok) {
+    if (r.reason === 'not-configured') throw errors.badRequest('e-Sign is not configured, so there is nothing to ask Digio about.');
+    throw errors.badRequest('No signing link is outstanding on this agreement.');
+  }
+  if (r.signed || r.failed) {
+    await writeAudit(db, {
+      actorId: actor.id, action: 'locker.agreement.esign-rechecked',
+      entityType: 'locker_agreement_signings', entityId: signing.id,
+      after: { application: applicationId, signed: r.signed, failed: r.failed, statuses: r.statuses },
+    });
+  }
+  return { ok: true, signed: r.signed, failed: r.failed };
 }
 
 /**

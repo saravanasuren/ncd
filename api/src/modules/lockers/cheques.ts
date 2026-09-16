@@ -98,10 +98,11 @@ export async function recordCheque(db: Db, actor: AuthUser, input: RecordChequeI
   const chequeNo = String(input.chequeNo ?? '').trim();
   if (!chequeNo) throw errors.badRequest('cheque_no is required');
 
-  const live = (await db.query(
-    "SELECT id FROM locker_cheques WHERE lockerhub_application_id = $1 AND leg = $2 AND status = 'Pending'",
-    [appId, input.leg])).rows[0];
-  if (live) throw errors.conflict(`A cheque is already pending clearance for the ${input.leg} leg of ${appId}`);
+  // Was: a pending CHEQUE only. That let a second cheque be taken once the
+  // first cleared, and never looked at the offline-payment table at all — two
+  // receipts, one leg. See legClaims.ts.
+  const { assertLegUnclaimed } = await import('./legClaims.js');
+  await assertLegUnclaimed(db, appId, input.leg);
 
   return db.withTx(async (tx) => {
     const row = (await tx.query<Record<string, unknown>>(

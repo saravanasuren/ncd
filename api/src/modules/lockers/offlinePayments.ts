@@ -129,10 +129,11 @@ export async function recordOfflinePayment(
   const who = await resolvePayer(db, appId);
 
   return db.withTx(async (tx) => {
-    const open = (await tx.query(
-      `SELECT 1 FROM locker_offline_payments WHERE lockerhub_application_id = $1 AND leg = $2 AND status = 'PendingApproval'`,
-      [appId, leg])).rowCount;
-    if (open) throw errors.conflict(`A ${leg} payment is already awaiting approval on this application.`);
+    // Was: a PendingApproval payment only. That let a second payment be recorded
+    // once the first was approved, and never looked at the cheque register —
+    // two receipts, one leg. See legClaims.ts.
+    const { assertLegUnclaimed } = await import('./legClaims.js');
+    await assertLegUnclaimed(tx, appId, leg);
 
     const { rows } = await tx.query<{ id: string }>(
       `INSERT INTO locker_offline_payments (lockerhub_application_id, leg, method, reference, amount, created_by_user_id)

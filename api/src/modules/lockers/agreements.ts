@@ -328,6 +328,62 @@ export async function syncFromEsignStatus(
  * Returns the full render result (buffer + both signature boxes) plus the
  * customer row and the locker number for the caller's bookkeeping.
  */
+/**
+ * The agreement's own number — DIF0001, allocated once and kept.
+ *
+ * Printed on the Schedule in place of the LockerHub application id, which the
+ * owner saw as "mu57ytsh53ldvkg" and rightly called junk on a document a
+ * customer signs (2026-09-17).
+ *
+ * ALLOCATED ONCE, THEN STORED. The agreement is re-rendered at every signing
+ * stage — hirer 1, each joint hirer, then the authorised signatory — and each
+ * stage signs the file the stage before produced. A number derived per render
+ * could differ between them, so a counter-signed contract would carry a
+ * different number from the copy the customer signed. Reading it back is
+ * therefore the first thing this does, and the common path writes nothing.
+ *
+ * The bare-row insert covers an application LockerHub knows about that our own
+ * index has not caught up with: the number belongs to the locker, so it must not
+ * depend on the sync having run.
+ */
+export async function ensureAgreementNo(db: Db, applicationId: string): Promise<string | null> {
+  const read = async (q: Db) => (await q.query<{ agreement_no: string | null }>(
+    'SELECT agreement_no FROM locker_applications WHERE lockerhub_application_id = $1',
+    [applicationId])).rows[0]?.agreement_no ?? null;
+
+  const existing = await read(db);
+  if (existing) return existing;
+
+  try {
+    return await db.withTx(async (tx) => {
+      await tx.query(
+        `INSERT INTO locker_applications (lockerhub_application_id) VALUES ($1)
+         ON CONFLICT (lockerhub_application_id) DO NOTHING`, [applicationId]);
+      // Lock the row before deciding, so two renders racing on the same locker
+      // cannot both see NULL and mint two numbers.
+      const locked = (await tx.query<{ agreement_no: string | null }>(
+        'SELECT agreement_no FROM locker_applications WHERE lockerhub_application_id = $1 FOR UPDATE',
+        [applicationId])).rows[0];
+      if (locked?.agreement_no) return locked.agreement_no;
+
+      const { nextCode } = await import('../../lib/sequences.js');
+      const code = await nextCode(tx, 'locker_agreement');
+      await tx.query(
+        'UPDATE locker_applications SET agreement_no = $1, updated_at = now() WHERE lockerhub_application_id = $2',
+        [code, applicationId]);
+      return code;
+    });
+  } catch (e) {
+    // A number already taken means another render won the race; read theirs.
+    // Anything else must not stop an agreement printing — it falls back to the
+    // LockerHub id, which is what printed before this existed.
+    const again = await read(db).catch(() => null);
+    if (again) return again;
+    console.warn(`[locker-agreement] could not allocate an agreement number for ${applicationId}: ${(e as Error).message}`);
+    return null;
+  }
+}
+
 async function renderLockerAgreement(
   db: Db, applicationId: string, signingId: number,
 ): Promise<{ result: import('../reports/forms/locker-agreement.js').LockerAgreementResult; customer: Record<string, unknown>; lockerNo: string | null }> {
@@ -402,6 +458,8 @@ async function renderLockerAgreement(
   const signatoryName = String(
     (await getSettingsMap(db))['lockers.agreement_signatory_name'] ?? 'Saravana Suren');
 
+  const agreementNo = await ensureAgreementNo(db, applicationId);
+
   const result = await lockerAgreementPdf(db, {
     signatoryName,
     customer: customer as never,
@@ -415,6 +473,7 @@ async function renderLockerAgreement(
     })),
     locker: {
       lockerhub_application_id: applicationId,
+      agreement_no: agreementNo,
       locker_number: (allot.locker_number as string) ?? null,
       size: (app?.locker_size as string) ?? null,
       branch: (app?.branch_name as string) ?? null,

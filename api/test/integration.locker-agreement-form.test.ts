@@ -98,7 +98,11 @@ describe('the printed agreement carries everything we already know', () => {
     const { text } = await pdfText(a, `/api/lockers/applications/${APP}/agreement/form.pdf`);
     expect(text).toContain('B-07');
     expect(text).toContain('Erode');          // branch resolved from branch_id
-    expect(text).toContain(APP);
+    // The Schedule prints the AGREEMENT number now, not LockerHub's internal id
+    // (owner 2026-09-17: "this feels like a junk charaterstic"). The id is still
+    // what every route is keyed on — it just is not what a customer reads.
+    expect(text).toMatch(/DIF\d{4,}/);
+    expect(text).not.toContain(APP);
   });
 
   it('prints the nominee already on file', async () => {

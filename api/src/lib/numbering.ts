@@ -39,4 +39,10 @@ export const DEFAULT_NUMBER_FORMATS = {
   // the APP- one (owner 2026-08-10). Same shape as `application` so the two
   // read alike; the leading token is what tells them apart at a glance.
   subordinate_bond: 'SOB-{yyyy}-{seq:6}',
+  // Locker agreement number, printed on the Schedule. The owner's template
+  // reads "Agreement No :- DIF0000", so it is DIF + a running number and NOT
+  // year-scoped: a locker hire renews indefinitely, so a number that restarts
+  // each January would collide with a live agreement. Four digits is the
+  // template's width; past 9,999 it simply grows a digit rather than wrapping.
+  locker_agreement: 'DIF{seq:4}',
 } as const;

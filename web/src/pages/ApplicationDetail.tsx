@@ -171,7 +171,7 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
 }
 
 export function ApplicationDetailPage() {
-  const { promptText } = useConfirm();
+  const { confirm, promptText } = useConfirm();
   const { id } = useParams();
   // Where the user came from, carried in router state. Opened from a customer
   // profile → back returns THERE; opened from the Applications list (or a hard
@@ -192,6 +192,36 @@ export function ApplicationDetailPage() {
   });
   const invalidate = () => qc.invalidateQueries({ queryKey: key });
   const run = (p: Promise<unknown>) => p.then(() => { setMsg(''); invalidate(); }).catch((e) => setMsg(e instanceof ApiError ? e.message : 'Failed'));
+
+  /**
+   * Send this investment's form for eSign — first attempt or any attempt after.
+   *
+   * A customer who abandons the Aadhaar OTP leaves the Digio document open, so
+   * the session stays 'requested' and the old screen never offered the button
+   * again: one failed attempt and the investment could not be signed at all,
+   * by eSign OR on paper (owner 2026-09-17). Sending again is allowed until a
+   * signature exists.
+   *
+   * A second send is confirmed first, because it costs the customer another SMS
+   * and the earlier link stays live — whichever one they sign is recorded.
+   */
+  const sendForEsign = async () => {
+    const alreadyOut = data?.esign?.state === 'awaiting' || data?.esign?.state === 'stalled';
+    if (alreadyOut) {
+      const waited = data?.esign?.days_waiting === 0 ? 'today' : `${data?.esign?.days_waiting} day(s) ago`;
+      const ok = await confirm({
+        title: 'Send another signing link?',
+        body: `A link was sent ${waited} and has not been signed yet. The customer gets a fresh link by SMS. `
+          + 'This does NOT cancel the earlier one — whichever link they sign is the one recorded.',
+        confirmLabel: 'Send a new link',
+      });
+      if (!ok) return;
+    }
+    await run(api.post<{ sign_url: string | null; stub: boolean }>(`/api/applications/${id}/esign/initiate`).then((r) => {
+      if (r.sign_url && !r.stub) window.open(r.sign_url, '_blank', 'noopener');
+      else setNote(r.stub ? 'eSign is in sandbox mode (no Digio credentials) — nothing was sent.' : 'Signing session created.');
+    }));
+  };
 
   /**
    * The signed application form, scanned back in (owner 2026-09-03: "currently
@@ -248,16 +278,20 @@ export function ApplicationDetailPage() {
             "mark this signed" control: a signature is recorded only when Digio
             says the customer signed, or when an actual signed document is
             uploaded — never because a member of staff said so (owner
-            2026-08-29). "Send for eSign" only appears when nothing is out;
-            while one is, the state below says where it stands. */}
-        {can('applications:mark-esigned') && data.esign?.state === 'not_sent' && ['PendingActivation', 'PendingEsign', 'Active'].includes(a.status) && (
+            2026-08-29). What IS always offered, until a signature exists, is
+            another attempt: eSign again, print and sign on paper, or upload a
+            signed form. An abandoned Digio session stays open on their side, so
+            gating these on "nothing is out" left a failed attempt with no way
+            forward at all (owner 2026-09-17). */}
+        {can('applications:mark-esigned') && data.esign?.can_send && ['PendingActivation', 'PendingEsign', 'Active'].includes(a.status) && (
           <>
-            <button onClick={() => {
-              run(api.post<{ sign_url: string | null; stub: boolean }>(`/api/applications/${id}/esign/initiate`).then((r) => {
-                if (r.sign_url && !r.stub) window.open(r.sign_url, '_blank', 'noopener');
-                else setNote(r.stub ? 'eSign is in sandbox mode (no Digio credentials) — nothing was sent.' : 'Signing session created.');
-              }));
-            }} className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">Send for eSign</button>
+            <button onClick={() => void sendForEsign()}
+              title={data.esign.state === 'not_sent'
+                ? 'Sends the pre-filled form to the customer for Aadhaar eSign.'
+                : 'The last link was not signed. This sends a fresh one; the old link stays valid too.'}
+              className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg">
+              {data.esign.state === 'not_sent' ? 'Send for eSign' : 'Send eSign again'}
+            </button>
             {/* The form is already pre-filled and already carries signature
                 boxes — it is the document Digio signs. Signing on paper prints
                 that same form. */}
@@ -274,6 +308,7 @@ export function ApplicationDetailPage() {
           <span className="text-xs text-warn bg-[color:var(--warn-bg)] rounded px-2 py-1"
             title={`Sent ${data.esign.days_waiting === 0 ? 'today' : `${data.esign.days_waiting} day(s) ago`}. Digio is asked every 15 seconds; this becomes eSigned on its own once the customer signs.`}>
             ⏳ Sent to customer — waiting for them to sign
+            {(data.esign.attempts ?? 0) > 1 && ` · attempt ${data.esign.attempts}`}
           </span>
         )}
         {data.esign?.state === 'stalled' && (

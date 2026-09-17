@@ -1526,8 +1526,11 @@ export function LockerEnrollmentPage() {
                               <a className={btnGhost} href={sg.sign_url} target="_blank" rel="noopener noreferrer">Open link</a>
                             )}
                             {sg.can_send && (
-                              <button className={btnGhost} disabled={busy} onClick={() => sendToHirer(sg.position)}>
-                                Send to Hirer {sg.position}
+                              <button className={btnGhost} disabled={busy} onClick={() => sendToHirer(sg.position)}
+                                title={sg.status === 'sent'
+                                  ? 'The last link was not signed. This sends a fresh one; the old link stays valid too.'
+                                  : undefined}>
+                                {sg.status === 'sent' ? 'Send again' : `Send to Hirer ${sg.position}`}
                               </button>
                             )}
                             {/* Why it is locked, not just that it is. */}

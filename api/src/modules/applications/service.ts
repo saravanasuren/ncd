@@ -1054,11 +1054,33 @@ export async function getApplicationDetail(db: Db, actor: AuthUser, appId: numbe
   const esignStalled = esignPending && Number(session!.days_old) > POLL_WINDOW_DAYS;
   const esignState: 'signed' | 'awaiting' | 'stalled' | 'not_sent' =
     app.esigned_at ? 'signed' : esignStalled ? 'stalled' : esignPending ? 'awaiting' : 'not_sent';
+  // Every attempt ever made on this investment, so the screen can say "2nd
+  // attempt" rather than leaving staff to guess whether the last send worked.
+  const attempts = Number((await db.query<{ n: string }>(
+    'SELECT count(*) AS n FROM digio_signing_sessions WHERE application_id = $1', [appId])).rows[0]?.n ?? 0);
   const esign = {
     state: esignState,
     sent_at: session?.created_at ?? null,
     days_waiting: session ? Math.floor(Number(session.days_old)) : null,
     poll_window_days: POLL_WINDOW_DAYS,
+    attempts,
+    /**
+     * May another signing attempt be started?
+     *
+     * Until a signature EXISTS, yes — always (owner 2026-09-17: "unless a esign
+     * becomes successful i should have attempts to make signing"). The page used
+     * to offer the button only while nothing was out, and a Digio session a
+     * customer abandons stays 'requested' for ever (Digio's own screen says
+     * "Signing cancelled by user. To retry, click Sign Now" and leaves the
+     * document open). So one abandoned attempt sealed the investment: no new
+     * link, and no way to print the form and sign on paper either.
+     *
+     * This is the rule, not a UI detail, which is why it is decided here where
+     * it can be tested. Sending again does NOT cancel the earlier link — the
+     * poller watches every open session, so whichever one the customer actually
+     * signs is the one recorded.
+     */
+    can_send: !app.esigned_at,
   };
   // Locker pledge breakdown: total / linked to lockers / free NCD / redeemable.
   // The investment is never split — links are claims against it.

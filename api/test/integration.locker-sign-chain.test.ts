@@ -55,6 +55,26 @@ async function pretendSigned(position: number) {
       WHERE id = $1`, [sess.locker_agreement_signing_id, stored.path, position]);
 }
 
+/** pretendSigned, scoped to ONE application — the helper above finds the newest
+ *  session for a position across every fixture, which two applications in one
+ *  file would make ambiguous. */
+async function pretendSignedFor(application: string, position: number) {
+  const sess = (await ctx.db.query<{ id: string; locker_agreement_signing_id: string }>(
+    `SELECT s.id, s.locker_agreement_signing_id FROM digio_signing_sessions s
+       JOIN locker_agreement_signings g ON g.id = s.locker_agreement_signing_id
+      WHERE g.lockerhub_application_id = $1 AND s.signer_position = $2 AND s.status = 'requested'
+      ORDER BY s.id DESC LIMIT 1`, [application, position])).rows[0]!;
+  await ctx.db.query("UPDATE digio_signing_sessions SET status = 'signed', signed_at = now() WHERE id = $1", [sess.id]);
+  const { saveBuffer } = await import('../src/lib/storage.js');
+  const stored = saveBuffer('locker-agreements', `${application}-stage-${position}.pdf`,
+    Buffer.from(`%PDF-1.4 ${application} stage ${position}\n%%EOF\n`));
+  await ctx.db.query(
+    `UPDATE locker_agreement_signings
+        SET signed_doc_path = $2, signed_doc_mime = 'application/pdf',
+            signed_doc_filename = 'signed.pdf', signed_doc_position = $3
+      WHERE id = $1`, [sess.locker_agreement_signing_id, stored.path, position]);
+}
+
 describe('the signing chain', () => {
   beforeAll(async () => {
     const a = await admin();
@@ -126,6 +146,60 @@ describe('the signing chain', () => {
     await expect(setHirers(ctx.db, actor, APP, [
       { position: 2, full_name: 'Renamed Second', phone: '9714000002', pan: 'AAAPC1111A', dob: '1980-01-01', address: '2 St' },
     ], '9714000001')).rejects.toThrow(/already signed/);
+  });
+});
+
+/**
+ * A hirer who does not finish can be sent another link (owner 2026-09-17:
+ * "unless a esign becomes successful i should have attempts to make signing").
+ *
+ * Abandoning the Aadhaar OTP does not fail the Digio document — their session
+ * stays 'sent' for ever — and `sendable` used to exclude 'sent', so one
+ * abandoned attempt stopped the agreement dead. The ORDERING rule is a separate
+ * guard and still holds, which is the half that must not loosen.
+ */
+describe('sending a hirer another link', () => {
+  const APP2 = 'LKR-CHAIN-RETRY';
+  beforeAll(async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Retry Primary', phone: '9714000011' });
+    await ctx.db.query(
+      `INSERT INTO locker_applications (lockerhub_application_id, customer_id, customer_name, phone, locker_size, status)
+       VALUES ($1, $2, 'Retry Primary', '9714000011', 'Large', 'approved')`, [APP2, Number(cust.json.id)]);
+    const { setHirers } = await import('../src/modules/lockers/hirers.js');
+    await setHirers(ctx.db, actor, APP2, [
+      { position: 2, full_name: 'Retry Second', phone: '9714000012', pan: 'AAAPC3333C', dob: '1982-01-01', address: '4 St' },
+    ], '9714000011');
+  });
+
+  it('a sent-but-unsigned hirer stays sendable, and sending again works', async () => {
+    const { agreementSigners, initiateHirerEsign } = await mod();
+    await initiateHirerEsign(ctx.db, actor, APP2, 1);
+
+    let s = await agreementSigners(ctx.db, APP2);
+    expect(s[0]!.status).toBe('sent');
+    // THE BUG: this was false, so the button disappeared and never returned.
+    expect(s[0]!.can_send, 'an unsigned hirer must be sendable again').toBe(true);
+    expect(s[0]!.blocked_reason).toBe(null);
+
+    const again = await initiateHirerEsign(ctx.db, actor, APP2, 1);
+    expect(again.digio_request_id).toBeTruthy();
+    s = await agreementSigners(ctx.db, APP2);
+    expect(s[0]!.status).toBe('sent');
+
+    // Order is STILL enforced — a resend must not open hirer 2 early.
+    expect(s[1]!.can_send).toBe(false);
+    expect(s[1]!.blocked_reason).toMatch(/Hirer 1 has to sign first/);
+    await expect(initiateHirerEsign(ctx.db, actor, APP2, 2)).rejects.toThrow(/Hirer 1 has to sign first/);
+  });
+
+  it('and stops once they have actually signed', async () => {
+    await pretendSignedFor(APP2, 1);
+    const { agreementSigners } = await mod();
+    const s = await agreementSigners(ctx.db, APP2);
+    expect(s[0]!.status).toBe('signed');
+    expect(s[0]!.can_send, 'a real signature closes the door').toBe(false);
+    expect(s[1]!.can_send).toBe(true);
   });
 });
 

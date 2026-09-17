@@ -578,8 +578,16 @@ export async function agreementSigners(db: Db, applicationId: string): Promise<A
 
     // In ORDER (owner 2026-09-14). Each stage signs the file the stage before
     // it produced, so sending out of order would put a signature on a document
-    // that is about to be replaced.
-    const sendable = status === 'pending' || status === 'failed';
+    // that is about to be replaced. The ordering gate below is what enforces
+    // that; being 'sent' is NOT a reason to refuse.
+    //
+    // A hirer who abandons the Aadhaar OTP leaves the Digio document open, so
+    // their session stays 'sent' for ever and this row could never be sent
+    // again — one abandoned attempt and the agreement was stuck (the same trap
+    // the owner hit on investments, 2026-09-17: "unless a esign becomes
+    // successful i should have attempts to make signing"). So: anything but a
+    // real signature may be sent again.
+    const sendable = status !== 'signed';
     const blocked_reason =
       !sendable ? null
       : !previousSigned ? `Hirer ${h.position - 1} has to sign first.`

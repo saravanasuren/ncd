@@ -135,7 +135,9 @@ export async function staffCandidates(db: Db, q: string) {
       WHERE u.is_active = TRUE AND u.is_staff = TRUE AND r.name NOT IN ('customer','agent')
         AND (u.full_name ILIKE $1 OR u.code ILIKE $1 OR u.email ILIKE $1)
       ORDER BY u.full_name LIMIT 15`, [like]);
-  return rows;
+  // Same cast, same reason: Agents posts the picked row's id to
+  // merge-into-staff, which parses it with a positive-integer schema.
+  return rows.map((r) => ({ ...r, id: Number(r.id) }));
 }
 
 export interface MergeIntoStaffResult {
@@ -281,7 +283,11 @@ export async function searchPayees(db: Db, q: string) {
      WHERE u.is_active = TRUE AND r.name <> 'customer' AND (u.full_name ILIKE $1 OR u.code ILIKE $1)
        AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.user_id = u.id AND a.deleted_at IS NULL)
      ORDER BY u.full_name LIMIT 10`, [like])).rows;
-  return [...agents, ...staff];
+  // BIGSERIAL ids come back from pg as STRINGS, and this list exists to be
+  // posted back: Approvals sends the clicked row's id to attribute-referrer,
+  // where z.number() rejected `"42"` as "Invalid request" — every assignment
+  // failed. Cast on the way out, the way dashboard search already does.
+  return [...agents, ...staff].map((r) => ({ ...r, id: Number(r.id) }));
 }
 
 /**

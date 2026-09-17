@@ -53,6 +53,9 @@ export interface AgreementCustomer {
 }
 export interface AgreementLocker {
   lockerhub_application_id: string;
+  /** The human-readable agreement number (DIF0001). Falls back to the LockerHub
+   *  application id only when one has not been allocated. */
+  agreement_no?: string | null;
   locker_number?: string | null;
   size?: string | null;
   branch?: string | null;
@@ -107,10 +110,14 @@ const orBlank = (v: unknown): string => {
  * rather than guessing.
  */
 export function annualRentForSize(size: unknown): number | null {
-  const s = String(size ?? '').trim().toLowerCase();
-  if (s === 'medium') return 6000;
-  if (s === 'large') return 12000;
-  if (s === 'extra large' || s === 'xlarge' || s === 'x-large' || s === 'xl') return 20000;
+  // LockerHub sends the size BOTH ways — "Large" on the applications we hold and
+  // a bare "M" on others — so both spellings have to resolve. Matching only the
+  // long form is how a Medium locker fell through to LockerHub's rent leg and
+  // printed ₹23,600 (₹20,000 + 18% GST) on the contract.
+  const s = String(size ?? '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (s === 'medium' || s === 'm') return 6000;
+  if (s === 'large' || s === 'l') return 12000;
+  if (s === 'extralarge' || s === 'xlarge' || s === 'xl') return 20000;
   return null;
 }
 
@@ -225,6 +232,20 @@ const PERIOD_OF_LICENCE =
 
 const OPERATION_MANDATES = 'Sole / Either or Survivor / Anyone or Survivor / Jointly';
 
+/**
+ * How the company's signatory is described ON THIS DOCUMENT.
+ *
+ * Fixed here rather than read from company_profile.signatory_designation, which
+ * holds "CEO" and is shared with the bond certificate and the investment
+ * application form. The owner's supplied agreement says "Authorised Signatory"
+ * and only this document changes (owner 2026-09-17) — so the other two keep
+ * saying CEO, deliberately.
+ *
+ * It is also the more accurate word on an executed contract: it states the
+ * capacity in which the person signs, not the job they hold.
+ */
+const SIGNATORY_DESIGNATION = 'Authorised Signatory';
+
 /** The DECLARATION that closes the owner's document, verbatim. It sits between
  *  the vernacular undertaking and the signature block. */
 const DECLARATION_BULLETS = [
@@ -332,7 +353,10 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
       .text('SCHEDULE', 50, y, { width: W, align: 'center' });
     doc.y += 8;
 
-    row('Agreement No.', l.lockerhub_application_id, true);
+    // The owner's number, not LockerHub's internal id — "mu57ytsh53ldvkg" on a
+    // document a customer signs is junk (owner 2026-09-17). The raw id remains
+    // the fallback so an agreement never prints a blank where its number goes.
+    row('Agreement No.', l.agreement_no || l.lockerhub_application_id, true);
     row('Place', orBlank(input.place ?? l.branch));
     row('Date', fmtDate(when));
     doc.y += 4;
@@ -406,8 +430,26 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
     doc.y += 4;
 
     sect('3. LOCKER RENT PER ANNUM', 100);
-    // LockerHub's rent leg first; otherwise the fixed annual rent for the size.
-    const rent = l.rent_amount != null ? l.rent_amount : annualRentForSize(l.size);
+    /**
+     * The RENT, which is the round figure for the size — M ₹6,000 · L ₹12,000 ·
+     * XL ₹20,000 (owner 2026-09-17).
+     *
+     * LockerHub's rent leg used to win, and it is GST-INCLUSIVE and changes as
+     * the application moves: before the standard waiver is applied it reads
+     * ₹14,160 on a Large (₹12,000 + 18%), after it reads ₹12,000. So the printed
+     * agreement said whatever the leg happened to hold at the moment somebody
+     * pressed print — which is how a Large locker went out quoting ₹14,160.
+     *
+     * The size is fixed for the life of the hire and the rent follows from it,
+     * so the contract states that. A premium (rent-free) customer still gets the
+     * standard figure: the waiver is a commercial arrangement, not a term of the
+     * hire (owner 2026-09-17). What was actually collected lives on the payment
+     * record, which is where the GST reduction is shown.
+     *
+     * A size we hold no figure for (Small, until one is set) falls back to
+     * LockerHub rather than printing blank.
+     */
+    const rent = annualRentForSize(l.size) ?? l.rent_amount;
     row('Rs. (in figures)', rent != null ? fmtINR(rent) : orBlank(null), true);
     row('Rupees (in words)', rent != null ? amountInWords(rent) : orBlank(null));
     need(16);
@@ -515,7 +557,7 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
       const rows: Array<[string, string, number]> = [
         ['Signature:', '', 44],
         ['Name of the signatory:', orBlank(input.signatoryName), 18],
-        ['Designation:', co.signatory_designation, 18],
+        ['Designation:', SIGNATORY_DESIGNATION, 18],
       ];
       let yTop = top;
       for (const [lab, val, h] of rows) {
@@ -661,7 +703,7 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
     doc.font('Helvetica').fontSize(8.5).fillColor(COLORS.MUTED)
       .text('Signature of Customers/ Hirer(s)', 50, ruleY + 4, { width: 240 });
     doc.font('Helvetica').fontSize(8.5).fillColor(COLORS.MUTED)
-      .text(co.signatory_designation, 320, ruleY + 4, { width: 225, align: 'right' });
+      .text(SIGNATORY_DESIGNATION, 320, ruleY + 4, { width: 225, align: 'right' });
     doc.y = ruleY + 22;
 
     doc.font('Helvetica').fontSize(8).fillColor(COLORS.MUTED)

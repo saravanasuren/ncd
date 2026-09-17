@@ -552,7 +552,9 @@ export function LockerEnrollmentPage() {
     const p = rentWaiverPreview;
     if (!await confirm({
       title: 'Apply the standard rent waiver?',
-      body: `Bill now ${money(p.gross)} · waive ${money(p.waived)} (${p.waiverPct.toFixed(4)}% of the pre-tax rent) · customer pays ${money(p.payable)}.\n\n`
+      body: `Rent ${money(p.payable)} + GST ${money(p.waived)} = ${money(p.gross)} billed.\n`
+        + `The GST comes off: ${money(p.gross)} − ${money(p.waived)} → the customer pays ${money(p.payable)}.\n\n`
+        + `(Sent to LockerHub as ${p.waiverPct.toFixed(4)}% of the pre-tax rent, which lands on the same rupees.)\n\n`
         + 'This is policy, so it goes to LockerHub immediately — there is no approval step.',
       confirmLabel: `Waive ${money(p.waived)}`,
     })) return;
@@ -1250,11 +1252,18 @@ export function LockerEnrollmentPage() {
                     if (!feeWaivers.some((w) => w.leg === 'rent')) return <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">rent yet to be paid</span>;
                     return null;
                   })()}
-                  {/* Rent-only waiver breakdown (LockerHub CR): legs.rent.amount IS the
-                      payable; the original + waiver ride along for transparency. */}
+                  {/* Rent-only breakdown (LockerHub CR): legs.rent.amount IS the
+                      payable; the original + reduction ride along for transparency.
+                      Shown as the GST coming OFF (owner 2026-09-17: "in the payment
+                      i need to see it like - the rent amount is getting reduced form
+                      the gst"), because that is what the customer experiences — the
+                      round rent is what they pay, and the tax component is what the
+                      waiver removes. The waiver is computed as a percentage of the
+                      PRE-TAX rent, never as the GST figure (see rentWaiverBreakdown);
+                      those net to the same rupees, and this labels the outcome. */}
                   {leg === 'rent' && !settled && st?.original_amount != null && (
                     <span className="text-xs text-text-muted">
-                      original {money(st.original_amount)} − waiver{st.waiver_pct != null ? ` ${st.waiver_pct}%` : ''} ({money(st.waiver_amount ?? st.original_amount - (st.amount ?? 0))})
+                      {money(st.original_amount)} − GST {money(st.waiver_amount ?? st.original_amount - (st.amount ?? 0))} = {money(st.amount ?? 0)} payable
                     </span>
                   )}
                   {!settled && link && (

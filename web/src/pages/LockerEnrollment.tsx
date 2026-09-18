@@ -1423,8 +1423,14 @@ export function LockerEnrollmentPage() {
                   // from the status — not the application id. Deliberately NOT
                   // esign.signed_file_url: that is an internal SharePoint link
                   // and 404s for staff (LockerHub, 2026-07-31).
+                  //
+                  // Only for a locker with NO row of our own: `esign` is
+                  // LockerHub's legacy e-Sign (A19), a different Digio account
+                  // from our joint-hirer chain (#421). Once `signing` exists,
+                  // its id belongs to a document LockerHub never received —
+                  // linking to it 404s (or worse, opens someone else's file).
                   const esignId = esign?.esign_id || esign?.id;
-                  const doc = esignId ? `/api/lockers/agreements/${encodeURIComponent(String(esignId))}/pdf` : null;
+                  const doc = !signing && esignId ? `/api/lockers/agreements/${encodeURIComponent(String(esignId))}/pdf` : null;
                   const physical = signing?.method === 'physical';
 
                   // Signed, either way. The method is always named — a bare
@@ -1435,7 +1441,15 @@ export function LockerEnrollmentPage() {
                   const ourSignedDoc = signing?.has_signed_doc
                     ? `/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement/signed.pdf`
                     : null;
-                  if (signing?.is_signed || st === 'signed' || st === 'completed') return (
+                  // Same rule as `doc` above: once a native-chain row exists, ITS
+                  // status is authoritative. Without the `!signing` guard, a
+                  // mid-chain agreement (e.g. only hirer 1 signed) still showed the
+                  // green ✓-signed badge whenever LockerHub's unrelated legacy
+                  // status happened to read "signed" — misleading even though the
+                  // backend fix (syncFromEsignStatus) already stops it corrupting
+                  // the row itself. Found while re-testing LOCKER-AUDIT-2026-09 L3.
+                  const legacySignedFallback = !signing && (st === 'signed' || st === 'completed');
+                  if (signing?.is_signed || legacySignedFallback) return (
                     <div className="mt-1 flex items-center gap-2 flex-wrap">
                       <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">
                         ✓ {signing?.label ?? 'e-Signed'}{signing?.signed_on ? ` · ${signing.signed_on}` : ''}

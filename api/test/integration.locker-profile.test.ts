@@ -90,3 +90,39 @@ describe('locker profile', () => {
     } finally { lockerHubUp = true; }
   });
 });
+
+/**
+ * The tenant page's heading showed LockerHub's internal id — "mty3cgwdd39daug"
+ * next to "Locker 36" — and the owner saw it there after the AGREEMENT number
+ * had already been fixed on the PDF, reasonably asking whether the change had
+ * worked at all (2026-09-18). It had; the screen was a different place reading a
+ * different field.
+ *
+ * So the profile carries the agreement number, and the LockerHub id stays
+ * alongside it: every route and every call to them is keyed on it, so support
+ * still needs it on the page.
+ */
+describe('the tenant page shows the agreement number', () => {
+  it('returns the DIF number alongside the LockerHub id', async () => {
+    const a = await admin();
+    await ctx.db.query(
+      `INSERT INTO locker_applications (lockerhub_application_id, agreement_no)
+       VALUES ($1, 'DIF0061')
+       ON CONFLICT (lockerhub_application_id) DO UPDATE SET agreement_no = EXCLUDED.agreement_no`,
+      [APP]);
+    const r = await a.get(`/api/lockers/profile?application_id=${encodeURIComponent(APP)}`);
+    expect(r.status).toBe(200);
+    expect(r.json.agreement_no).toBe('DIF0061');
+    // The LockerHub id is still there — it is what everything is keyed on.
+    expect(r.json.locker_application_id).toBe(APP);
+  });
+
+  it('is null, not an error, for an application that has never been rendered', async () => {
+    const a = await admin();
+    await ctx.db.query(
+      `UPDATE locker_applications SET agreement_no = NULL WHERE lockerhub_application_id = $1`, [APP]);
+    const r = await a.get(`/api/lockers/profile?application_id=${encodeURIComponent(APP)}`);
+    expect(r.status).toBe(200);
+    expect(r.json.agreement_no).toBeNull();
+  });
+});

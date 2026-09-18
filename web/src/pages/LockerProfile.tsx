@@ -84,7 +84,13 @@ export function LockerProfilePage() {
         <h1 className="text-xl font-bold tracking-tight m-0">Locker {String(lockerNo)}</h1>
         <span className="text-xs rounded px-2 py-0.5 bg-bg">{String(size)}</span>
         <span className="text-xs rounded px-2 py-0.5 bg-bg">{String(status)}</span>
-        <span className="font-mono text-xs text-text-muted">{data.locker_application_id}</span>
+        {data.agreement_no && (
+          <span className="font-mono text-sm font-semibold text-text" title="Agreement number">{data.agreement_no}</span>
+        )}
+        {/* LockerHub's own id. Kept — it is what every route and every call to
+            them is keyed on, so support needs it — but it is no longer the
+            thing you read first (owner 2026-09-18). */}
+        <span className="font-mono text-xs text-text-muted" title="LockerHub application id">{data.locker_application_id}</span>
       </div>
       {data.customer && (
         <p className="text-sm text-text-muted mb-4">

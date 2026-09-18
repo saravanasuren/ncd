@@ -44,8 +44,8 @@ export async function lockerProfile(db: Db, lockerApplicationId: string) {
   // one when money happened to move that way, so a locker whose rent was waived
   // and which backs no NCD had NO customer here at all — hirer 1 rendered as a
   // dash on a page listing hirer 2 by name (owner 2026-09-14).
-  const indexed = (await db.query<{ customer_id: string | null; customer_name: string | null; phone: string | null }>(
-    'SELECT customer_id, customer_name, phone FROM locker_applications WHERE lockerhub_application_id = $1',
+  const indexed = (await db.query<{ customer_id: string | null; customer_name: string | null; phone: string | null; agreement_no: string | null }>(
+    'SELECT customer_id, customer_name, phone, agreement_no FROM locker_applications WHERE lockerhub_application_id = $1',
     [appId])).rows[0];
   const customerId =
     (indexed?.customer_id as string | null | undefined) ??
@@ -99,6 +99,11 @@ export async function lockerProfile(db: Db, lockerApplicationId: string) {
 
   return {
     locker_application_id: appId,
+    // The number a person reads — DIF0061. The LockerHub id beside it is what
+    // every route and every call to them is keyed on, so it stays on the page
+    // for support and for matching against LockerHub's own screens; it is just
+    // no longer the first thing you see (owner 2026-09-18).
+    agreement_no: indexed?.agreement_no ?? null,
     // id stays NULL for a walk-in with no NCD record — Number(null) is 0, and a
     // customer id of 0 would render as a link to a customer that does not exist.
     customer: customer && {

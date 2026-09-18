@@ -392,6 +392,13 @@ export async function ensureAgreementNo(db: Db, applicationId: string): Promise<
         'UPDATE locker_applications SET agreement_no = $1, updated_at = now() WHERE lockerhub_application_id = $2',
         [code, applicationId]);
       return code;
+    }).then((code) => {
+      // Tell LockerHub, so both systems show the same number (owner 2026-09-18).
+      // AFTER the commit and NOT awaited: the number is ours the moment it is
+      // stored, and an agreement must never fail to render because LockerHub is
+      // slow or down. pushAgreementNo records its own outcome and never throws.
+      if (code) void pushAgreementNo(db, applicationId).catch(() => undefined);
+      return code;
     });
   } catch (e) {
     // A number already taken means another render won the race; read theirs.
@@ -401,6 +408,83 @@ export async function ensureAgreementNo(db: Db, applicationId: string): Promise<
     if (again) return again;
     console.warn(`[locker-agreement] could not allocate an agreement number for ${applicationId}: ${(e as Error).message}`);
     return null;
+  }
+}
+
+/**
+ * Who an AUTOMATIC push is attributed to on LockerHub's side. A28 wants a staff
+ * block for its audit trail, and an allocation that happens during a render has
+ * no person behind it. The backfill script passes a real Super Admin instead.
+ */
+const SYSTEM_STAFF = { id: 'ncd-system', name: 'NCD automatic sync', staff_role: 'system' } as const;
+
+export type AgreementNoPush =
+  | { outcome: 'pushed' | 'already' }
+  | { outcome: 'refused' | 'failed'; detail: string }
+  | { outcome: 'skipped'; detail: string };
+
+/**
+ * Record this application's agreement number on LockerHub (their A28).
+ *
+ * Every outcome is WRITTEN DOWN, because the push runs after the number is
+ * stored and outside that transaction — so without a record, a number that
+ * never reached them would look exactly like one that did.
+ *
+ *   pushed / already  → agreement_no_pushed_at set, error cleared. `already` is
+ *                       their answer to the same number sent twice; that is
+ *                       success, and it is what makes retrying safe.
+ *   refused (4xx)     → error recorded, pushed_at left NULL, and NOT retried by
+ *                       itself. A 409 means they hold a DIFFERENT number for this
+ *                       application, or another application holds this one —
+ *                       both are a disagreement a person has to look at, and
+ *                       re-sending would only repeat it. LockerHub never
+ *                       overwrites, by our own request, because the number is
+ *                       printed on a signed contract.
+ *   failed (5xx/down) → error recorded, pushed_at NULL; the push script retries.
+ *
+ * Never throws.
+ */
+export async function pushAgreementNo(
+  db: Db, applicationId: string,
+  staff: { id: string | number; name: string; email?: string | null; staff_role?: string } = SYSTEM_STAFF,
+): Promise<AgreementNoPush> {
+  try {
+    const lh = await import('../../integrations/lockerhub/client.js');
+    if (!lh.lockerHubConfigured()) return { outcome: 'skipped', detail: 'LockerHub is not configured' };
+    const no = (await db.query<{ agreement_no: string | null }>(
+      'SELECT agreement_no FROM locker_applications WHERE lockerhub_application_id = $1',
+      [applicationId])).rows[0]?.agreement_no;
+    if (!no) return { outcome: 'skipped', detail: 'no agreement number allocated yet' };
+
+    const record = (error: string | null, pushed: boolean) => db.query(
+      `UPDATE locker_applications
+          SET agreement_no_pushed_at = CASE WHEN $2 THEN now() ELSE agreement_no_pushed_at END,
+              agreement_no_push_error = $3, updated_at = now()
+        WHERE lockerhub_application_id = $1`, [applicationId, pushed, error]);
+
+    try {
+      const r = await lh.setAgreementNo(staff, applicationId, no);
+      await record(null, true);
+      return { outcome: r?.already ? 'already' : 'pushed' };
+    } catch (e) {
+      const err = e as { status?: number; message?: string; detail?: Record<string, unknown> };
+      const status = Number(err.status) || 0;
+      const d = (err.detail ?? {}) as Record<string, unknown>;
+      const code = String(d.code ?? d.error ?? '').trim();
+      const refused = status >= 400 && status < 500;
+      const extra = [
+        d.current != null ? `they hold ${String(d.current)}` : '',
+        d.requested != null ? `we sent ${String(d.requested)}` : '',
+        d.application_id != null ? `held by ${String(d.application_id)}` : '',
+      ].filter(Boolean).join(', ');
+      const detail = refused
+        ? `LockerHub refused (${status}${code ? ` ${code}` : ''})${extra ? `: ${extra}` : ''}`
+        : `LockerHub unavailable: ${String(err.message ?? 'unknown error').slice(0, 200)}`;
+      await record(detail, false);
+      return { outcome: refused ? 'refused' : 'failed', detail };
+    }
+  } catch (e) {
+    return { outcome: 'failed', detail: (e as Error).message };
   }
 }
 

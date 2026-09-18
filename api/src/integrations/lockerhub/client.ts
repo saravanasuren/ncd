@@ -396,6 +396,24 @@ export const applyWaiver = (
  * money was collected (409 payment_collected) or the application is already a
  * live tenancy (409 live_tenancy).
  */
+/**
+ * A28 — record NCD's agreement number (DIF0061) on the application, so both
+ * systems show the same number (owner 2026-09-18). Live 2026-09-18.
+ *
+ * Their behaviour, as specified by them:
+ *   200 { success, application_id, agreement_no }  — also on a repeat of the
+ *        SAME number, with `already: true`. Safe to retry.
+ *   409 agreement_no_conflict  — this application already holds a DIFFERENT
+ *        number. They never overwrite; the body carries `current`, `requested`.
+ *   409 agreement_no_in_use    — another application holds this number.
+ *   400 bad_agreement_no       — outside 1-40 chars of [A-Z0-9/-].
+ * Read back on A8 as `external_agreement_no` ('' when unset).
+ */
+export const setAgreementNo = (staff: ActingStaff, applicationId: string, agreementNo: string) =>
+  lhFetch<{ success: boolean; application_id: string; agreement_no: string; already?: boolean }>(
+    'POST', `/locker-applications/${encodeURIComponent(applicationId)}/external-ref`,
+    { body: { agreement_no: agreementNo, staff } });
+
 export const cancelLockerApplication = (
   staff: ActingStaff,
   applicationId: string,

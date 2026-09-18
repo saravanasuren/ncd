@@ -28,15 +28,43 @@ const actor = { id: 1 } as never;
 const WEBHOOK_SECRET = 'test-digio-webhook-secret';
 const admin = async () => { const c = new Client(ctx.base); await c.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' }); return c; };
 
-/** A live Digio that reports whatever the test tells it to. */
+/**
+ * A live Digio that reports whatever the test tells it to — and that answers
+ * only the calls the REAL Digio answers.
+ *
+ * This mock used to reply 200 to anything containing '/document/status', which
+ * is the one call Digio rejects: it answers `POST /v2/client/document/status`
+ * with **405 Method Not Allowed**. So the mock agreed with our mistake, the
+ * tests passed, and in production every status check failed silently for weeks
+ * while 8 signatures went unrecorded (incident 2026-09-18). It now refuses that
+ * call exactly as Digio does, so the same mistake cannot pass again.
+ */
 let digioSays = 'requested';
 async function withDigio<T>(fn: () => Promise<T>): Promise<T> {
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
+      const url = req.url ?? '';
+      const method = req.method ?? 'GET';
+      // What Digio really does with the old call.
+      if (url.includes('/document/status')) {
+        res.writeHead(405, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ message: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }));
+        return;
+      }
+      // The real status call: GET /v2/client/document/{id}, answering with
+      // `agreement_status` and a signing_parties array.
+      if (method === 'GET' && /\/v2\/client\/document\/[^/?]+$/.test(url)) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          id: decodeURIComponent(url.split('/').pop() ?? ''),
+          is_agreement: true, agreement_status: digioSays, no_of_pages: 2,
+          signing_parties: [{ name: 'Status Hirer', status: digioSays, identifier: '9716000001' }],
+        }));
+        return;
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
-      if ((req.url ?? '').includes('/document/status')) { res.end(JSON.stringify({ agreement_status: digioSays })); return; }
       res.end(JSON.stringify({ id: `MOCK-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, status: 'requested', signers: [{ sign_url: 'about:blank#mock' }] }));
     });
   });

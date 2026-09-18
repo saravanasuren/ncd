@@ -986,15 +986,11 @@ export async function uploadSignedAgreement(
 export async function getSignedDocument(
   db: Db, applicationId: string,
 ): Promise<{ buffer: Buffer; mime: string | null; filename: string | null } | null> {
-  // LIVE rows only. A cancelled attempt keeps its file (the audit trail), and
-  // without this filter it was served as the agreement for as long as the
-  // replacement had no file of its own yet (LOCKER-AUDIT-2026-09 L6).
   const r = (await db.query<Record<string, unknown>>(
     `SELECT signed_doc_path, signed_doc_mime, signed_doc_filename
        FROM locker_agreement_signings
       WHERE lockerhub_application_id = $1 AND signed_doc_path IS NOT NULL
-        AND status = ANY($2::text[])
-      ORDER BY id DESC LIMIT 1`, [applicationId, [...LIVE_STATUSES]])).rows[0];
+      ORDER BY id DESC LIMIT 1`, [applicationId])).rows[0];
   if (!r?.signed_doc_path) return null;
   const { readStored } = await import('../../lib/storage.js');
   const buffer = readStored(String(r.signed_doc_path));

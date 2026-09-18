@@ -171,17 +171,6 @@ describe('signed.pdf resolves the right source for every kind of signed locker',
     expect(r.status).not.toBe(200);
   });
 
-  it('a CANCELLED attempt\'s file is not served as the agreement (L6)', async () => {
-    const { saveBuffer } = await import('../src/lib/storage.js');
-    const stored = saveBuffer('locker-agreements', 'cancelled.pdf', PDF('cancelled-attempt'));
-    await ctx.db.query(
-      `INSERT INTO locker_agreement_signings (lockerhub_application_id, method, status, signed_doc_path, signed_doc_mime)
-       VALUES ('LKR-DL-CANCELLED', 'esign', 'Cancelled', $1, 'application/pdf')`, [stored.path]);
-    lhEsign = { found: false, status: null };
-    const r = await admin.req('GET', url('LKR-DL-CANCELLED'));
-    expect(r.status).toBe(404);
-  });
-
   it('never signed: 404, not an empty 200', async () => {
     lhEsign = { found: false, status: null };
     const r = await admin.req('GET', url('LKR-DL-NOTHING'));

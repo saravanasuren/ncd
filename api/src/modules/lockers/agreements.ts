@@ -312,9 +312,12 @@ export async function syncFromEsignStatus(
   }
   if (cur.method !== 'esign' || cur.status === 'Signed') return cur;
 
-  const onNativeChain = (await db.query<{ n: string }>(
+  // count(*) comes back a STRING under node-postgres (prod) but a NUMBER under
+  // PGlite (tests), so compare numerically — a bare `!== '0'` reads every row as
+  // on-chain in tests and blocks the legacy sync (see bigint-ids-string-vs-pglite).
+  const onNativeChain = Number((await db.query<{ n: string | number }>(
     'SELECT count(*) AS n FROM digio_signing_sessions WHERE locker_agreement_signing_id = $1',
-    [cur.id])).rows[0]?.n !== '0';
+    [cur.id])).rows[0]?.n ?? 0) > 0;
   if (onNativeChain) return cur;
 
   await db.query(

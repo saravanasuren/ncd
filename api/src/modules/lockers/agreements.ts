@@ -278,6 +278,18 @@ export async function recordEsignSent(
  * `esign_pending` for one, and letting that overwrite an approved paper
  * signature would undo a checker's decision.
  *
+ * LockerHub's `/esign/status` is THEIR legacy e-Sign (A19, added 2026-07-29) —
+ * a completely different Digio account from the joint-hirer chain we run
+ * ourselves (#421, 2026-09-10). A native-chain row is `method === 'esign'`
+ * too, so without excluding it here, LockerHub reporting "signed" (their own,
+ * unrelated bookkeeping) stamps our row Signed without a single hirer or the
+ * CEO ever signing through us — and with no signed_doc_path, since only
+ * storeHirerSignedCopy/storeCeoSignedCopy ever populate that column. The
+ * enrolment page then has nothing real to link to (LOCKER-AUDIT-2026-09 L3).
+ * A `digio_signing_sessions` row keyed to this signing is the tell: only OUR
+ * chain ever creates one, so its presence means LockerHub's answer is about a
+ * different document entirely and must be ignored here.
+ *
  * Returns the row as it now stands (or null when the locker has no signing).
  */
 export async function syncFromEsignStatus(
@@ -299,6 +311,14 @@ export async function syncFromEsignStatus(
     return getSigning(db, applicationId);
   }
   if (cur.method !== 'esign' || cur.status === 'Signed') return cur;
+
+  // count(*) comes back a STRING under node-postgres (prod) but a NUMBER under
+  // PGlite (tests), so compare numerically — a bare `!== '0'` reads every row as
+  // on-chain in tests and blocks the legacy sync (see bigint-ids-string-vs-pglite).
+  const onNativeChain = Number((await db.query<{ n: string | number }>(
+    'SELECT count(*) AS n FROM digio_signing_sessions WHERE locker_agreement_signing_id = $1',
+    [cur.id])).rows[0]?.n ?? 0) > 0;
+  if (onNativeChain) return cur;
 
   await db.query(
     `UPDATE locker_agreement_signings

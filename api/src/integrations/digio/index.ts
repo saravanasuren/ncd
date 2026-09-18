@@ -177,11 +177,34 @@ export async function createSignRequest(input: {
   return { digioRequestId: String(r.id), signUrl: (signUrl as string | null) ?? null, status: String(r.status ?? 'requested') };
 }
 
-/** Poll Digio for one request's current status (real mode only). */
+/**
+ * Ask Digio the current status of one request (real mode only).
+ *
+ * `GET /v2/client/document/{id}` — verified against live Digio 2026-09-18,
+ * which answers 200 with `agreement_status` plus a `signing_parties` array.
+ *
+ * It used to POST /v2/client/document/status, which Digio answers **405 Method
+ * Not Allowed**, and it swallowed that with `.catch(() => null)`. A broken call
+ * and "the customer has not signed yet" were therefore the same answer, so the
+ * 15-second poller could never see a signature and never retire a dead link.
+ * Measured against Digio's own records on 2026-09-18: of 66 sessions we still
+ * called 'requested', 8 were signed and unrecorded — TWO NCD application forms,
+ * three locker agreements and three authorised-user consents — 36 had expired
+ * while still reading "sent to customer, waiting", and only 22 were really open.
+ *
+ * So this THROWS now. A caller that cannot reach Digio must be able to tell
+ * that apart from an unsigned document; null means only "no credentials".
+ */
 export async function fetchStatus(digioRequestId: string): Promise<string | null> {
   if (!digioConfigured()) return null;
-  const r = await call('POST', '/v2/client/document/status', { id: digioRequestId }).catch(() => null);
-  return r ? String((r as Record<string, unknown>).agreement_status ?? (r as Record<string, unknown>).status ?? '') : null;
+  const r = await call('GET', `/v2/client/document/${encodeURIComponent(digioRequestId)}`);
+  return String(r.agreement_status ?? r.status ?? '');
+}
+
+/** Digio rate-limits a burst of these (HTTP 429). A caller walking a backlog
+ *  should pause rather than hammer, and try the rest next cycle. */
+export function isRateLimited(e: unknown): boolean {
+  return / 429\b/.test(String((e as Error)?.message ?? ''));
 }
 
 /** Digio "signed" states (a few spellings across their API surface). */

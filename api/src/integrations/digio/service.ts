@@ -7,7 +7,8 @@ import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
-import { createSignRequest, fetchStatus, isSignedStatus, isFailedStatus, digioConfigured, type SignaturePlacement } from './index.js';
+import { createSignRequest, fetchStatus, isSignedStatus, isFailedStatus, isRateLimited, digioConfigured, type SignaturePlacement } from './index.js';
+import { alertOps } from '../../lib/alerts.js';
 
 /** Start a signing session for an application; returns the sign URL. */
 export async function initiateSigning(db: Db, actor: AuthUser, applicationId: number): Promise<{ sign_url: string | null; digio_request_id: string; stub: boolean }> {
@@ -272,27 +273,60 @@ export async function markSessionFailed(db: Db, digioRequestId: string, digioSta
     [digioRequestId, digioStatus ?? 'unknown']);
 }
 
-/** Poll outstanding sessions against Digio (real mode only). Cron-gated. */
-export async function pollOutstanding(db: Db): Promise<{ checked: number; signed: number; failed: number }> {
-  if (!digioConfigured()) return { checked: 0, signed: 0, failed: 0 };
+/**
+ * Poll outstanding sessions against Digio (real mode only). Cron-gated.
+ *
+ * `unreadable` is reported rather than ignored. The whole point of the 2026-09-18
+ * incident was that an unreachable Digio looked exactly like a customer who had
+ * not signed: every status call was answering 405 and being swallowed, so the
+ * poller reported "checked 50, signed 0" for weeks while signatures piled up
+ * unrecorded. A batch where NOTHING could be read is a broken integration, not
+ * a quiet day, and it now says so out loud.
+ */
+export async function pollOutstanding(db: Db): Promise<{ checked: number; signed: number; failed: number; unreadable: number }> {
+  if (!digioConfigured()) return { checked: 0, signed: 0, failed: 0, unreadable: 0 };
   // Only chase RECENT signatures. A customer who never signs leaves the session
   // 'requested' forever — without this cutoff the 15s poller would hit Digio for
   // that abandoned request indefinitely. Newest first so live signings win the
   // batch when several are open.
+  //
+  // 20, not 50: Digio rate-limits a burst, and at one cycle every 15 seconds a
+  // bigger batch buys nothing but 429s.
   const { rows } = await db.query<{ digio_request_id: string }>(
     `SELECT digio_request_id FROM digio_signing_sessions
       WHERE status = 'requested' AND digio_request_id IS NOT NULL
         AND created_at > now() - interval '${POLL_WINDOW_DAYS} days'
-      ORDER BY created_at DESC LIMIT 50`);
+      ORDER BY created_at DESC LIMIT 20`);
   let signed = 0;
   let failed = 0;
+  let unreadable = 0;
+  let lastError = '';
   for (const r of rows) {
-    const status = await fetchStatus(r.digio_request_id).catch(() => null);
+    let status: string | null;
+    try {
+      status = await fetchStatus(r.digio_request_id);
+    } catch (e) {
+      unreadable++;
+      lastError = (e as Error).message;
+      // Rate-limited: stop the cycle. The rest keep their turn 15 seconds from
+      // now, and pressing on would only earn more 429s.
+      if (isRateLimited(e)) { unreadable += rows.length - rows.indexOf(r) - 1; break; }
+      continue;
+    }
     if (isSignedStatus(status)) { await completeSigning(db, r.digio_request_id, {}); signed++; }
     // A dead request is chased no further and stops pretending to be live.
     else if (isFailedStatus(status)) { await markSessionFailed(db, r.digio_request_id, status); failed++; }
   }
-  return { checked: rows.length, signed, failed };
+  if (unreadable) {
+    console.warn(`[digio] ${unreadable} of ${rows.length} status checks failed: ${lastError}`);
+    // Not one readable answer in a non-empty batch means we are blind, and a
+    // blind poller reports "nobody signed" for ever.
+    if (unreadable === rows.length) {
+      void alertOps('Digio status checks are all failing',
+        `${rows.length} outstanding signature(s) could not be checked. Signatures will go unrecorded until this is fixed.\n\nLast error: ${lastError}`);
+    }
+  }
+  return { checked: rows.length, signed, failed, unreadable };
 }
 
 /**
@@ -316,7 +350,10 @@ export async function checkOneApplication(db: Db, applicationId: number): Promis
       WHERE application_id = $1 AND status = 'requested' AND digio_request_id IS NOT NULL
       ORDER BY created_at DESC LIMIT 1`, [applicationId])).rows[0];
   if (!row) return { ok: false, reason: 'no-session' };
-  const status = await fetchStatus(row.digio_request_id).catch(() => null);
+  // No .catch here on purpose. Swallowing the error made this button answer
+  // "Digio says it is still unsigned" when it had in fact never managed to ask
+  // (2026-09-18). The route turns a throw into a plain error on screen.
+  const status = await fetchStatus(row.digio_request_id);
   if (isSignedStatus(status)) {
     await completeSigning(db, row.digio_request_id, {});
     return { ok: true, signed: true, status };
@@ -349,11 +386,22 @@ export async function checkOneLockerSigning(db: Db, signingId: number): Promise<
   if (rows.length === 0) return { ok: false, reason: 'no-session' };
   let signed = 0; let failed = 0;
   const statuses: Array<string | null> = [];
+  let unreadable = 0;
   for (const r of rows) {
-    const status = await fetchStatus(r.digio_request_id).catch(() => null);
+    let status: string | null;
+    try {
+      status = await fetchStatus(r.digio_request_id);
+    } catch (e) {
+      // One unreachable link must not hide the answer for the others — but it
+      // is counted, so "nothing moved" cannot be mistaken for "nobody signed".
+      unreadable++; statuses.push(null);
+      if (isRateLimited(e)) break;
+      continue;
+    }
     statuses.push(status);
     if (isSignedStatus(status)) { await completeSigning(db, r.digio_request_id, {}); signed++; }
     else if (isFailedStatus(status)) { await markSessionFailed(db, r.digio_request_id, status); failed++; }
   }
+  if (unreadable === rows.length) throw errors.upstream(502, 'Digio could not be reached to check these signatures — try again in a moment.');
   return { ok: true, signed, failed, statuses };
 }

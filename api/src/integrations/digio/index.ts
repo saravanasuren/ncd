@@ -239,10 +239,28 @@ export async function downloadSignedDocument(digioRequestId: string): Promise<Bu
       headers: { Authorization: 'Basic ' + auth },
       signal: AbortSignal.timeout(20000),
     });
-    if (!r.ok) return null;
+    // Every "no" below is logged with WHY. This used to return null silently, so
+    // a missing signed copy left nothing in any log to say whether Digio was
+    // down, rate-limiting us, or had answered something else entirely.
+    if (!r.ok) {
+      console.warn(`[digio] signed-document download for ${digioRequestId} refused: HTTP ${r.status}`);
+      return null;
+    }
     const buf = Buffer.from(await r.arrayBuffer());
-    return buf.length > 0 ? buf : null;
-  } catch {
+    if (!buf.length) {
+      console.warn(`[digio] signed-document download for ${digioRequestId} came back empty`);
+      return null;
+    }
+    // A 200 is not proof of a PDF. Storing a JSON/HTML body here made the
+    // agreement read "e-Signed" with a file no viewer can open — and the next
+    // hirer would have been asked to sign it.
+    if (buf.subarray(0, 5).toString('latin1') !== '%PDF-') {
+      console.warn(`[digio] signed-document download for ${digioRequestId} was not a PDF (starts ${JSON.stringify(buf.subarray(0, 40).toString('latin1'))})`);
+      return null;
+    }
+    return buf;
+  } catch (e) {
+    console.warn(`[digio] signed-document download for ${digioRequestId} failed: ${(e as Error).message}`);
     return null;
   }
 }

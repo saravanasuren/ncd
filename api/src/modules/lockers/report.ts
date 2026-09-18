@@ -40,14 +40,32 @@ export async function lockerRentReport(db: Db): Promise<LockerRentReport> {
   let lockerhub_error: string | null = null;
   const last10 = (v: unknown) => String(v ?? '').replace(/\D/g, '').slice(-10);
 
-  // Every NCD locker carries at least the deposit auto-waiver, so fee_waivers
-  // covers them all; pledges + cheques folded in for completeness.
-  const ids = (await db.query<{ id: string }>(
+  // These three tables were assumed to cover every locker ("every NCD locker
+  // carries at least the deposit auto-waiver") — wrong for a tenant who simply
+  // paid rent and deposit online with no waiver, no NCD-backed deposit pledge
+  // and no cheque: they leave NO row in any of the three, so the report
+  // silently excluded them while Locker Tenants (which reads the full
+  // LockerHub roster, not these exception tables) showed them fine. The
+  // roster is the actual "every occupied locker" list; these tables only ever
+  // covered the exceptions to a clean online payment, so it is unioned in
+  // rather than relied on alone.
+  const localIds = (await db.query<{ id: string }>(
     `SELECT DISTINCT id FROM (
        SELECT lockerhub_application_id AS id FROM locker_fee_waivers
        UNION SELECT lockerhub_application_id FROM locker_deposit_links
        UNION SELECT lockerhub_application_id FROM locker_cheques
      ) t WHERE id IS NOT NULL ORDER BY id LIMIT 500`)).rows.map((r) => String(r.id));
+
+  let rosterIds: string[] = [];
+  if (lh.lockerHubConfigured()) {
+    try {
+      const { tenants } = await lh.lockerTenants();
+      rosterIds = (tenants as Array<Record<string, unknown>>)
+        .map((t) => String(t.application_id ?? '').trim())
+        .filter(Boolean);
+    } catch (e) { lockerhub_error = (e as Error).message; }
+  }
+  const ids = [...new Set([...localIds, ...rosterIds])];
 
   const waiverRows = (await db.query<Record<string, any>>(
     "SELECT lockerhub_application_id, category, waiver_pct, status, reason FROM locker_fee_waivers WHERE leg = 'rent'")).rows;

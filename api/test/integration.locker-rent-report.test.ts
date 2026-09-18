@@ -18,6 +18,13 @@ const APPS: Record<string, any> = {
   la_rr_premium: { application_no: 'APP-RR-1', locker_size: 'Large', branch_id: 'br1', allotment: { locker_number: 'L-1' }, name: 'Prem Cust', phone: '9800000001', legs: { rent: { amount: 20000, settled: true } } },
   la_rr_waived:  { application_no: 'APP-RR-2', locker_size: 'Medium', branch_id: 'br1', allotment: { locker_number: 'L-2' }, name: 'Waive Cust', phone: '9800000002', legs: { rent: { amount: 7000, settled: true } } },
   la_rr_paid:    { application_no: 'APP-RR-3', locker_size: 'Large', branch_id: 'br1', allotment: { locker_number: 'L-3' }, name: 'Pay Cust', phone: '9800000003', legs: { rent: { amount: 20000, settled: true } } },
+  // A tenant who simply paid online: no fee waiver, no NCD-backed deposit
+  // pledge, no cheque — nothing in any of the three NCD-side tables. Only the
+  // LockerHub roster (below) knows this tenancy exists at all.
+  la_rr_clean_online: { application_no: 'APP-RR-4', locker_size: 'Extra Large', branch_id: 'br1', allotment: { locker_number: 'L-4' }, name: 'Sathya', phone: '9363456687', legs: { rent: { amount: 20000, settled: true } } },
+  // Same shape, but the leg is genuinely NOT settled — must show unpaid, not
+  // be swept in as "paid" just for having a roster entry.
+  la_rr_clean_unpaid: { application_no: 'APP-RR-5', locker_size: 'Large', branch_id: 'br1', allotment: { locker_number: 'L-5' }, name: 'Owes Rent', phone: '9800000005', legs: { rent: { amount: 20000, settled: false } } },
 };
 
 beforeAll(async () => {
@@ -27,6 +34,12 @@ beforeAll(async () => {
     const url = new URL(req.url ?? '/', 'http://x');
     const send = (code: number, obj: unknown) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
     if (/\/branches$/.test(url.pathname)) return send(200, { branches: [{ id: 'br1', name: 'Dindigul' }] });
+    if (/\/locker-tenants$/.test(url.pathname)) {
+      return send(200, { tenants: [
+        { tenant_id: 't-clean-online', application_id: 'la_rr_clean_online' },
+        { tenant_id: 't-clean-unpaid', application_id: 'la_rr_clean_unpaid' },
+      ] });
+    }
     const m = url.pathname.match(/\/locker-applications\/([^/]+)$/);
     if (m) { const a = APPS[decodeURIComponent(m[1]!)]; return a ? send(200, a) : send(404, {}); }
     return send(404, {});
@@ -69,6 +82,24 @@ describe('locker rent report', () => {
     expect(r.json.totals.premium).toBeGreaterThanOrEqual(1);
     expect(r.json.totals.waived).toBeGreaterThanOrEqual(1);
     expect(r.json.totals.paid).toBeGreaterThanOrEqual(1);
+  });
+
+  it('includes a tenant with NO fee waiver, deposit pledge or cheque — only a LockerHub roster entry (regression: Sathya)', async () => {
+    const r = await (await admin()).get('/api/lockers/rent-report');
+    expect(r.status).toBe(200);
+    const by = new Map(r.json.rows.map((x: any) => [x.lockerhub_application_id, x]));
+    const sathya = by.get('la_rr_clean_online') as any;
+    expect(sathya).toBeTruthy();
+    expect(sathya.customer_name).toBe('Sathya');
+    expect(sathya.locker_no).toBe('L-4');
+    expect(sathya.rent_amount).toBe(20000);
+    expect(sathya.rent_status).toBe('paid');
+
+    // A roster-only tenant whose leg genuinely is NOT settled must show
+    // unpaid — the fix must not default every roster tenant to "paid".
+    const unpaid = by.get('la_rr_clean_unpaid') as any;
+    expect(unpaid).toBeTruthy();
+    expect(unpaid.rent_status).toBe('unpaid');
   });
 
   it('builds a non-empty xlsx', async () => {

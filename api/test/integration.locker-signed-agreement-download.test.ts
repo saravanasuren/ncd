@@ -38,6 +38,7 @@ beforeAll(async () => {
   lockerhub = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     const json = (code: number, o: unknown) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
+    if (url.pathname === '/branches') return json(200, { branches: [{ id: 'br_erode_2', name: 'Erode' }, { id: 'br_salem', name: 'Salem' }] });
     if (/\/esign\/status$/.test(url.pathname)) return json(200, lhEsign);
     if (/^\/agreements\/[^/]+\/pdf$/.test(url.pathname)) {
       res.writeHead(lhPdf.status, { 'Content-Type': lhPdf.status === 200 ? 'application/pdf' : 'application/json' });
@@ -175,5 +176,74 @@ describe('signed.pdf resolves the right source for every kind of signed locker',
     lhEsign = { found: false, status: null };
     const r = await admin.req('GET', url('LKR-DL-NOTHING'));
     expect(r.status).toBe(404);
+  });
+});
+
+describe('who may open a signed agreement', () => {
+  const as = async (email: string, password = 'Demo_1234') => {
+    const c = new Client(ctx.base);
+    await c.post('/api/auth/login', { email, password });
+    return c;
+  };
+
+  /** A signed locker with its file already ours, on the given LockerHub branch. */
+  async function localSigned(appId: string, branchId: string | null) {
+    const { saveBuffer } = await import('../src/lib/storage.js');
+    const stored = saveBuffer('locker-agreements', `${appId}.pdf`, PDF(`contract-${appId}`));
+    await ctx.db.query(
+      `INSERT INTO locker_agreement_signings (lockerhub_application_id, method, status, signed_doc_path, signed_doc_mime, signed_at)
+       VALUES ($1, 'esign', 'Signed', $2, 'application/pdf', now())`, [appId, stored.path]);
+    if (branchId) {
+      await ctx.db.query('INSERT INTO locker_applications (lockerhub_application_id, branch_id) VALUES ($1, $2)', [appId, branchId]);
+    }
+  }
+
+  let erodeStaff: Client;
+  beforeAll(async () => {
+    await localSigned('LKR-AZ-ERODE', 'br_erode_2');
+    await localSigned('LKR-AZ-SALEM', 'br_salem');
+    await localSigned('LKR-AZ-UNINDEXED', null);   // not on our index, and LockerHub does not know it either
+    const erodeId = Number((await ctx.db.query("SELECT id FROM branches WHERE code = 'ERD'")).rows[0]!.id);
+    const u = await admin.post('/api/users', { email: 'erode.staff@demo.local', full_name: 'Erode Staff', role: 'branch_staff', password: 'Demo_1234', branch_id: erodeId });
+    expect(u.status).toBeLessThan(300);
+    erodeStaff = await as('erode.staff@demo.local');
+  });
+
+  it("a branch_staff user opens their OWN branch's agreement", async () => {
+    const r = await erodeStaff.raw(url('LKR-AZ-ERODE'));
+    expect(r.status).toBe(200);
+    expect(r.buffer.toString()).toContain('contract-LKR-AZ-ERODE');
+  });
+
+  it("...and is refused another branch's, with no part of the document in the response", async () => {
+    const r = await erodeStaff.raw(url('LKR-AZ-SALEM'));
+    expect(r.status).toBe(403);
+    expect(r.buffer.toString()).toMatch(/another branch/i);
+    expect(r.buffer.toString()).not.toContain('contract-LKR-AZ-SALEM');
+  });
+
+  it("a restricted user is refused when the locker's branch cannot be determined (fails closed)", async () => {
+    const r = await erodeStaff.raw(url('LKR-AZ-UNINDEXED'));
+    expect(r.status).toBe(403);
+    expect(r.buffer.toString()).toMatch(/confirm which branch/i);
+  });
+
+  it("unrestricted roles (admin, branch manager) open any branch's", async () => {
+    for (const c of [admin, await as('bm@demo.local')]) {
+      for (const id of ['LKR-AZ-ERODE', 'LKR-AZ-SALEM', 'LKR-AZ-UNINDEXED']) {
+        expect((await c.raw(url(id))).status).toBe(200);
+      }
+    }
+  });
+
+  it('an agent (no lockers:enroll) is refused outright', async () => {
+    const r = await (await as('agent@demo.local')).raw(url('LKR-AZ-ERODE'));
+    expect(r.status).toBe(403);
+    expect(r.buffer.toString()).not.toContain('contract-');
+  });
+
+  it('nobody signed in gets 401', async () => {
+    const r = await new Client(ctx.base).raw(url('LKR-AZ-ERODE'));
+    expect(r.status).toBe(401);
   });
 });

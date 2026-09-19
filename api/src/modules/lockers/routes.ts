@@ -968,6 +968,10 @@ lockersRouter.post('/applications/:id/agreement/signed-upload', asyncHandler(asy
 // fetched from Digio on demand if the file never landed, or LockerHub's PDF for
 // an agreement they signed. See resolveSignedAgreement.
 lockersRouter.get('/applications/:id/agreement/signed.pdf', asyncHandler(async (req, res) => {
+  // Router-level lockers:enroll already keeps out agents and anyone signed out;
+  // this is the per-locker half: a branch_staff user reaches only their branch's.
+  const { assertLockerApplicationVisible } = await import('./branchScope.js');
+  await assertLockerApplicationVisible(getDb(), req.user!, String(req.params.id));
   const { resolveSignedAgreement } = await import('./agreements.js');
   const d = await resolveSignedAgreement(getDb(), req.user!, staffOf(req), String(req.params.id));
   const h = serveHeaders(d.mime, d.filename, 'signed-agreement.pdf');

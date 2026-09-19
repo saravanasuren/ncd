@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { LockerAuthorisedUsers } from '../components/LockerAuthorisedUsers.js';
+import { SignedAgreementActions } from '../components/SignedAgreementActions.js';
 
 /**
  * Complete locker profile (owner 2026-08-07) — everything about one locker in
@@ -78,9 +79,6 @@ export function LockerProfilePage() {
    */
   const signedOnLockerHub = ['signed', 'completed'].includes(String(pick(data.esign, 'status', 'esign_status') ?? '').toLowerCase());
   const isSigned = data.signing ? !!data.signing.is_signed : signedOnLockerHub;
-  const downloadHref = isSigned
-    ? `/api/lockers/applications/${encodeURIComponent(data.locker_application_id)}/agreement/signed.pdf`
-    : null;
 
   const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
     <div className="flex gap-3 py-1.5 border-b border-border last:border-0 text-sm">
@@ -244,9 +242,12 @@ export function LockerProfilePage() {
           {esignStatus ? String(esignStatus) : <span className="text-text-muted">not started</span>}
           {signMethod ? <span className="text-text-muted"> · {String(signMethod) === 'esign' ? 'e-Sign' : 'on paper'}</span> : null}
         </Row>
-        {downloadHref && (
+        {isSigned && (
           <Row label="Signed agreement">
-            <a href={downloadHref} target="_blank" rel="noreferrer" className="text-primary hover:underline">Download PDF</a>
+            <SignedAgreementActions
+              applicationId={String(data.locker_application_id)}
+              fileStem={`Locker-${String(lockerNo).replace(/[^\w.-]+/g, '_')}-signed-agreement`}
+              className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40" />
           </Row>
         )}
         <div className="mt-3">

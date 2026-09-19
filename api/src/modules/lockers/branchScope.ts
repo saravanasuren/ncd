@@ -17,6 +17,7 @@
  */
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
+import { errors } from '../../lib/errors.js';
 import * as lh from '../../integrations/lockerhub/client.js';
 
 export interface LockerBranchScope {
@@ -66,4 +67,39 @@ export async function lockerBranchScopeFor(db: Db, actor: AuthUser): Promise<Loc
   if (!matched.length) return UNRESTRICTED; // e.g. HO — not a physical locker branch
 
   return { restricted: true, branchIds: matched.map((b) => b.id), branches: matched };
+}
+
+/**
+ * May this user open THIS locker's documents?
+ *
+ * The scope above governs the list pages. A single locker's signed agreement is
+ * a different question and a stricter one: it carries the hirers' PAN, address,
+ * phone and nominee, and it is a legally binding contract. Restricting the
+ * roster while leaving the by-id document open meant a branch_staff user at one
+ * branch could fetch another branch's agreement by id (LOCKER-AUDIT-2026-09 P1).
+ *
+ * Unrestricted roles pass, as everywhere else. For a restricted user the
+ * locker's branch is read from OUR index first (no upstream call), and only from
+ * LockerHub when the index has none. Unlike the list pages this FAILS CLOSED
+ * when the branch cannot be determined: a missing tenants row is an
+ * inconvenience, a contract handed to the wrong branch is not.
+ */
+export async function assertLockerApplicationVisible(db: Db, actor: AuthUser, applicationId: string): Promise<void> {
+  const scope = await lockerBranchScopeFor(db, actor);
+  if (!scope.restricted) return;
+
+  let branchId: string | null = (await db.query<{ branch_id: string | null }>(
+    'SELECT branch_id FROM locker_applications WHERE lockerhub_application_id = $1', [applicationId])).rows[0]?.branch_id ?? null;
+  if (!branchId) {
+    try {
+      const a = await lh.getLockerApplication(applicationId) as Record<string, unknown>;
+      branchId = a?.branch_id != null ? String(a.branch_id) : null;
+    } catch { /* falls through to the refusal below */ }
+  }
+  if (!branchId) {
+    throw errors.forbidden("Couldn't confirm which branch this locker belongs to, so its agreement can't be opened from your login.");
+  }
+  if (!scope.branchIds.includes(String(branchId))) {
+    throw errors.forbidden("This locker belongs to another branch, so its agreement can't be opened from your login.");
+  }
 }

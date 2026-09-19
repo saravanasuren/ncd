@@ -54,7 +54,27 @@ async function request<T>(method: string, path: string, body?: unknown, retried 
   return json as T;
 }
 
+/** A binary GET (a PDF). Same session handling as `request` — refresh once on
+ *  an expired token — but the body is kept as a Blob, and a failure still comes
+ *  back as an ApiError carrying the server's own readable message. */
+async function requestBlob(path: string, retried = false): Promise<Blob> {
+  const res = await fetch(path, { credentials: 'same-origin', headers: BASE_HEADERS });
+  if (res.status === 401 && !retried && !path.startsWith('/api/auth/')) {
+    const ok = await refreshOnce();
+    if (ok) return requestBlob(path, true);
+    redirectToLogin();
+  }
+  if (!res.ok) {
+    let json: unknown = null;
+    try { json = await res.json(); } catch { /* not JSON */ }
+    const e = (json as { error?: { code: string; message: string; detail?: unknown } })?.error;
+    throw new ApiError(e?.code ?? 'ERROR', res.status, e?.message ?? res.statusText, e?.detail);
+  }
+  return res.blob();
+}
+
 export const api = {
+  blob: (p: string) => requestBlob(p),
   get: <T>(p: string) => request<T>('GET', p),
   post: <T>(p: string, b?: unknown) => request<T>('POST', p, b),
   put: <T>(p: string, b?: unknown) => request<T>('PUT', p, b),

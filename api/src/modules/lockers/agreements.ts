@@ -21,7 +21,7 @@
  */
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
-import { errors } from '../../lib/errors.js';
+import { errors, AppError } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { registerOnFinalApprove, registerOnReject } from '../approvals/service.js';
 
@@ -1080,6 +1080,83 @@ export async function getSignedDocument(
   const buffer = readStored(String(r.signed_doc_path));
   if (!buffer) return null;
   return { buffer, mime: (r.signed_doc_mime as string) ?? null, filename: (r.signed_doc_filename as string) ?? null };
+}
+
+/**
+ * The signed agreement for a locker, from wherever it actually lives.
+ *
+ * This is the ONE place that decides. It used to be decided in the browser, on
+ * each page, by guessing which id to build a link from — and each page guessed
+ * differently: the enrolment page and the profile page both fell back to
+ * LockerHub's esign_id, which for a locker signed on our own Digio names a
+ * document LockerHub never received ("Signed agreement not found"), and once
+ * that was "fixed" by refusing the fallback whenever a signing row existed, a
+ * locker signed on LockerHub's e-Sign (which NCD also records as a plain Signed
+ * row) lost its only working link. Two wrong answers to a question the server
+ * can simply answer:
+ *
+ *   1. A file we hold  → serve it. (Native chain, or a checker-approved scan.)
+ *   2. Native chain, signature recorded, but the file never landed → ask Digio
+ *      for it now, keep it, serve it. The download is best-effort at signing
+ *      time, so a bad minute at Digio otherwise leaves the agreement "e-Signed"
+ *      with nothing behind the button until someone finds the queue's Fetch.
+ *   3. Not native (LockerHub signed it) → LockerHub holds the PDF; stream it.
+ *
+ * Every failure ends in a message a person can act on, never a raw upstream
+ * error, and nothing that is not a PDF is ever returned as one.
+ */
+export async function resolveSignedAgreement(
+  db: Db, actor: AuthUser, staff: import('../../integrations/lockerhub/client.js').ActingStaff, applicationId: string,
+): Promise<{ buffer: Buffer; mime: string | null; filename: string | null }> {
+  const held = await getSignedDocument(db, applicationId);
+  if (held) return held;
+
+  const signing = await getSigning(db, applicationId);
+  const native = signing
+    ? Number((await db.query<{ n: string }>(
+        'SELECT count(*) AS n FROM digio_signing_sessions WHERE locker_agreement_signing_id = $1', [signing.id])).rows[0]?.n ?? 0) > 0
+    : false;
+
+  if (signing && native) {
+    const { refetchSignedCopy } = await import('../../integrations/digio/service.js');
+    const r = await refetchSignedCopy(db, signing.id);
+    if (r.ok) {
+      const again = await getSignedDocument(db, applicationId);
+      if (again) {
+        await writeAudit(db, {
+          actorId: actor.id, action: 'locker.agreement.signed-copy-refetched',
+          entityType: 'locker_agreement_signings', entityId: signing.id,
+          after: { application: applicationId, kind: r.kind, via: 'download' },
+        });
+        return again;
+      }
+    }
+    throw errors.notFound(
+      r.kind
+        ? 'The signed copy has not reached NCD yet — Digio did not hand it over just now. Try again in a few minutes, or use "Fetch signed copy".'
+        : 'Nobody has e-signed this agreement yet, so there is no signed copy.');
+  }
+
+  // Not on our Digio: LockerHub's own e-Sign is the only place a copy can be.
+  const lh = await import('../../integrations/lockerhub/client.js');
+  if (!lh.lockerHubConfigured()) throw errors.notFound('No signed agreement on file.');
+  let esign: Record<string, unknown> | null = null;
+  try { esign = await lh.esignStatus(applicationId) as Record<string, unknown>; }
+  catch (e) { throw errors.unavailable(`LockerHub could not be reached to fetch the signed copy (${(e as Error).message}). Try again shortly.`); }
+  const state = String(esign?.status ?? '').toLowerCase();
+  const esignId = String(esign?.esign_id ?? esign?.id ?? '').trim();
+  if (!(state === 'signed' || state === 'completed') || !esignId) throw errors.notFound('No signed agreement on file.');
+  try {
+    const { body } = await lh.agreementPdf(staff, esignId);
+    if (body.subarray(0, 5).toString('latin1') !== '%PDF-') throw errors.notFound('LockerHub returned something that is not a PDF for this agreement.');
+    return { buffer: body, mime: 'application/pdf', filename: `locker-agreement-${applicationId}.pdf` };
+  } catch (e) {
+    if (e instanceof AppError && e.code === 'NOT_FOUND') throw e;
+    if (e instanceof AppError && e.status === 404) {
+      throw errors.notFound('LockerHub says this agreement is signed but holds no signed copy of it (their record ' + esignId + '). It needs to be raised with LockerHub.');
+    }
+    throw e;
+  }
 }
 
 /**

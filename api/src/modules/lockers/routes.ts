@@ -963,11 +963,17 @@ lockersRouter.post('/applications/:id/agreement/signed-upload', asyncHandler(asy
   }));
 }));
 
-// The stored scan. For a physical signing THIS is the agreement on file, which
-// is why it is served from our own storage and not proxied to LockerHub.
+// THE signed agreement — the single link every screen points at. Resolved here,
+// not guessed in the browser: our own copy (native e-Sign or an approved scan),
+// fetched from Digio on demand if the file never landed, or LockerHub's PDF for
+// an agreement they signed. See resolveSignedAgreement.
 lockersRouter.get('/applications/:id/agreement/signed.pdf', asyncHandler(async (req, res) => {
-  const d = await getSignedDocument(getDb(), String(req.params.id));
-  if (!d) { res.status(404).json({ error: { code: 'NOT_FOUND', message: 'No signed agreement on file' } }); return; }
+  // Router-level lockers:enroll already keeps out agents and anyone signed out;
+  // this is the per-locker half: a branch_staff user reaches only their branch's.
+  const { assertLockerApplicationVisible } = await import('./branchScope.js');
+  await assertLockerApplicationVisible(getDb(), req.user!, String(req.params.id));
+  const { resolveSignedAgreement } = await import('./agreements.js');
+  const d = await resolveSignedAgreement(getDb(), req.user!, staffOf(req), String(req.params.id));
   const h = serveHeaders(d.mime, d.filename, 'signed-agreement.pdf');
   res.setHeader('Content-Type', h.type);
   res.setHeader('Content-Disposition', h.disposition);

@@ -5,6 +5,7 @@ import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { useConfirm } from '../components/Confirm.js';
 import { LockerAuthorisedUsers } from '../components/LockerAuthorisedUsers.js';
+import { SignedAgreementActions } from '../components/SignedAgreementActions.js';
 import {
   rentWaiverBreakdown, LOCKER_OPERATION_MANDATES, LOCKER_OPERATION_MANDATE_LABELS,
   type LockerOperationMandate,
@@ -1419,28 +1420,19 @@ export function LockerEnrollmentPage() {
                 {(() => {
                   const st = String(esign?.status ?? '').toLowerCase();
                   const url = esign?.auth_url || esign?.signing_url || esign?.url;
-                  // A16 is keyed on the AGREEMENT id, which is the esign_id
-                  // from the status — not the application id. Deliberately NOT
-                  // esign.signed_file_url: that is an internal SharePoint link
-                  // and 404s for staff (LockerHub, 2026-07-31).
-                  //
-                  // Only for a locker with NO row of our own: `esign` is
-                  // LockerHub's legacy e-Sign (A19), a different Digio account
-                  // from our joint-hirer chain (#421). Once `signing` exists,
-                  // its id belongs to a document LockerHub never received —
-                  // linking to it 404s (or worse, opens someone else's file).
-                  const esignId = esign?.esign_id || esign?.id;
-                  const doc = !signing && esignId ? `/api/lockers/agreements/${encodeURIComponent(String(esignId))}/pdf` : null;
                   const physical = signing?.method === 'physical';
 
                   // Signed, either way. The method is always named — a bare
                   // "signed" that hides which way it happened is the thing this
                   // whole change exists to stop (owner 2026-09-03).
-                  // Our OWN e-Sign stores the final both-signed PDF, downloadable
-                  // via the signed.pdf route — prefer it over LockerHub's copy.
-                  const ourSignedDoc = signing?.has_signed_doc
-                    ? `/api/lockers/applications/${encodeURIComponent(app.application_id)}/agreement/signed.pdf`
-                    : null;
+                  //
+                  // ONE resolver, and the SERVER decides what is behind the buttons:
+                  // our own copy, one fetched from Digio on demand, or LockerHub's
+                  // PDF for an agreement they signed. This used to pick an id here —
+                  // LockerHub's esign_id for one kind of locker, our own route for
+                  // another — and every rule for choosing was wrong for somebody:
+                  // "Signed agreement not found" for a locker signed on our Digio,
+                  // and no link at all for one signed on LockerHub's.
                   // Same rule as `doc` above: once a native-chain row exists, ITS
                   // status is authoritative. Without the `!signing` guard, a
                   // mid-chain agreement (e.g. only hirer 1 signed) still showed the
@@ -1454,11 +1446,11 @@ export function LockerEnrollmentPage() {
                       <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">
                         ✓ {signing?.label ?? 'e-Signed'}{signing?.signed_on ? ` · ${signing.signed_on}` : ''}
                       </span>
-                      {physical
-                        ? <span className="text-xs text-text-muted">Signed on paper — the scan is the agreement on file.</span>
-                        : (ourSignedDoc || doc)
-                          ? <a className={btnGhost} href={ourSignedDoc || doc!} target="_blank" rel="noopener noreferrer">↓ Signed agreement</a>
-                          : <span className="text-xs text-text-muted">Signed — the copy is on file.</span>}
+                      {physical && <span className="text-xs text-text-muted">Signed on paper — the scan is the agreement on file.</span>}
+                      <SignedAgreementActions
+                        applicationId={String(app.application_id)}
+                        fileStem={`Locker-${String(app.allotment?.locker_number ?? app.application_id).replace(/[^\w.-]+/g, '_')}-signed-agreement`}
+                        className={btnGhost} />
                     </div>
                   );
 

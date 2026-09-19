@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { LockerAuthorisedUsers } from '../components/LockerAuthorisedUsers.js';
+import { SignedAgreementActions } from '../components/SignedAgreementActions.js';
 
 /**
  * Complete locker profile (owner 2026-08-07) — everything about one locker in
@@ -69,23 +70,15 @@ export function LockerProfilePage() {
   const esignStatus = ourStatus ?? pick(data.esign, 'status', 'esign_status') ?? pick(lh, 'esign_status') ?? null;
   const signMethod = pick(data.signing, 'method') ?? null;
   /**
-   * Same "OUR record first" rule as esignStatus/signMethod above, missed here
-   * originally. `data.esign.esign_id` is LockerHub's A19 reference — a
-   * document their side hosts. Since #421 a native-chain locker is signed
-   * through OUR OWN Digio account and the fully-signed file lives in OUR
-   * storage (locker_agreement_signings.signed_doc_path), never handed to
-   * LockerHub — so this id names a document that, from their side, does not
-   * exist. Hitting it 404s upstream with "Signed agreement not found", which
-   * is literally true for them and misleading for us (owner 2026-09-18: the
-   * enrolment page's identical bug was fixed, this page's copy was not).
-   * `!data.signing` scopes the legacy id to lockers with no native row at all.
+   * ONE link; the server decides what is behind it (our own copy, one fetched
+   * from Digio on demand, or LockerHub's PDF for an agreement they signed).
+   * This page used to build the link from LockerHub's esign_id, then from
+   * whichever record existed — each rule wrong for some kind of locker
+   * ("Signed agreement not found" for one signed on our Digio, no link at all
+   * for one signed on LockerHub's). See resolveSignedAgreement.
    */
-  const ourSignedDoc = data.signing?.has_signed_doc
-    ? `/api/lockers/applications/${encodeURIComponent(data.locker_application_id)}/agreement/signed.pdf`
-    : null;
-  const legacyEsignId = !data.signing ? pick(data.esign, 'esign_id', 'id') : null;
-  const legacyDoc = legacyEsignId ? `/api/lockers/agreements/${encodeURIComponent(String(legacyEsignId))}/pdf` : null;
-  const downloadHref = ourSignedDoc || legacyDoc;
+  const signedOnLockerHub = ['signed', 'completed'].includes(String(pick(data.esign, 'status', 'esign_status') ?? '').toLowerCase());
+  const isSigned = data.signing ? !!data.signing.is_signed : signedOnLockerHub;
 
   const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
     <div className="flex gap-3 py-1.5 border-b border-border last:border-0 text-sm">
@@ -249,13 +242,13 @@ export function LockerProfilePage() {
           {esignStatus ? String(esignStatus) : <span className="text-text-muted">not started</span>}
           {signMethod ? <span className="text-text-muted"> · {String(signMethod) === 'esign' ? 'e-Sign' : 'on paper'}</span> : null}
         </Row>
-        {downloadHref && (
+        {isSigned && (
           <Row label="Signed agreement">
-            <a href={downloadHref} target="_blank" rel="noreferrer" className="text-primary hover:underline">Download PDF</a>
+            <SignedAgreementActions
+              applicationId={String(data.locker_application_id)}
+              fileStem={`Locker-${String(lockerNo).replace(/[^\w.-]+/g, '_')}-signed-agreement`}
+              className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40" />
           </Row>
-        )}
-        {!downloadHref && data.signing?.is_signed && (
-          <Row label="Signed agreement"><span className="text-text-muted">Signed — the copy is on file.</span></Row>
         )}
         <div className="mt-3">
           <Link to={`/app/locker-enrollment?application_id=${encodeURIComponent(data.locker_application_id)}`} className="text-xs text-primary hover:underline">

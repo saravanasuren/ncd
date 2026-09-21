@@ -72,10 +72,28 @@ const safeJson = (s) => { try { return JSON.parse(s); } catch { return null; } }
  * @param {{ db: { query: Function }, appId: string, serviceDir: string, otherDirs?: string[],
  *           digio?: { base: string, id: string, secret: string } | null }} p
  */
-export async function diagnose({ db, appId, serviceDir, otherDirs = [], digio = null }) {
+export async function diagnose({ db, appId: given, serviceDir, otherDirs = [], digio = null }) {
   const out = [];
   const say = (s = '') => out.push(s);
+  let appId = String(given).trim();
   const result = { appId, failurePoint: null, signings: [], sessions: [] };
+
+  // "APP-2026-01312" is the number people SEE; every route and table is keyed on
+  // LockerHub's internal id ("mu5izyh19z2ssnr", the ?application_id= in the URL).
+  if (/^APP-/i.test(appId)) {
+    const hit = (await db.query('SELECT lockerhub_application_id FROM locker_applications WHERE application_no = $1', [appId])).rows;
+    if (hit.length === 1) {
+      say(`${appId} is the display number; its LockerHub application id is ${hit[0].lockerhub_application_id}`);
+      appId = hit[0].lockerhub_application_id;
+      result.appId = appId;
+    } else {
+      say(`${appId} looks like a display number, but ${hit.length ? `${hit.length} applications share it` : "NCD's index has no application with that number (it fills in when the page is opened or refreshed)"}.`);
+      say('Use the id in the address bar instead:  …/locker-enrollment?application_id=<THIS>');
+      result.failurePoint = 'NEEDS-ID: re-run with the application_id from the URL, not the APP- number.';
+      say(''); say(`FAILURE POINT: ${result.failurePoint}`);
+      return { ...result, text: out.join('\n') };
+    }
+  }
 
   say(`Agreement ${appId}`);
   say(`The service reads files from: ${serviceDir}`);

@@ -103,6 +103,20 @@ describe('each way the retrieval can fail is a different verdict', () => {
     expect((await run(appId)).failurePoint).toMatch(/NOT A PDF/);
   });
 
+  it('accepts the APP- display number the screen shows, and resolves it to the id', async () => {
+    const { appId } = await seedSigning({ path: null, sessions: [{ status: 'requested' }] });
+    await ctx.db.query('INSERT INTO locker_applications (lockerhub_application_id, application_no) VALUES ($1, $2)', [appId, 'APP-2026-09999']);
+    const r = await run('APP-2026-09999');
+    expect(r.text).toContain(`APP-2026-09999 is the display number; its LockerHub application id is ${appId}`);
+    expect(r.failurePoint).toMatch(/NO SIGNATURE RECORDED/);       // it went on to diagnose the real agreement
+  });
+
+  it('an APP- number NCD cannot resolve says to use the id from the URL, instead of "no record"', async () => {
+    const r = await run('APP-2026-00000');
+    expect(r.failurePoint).toMatch(/NEEDS-ID/);
+    expect(r.text).toMatch(/application_id=/);
+  });
+
   it('an id with no signing record says so', async () => {
     expect((await run('LKR-DIAG-NOPE')).failurePoint).toMatch(/NO-RECORD/);
   });

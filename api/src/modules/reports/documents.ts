@@ -491,3 +491,97 @@ export async function staffMonthSeriesXlsx(
 
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
+
+/**
+ * The Leads page as a workbook (owner 2026-09-21: "in leads page - get me a
+ * download button to download the leads report in excel").
+ *
+ *   Summary       — counts and expected amount by status, what they want, source
+ *   Leads         — one row per lead, with what the table hides: who created it,
+ *                   the branch, what it converted into, and where follow-up stands
+ *   App prospects — the page's other tab: app profiles with no investment yet
+ *
+ * Phone numbers are written as TEXT. As numbers Excel turns 9787239640 into
+ * 9.79E+09 and drops a leading zero, and a phone list nobody can dial is worse
+ * than none.
+ */
+export async function leadsReportXlsx(
+  leads: import('../leads/service.js').LeadReportRow[],
+  prospects: Array<{ customer_code: string; full_name: string; phone: string | null; district: string | null; kyc_status: string | null; created_at: string }>,
+  asOf: string,
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const money = '#,##0.00';
+  const interest = (l: (typeof leads)[number]) => (l.lead_type === 'locker' ? 'Locker' : 'NCD');
+  const want = (l: (typeof leads)[number]) =>
+    (l.lead_type === 'locker' ? (l.locker_size ?? '') : (l.interested_scheme ?? ''));
+  const amt = (l: (typeof leads)[number]) => Number(l.expected_amount ?? 0);
+
+  // ── Summary ────────────────────────────────────────────────────────────────
+  const sum = wb.addWorksheet('Summary');
+  sum.addRow(['Leads report']).font = { bold: true, size: 14 };
+  sum.addRow([`As on ${ddmmyyyy(asOf)} · ${leads.length} lead${leads.length === 1 ? '' : 's'}`]);
+  sum.addRow([]);
+  const group = (title: string, keyOf: (l: (typeof leads)[number]) => string) => {
+    sum.addRow([title, 'Leads', 'Expected Amount']).eachCell((c) => { c.font = { bold: true }; });
+    const m = new Map<string, { n: number; amt: number }>();
+    for (const l of leads) {
+      const k = keyOf(l) || '(not set)';
+      const e = m.get(k) ?? { n: 0, amt: 0 };
+      e.n += 1; e.amt += amt(l);
+      m.set(k, e);
+    }
+    for (const [k, e] of [...m.entries()].sort((a, b) => b[1].n - a[1].n)) sum.addRow([k, e.n, e.amt]);
+    sum.addRow([]);
+  };
+  if (leads.length) {
+    group('Status', (l) => l.status);
+    group('Interested in', interest);
+    group('Source', (l) => l.source ?? '');
+    const t = sum.addRow(['TOTAL', leads.length, leads.reduce((x, l) => x + amt(l), 0)]);
+    t.eachCell((c) => { c.font = { bold: true }; });
+  } else {
+    sum.addRow(['There are no leads to report.']);
+  }
+  sum.columns = [{ width: 30 }, { width: 10 }, { width: 18, style: { numFmt: money } }];
+
+  // ── Leads ──────────────────────────────────────────────────────────────────
+  const ws = wb.addWorksheet('Leads');
+  ws.addRow([
+    'Created On', 'Name', 'Phone', 'Place', 'District', 'Category', 'Source', 'Referred By',
+    'Interested In', 'Scheme / Locker Size', 'Expected Amount', 'Follow-up Date', 'Status',
+    'Created By', 'Branch', 'Converted To', 'Notes', 'Follow-up Notes', 'Latest Note', 'Latest Note On',
+  ]).eachCell((c) => { c.font = { bold: true }; });
+  for (const l of leads) {
+    ws.addRow([
+      ddmmyyyy(l.created_on), l.full_name, l.phone ?? '', l.place ?? '', l.district ?? '',
+      l.category ?? '', l.source ?? '', l.referred_by_text ?? '',
+      interest(l), want(l), l.expected_amount == null ? '' : amt(l), ddmmyyyy(l.follow_up_date), l.status,
+      l.created_by ?? '', l.branch ?? '', l.converted_customer_code ?? '',
+      l.notes ?? '', l.note_count, l.last_note ?? '', ddmmyyyy(l.last_note_on),
+    ]);
+  }
+  if (!leads.length) ws.addRow(['There are no leads to report.']);
+  ws.columns = [
+    { width: 12 }, { width: 26 }, { width: 14, style: { numFmt: '@' } }, { width: 16 }, { width: 14 },
+    { width: 14 }, { width: 16 }, { width: 18 }, { width: 12 }, { width: 20 },
+    { width: 16, style: { numFmt: money } }, { width: 14 }, { width: 14 },
+    { width: 22 }, { width: 16 }, { width: 14 }, { width: 40 }, { width: 10 }, { width: 50 }, { width: 14 },
+  ];
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  if (leads.length) ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 20 } };
+
+  // ── App prospects ──────────────────────────────────────────────────────────
+  const ap = wb.addWorksheet('App prospects');
+  ap.addRow(['Customer Code', 'Name', 'Phone', 'District', 'KYC', 'Added On'])
+    .eachCell((c) => { c.font = { bold: true }; });
+  for (const p of prospects) {
+    ap.addRow([p.customer_code, p.full_name, p.phone ?? '', p.district ?? '', p.kyc_status ?? '',
+      ddmmyyyy(String(p.created_at).slice(0, 10))]);
+  }
+  if (!prospects.length) ap.addRow(['No app prospects.']);
+  ap.columns = [{ width: 15 }, { width: 26 }, { width: 14, style: { numFmt: '@' } }, { width: 14 }, { width: 12 }, { width: 12 }];
+  ap.views = [{ state: 'frozen', ySplit: 1 }];
+
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}

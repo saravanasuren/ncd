@@ -114,7 +114,10 @@ export function LeadsPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [err, setErr] = useState('');
   const [notesFor, setNotesFor] = useState<number | null>(null);
-  const [edit, setEdit] = useState<{ id: number; status: string; follow_up_date: string; expected_amount: string } | null>(null);
+  /** The lead open in the full edit form (owner 2026-09-21: "i need the full
+   *  editing thing where i can edit everything about the lead"). It replaces
+   *  the old inline edit, which offered only status, follow-up and amount. */
+  const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [tab, setTab] = useState<string>('all');
   const [creating, setCreating] = useState(false);
   const [q, setQ] = useState('');
@@ -163,16 +166,55 @@ export function LeadsPage() {
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
 
+  // Every field goes, null where a box was emptied — so a phone, a date or an
+  // amount can be taken OFF a lead, not only changed. The server clears the
+  // scheme/size that no longer applies when the type changes.
   const update = useMutation({
-    mutationFn: (e: { id: number; status: string; follow_up_date: string; expected_amount: string }) =>
-      api.put(`/api/leads/${e.id}`, {
-        status: e.status,
-        ...(e.follow_up_date ? { follow_up_date: e.follow_up_date } : {}),
-        ...(e.expected_amount ? { expected_amount: Number(e.expected_amount) } : {}),
-      }),
-    onSuccess: () => { setEdit(null); qc.invalidateQueries({ queryKey: ['leads'] }); },
+    mutationFn: (id: number) => {
+      const v = (x: string) => (x.trim() ? x.trim() : null);
+      return api.put(`/api/leads/${id}`, {
+        full_name: form.full_name.trim(),
+        phone: v(form.phone), place: v(form.place), district: v(form.district),
+        category: v(form.category), source: v(form.source), referred_by_text: v(form.referred_by_text),
+        lead_type: form.lead_type,
+        interested_scheme: form.lead_type === 'ncd' ? v(form.interested_scheme) : null,
+        locker_size: form.lead_type === 'locker' ? v(form.locker_size) : null,
+        expected_amount: form.expected_amount.trim() ? Number(form.expected_amount) : null,
+        follow_up_date: v(form.follow_up_date),
+        ...(form.status ? { status: form.status } : {}),
+        notes: v(form.notes),
+      });
+    },
+    onSuccess: () => { closeForm(); qc.invalidateQueries({ queryKey: ['leads'] }); },
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
   });
+
+  /** Open the full form on an existing lead, every field filled in. */
+  const openEdit = (l: Lead) => {
+    setErr('');
+    setForm({
+      full_name: l.full_name ?? '', phone: l.phone ?? '', place: l.place ?? '', district: l.district ?? '',
+      category: l.category ?? '', source: l.source ?? '', referred_by_text: l.referred_by_text ?? '',
+      lead_type: l.lead_type === 'locker' ? 'locker' : 'ncd',
+      interested_scheme: l.interested_scheme ?? '', locker_size: l.locker_size ?? '',
+      expected_amount: l.expected_amount != null ? String(Number(l.expected_amount)) : '',
+      follow_up_date: l.follow_up_date ? String(l.follow_up_date).slice(0, 10) : '',
+      status: l.status ?? '', notes: l.notes ?? '',
+    });
+    setEditingLead(l);
+  };
+  /** Close the form. An edit is thrown away so the next "Create" starts blank;
+   *  a half-typed NEW lead is kept, as it always was. */
+  const closeForm = () => {
+    setErr('');
+    if (editingLead) setForm(EMPTY_FORM);
+    setEditingLead(null);
+    setCreating(false);
+  };
+  /** A config list plus the value already on the lead, so a lead saved before
+   *  a value was removed from the list still SHOWS it — a select that cannot
+   *  display the current value reads as blank and invites overwriting it. */
+  const withCurrent = (list: string[], current: string) => (current && !list.includes(current) ? [current, ...list] : list);
 
   // Converting a lead now opens the FULL customer form (name pre-filled) rather
   // than creating a bare customer. On save we link the lead to the new customer.
@@ -214,13 +256,13 @@ export function LeadsPage() {
         </div>
       </div>
 
-      {can('leads:create') && creating && (
+      {((can('leads:create') && creating) || (can('leads:update') && editingLead)) && (
         <div className="fixed inset-0 z-40 bg-black/40 flex items-start justify-center overflow-y-auto py-8 px-4"
-          onClick={() => { setErr(''); setCreating(false); }}>
+          onClick={closeForm}>
           <div className="bg-surface border border-border rounded-lg shadow-lg w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-border">
-              <h2 className="text-base font-bold m-0">New lead</h2>
-              <button onClick={() => { setErr(''); setCreating(false); }} className="text-text-muted hover:text-text text-lg leading-none" aria-label="Close">✕</button>
+              <h2 className="text-base font-bold m-0">{editingLead ? `Edit lead — ${editingLead.full_name}` : 'New lead'}</h2>
+              <button onClick={closeForm} className="text-text-muted hover:text-text text-lg leading-none" aria-label="Close">✕</button>
             </div>
             <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
               {/* Name leads (owner 2026-07-23) — it's the required field, and
@@ -231,25 +273,28 @@ export function LeadsPage() {
               <Field label="Phone number">
                 <input className={`${inp} w-full`} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
               </Field>
+              <Field label="Place">
+                <input className={`${inp} w-full`} value={form.place} onChange={(e) => setForm({ ...form, place: e.target.value })} />
+              </Field>
               <Field label="District">
                 <input className={`${inp} w-full`} value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} />
               </Field>
               <Field label="Category">
                 <select className={`${inp} w-full`} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
                   <option value="">Select…</option>
-                  {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+                  {withCurrent(CATEGORIES, form.category).map((c) => <option key={c}>{c}</option>)}
                 </select>
               </Field>
               <Field label="Source">
                 <select className={`${inp} w-full`} value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}>
                   <option value="">Select…</option>
-                  {SOURCES.map((s) => <option key={s}>{s}</option>)}
+                  {withCurrent(SOURCES, form.source).map((s) => <option key={s}>{s}</option>)}
                 </select>
               </Field>
               <Field label="Referred by">
                 <select className={`${inp} w-full`} value={form.referred_by_text} onChange={(e) => setForm({ ...form, referred_by_text: e.target.value })}>
                   <option value="">Select…</option>
-                  {REFERRED_BY.map((r) => <option key={r}>{r}</option>)}
+                  {withCurrent(REFERRED_BY, form.referred_by_text).map((r) => <option key={r}>{r}</option>)}
                 </select>
               </Field>
               <Field label="Interested in" required>
@@ -267,7 +312,7 @@ export function LeadsPage() {
                 <Field label="Interested scheme">
                   <select className={`${inp} w-full`} value={form.interested_scheme} onChange={(e) => setForm({ ...form, interested_scheme: e.target.value })}>
                     <option value="">Select…</option>
-                    {SCHEMES.map((s) => <option key={s}>{s}</option>)}
+                    {withCurrent(SCHEMES, form.interested_scheme).map((s) => <option key={s}>{s}</option>)}
                   </select>
                 </Field>
               ) : (
@@ -286,8 +331,8 @@ export function LeadsPage() {
               </Field>
               <Field label="Status">
                 <select className={`${inp} w-full`} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                  <option value="">Default (New)</option>
-                  {STATUSES.map((s) => <option key={s}>{s}</option>)}
+                  {!editingLead && <option value="">Default (New)</option>}
+                  {withCurrent(STATUSES, form.status).map((s) => <option key={s}>{s}</option>)}
                 </select>
               </Field>
               <div className="sm:col-span-2">
@@ -296,23 +341,26 @@ export function LeadsPage() {
                     value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
                 </Field>
               </div>
-              {dup.data?.duplicate && (
+              {dup.data?.duplicate && (!editingLead || phone !== (editingLead.phone ?? '').trim()) && (
                 <div className="sm:col-span-2 text-xs text-warn">
-                  ⚠ This phone belongs to existing customer <button className="font-mono underline" onClick={() => nav(`/app/customers/${dup.data!.customer!.id}`)}>{dup.data.customer!.customer_code}</button> ({dup.data.customer!.full_name}) — consider a handover request instead of a new lead.
+                  ⚠ This phone belongs to existing customer <button className="font-mono underline" onClick={() => nav(`/app/customers/${dup.data!.customer!.id}`)}>{dup.data.customer!.customer_code}</button> ({dup.data.customer!.full_name}){editingLead ? '.' : ' — consider a handover request instead of a new lead.'}
                 </div>
               )}
             </div>
             {err && <div className="text-xs text-danger px-5 pb-1">{err}</div>}
             <div className="flex items-center justify-end gap-2 px-5 py-3.5 border-t border-border">
-              <button onClick={() => { setErr(''); setCreating(false); }} className="text-sm text-text-muted hover:underline px-3 py-1.5">Cancel</button>
-              <button disabled={!form.full_name || create.isPending} onClick={() => { setErr(''); create.mutate(); }}
-                className="bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-4 py-1.5 text-sm font-semibold">Save lead</button>
+              <button onClick={closeForm} className="text-sm text-text-muted hover:underline px-3 py-1.5">Cancel</button>
+              <button disabled={!form.full_name.trim() || create.isPending || update.isPending}
+                onClick={() => { setErr(''); if (editingLead) update.mutate(editingLead.id); else create.mutate(); }}
+                className="bg-primary hover:bg-primary-hover disabled:opacity-40 text-white rounded px-4 py-1.5 text-sm font-semibold">
+                {editingLead ? 'Save changes' : 'Save lead'}
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {err && !creating && <div className="text-xs text-danger mb-3">{err}</div>}
+      {err && !creating && !editingLead && <div className="text-xs text-danger mb-3">{err}</div>}
 
       <input
         className="w-full max-w-md px-3 py-1.5 text-sm border border-border-strong rounded outline-none focus:border-primary mb-4"
@@ -336,33 +384,17 @@ export function LeadsPage() {
           { key: 'follow_up_date', header: 'Follow-up', value: (l) => l.follow_up_date ?? '',
             render: (l) => l.follow_up_date ? <span className="mono text-xs">{String(l.follow_up_date).slice(0, 10)}</span> : '—' },
           { key: 'status', header: 'Status',
-            render: (l) => edit?.id === l.id ? (
-              <select className={`${inp} text-xs`} value={edit.status} onChange={(e) => setEdit({ ...edit, status: e.target.value })}>
-                {[...new Set([l.status, ...STATUSES])].map((s) => <option key={s}>{s}</option>)}
-              </select>
-            ) : <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.status}</span> },
+            render: (l) => <span className="text-xs rounded px-1.5 py-0.5 bg-bg">{l.status}</span> },
           { key: 'actions', header: '', sortable: false, filterable: false, align: 'right', tdClassName: 'whitespace-nowrap',
             render: (l) => {
-              if (edit?.id === l.id) {
-                return (
-                  <span className="inline-flex items-center gap-1.5">
-                    <input className={`${inp} text-xs`} type="date" title="Follow-up date" value={edit.follow_up_date} onChange={(e) => setEdit({ ...edit, follow_up_date: e.target.value })} />
-                    <input className={`${inp} text-xs w-24`} type="number" placeholder="Expected ₹" value={edit.expected_amount} onChange={(e) => setEdit({ ...edit, expected_amount: e.target.value })} />
-                    <button disabled={update.isPending} onClick={() => { setErr(''); update.mutate(edit); }}
-                      className="text-xs bg-primary text-white rounded px-2.5 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Save</button>
-                    <button onClick={() => setEdit(null)} className="text-xs text-text-muted hover:underline">Cancel</button>
-                  </span>
-                );
-              }
               return (
                 <span className="inline-flex items-center gap-2.5">
                   <button onClick={() => setNotesFor(notesFor === l.id ? null : l.id)} className="text-xs text-primary hover:underline">Notes</button>
                   {can('leads:update') && l.status !== 'Converted' && (
-                    <button onClick={() => { setErr(''); setEdit({ id: l.id, status: l.status, follow_up_date: l.follow_up_date ? String(l.follow_up_date).slice(0, 10) : '', expected_amount: l.expected_amount ?? '' }); }}
-                      className="text-xs text-primary hover:underline">Edit</button>
+                    <button onClick={() => openEdit(l)} className="text-xs text-primary hover:underline">Edit</button>
                   )}
                   {can('leads:convert') && can('customers:create') && l.status !== 'Converted' && (
-                    <button onClick={() => { setErr(''); setEdit(null); setConvertLead(l); }}
+                    <button onClick={() => { setErr(''); setConvertLead(l); }}
                       className="text-xs text-primary hover:underline">Convert →</button>
                   )}
                 </span>

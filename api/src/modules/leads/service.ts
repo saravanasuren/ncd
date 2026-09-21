@@ -77,13 +77,41 @@ export async function createLead(db: Db, actor: AuthUser, input: CreateLeadInput
   });
 }
 
-export async function updateLead(db: Db, actor: AuthUser, id: number, input: Partial<CreateLeadInput>) {
+/** A lead field as an edit may send it: a value, or null to clear it. */
+export type LeadEditInput = { [K in keyof CreateLeadInput]?: CreateLeadInput[K] | null };
+
+/**
+ * Refuse a lead this person cannot see — the SAME rule as listLeads: read-all
+ * sees everything, everyone else their own scope.
+ *
+ * updateLead had no check at all. The screen only offers a person their own
+ * leads, but the API took any id, so a branch user could rewrite another
+ * branch's lead — its phone number included — with one request. That mattered
+ * less while Edit changed three fields; with the full edit it is every field.
+ * Not found rather than forbidden, so an id outside scope reveals nothing.
+ */
+async function assertLeadInScope(db: Db, actor: AuthUser, id: number): Promise<void> {
+  if (actor.permissions.includes('leads:read-all')) return;
+  const sc = scopeWhere(scopeFor(actor), SCOPE_COLS, 1);
+  const hit = await db.query(`SELECT 1 FROM investor_leads l WHERE l.id = $1 AND ${sc.sql}`, [id, ...sc.params]);
+  if (!hit.rowCount) throw errors.notFound('Lead not found');
+}
+
+export async function updateLead(db: Db, actor: AuthUser, id: number, raw: LeadEditInput) {
   const fields = ['full_name', 'phone', 'place', 'district', 'category', 'source', 'referred_by_text', 'lead_type', 'interested_scheme', 'locker_size', 'expected_amount', 'follow_up_date', 'status', 'notes'];
+  // A blank text box means "nothing here", not a stored empty string.
+  const input: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) input[k] = typeof v === 'string' && v.trim() === '' ? null : v;
+  // The same pairing create enforces: an NCD lead carries a scheme, a locker
+  // lead a size, never both. Switching type clears the one that no longer applies.
+  if (input.lead_type === 'ncd') input.locker_size = null;
+  if (input.lead_type === 'locker') input.interested_scheme = null;
+  await assertLeadInScope(db, actor, id);
   await db.withTx(async (tx) => {
     const cur = (await tx.query('SELECT * FROM investor_leads WHERE id = $1', [id])).rows[0];
     if (!cur) throw errors.notFound('Lead not found');
     const sets: string[] = []; const params: unknown[] = []; let p = 0;
-    for (const f of fields) if ((input as Record<string, unknown>)[f] !== undefined) { sets.push(`${f} = $${++p}`); params.push((input as Record<string, unknown>)[f]); }
+    for (const f of fields) if (input[f] !== undefined) { sets.push(`${f} = $${++p}`); params.push(input[f]); }
     if (!sets.length) return;
     sets.push('updated_at = now()'); params.push(id);
     await tx.query(`UPDATE investor_leads SET ${sets.join(', ')} WHERE id = $${++p}`, params);

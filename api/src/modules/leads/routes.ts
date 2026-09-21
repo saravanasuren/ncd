@@ -35,8 +35,34 @@ const createSchema = z.object({
 leadsRouter.post('/', requirePermission('leads:create'),
   asyncHandler(async (req, res) => res.status(201).json(await s.createLead(getDb(), req.user!, createSchema.parse(req.body)))));
 
+/**
+ * The full edit (owner 2026-09-21: "i need the full editing thing where i can
+ * edit everything about the lead ... reflected across every user").
+ *
+ * Every field, and — unlike create — any of them can be CLEARED: null empties
+ * it. `createSchema.partial()` could not say that, so a follow-up date or an
+ * amount, once set, could never be taken off again, and an empty string sent
+ * for a date was a database error.
+ */
+const updateSchema = z.object({
+  full_name: z.string().trim().min(1).optional(),
+  phone: z.string().nullable().optional(),
+  place: z.string().nullable().optional(),
+  district: z.string().nullable().optional(),
+  category: z.string().nullable().optional(),
+  source: z.string().nullable().optional(),
+  referred_by_text: z.string().nullable().optional(),
+  lead_type: z.enum(['ncd', 'locker']).optional(),
+  interested_scheme: z.string().nullable().optional(),
+  locker_size: z.enum(['Medium', 'L', 'XL']).nullable().optional(),
+  expected_amount: z.number().nonnegative().nullable().optional(),
+  follow_up_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'A date as YYYY-MM-DD').nullable().optional(),
+  status: z.string().trim().min(1).optional(),
+  notes: z.string().nullable().optional(),
+});
+
 leadsRouter.put('/:id', requirePermission('leads:update'),
-  asyncHandler(async (req, res) => { await s.updateLead(getDb(), req.user!, Number(req.params.id), createSchema.partial().parse(req.body)); res.json({ ok: true }); }));
+  asyncHandler(async (req, res) => { await s.updateLead(getDb(), req.user!, Number(req.params.id), updateSchema.parse(req.body)); res.json({ ok: true }); }));
 
 leadsRouter.post('/:id/notes', requirePermission('leads:update'),
   asyncHandler(async (req, res) => { const { note } = z.object({ note: z.string().min(1) }).parse(req.body); await s.addNote(getDb(), req.user!, Number(req.params.id), note); res.status(201).json({ ok: true }); }));

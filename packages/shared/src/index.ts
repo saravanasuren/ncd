@@ -7,5 +7,6 @@ export * from './whatsapp.js';
 export * from './validation.js';
 export * from './customerFields.js';
 export * from './lockerRent.js';
+export * from './rentStatus.js';
 export * from './escrow.js';
 export * from './paymentMethods.js';

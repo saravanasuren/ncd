@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { formatINR } from '@new-wealth/shared';
+import { formatINR, type RentStatus } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
+import { RentStatusBadge } from '../components/RentStatusBadge.js';
 import { useAuth } from '../auth/AuthContext.js';
 import { useConfirm } from '../components/Confirm.js';
 
@@ -51,7 +52,8 @@ interface Tenant {
   lease_start?: string | null; lockers_held?: number | null; open_applications?: number | null;
   customer_id: number | null; customer_code: string | null;
   pledged_amount: number; cheque_pending: boolean; ncd_backed: boolean; unresolved: boolean;
-  rent_status?: 'paid' | 'waived' | 'premium' | null;
+  rent_status?: RentStatus | null;
+  rent_reason?: string | null;
   waiver_id: number | null; waiver_status: string | null; waiver_reason: string | null;
   linked_manually?: boolean; override_key?: string | null;
   /** The locker agreement is signed, and by which route (owner 2026-09-04). */
@@ -334,10 +336,8 @@ export function LockerTenantsPage() {
                   </td>
                   <td className="py-2 pr-3 text-right mono">{r.annual_rent != null ? formatINR(r.annual_rent) : '—'}</td>
                   <td className="py-2 pr-3">
-                    {r.rent_status === 'premium' ? <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">★ Premium</span>
-                      : r.rent_status === 'waived' ? <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn">Waived</span>
-                      : r.rent_status === 'paid' ? <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">Paid</span>
-                      : <span className="text-text-muted text-xs">—</span>}
+                    <RentStatusBadge status={r.rent_status} reason={r.rent_reason} />
+                    {r.rent_reason && <div className="text-[11px] text-text-muted">{r.rent_reason}</div>}
                   </td>
                   <td className="py-2 pr-3 text-xs text-text-muted whitespace-nowrap">
                     {(r.lease_start ?? r.allotted_on) ? <>{r.lease_start ?? r.allotted_on}{r.lease_expires_on ? <> → {r.lease_expires_on}</> : null}</> : '—'}

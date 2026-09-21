@@ -40,6 +40,9 @@ const APPS: Record<string, any | null> = {
   rs_premium_pending:    app('rs_premium_pending', 'P-6', false),   // Sonia
   rs_premium_rejected:   app('rs_premium_rejected', 'P-7', true),
   rs_ncd_backed:         app('rs_ncd_backed', 'P-8', true),
+  rs_cheque_unsettled:   app('rs_cheque_unsettled', 'P-9', false),  // cleared in NCD, LockerHub never told
+  rs_transfer_unsettled: app('rs_transfer_unsettled', 'P-10', false),
+  rs_transfer_pending:   app('rs_transfer_pending', 'P-11', false),
   rs_lh_down:            null,
   rs_premium_ok_lh_down: null,
 };
@@ -47,6 +50,7 @@ const APPS: Record<string, any | null> = {
 const EXPECT: Record<string, string> = {
   rs_paid: 'paid', rs_unpaid: 'unpaid', rs_premium_ok: 'premium', rs_waived_ok: 'waived', rs_partial: 'paid',
   rs_premium_pending: 'unpaid', rs_premium_rejected: 'paid', rs_ncd_backed: 'paid',
+  rs_cheque_unsettled: 'unpaid', rs_transfer_unsettled: 'unpaid', rs_transfer_pending: 'unpaid',
   rs_lh_down: 'unknown', rs_premium_ok_lh_down: 'premium',
 };
 
@@ -85,6 +89,15 @@ beforeAll(async () => {
     `INSERT INTO locker_cheques (lockerhub_application_id, leg, amount, cheque_no, bank_name, received_on, status, recorded_by_user_id)
      VALUES ('rs_ncd_backed','rent',23600,'CHQ-1','Test Bank', now()::date, 'Cleared', $1)`, [adminId]);
 
+  await ctx.db.query(
+    `INSERT INTO locker_cheques (lockerhub_application_id, leg, amount, cheque_no, bank_name, received_on, status, recorded_by_user_id, lockerhub_error)
+     VALUES ('rs_cheque_unsettled','rent',23600,'CHQ-77','Test Bank', now()::date, 'Cleared', $1, 'LockerHub unreachable')`, [adminId]);
+  const off = (id: string, status: string) => ctx.db.query(
+    `INSERT INTO locker_offline_payments (lockerhub_application_id, leg, method, reference, amount, status, created_by_user_id)
+     VALUES ($1,'rent','transfer','UTR-9',23600,$2,$3)`, [id, status, adminId]);
+  await off('rs_transfer_unsettled', 'Approved');
+  await off('rs_transfer_pending', 'PendingApproval');
+
   admin = new Client(ctx.base);
   await admin.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' });
 });
@@ -121,6 +134,21 @@ describe('Locker Tenants and the Locker Rent Report agree', () => {
     expect(tenant.get('rs_premium_pending').rent_status).not.toBe('paid');
     expect(report.get('rs_premium_pending').reason).toMatch(/awaiting approval/i);
     expect(tenant.get('rs_premium_pending').rent_reason).toMatch(/awaiting approval/i);
+  });
+
+  it('every Unpaid says why — including money NCD collected that LockerHub never settled', async () => {
+    const { tenant, report } = await both();
+    for (const [id, re] of [
+      ['rs_cheque_unsettled', /CHQ-77 cleared in NCD — rent not settled on LockerHub \(LockerHub unreachable\)/],
+      ['rs_transfer_unsettled', /UTR-9 approved in NCD — rent not settled on LockerHub/],
+      ['rs_transfer_pending', /awaiting approval/],
+      ['rs_unpaid', /LockerHub shows the rent unsettled.*no payment recorded in NCD/],
+    ] as const) {
+      expect(report.get(id).reason, id).toMatch(re);
+      expect(tenant.get(id).rent_reason, id).toMatch(re);
+    }
+    // a settled leg needs no excuse
+    expect(report.get('rs_ncd_backed').reason).toBeNull();
   });
 
   it('LockerHub being unreachable reads Unknown, never Paid and never Unpaid', async () => {

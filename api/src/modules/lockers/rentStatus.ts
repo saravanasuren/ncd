@@ -26,6 +26,12 @@
  * it is named in `reason`, so "Premium, awaiting approval" is visible instead of
  * silently reading as an ordinary unpaid locker.
  *
+ * "Unpaid" always says WHY. LockerHub owns the money, so an unsettled rent leg is
+ * Unpaid — but NCD also records collections (a cleared cheque, an approved
+ * transfer) and pushes each to LockerHub as a second call that can fail. When NCD
+ * holds such a record LockerHub never settled, the reason names it: the customer
+ * DID pay, and what is broken is the settlement, not the customer.
+ *
  * Every consumer goes through rentDecisions(); none may recompute this.
  */
 import type { RentStatus } from '@new-wealth/shared';
@@ -33,6 +39,8 @@ import type { Db } from '../../db/types.js';
 import * as lh from '../../integrations/lockerhub/client.js';
 
 export interface RentWaiver { category: string; waiver_pct: number | null; status: string; reason: string | null }
+/** A rent collection NCD recorded, and whether LockerHub was ever told. */
+export interface RentPayment { kind: 'cheque' | 'transfer'; state: 'collected' | 'awaiting_approval'; reference: string | null; settled: boolean; error: string | null }
 export interface RentDecision { status: RentStatus; reason: string | null }
 
 type App = Record<string, any>;
@@ -42,8 +50,20 @@ const settled = (app: App): boolean => {
   return leg?.settled === true || /paid|settled|success|complete/i.test(String(leg?.status ?? ''));
 };
 
-/** The rule. Pure: waivers + what LockerHub said about the application (null = it could not be read). */
-export function rentDecisionOf(app: App | null, waivers: RentWaiver[]): RentDecision {
+/** Why an unsettled rent leg is unpaid — the most specific true thing we know. */
+function unpaidReason(app: App, payments: RentPayment[]): string {
+  const unsettled = payments.find((p) => p.state === 'collected' && !p.settled);
+  if (unsettled) {
+    const what = unsettled.kind === 'cheque' ? `Cheque ${unsettled.reference ?? ''}`.trim() + ' cleared' : `Transfer ${unsettled.reference ?? ''}`.trim() + ' approved';
+    return `${what} in NCD — rent not settled on LockerHub${unsettled.error ? ` (${unsettled.error})` : ''}`;
+  }
+  if (payments.some((p) => p.state === 'awaiting_approval')) return 'Payment recorded — awaiting approval';
+  const st = app?.legs?.rent?.status;
+  return `LockerHub shows the rent unsettled${st ? ` (status: ${st})` : ''}; no payment recorded in NCD`;
+}
+
+/** The rule. Pure: waivers + what LockerHub said about the application (null = it could not be read) + NCD's recorded collections. */
+export function rentDecisionOf(app: App | null, waivers: RentWaiver[], payments: RentPayment[] = []): RentDecision {
   const approved = waivers.filter((w) => w.status === 'Approved');
   const premium = approved.find((w) => w.category === 'premium');
   if (premium) return { status: 'premium', reason: premium.reason };
@@ -57,7 +77,27 @@ export function rentDecisionOf(app: App | null, waivers: RentWaiver[]): RentDeci
     : null;
 
   if (!app) return { status: 'unknown', reason };
-  return { status: settled(app) ? 'paid' : 'unpaid', reason };
+  if (settled(app)) return { status: 'paid', reason };
+  return { status: 'unpaid', reason: [reason, unpaidReason(app, payments)].filter(Boolean).join(' · ') };
+}
+
+/** application id → rent collections NCD recorded (cleared cheques, approved / pending transfers). */
+export async function loadRentPayments(db: Db): Promise<Map<string, RentPayment[]>> {
+  const by = new Map<string, RentPayment[]>();
+  const add = (id: unknown, p: RentPayment) => { const k = String(id); if (!by.has(k)) by.set(k, []); by.get(k)!.push(p); };
+  const chq = (await db.query<Record<string, any>>(
+    `SELECT lockerhub_application_id, cheque_no, lockerhub_settled_at, lockerhub_error
+       FROM locker_cheques WHERE leg = 'rent' AND status = 'Cleared'`)).rows;
+  for (const c of chq) add(c.lockerhub_application_id, { kind: 'cheque', state: 'collected', reference: (c.cheque_no as string) ?? null, settled: !!c.lockerhub_settled_at, error: (c.lockerhub_error as string) ?? null });
+  const off = (await db.query<Record<string, any>>(
+    `SELECT lockerhub_application_id, method, reference, status, lockerhub_settled_at, lockerhub_error
+       FROM locker_offline_payments WHERE leg = 'rent' AND status IN ('Approved','PendingApproval')`)).rows;
+  for (const o of off) add(o.lockerhub_application_id, {
+    kind: String(o.method) === 'cheque' ? 'cheque' : 'transfer',
+    state: String(o.status) === 'Approved' ? 'collected' : 'awaiting_approval',
+    reference: (o.reference as string) ?? null, settled: !!o.lockerhub_settled_at, error: (o.lockerhub_error as string) ?? null,
+  });
+  return by;
 }
 
 /** application id → its rent waivers that matter to the rule (approved, or awaiting approval). */
@@ -107,8 +147,8 @@ export async function rentDecisions(
   db: Db, ids: string[], opts: { preloaded?: Map<string, App | null> } = {},
 ): Promise<{ decisions: Map<string, RentDecision>; apps: Map<string, App | null>; lockerhub_error: string | null }> {
   const unique = [...new Set(ids.filter(Boolean))];
-  const [waivers, { apps, error }] = await Promise.all([loadRentWaivers(db), readApplications(unique, opts.preloaded)]);
+  const [waivers, payments, { apps, error }] = await Promise.all([loadRentWaivers(db), loadRentPayments(db), readApplications(unique, opts.preloaded)]);
   const decisions = new Map<string, RentDecision>();
-  for (const id of unique) decisions.set(id, rentDecisionOf(apps.get(id) ?? null, waivers.get(id) ?? []));
+  for (const id of unique) decisions.set(id, rentDecisionOf(apps.get(id) ?? null, waivers.get(id) ?? [], payments.get(id) ?? []));
   return { decisions, apps, lockerhub_error: error };
 }

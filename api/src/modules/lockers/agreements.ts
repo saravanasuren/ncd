@@ -1083,6 +1083,111 @@ export async function getSignedDocument(
 }
 
 /**
+ * Agreements that say `Signed` and have Digio sessions of our own, none of them
+ * recorded as signed. A row backed by a signed session is evidence; a row with
+ * no sessions at all is a LockerHub-signed one. Neither is listed.
+ */
+export async function listFalselySigned(db: Db): Promise<Array<{ lockerhub_application_id: string; customer_name: string | null }>> {
+  return (await db.query<{ lockerhub_application_id: string; customer_name: string | null }>(
+    `SELECT s.lockerhub_application_id, la.customer_name
+       FROM locker_agreement_signings s
+       LEFT JOIN locker_applications la ON la.lockerhub_application_id = s.lockerhub_application_id
+      WHERE s.status = 'Signed' AND s.method = 'esign'
+        AND EXISTS (SELECT 1 FROM digio_signing_sessions d WHERE d.locker_agreement_signing_id = s.id)
+        AND NOT EXISTS (SELECT 1 FROM digio_signing_sessions d
+                         WHERE d.locker_agreement_signing_id = s.id AND d.status = 'signed'
+                           AND d.document_type IN ('locker_agreement', 'locker_agreement_ceo'))
+      ORDER BY s.id`)).rows;
+}
+
+export type SignedClaim =
+  | { verdict: 'recovered' }                               // Digio HAS the signature; recorded (or would be, on a dry run)
+  | { verdict: 'lockerhub' }                               // LockerHub says signed — the copy may be theirs
+  | { verdict: 'unsupported'; digio: Array<string | null> } // both sides positively say nothing is signed
+  | { verdict: 'unknown'; why: string };                   // could not ask — so nothing is changed
+
+/**
+ * Is a `Signed` row telling the truth?
+ *
+ * Until #450 (18 Sep) every load of the enrolment or profile page ran
+ * syncFromEsignStatus, which stamped a NATIVE agreement `Signed` whenever
+ * LockerHub's own, unrelated e-Sign status read "signed" — with no Digio
+ * signature recorded and no file. #450 stopped new rows being corrupted and
+ * left the ones already flipped as they were: `Signed`, with Digio sessions
+ * that were never signed and nothing to download. Showing "e-Signed" for an
+ * agreement nobody can produce is the same defect #441 closed at the file
+ * level — the record claiming more than the evidence backs.
+ *
+ * Establishes it in order, and changes nothing unless it is SURE:
+ *   1. Digio. A signature that really happened but was never recorded (the
+ *      poller could not see Digio at all until #451) is recorded through the
+ *      normal completion path, which stores the file and sets the status the
+ *      chain is really at (customer signed, awaiting the signatory).
+ *   2. LockerHub. The old flip may have been RIGHT: they hold a signed copy.
+ *   3. Only when Digio and LockerHub have BOTH been read and BOTH say nothing is
+ *      signed does the row stop claiming it is: back to AwaitingSignature, with
+ *      the evidence in the audit trail.
+ * A question that could not be asked is not an answer. If either side is
+ * unreachable, or Digio is not configured, this returns `unknown` and touches
+ * nothing. `apply: false` performs only reads (for a dry run).
+ */
+export async function reconcileSignedClaim(
+  db: Db, actorId: number | null, applicationId: string, opts: { apply: boolean },
+): Promise<SignedClaim> {
+  const signing = await getSigning(db, applicationId);
+  if (!signing) return { verdict: 'unknown', why: 'no signing record' };
+  const digioMod = await import('../../integrations/digio/index.js');
+  if (!digioMod.digioConfigured()) return { verdict: 'unknown', why: 'e-Sign is not configured on this server' };
+
+  const sessions = (await db.query<{ digio_request_id: string }>(
+    `SELECT digio_request_id FROM digio_signing_sessions
+      WHERE locker_agreement_signing_id = $1 AND status = 'requested' AND digio_request_id IS NOT NULL
+      ORDER BY id DESC`, [signing.id])).rows;
+
+  // 1 — Digio.
+  const statuses: Array<string | null> = [];
+  for (const s of sessions) {
+    try { statuses.push(await digioMod.fetchStatus(s.digio_request_id)); }
+    catch { return { verdict: 'unknown', why: 'Digio could not be reached' }; }
+  }
+  if (statuses.some((s) => digioMod.isSignedStatus(s))) {
+    if (opts.apply) {
+      const { checkOneLockerSigning } = await import('../../integrations/digio/service.js');
+      try { await checkOneLockerSigning(db, signing.id); }
+      catch { return { verdict: 'unknown', why: 'Digio could not be reached' }; }
+    }
+    return { verdict: 'recovered' };
+  }
+
+  // 2 — LockerHub.
+  const lh = await import('../../integrations/lockerhub/client.js');
+  if (!lh.lockerHubConfigured()) return { verdict: 'unknown', why: 'LockerHub is not configured on this server' };
+  let esign: Record<string, unknown> | null = null;
+  try { esign = await lh.esignStatus(applicationId) as Record<string, unknown>; }
+  catch { return { verdict: 'unknown', why: 'LockerHub could not be reached' }; }
+  const theirs = String(esign?.status ?? '').toLowerCase();
+  if (theirs === 'signed' || theirs === 'completed') return { verdict: 'lockerhub' };
+
+  // 3 — both read, neither has a signature.
+  if (opts.apply) {
+    await db.withTx(async (tx) => {
+      const r = await tx.query(
+        `UPDATE locker_agreement_signings
+            SET status = 'AwaitingSignature', signed_at = NULL, updated_at = now()
+          WHERE id = $1 AND status = 'Signed'`, [signing.id]);
+      if (!r.rowCount) return;
+      await writeAudit(tx, {
+        actorId, action: 'locker.agreement.false-signed-corrected',
+        entityType: 'locker_agreement_signings', entityId: signing.id,
+        before: { status: 'Signed' },
+        after: { status: 'AwaitingSignature', application: applicationId, digio_statuses: statuses, lockerhub_status: theirs || null },
+      });
+    });
+  }
+  return { verdict: 'unsupported', digio: statuses };
+}
+
+/**
  * The signed agreement for a locker, from wherever it actually lives.
  *
  * This is the ONE place that decides. It used to be decided in the browser, on
@@ -1117,6 +1222,10 @@ export async function resolveSignedAgreement(
         'SELECT count(*) AS n FROM digio_signing_sessions WHERE locker_agreement_signing_id = $1', [signing.id])).rows[0]?.n ?? 0) > 0
     : false;
 
+  // A native row whose Signed claim turns out to be backed by LockerHub rather
+  // than Digio carries on to the LockerHub branch below.
+  let tryLockerHub = !(signing && native);
+
   if (signing && native) {
     const { refetchSignedCopy } = await import('../../integrations/digio/service.js');
     const r = await refetchSignedCopy(db, signing.id);
@@ -1131,13 +1240,35 @@ export async function resolveSignedAgreement(
         return again;
       }
     }
-    throw errors.notFound(
-      r.kind
-        ? 'The signed copy has not reached NCD yet — Digio did not hand it over just now. Try again in a few minutes, or use "Fetch signed copy".'
-        : 'Nobody has e-signed this agreement yet, so there is no signed copy.');
+    if (r.kind) {
+      throw errors.notFound('The signed copy has not reached NCD yet — Digio did not hand it over just now. Try again in a few minutes, or use "Fetch signed copy".');
+    }
+
+    // No Digio signature is recorded here. If the row nonetheless SAYS Signed,
+    // that claim needs establishing rather than repeating — see reconcileSignedClaim.
+    if (signing.status !== 'Signed' || signing.method !== 'esign') {
+      throw errors.notFound('Nobody has e-signed this agreement yet, so there is no signed copy.');
+    }
+    const claim = await reconcileSignedClaim(db, actor.id, applicationId, { apply: true });
+    if (claim.verdict === 'recovered') {
+      const again = await getSignedDocument(db, applicationId);
+      if (again) return again;
+      throw errors.notFound('Digio confirmed the signature and it is now recorded, but the signed file did not come back with it. Try again in a few minutes.');
+    }
+    if (claim.verdict === 'lockerhub') {
+      tryLockerHub = true;
+    } else if (claim.verdict === 'unsupported') {
+      throw errors.notFound(
+        'This agreement was marked as signed, but neither Digio nor LockerHub has a completed signature for it, so there is no signed copy. '
+        + 'NCD has reset it to "awaiting signature" — send the signing link again.');
+    } else {
+      throw errors.notFound(
+        `This agreement is marked as signed, but NCD could not confirm a signature (${claim.why}). Nothing has been changed — try again shortly.`);
+    }
   }
 
-  // Not on our Digio: LockerHub's own e-Sign is the only place a copy can be.
+  // Not on our Digio (or LockerHub is the one that holds it): LockerHub's own e-Sign.
+  if (!tryLockerHub) throw errors.notFound('No signed agreement on file.');
   const lh = await import('../../integrations/lockerhub/client.js');
   if (!lh.lockerHubConfigured()) throw errors.notFound('No signed agreement on file.');
   let esign: Record<string, unknown> | null = null;

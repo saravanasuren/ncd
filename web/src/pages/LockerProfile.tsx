@@ -1,5 +1,6 @@
 import { useParams, Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { LockerAuthorisedUsers } from '../components/LockerAuthorisedUsers.js';
@@ -36,6 +37,9 @@ const badge = (ok: boolean) => `text-xs rounded px-1.5 py-0.5 ${ok ? 'bg-[color:
 
 export function LockerProfilePage() {
   const { applicationId } = useParams();
+  const qc = useQueryClient();
+  // Owned here, not by the buttons: a corrected row re-renders them away.
+  const [agreementMsg, setAgreementMsg] = useState('');
   const { data, isLoading, error } = useQuery({
     queryKey: ['locker-profile', applicationId],
     queryFn: () => api.get<any>(`/api/lockers/profile?application_id=${encodeURIComponent(String(applicationId))}`),
@@ -247,9 +251,12 @@ export function LockerProfilePage() {
             <SignedAgreementActions
               applicationId={String(data.locker_application_id)}
               fileStem={`Locker-${String(lockerNo).replace(/[^\w.-]+/g, '_')}-signed-agreement`}
-              className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40" />
+              className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40"
+              message={agreementMsg} onMessage={setAgreementMsg}
+              onAfter={() => { void qc.invalidateQueries({ queryKey: ['locker-profile', applicationId] }); }} />
           </Row>
         )}
+        {agreementMsg && <div role="alert" className="text-xs text-danger py-1.5">{agreementMsg}</div>}
         <div className="mt-3">
           <Link to={`/app/locker-enrollment?application_id=${encodeURIComponent(data.locker_application_id)}`} className="text-xs text-primary hover:underline">
             Open in enrollment (payments, allotment, e-sign actions) →

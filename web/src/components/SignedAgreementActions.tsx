@@ -14,15 +14,28 @@ import { api, ApiError } from '../api/client.js';
  * not reached NCD yet…"), instead of a new tab of raw JSON; and an expired
  * 15-minute session is refreshed (api.blob) instead of failing silently.
  *
+ * onAfter runs after EVERY attempt, success or not: the resolver may have just
+ * recorded a signature Digio held, or corrected a row that claimed Signed with
+ * nothing behind it, and the page must show the status as it now is.
+ *
  * Authorization is the server's: lockers:enroll for the route, and a branch
  * user reaches only their own branch's agreements. This component only reports
  * what the server said.
  */
 export function SignedAgreementActions({
-  applicationId, fileStem, className,
-}: { applicationId: string; fileStem: string; className: string }) {
+  applicationId, fileStem, className, onAfter, message, onMessage,
+}: {
+  applicationId: string; fileStem: string; className: string; onAfter?: () => void;
+  /** Controlled message. A parent that re-renders this block away after a click
+   *  (the row was corrected, so the buttons no longer apply) must own the text,
+   *  or the reason it changed would vanish with this component. */
+  message?: string; onMessage?: (m: string) => void;
+}) {
   const [busy, setBusy] = useState<'view' | 'download' | null>(null);
-  const [err, setErr] = useState('');
+  const [local, setLocal] = useState('');
+  const controlled = message !== undefined && !!onMessage;
+  const err = controlled ? message : local;
+  const setErr = controlled ? onMessage! : setLocal;
 
   const fetchPdf = () =>
     api.blob(`/api/lockers/applications/${encodeURIComponent(applicationId)}/agreement/signed.pdf`);
@@ -42,7 +55,7 @@ export function SignedAgreementActions({
     } catch (e) {
       tab?.close();
       setErr(e instanceof ApiError ? e.message : 'Could not open the signed agreement.');
-    } finally { setBusy(null); }
+    } finally { setBusy(null); onAfter?.(); }
   }
 
   async function download() {
@@ -56,7 +69,7 @@ export function SignedAgreementActions({
       setTimeout(() => URL.revokeObjectURL(href), 1000);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Could not download the signed agreement.');
-    } finally { setBusy(null); }
+    } finally { setBusy(null); onAfter?.(); }
   }
 
   return (
@@ -69,7 +82,7 @@ export function SignedAgreementActions({
           {busy === 'download' ? 'Downloading…' : '↓ Download'}
         </button>
       </div>
-      {err && <div role="alert" className="text-xs text-danger">{err}</div>}
+      {!controlled && err && <div role="alert" className="text-xs text-danger">{err}</div>}
     </div>
   );
 }

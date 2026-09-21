@@ -383,6 +383,10 @@ export function LockerEnrollmentPage() {
   };
   /** Locker-agreement e-Sign (§A19). Only exists after allotment. */
   const [esign, setEsign] = useState<any>(null);
+  /** What the last View/Download of the signed agreement said. Owned here, not by
+   *  the buttons: when the server corrects a row that claimed Signed, this block
+   *  re-renders as "awaiting signature" and the buttons unmount with their text. */
+  const [agreementMsg, setAgreementMsg] = useState('');
   const loadEsign = async () => {
     if (!app?.application_id || !app?.allotment) return;
     const r = await run(api.get<any>(`/api/lockers/applications/${encodeURIComponent(app.application_id)}/esign`));
@@ -1450,7 +1454,9 @@ export function LockerEnrollmentPage() {
                       <SignedAgreementActions
                         applicationId={String(app.application_id)}
                         fileStem={`Locker-${String(app.allotment?.locker_number ?? app.application_id).replace(/[^\w.-]+/g, '_')}-signed-agreement`}
-                        className={btnGhost} />
+                        className={btnGhost}
+                        message={agreementMsg} onMessage={setAgreementMsg}
+                        onAfter={() => { void loadSigning(); }} />
                     </div>
                   );
 
@@ -1598,6 +1604,7 @@ export function LockerEnrollmentPage() {
                     </div>
                   );
                 })()}
+                {agreementMsg && <div role="alert" className="mt-1.5 text-xs text-danger">{agreementMsg}</div>}
               </div>
             </>
           ) : canAllocate ? (

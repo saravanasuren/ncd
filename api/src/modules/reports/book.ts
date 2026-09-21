@@ -1291,3 +1291,49 @@ export async function seriesWiseReport(db: Db, actor: AuthUser, seriesId: number
     status: r.status as string, outstanding: round2(Number(r.outstanding)),
   }));
 }
+
+/** One staff member's investments in one month of one series (owner 2026-09-21:
+ *  "staff data of how much investments they have made month wise and series
+ *  wise"). The grain the two pivots (staff×month, staff×series) are built from.
+ *
+ *  Staff attribution is the same resolved-referrer rule as `staffwise`: only a
+ *  referrer that matches an is_staff user counts (sref); agents and Direct are
+ *  excluded. "Investments made" is the SUBSCRIBED amount (a.total_amount, what
+ *  they brought in — not the live outstanding, which partial redemptions shrink),
+ *  counting every issued investment (money received, not Rejected/Cancelled/
+ *  Draft/PendingApproval) whether it is still active or since redeemed. The month
+ *  is the money-received date. Branch scope applies via appWhere, so a branch
+ *  manager sees their own staff and an admin sees all. */
+export interface StaffMonthSeriesRow {
+  staff: string;
+  month: string;        // 'YYYY-MM'
+  series_code: string;
+  count: number;
+  amount: number;
+}
+export async function staffMonthSeriesReport(
+  db: Db, actor: AuthUser, filters: BookFilters = {},
+): Promise<StaffMonthSeriesRow[]> {
+  const w = appWhere(actor, { ...filters, status: undefined }, [
+    'sref.full_name IS NOT NULL',
+    'a.date_money_received IS NOT NULL',
+    "a.status NOT IN ('Rejected','Cancelled','Draft','PendingApproval')",
+  ]);
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT sref.full_name AS staff,
+            to_char(a.date_money_received, 'YYYY-MM') AS month,
+            s.code AS series_code,
+            count(a.id)::int AS count,
+            COALESCE(sum(a.total_amount), 0) AS amount
+     ${FROM_ATTR}
+     WHERE ${w.sql}
+     GROUP BY sref.full_name, to_char(a.date_money_received, 'YYYY-MM'), s.code
+     ORDER BY staff, month, series_code`, w.params);
+  return rows.map((r) => ({
+    staff: r.staff as string,
+    month: r.month as string,
+    series_code: r.series_code as string,
+    count: Number(r.count),
+    amount: round2(Number(r.amount)),
+  }));
+}

@@ -250,6 +250,35 @@ reportsRouter.get('/series-wise.xlsx', requirePermission('reports:download'),
     res.end(buf);
   }));
 
+// Staff-wise investments, month-wise and series-wise (owner 2026-09-21). JSON
+// form drives an on-screen summary; the .xlsx has the two pivots plus the grain.
+// Optional from/to (YYYY-MM-DD) narrow the money-received window.
+reportsRouter.get('/staff-investments', requirePermission('reports:download'),
+  asyncHandler(async (req, res) => {
+    const from = typeof req.query.from === 'string' ? req.query.from : undefined;
+    const to = typeof req.query.to === 'string' ? req.query.to : undefined;
+    const rows = await book.staffMonthSeriesReport(getDb(), req.user!, { from, to });
+    res.json({
+      rows,
+      staff_count: new Set(rows.map((r) => r.staff)).size,
+      months: [...new Set(rows.map((r) => r.month))].sort(),
+      grand_total: rows.reduce((s, r) => s + r.amount, 0),
+      investment_count: rows.reduce((s, r) => s + r.count, 0),
+    });
+  }));
+
+reportsRouter.get('/staff-investments.xlsx', requirePermission('reports:download'),
+  asyncHandler(async (req, res) => {
+    const from = typeof req.query.from === 'string' ? req.query.from : undefined;
+    const to = typeof req.query.to === 'string' ? req.query.to : undefined;
+    const rows = await book.staffMonthSeriesReport(getDb(), req.user!, { from, to });
+    const { staffMonthSeriesXlsx } = await import('./documents.js');
+    const buf = await staffMonthSeriesXlsx(rows);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="staff-investments.xlsx"');
+    res.end(buf);
+  }));
+
 // 26Q quarterly TDS filing annexure. :quarter = 'YYYY-Qn'.
 reportsRouter.get('/tds-26q/:quarter.xlsx', requirePermission('reports:download'),
   asyncHandler(async (req, res) => {

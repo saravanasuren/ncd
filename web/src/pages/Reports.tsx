@@ -146,6 +146,13 @@ export function ReportsPage() {
             <a href="/app/reports/series-wise" className={dl}>Open report →</a>
           </div>
         )}
+        {can('reports:download') && (
+          <div className={card}>
+            <h2 className="text-sm font-semibold mb-2">Staff-wise investments</h2>
+            <p className="text-xs text-text-muted mb-2">How much each staff member brought in, broken down month-wise and series-wise. Excel has two pivots — staff × month and staff × series — plus the detail grain.</p>
+            <a href="/api/reports/staff-investments.xlsx" className={dl}>↓ Excel</a>
+          </div>
+        )}
         {can('settings:manage') && (
           <div className={card}>
             <h2 className="text-sm font-semibold mb-2">Full database dump</h2>

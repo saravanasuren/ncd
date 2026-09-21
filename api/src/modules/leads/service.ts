@@ -11,13 +11,86 @@ const SCOPE_COLS = {
   branchCol: 'l.branch_id',
 };
 
-export async function listLeads(db: Db, actor: AuthUser) {
+/**
+ * Which leads this person may see. ONE definition, shared by the list and the
+ * Excel report, so a download can never hold a lead the screen would not show —
+ * the report is every phone number in someone's scope, and a second copy of this
+ * rule is exactly how the two would drift apart.
+ */
+function leadScope(actor: AuthUser): { sql: string; params: unknown[] } {
   // read-all permission bypasses scope
-  if (actor.permissions.includes('leads:read-all')) {
-    return (await db.query('SELECT l.* FROM investor_leads l ORDER BY l.created_at DESC LIMIT 2000')).rows;
-  }
-  const sc = scopeWhere(scopeFor(actor), SCOPE_COLS, 0);
+  if (actor.permissions.includes('leads:read-all')) return { sql: 'TRUE', params: [] };
+  return scopeWhere(scopeFor(actor), SCOPE_COLS, 0);
+}
+
+export async function listLeads(db: Db, actor: AuthUser) {
+  const sc = leadScope(actor);
   return (await db.query(`SELECT l.* FROM investor_leads l WHERE ${sc.sql} ORDER BY l.created_at DESC LIMIT 2000`, sc.params)).rows;
+}
+
+export interface LeadReportRow {
+  id: string;
+  created_on: string | null;
+  full_name: string;
+  phone: string | null;
+  place: string | null;
+  district: string | null;
+  category: string | null;
+  source: string | null;
+  referred_by_text: string | null;
+  lead_type: string | null;
+  interested_scheme: string | null;
+  locker_size: string | null;
+  expected_amount: string | null;
+  follow_up_date: string | null;
+  status: string;
+  notes: string | null;
+  created_by: string | null;
+  branch: string | null;
+  converted_customer_code: string | null;
+  note_count: number;
+  last_note: string | null;
+  last_note_on: string | null;
+}
+
+/**
+ * Every lead in scope, for the Excel report (owner 2026-09-21: "in leads page -
+ * get me a download button to download the leads report in excel").
+ *
+ * Deliberately NOT capped at the list's 2000: a report that silently stops
+ * short reads as "that's all of them". It carries what the table hides — who
+ * created the lead, which branch, what it converted into, and where the
+ * follow-up stands (the latest note, and how many there have been).
+ */
+export async function leadsReportRows(db: Db, actor: AuthUser): Promise<LeadReportRow[]> {
+  const sc = leadScope(actor);
+  return (await db.query<LeadReportRow>(
+    `SELECT l.id,
+            -- IST calendar day. A fixed +5:30 rather than the named zone: India has no
+            -- daylight saving, and it needs no time-zone data in the database.
+            to_char((l.created_at AT TIME ZONE 'UTC') + interval '5 hours 30 minutes', 'YYYY-MM-DD') AS created_on,
+            l.full_name, l.phone, l.place, l.district, l.category, l.source, l.referred_by_text,
+            l.lead_type, l.interested_scheme, l.locker_size, l.expected_amount,
+            l.follow_up_date, l.status, l.notes,
+            COALESCE(u.full_name, ag.full_name) AS created_by,
+            b.name AS branch,
+            cc.customer_code AS converted_customer_code,
+            COALESCE(n.cnt, 0)::int AS note_count,
+            n.last_note,
+            to_char((n.last_at AT TIME ZONE 'UTC') + interval '5 hours 30 minutes', 'YYYY-MM-DD') AS last_note_on
+       FROM investor_leads l
+       LEFT JOIN users u      ON u.id = l.created_by_user_id
+       LEFT JOIN agents ag    ON ag.id = l.created_by_agent_id
+       LEFT JOIN branches b   ON b.id = l.branch_id
+       LEFT JOIN customers cc ON cc.id = l.converted_customer_id
+       LEFT JOIN LATERAL (
+         SELECT count(*) AS cnt,
+                (array_agg(ln.note ORDER BY ln.id DESC))[1] AS last_note,
+                max(ln.created_at) AS last_at
+           FROM lead_notes ln WHERE ln.lead_id = l.id
+       ) n ON TRUE
+      WHERE ${sc.sql}
+      ORDER BY l.created_at DESC, l.id DESC`, sc.params)).rows;
 }
 
 /**

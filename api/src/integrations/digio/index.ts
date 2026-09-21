@@ -232,35 +232,51 @@ export function isFailedStatus(s: string | null | undefined): boolean {
  * download hiccup block the eSign completion.
  */
 export async function downloadSignedDocument(digioRequestId: string): Promise<Buffer | null> {
-  if (!digioConfigured()) return null;
+  const r = await fetchSignedDocument(digioRequestId);
+  return r.ok ? r.buffer : null;
+}
+
+export type SignedDownload = { ok: true; buffer: Buffer } | { ok: false; reason: string };
+
+/**
+ * The same download, but it SAYS WHY when it fails.
+ *
+ * This call has never been checked against live Digio: it dates from 22 Jul, its
+ * tests only prove the route 404s before signing, and every stand-in accepts any
+ * URL containing "/document/download" — the same blind spot that hid the wrong
+ * status call for weeks (#451). So a failure has to be legible to whoever is
+ * looking at it, not just null: the reason is logged AND returned, and the
+ * resolver puts it in front of the user.
+ *
+ * Returns a reason for every "no": Digio's HTTP status and the start of its
+ * answer, an empty body, a body that is not a PDF, or the network error.
+ */
+export async function fetchSignedDocument(digioRequestId: string): Promise<SignedDownload> {
+  if (!digioConfigured()) return { ok: false, reason: 'e-Sign is not configured on this server' };
+  const fail = (reason: string): SignedDownload => {
+    console.warn(`[digio] signed-document download for ${digioRequestId}: ${reason}`);
+    return { ok: false, reason };
+  };
   try {
     const auth = Buffer.from(`${config.DIGIO_CLIENT_ID}:${config.DIGIO_CLIENT_SECRET}`).toString('base64');
     const r = await fetch(`${base()}/v2/client/document/download?document_id=${encodeURIComponent(digioRequestId)}`, {
       headers: { Authorization: 'Basic ' + auth },
       signal: AbortSignal.timeout(20000),
     });
-    // Every "no" below is logged with WHY. This used to return null silently, so
-    // a missing signed copy left nothing in any log to say whether Digio was
-    // down, rate-limiting us, or had answered something else entirely.
     if (!r.ok) {
-      console.warn(`[digio] signed-document download for ${digioRequestId} refused: HTTP ${r.status}`);
-      return null;
+      const body = (await r.text().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 160);
+      return fail(`Digio answered HTTP ${r.status}${body ? ` — ${body}` : ''}`);
     }
     const buf = Buffer.from(await r.arrayBuffer());
-    if (!buf.length) {
-      console.warn(`[digio] signed-document download for ${digioRequestId} came back empty`);
-      return null;
-    }
+    if (!buf.length) return fail('Digio answered with an empty file');
     // A 200 is not proof of a PDF. Storing a JSON/HTML body here made the
     // agreement read "e-Signed" with a file no viewer can open — and the next
     // hirer would have been asked to sign it.
     if (buf.subarray(0, 5).toString('latin1') !== '%PDF-') {
-      console.warn(`[digio] signed-document download for ${digioRequestId} was not a PDF (starts ${JSON.stringify(buf.subarray(0, 40).toString('latin1'))})`);
-      return null;
+      return fail(`Digio answered 200 with something that is not a PDF (starts ${JSON.stringify(buf.subarray(0, 40).toString('latin1'))})`);
     }
-    return buf;
+    return { ok: true, buffer: buf };
   } catch (e) {
-    console.warn(`[digio] signed-document download for ${digioRequestId} failed: ${(e as Error).message}`);
-    return null;
+    return fail(`Digio could not be reached (${(e as Error).message})`);
   }
 }

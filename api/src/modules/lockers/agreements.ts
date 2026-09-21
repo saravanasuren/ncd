@@ -1241,7 +1241,11 @@ export async function resolveSignedAgreement(
       }
     }
     if (r.kind) {
-      throw errors.notFound('The signed copy has not reached NCD yet — Digio did not hand it over just now. Try again in a few minutes, or use "Fetch signed copy".');
+      const { explainSignedDownload } = await import('../../integrations/digio/service.js');
+      const why = await explainSignedDownload(db, signing.id);
+      throw errors.notFound(
+        `The signature is recorded, but the signed copy has not reached NCD: ${why ?? 'Digio did not hand it over just now'}. `
+        + 'Try again in a few minutes, or use "Fetch signed copy".');
     }
 
     // No Digio signature is recorded here. If the row nonetheless SAYS Signed,
@@ -1253,7 +1257,11 @@ export async function resolveSignedAgreement(
     if (claim.verdict === 'recovered') {
       const again = await getSignedDocument(db, applicationId);
       if (again) return again;
-      throw errors.notFound('Digio confirmed the signature and it is now recorded, but the signed file did not come back with it. Try again in a few minutes.');
+      const { explainSignedDownload } = await import('../../integrations/digio/service.js');
+      const why = await explainSignedDownload(db, signing.id);
+      throw errors.notFound(
+        `Digio confirmed the signature and it is now recorded, but the signed file did not come back with it: ${why ?? 'Digio did not hand it over just now'}. `
+        + 'Try again in a few minutes.');
     }
     if (claim.verdict === 'lockerhub') {
       tryLockerHub = true;

@@ -163,6 +163,23 @@ describe('signed.pdf resolves the right source for every kind of signed locker',
     expect(after.signed_doc_path).toBeTruthy();
   });
 
+  it("when Digio refuses the download, the message says WHAT Digio said (the endpoint was never verified against live Digio)", async () => {
+    digioDownload = { status: 200, body: PDF('first') };
+    const sid = await nativeSigned('LKR-DL-WHY', 'Why Hirer', '9741000008', 'AAAPW8888A');
+    await ctx.db.query('UPDATE locker_agreement_signings SET signed_doc_path = NULL WHERE id = $1', [sid]);
+
+    digioDownload = { status: 404, body: '{"message":"Document not found","code":"NOT_FOUND"}' };
+    let r = await admin.req('GET', url('LKR-DL-WHY'));
+    expect(r.status).toBe(404);
+    expect(r.json.error.message).toMatch(/signature is recorded/i);
+    expect(r.json.error.message).toMatch(/HTTP 404/);
+    expect(r.json.error.message).toMatch(/Document not found/);
+
+    digioDownload = { status: 200, body: '<html>login</html>' };
+    r = await admin.req('GET', url('LKR-DL-WHY'));
+    expect(r.json.error.message).toMatch(/not a PDF/);
+  });
+
   it('Digio answers 200 with something that is NOT a PDF: never stored as "the signed PDF"', async () => {
     digioDownload = { status: 200, body: '{"code":"SOMETHING_WENT_WRONG","message":"try later"}' };
     const sid = await nativeSigned('LKR-DL-NOTPDF', 'Notpdf Hirer', '9741000005', 'AAAPP5555A');

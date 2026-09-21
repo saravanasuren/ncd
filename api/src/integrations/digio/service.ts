@@ -405,3 +405,23 @@ export async function checkOneLockerSigning(db: Db, signingId: number): Promise<
   if (unreadable === rows.length) throw errors.upstream(502, 'Digio could not be reached to check these signatures — try again in a moment.');
   return { ok: true, signed, failed, statuses };
 }
+
+/**
+ * Why did the signed copy not come back? Asks Digio once more and returns its
+ * answer as a sentence, or null if it hands the file over this time.
+ *
+ * Only ever called on a failure path, so the one extra request costs nothing
+ * that was not already going wrong — and it turns "Digio did not hand it over"
+ * into "Digio answered HTTP 404 — …", which is what anyone has to know to fix it.
+ */
+export async function explainSignedDownload(db: Db, signingId: number): Promise<string | null> {
+  const sess = (await db.query<{ digio_request_id: string }>(
+    `SELECT digio_request_id FROM digio_signing_sessions
+      WHERE locker_agreement_signing_id = $1 AND status = 'signed'
+        AND document_type IN ('locker_agreement', 'locker_agreement_ceo')
+      ORDER BY id DESC LIMIT 1`, [signingId])).rows[0];
+  if (!sess) return null;
+  const { fetchSignedDocument } = await import('./index.js');
+  const r = await fetchSignedDocument(sess.digio_request_id);
+  return r.ok ? null : r.reason;
+}

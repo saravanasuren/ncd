@@ -21,16 +21,22 @@
  *                money, so neither Paid nor Unpaid is claimed
  *   4. paid      LockerHub's rent leg is settled — a standard PARTIAL GST waiver
  *                lands here: the customer still pays the base
- *   5. unpaid    otherwise
+ *   5. paid      NCD holds a cleared cheque / approved transfer for the rent that
+ *                LockerHub was never told about (`settlement_pending`). The money
+ *                is in and approved; only the second call failed. It reads Paid,
+ *                flagged, so nobody chases a customer who has paid — and the
+ *                flag is what tells staff to retry the settlement.
+ *   6. unpaid    otherwise
  * A request still awaiting approval changes NO status — it is not in force — but
  * it is named in `reason`, so "Premium, awaiting approval" is visible instead of
  * silently reading as an ordinary unpaid locker.
  *
  * "Unpaid" always says WHY. LockerHub owns the money, so an unsettled rent leg is
- * Unpaid — but NCD also records collections (a cleared cheque, an approved
- * transfer) and pushes each to LockerHub as a second call that can fail. When NCD
- * holds such a record LockerHub never settled, the reason names it: the customer
- * DID pay, and what is broken is the settlement, not the customer.
+ * unsettled — but NCD also records collections (a cleared cheque, an approved
+ * transfer) and pushes each to LockerHub as a second call that can fail (rule 5).
+ * An application LockerHub has CANCELLED is not a locker owing rent: a cancel is
+ * only allowed while nothing has been paid, so it would otherwise read Unpaid
+ * forever. Callers that LIST lockers drop those (see liveApplications).
  *
  * Every consumer goes through rentDecisions(); none may recompute this.
  */
@@ -41,7 +47,7 @@ import * as lh from '../../integrations/lockerhub/client.js';
 export interface RentWaiver { category: string; waiver_pct: number | null; status: string; reason: string | null }
 /** A rent collection NCD recorded, and whether LockerHub was ever told. */
 export interface RentPayment { kind: 'cheque' | 'transfer'; state: 'collected' | 'awaiting_approval'; reference: string | null; settled: boolean; error: string | null }
-export interface RentDecision { status: RentStatus; reason: string | null }
+export interface RentDecision { status: RentStatus; reason: string | null; settlement_pending?: boolean }
 
 type App = Record<string, any>;
 
@@ -50,13 +56,21 @@ const settled = (app: App): boolean => {
   return leg?.settled === true || /paid|settled|success|complete/i.test(String(leg?.status ?? ''));
 };
 
+/** The rent amount both pages show: what LockerHub bills (`amount` IS the payable), else the pre-waiver figure. */
+export function rentAmountOf(app: App | null): number | null {
+  const leg = app?.legs?.rent;
+  return Number(leg?.amount ?? leg?.original_amount ?? 0) || null;
+}
+
+/** LockerHub's own word for a cancelled application ("cancelled", per the A23 contract). */
+export const isCancelled = (app: App | null): boolean => /^cancel/i.test(String(app?.status ?? app?.application_status ?? ''));
+
+const settlementNote = (p: RentPayment) =>
+  `${p.kind === 'cheque' ? `Cheque ${p.reference ?? ''}`.trim() + ' cleared' : `Transfer ${p.reference ?? ''}`.trim() + ' approved'} in NCD — settlement to LockerHub pending${p.error ? ` (${p.error})` : ''}`;
+
 /** Why an unsettled rent leg is unpaid — the most specific true thing we know. */
 function unpaidReason(app: App, payments: RentPayment[]): string {
-  const unsettled = payments.find((p) => p.state === 'collected' && !p.settled);
-  if (unsettled) {
-    const what = unsettled.kind === 'cheque' ? `Cheque ${unsettled.reference ?? ''}`.trim() + ' cleared' : `Transfer ${unsettled.reference ?? ''}`.trim() + ' approved';
-    return `${what} in NCD — rent not settled on LockerHub${unsettled.error ? ` (${unsettled.error})` : ''}`;
-  }
+  if (isCancelled(app)) return 'Application cancelled on LockerHub';
   if (payments.some((p) => p.state === 'awaiting_approval')) return 'Payment recorded — awaiting approval';
   const st = app?.legs?.rent?.status;
   return `LockerHub shows the rent unsettled${st ? ` (status: ${st})` : ''}; no payment recorded in NCD`;
@@ -78,6 +92,9 @@ export function rentDecisionOf(app: App | null, waivers: RentWaiver[], payments:
 
   if (!app) return { status: 'unknown', reason };
   if (settled(app)) return { status: 'paid', reason };
+  // Rule 5 — money NCD collected and approved that LockerHub was never told about.
+  const pendingSettle = isCancelled(app) ? undefined : payments.find((p) => p.state === 'collected' && !p.settled);
+  if (pendingSettle) return { status: 'paid', reason: [reason, settlementNote(pendingSettle)].filter(Boolean).join(' · '), settlement_pending: true };
   return { status: 'unpaid', reason: [reason, unpaidReason(app, payments)].filter(Boolean).join(' · ') };
 }
 
@@ -151,4 +168,46 @@ export async function rentDecisions(
   const decisions = new Map<string, RentDecision>();
   for (const id of unique) decisions.set(id, rentDecisionOf(apps.get(id) ?? null, waivers.get(id) ?? [], payments.get(id) ?? []));
   return { decisions, apps, lockerhub_error: error };
+}
+
+// ── Which applications are lockers at all ────────────────────────────────
+
+type Roster = Array<Record<string, any>>;
+
+/**
+ * Ids NCD staff removed (locker_tenant_overrides). Keyed on the tenant id for an
+ * allotted tenancy and on the application id for one not yet allotted — the same
+ * key Locker Tenants uses, so a removed tenancy is gone from both pages.
+ */
+export async function removedKeys(db: Db): Promise<Set<string>> {
+  const rows = (await db.query<{ lockerhub_tenant_id: string }>(
+    'SELECT lockerhub_tenant_id FROM locker_tenant_overrides WHERE removed_at IS NOT NULL')).rows;
+  return new Set(rows.map((r) => String(r.lockerhub_tenant_id)));
+}
+
+/** Is this application id removed from NCD's view — directly, or via its roster tenancy? */
+export function isRemoved(appId: string, removed: Set<string>, roster: Roster): boolean {
+  if (removed.has(appId)) return true;
+  const t = roster.find((x) => String(x.application_id ?? '') === appId);
+  return !!t && removed.has(String(t.tenant_id ?? ''));
+}
+
+const lockerNoOf = (app: App | null): string => String(app?.allotment?.locker_number ?? app?.allotment?.locker_no ?? app?.locker_no ?? '').trim();
+
+/**
+ * An application that is NOT the tenancy on its locker: LockerHub's roster (the
+ * allotted truth) holds a DIFFERENT application on the same locker at the same
+ * branch. That is a stale or duplicate application — its rent leg was never
+ * paid because the customer paid the other one — and listing it as a locker
+ * would read "Unpaid" for a locker that is paid. Needs the roster: with it
+ * unreadable nothing can be called superseded, so nothing is dropped.
+ */
+export function isSuperseded(appId: string, app: App | null, roster: Roster): boolean {
+  if (!roster.length || !app) return false;
+  if (roster.some((t) => String(t.application_id ?? '') === appId)) return false; // it IS the tenancy
+  const no = lockerNoOf(app);
+  const branch = String(app.branch_id ?? '');
+  if (!no || !branch) return false;
+  return roster.some((t) => String(t.locker_number ?? '').trim() === no && String(t.branch_id ?? '') === branch
+    && String(t.application_id ?? '') !== appId);
 }

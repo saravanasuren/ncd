@@ -152,9 +152,10 @@ export async function diagnose({ db, lh, ref: given }) {
     const pendingWaiver = w.find((x) => x.status === 'PendingApproval');
     let verdict;
     if (!app) verdict = 'UNREADABLE — LockerHub would not return this application; the report shows Unknown (this build) / Unpaid (old build).';
+    else if (/^cancel/i.test(String(app.status ?? app.application_status ?? ''))) verdict = 'CANCELLED ON LOCKERHUB — not a locker owing rent. A cancel is only allowed while nothing is paid, so the old Report listed it as Unpaid forever; the fixed Report hides it.';
     else if (approvedWaiver && approvedWaiver.category === 'premium') verdict = 'PREMIUM — an approved premium waiver is in force.';
     else if (okLike) verdict = 'PAID — LockerHub shows the rent leg settled.';
-    else if (ncdMoney) verdict = `PAID IN NCD, NOT SETTLED ON LOCKERHUB — ${ncdMoney.cheque_no ? 'cheque ' + ncdMoney.cheque_no : 'transfer ' + (ncdMoney.reference ?? '')} is recorded in NCD but LockerHub never marked the leg settled${ncdMoney.lockerhub_error ? ' (' + ncdMoney.lockerhub_error + ')' : ''}. The customer paid; the settlement call failed. Retry it from the cheque register / enrolment screen.`;
+    else if (ncdMoney) verdict = `PAID IN NCD, NOT SETTLED ON LOCKERHUB — ${ncdMoney.cheque_no ? 'cheque ' + ncdMoney.cheque_no : 'transfer ' + (ncdMoney.reference ?? '')} is recorded in NCD but LockerHub never marked the leg settled${ncdMoney.lockerhub_error ? ' (' + ncdMoney.lockerhub_error + ')' : ''}. The customer paid; the settlement call failed. The fixed Report reads Paid and flags it; retry the settlement from the cheque register / enrolment screen.`;
     else if (pendingPay) verdict = 'PAYMENT AWAITING APPROVAL — a transfer is recorded but no Admin/CXO has approved it, so nothing was sent to LockerHub.';
     else if (pendingWaiver) verdict = `WAIVER REQUEST AWAITING APPROVAL (${pendingWaiver.category}) — not in force; LockerHub shows the rent unsettled.`;
     else verdict = 'UNPAID ON LOCKERHUB, NO PAYMENT RECORDED IN NCD — LockerHub shows the rent unsettled and NCD holds no cheque/transfer for it. If the customer paid, it was by a route neither system recorded against THIS application (see DUPLICATES below).';
@@ -173,7 +174,7 @@ export async function diagnose({ db, lh, ref: given }) {
   for (const [locker, v] of dup) {
     say(`   locker ${locker}: ${v.length} applications — ${v.map((r) => `${r.id} (${r.okLike ? 'rent settled' : 'rent NOT settled'}, status ${r.status ?? '?'})`).join('  |  ')}`);
     if (v.some((r) => r.okLike) && v.some((r) => !r.okLike)) {
-      say('   → ONE HAS BEEN PAID AND ANOTHER HAS NOT. The report lists each application, so the unsettled one reads Unpaid even though the locker is paid. That is a stale/duplicate application, not an unpaid customer.');
+      say('   → ONE HAS BEEN PAID AND ANOTHER HAS NOT. The old Report listed each application, so the unsettled one read Unpaid even though the locker is paid. That is a stale/duplicate application, not an unpaid customer (the fixed Report hides it when the LockerHub roster shows the locker under the other one).');
     }
   }
   const openUnsettled = rows.filter((r) => !r.okLike);

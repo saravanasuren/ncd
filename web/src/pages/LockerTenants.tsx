@@ -54,6 +54,9 @@ interface Tenant {
   pledged_amount: number; cheque_pending: boolean; ncd_backed: boolean; unresolved: boolean;
   rent_status?: RentStatus | null;
   rent_reason?: string | null;
+  rent_settlement_pending?: boolean;
+  /** What LockerHub bills for the rent — the same figure the Rent Report shows. annual_rent is the price list. */
+  rent_amount?: number | null;
   waiver_id: number | null; waiver_status: string | null; waiver_reason: string | null;
   linked_manually?: boolean; override_key?: string | null;
   /** The locker agreement is signed, and by which route (owner 2026-09-04). */
@@ -334,10 +337,12 @@ export function LockerTenantsPage() {
                         screen. The auto-waive plumbing (feeWaivers.autoWaiveDeposit)
                         and the waiver records are untouched. */}
                   </td>
-                  <td className="py-2 pr-3 text-right mono">{r.annual_rent != null ? formatINR(r.annual_rent) : '—'}</td>
+                  <td className="py-2 pr-3 text-right mono" title={r.annual_rent != null ? `Price list ${formatINR(r.annual_rent)} before GST` : undefined}>
+                    {(r.rent_amount ?? r.annual_rent) != null ? formatINR(r.rent_amount ?? r.annual_rent!) : '—'}
+                  </td>
                   <td className="py-2 pr-3">
                     <RentStatusBadge status={r.rent_status} reason={r.rent_reason} />
-                    {r.rent_reason && <div className="text-[11px] text-text-muted">{r.rent_reason}</div>}
+                    {r.rent_reason && <div className={`text-[11px] ${r.rent_settlement_pending ? 'text-warn' : 'text-text-muted'}`}>{r.rent_settlement_pending ? '⚠ ' : ''}{r.rent_reason}</div>}
                   </td>
                   <td className="py-2 pr-3 text-xs text-text-muted whitespace-nowrap">
                     {(r.lease_start ?? r.allotted_on) ? <>{r.lease_start ?? r.allotted_on}{r.lease_expires_on ? <> → {r.lease_expires_on}</> : null}</> : '—'}

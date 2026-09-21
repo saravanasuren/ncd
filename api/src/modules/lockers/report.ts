@@ -13,7 +13,7 @@ import ExcelJS from 'exceljs';
 import { RENT_STATUSES, RENT_STATUS_LABEL, type RentStatus } from '@new-wealth/shared';
 import type { Db } from '../../db/types.js';
 import * as lh from '../../integrations/lockerhub/client.js';
-import { rentDecisions } from './rentStatus.js';
+import { rentDecisions, rentAmountOf, removedKeys, isRemoved, isCancelled, isSuperseded } from './rentStatus.js';
 
 export type { RentStatus };
 
@@ -21,10 +21,12 @@ export interface LockerRentRow {
   lockerhub_application_id: string; application_no: string | null;
   locker_no: string | null; branch: string | null; size: string | null;
   customer_name: string | null; customer_code: string | null; phone: string | null;
-  rent_amount: number | null; rent_status: RentStatus; reason: string | null;
+  rent_amount: number | null; rent_status: RentStatus; reason: string | null; settlement_pending: boolean;
 }
 
-export interface LockerRentReport { rows: LockerRentRow[]; totals: Record<RentStatus, number>; lockerhub_error: string | null }
+/** Applications NCD knows about that are not lockers owing rent, and so are not listed. */
+export interface HiddenApplications { removed: number; cancelled: number; superseded: number }
+export interface LockerRentReport { rows: LockerRentRow[]; totals: Record<RentStatus, number>; hidden: HiddenApplications; lockerhub_error: string | null }
 
 export async function lockerRentReport(db: Db): Promise<LockerRentReport> {
   let lockerhub_error: string | null = null;
@@ -46,16 +48,19 @@ export async function lockerRentReport(db: Db): Promise<LockerRentReport> {
        UNION SELECT lockerhub_application_id FROM locker_cheques
      ) t WHERE id IS NOT NULL ORDER BY id LIMIT 500`)).rows.map((r) => String(r.id));
 
-  let rosterIds: string[] = [];
+  let roster: Array<Record<string, any>> = [];
   if (lh.lockerHubConfigured()) {
-    try {
-      const { tenants } = await lh.lockerTenants();
-      rosterIds = (tenants as Array<Record<string, unknown>>)
-        .map((t) => String(t.application_id ?? '').trim())
-        .filter(Boolean);
-    } catch (e) { lockerhub_error = (e as Error).message; }
+    try { roster = (await lh.lockerTenants()).tenants as Array<Record<string, any>>; }
+    catch (e) { lockerhub_error = (e as Error).message; }
   }
-  const ids = [...new Set([...localIds, ...rosterIds])];
+  const rosterIds = roster.map((t) => String(t.application_id ?? '').trim()).filter(Boolean);
+  const hidden: HiddenApplications = { removed: 0, cancelled: 0, superseded: 0 };
+
+  // Not every application NCD ever touched is a locker owing rent. Removed ones
+  // (Locker Tenants already hides these) go before LockerHub is even asked.
+  const removed = await removedKeys(db);
+  const candidates = [...new Set([...localIds, ...rosterIds])];
+  const ids = candidates.filter((id) => (isRemoved(id, removed, roster) ? (hidden.removed++, false) : true));
 
   let branchNames = new Map<string, string>();
   if (lh.lockerHubConfigured()) {
@@ -67,8 +72,18 @@ export async function lockerRentReport(db: Db): Promise<LockerRentReport> {
   const { decisions, apps, lockerhub_error: readError } = await rentDecisions(db, ids);
   if (!lockerhub_error) lockerhub_error = readError;
 
+  // Then the ones LockerHub cancelled, and the stale duplicates of a locker
+  // that is let under a different application. Each would read "Unpaid" for a
+  // locker that is either not a locker at all or is paid.
+  const listed = ids.filter((id) => {
+    const app = apps.get(id) ?? null;
+    if (isCancelled(app)) { hidden.cancelled++; return false; }
+    if (isSuperseded(id, app, roster)) { hidden.superseded++; return false; }
+    return true;
+  });
+
   // Match the resolved phones to NCD customers for the code/name.
-  const phones = ids.map((id) => last10(apps.get(id)?.phone)).filter((p) => p.length === 10);
+  const phones = listed.map((id) => last10(apps.get(id)?.phone)).filter((p) => p.length === 10);
   const custByPhone = new Map<string, Record<string, unknown>>();
   if (phones.length) {
     const custs = (await db.query<Record<string, unknown>>(
@@ -76,7 +91,7 @@ export async function lockerRentReport(db: Db): Promise<LockerRentReport> {
     for (const c of custs) custByPhone.set(last10(c.phone), c);
   }
 
-  const rows: LockerRentRow[] = ids.map((id) => {
+  const rows: LockerRentRow[] = listed.map((id) => {
     const app = apps.get(id) ?? null;
     const d = decisions.get(id)!;
     const c = custByPhone.get(last10(app?.phone));
@@ -89,9 +104,10 @@ export async function lockerRentReport(db: Db): Promise<LockerRentReport> {
       customer_name: (c?.full_name as string) ?? (app?.name as string) ?? null,
       customer_code: (c?.customer_code as string) ?? null,
       phone: (app?.phone as string) ?? null,
-      rent_amount: Number(app?.legs?.rent?.amount ?? app?.legs?.rent?.original_amount ?? 0) || null,
+      rent_amount: rentAmountOf(app),
       rent_status: d.status,
       reason: d.reason,
+      settlement_pending: d.settlement_pending === true,
     };
   });
   // Allotted lockers first, then by locker number.
@@ -99,7 +115,7 @@ export async function lockerRentReport(db: Db): Promise<LockerRentReport> {
 
   const totals = Object.fromEntries(RENT_STATUSES.map((s) => [s, 0])) as Record<RentStatus, number>;
   for (const r of rows) totals[r.rent_status]++;
-  return { rows, totals, lockerhub_error };
+  return { rows, totals, hidden, lockerhub_error };
 }
 
 export async function lockerRentReportXlsx(rep: LockerRentReport): Promise<Buffer> {
@@ -111,14 +127,14 @@ export async function lockerRentReportXlsx(rep: LockerRentReport): Promise<Buffe
     .map((s) => `${RENT_STATUS_LABEL[s]}: ${rep.totals[s]}`).join('   ');
   ws.addRow([summary]);
   ws.addRow([]);
-  ws.addRow(['S.No', 'Locker', 'Branch', 'Size', 'Customer', 'Customer code', 'Phone', 'Rent', 'Rent status', 'Reason'])
+  ws.addRow(['S.No', 'Locker', 'Branch', 'Size', 'Customer', 'Customer code', 'Phone', 'Rent', 'Rent status', 'Reason', 'Application'])
     .eachCell((c) => { c.font = { bold: true }; });
   rep.rows.forEach((r, i) => {
     ws.addRow([
       i + 1, r.locker_no ?? '', r.branch ?? '', r.size ?? '', r.customer_name ?? '', r.customer_code ?? '',
-      r.phone ?? '', r.rent_amount ?? '', RENT_STATUS_LABEL[r.rent_status], r.reason ?? '',
+      r.phone ?? '', r.rent_amount ?? '', RENT_STATUS_LABEL[r.rent_status], r.reason ?? '', r.application_no ?? '',
     ]);
   });
-  ws.columns = [{ width: 6 }, { width: 12 }, { width: 16 }, { width: 12 }, { width: 26 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 12 }, { width: 40 }];
+  ws.columns = [{ width: 6 }, { width: 12 }, { width: 16 }, { width: 12 }, { width: 26 }, { width: 14 }, { width: 14 }, { width: 12 }, { width: 12 }, { width: 40 }, { width: 18 }];
   return Buffer.from(await wb.xlsx.writeBuffer());
 }

@@ -21,6 +21,7 @@ const APPS: Record<string, any> = {
   // one locker, two applications: the live one paid, a stale one never
   d_live:    { application_no: 'APP-D4', phone: '9077777777', allotment: { locker_number: 'D-4' }, legs: { rent: leg({ settled: true }) } },
   d_stale:   { application_no: 'APP-D5', phone: '9077777777', allotment: { locker_number: 'D-4' }, legs: { rent: leg({ settled: false }) } },
+  d_cancel:  { application_no: 'APP-D7', phone: '9055555555', status: 'cancelled', allotment: { locker_number: 'D-7' }, legs: { rent: leg({ settled: false }) } },
   d_sonia:   { application_no: 'APP-D6', phone: '9066666666', allotment: { locker_number: 'D-6' }, legs: { rent: leg({ settled: false }) } },
 };
 const lh = {
@@ -82,6 +83,10 @@ describe('diagnose-rent-status', () => {
     expect(t).toContain('annual_rent = ₹20,000');
     expect(t).toContain('leg amount = ₹23,600');
     expect(t).toMatch(/NO standard GST waiver is applied/);
+  });
+
+  it('a cancelled application is named as such — it is not a customer who owes rent', async () => {
+    expect(await run('d_cancel')).toMatch(/VERDICT: CANCELLED ON LOCKERHUB/);
   });
 
   it('finds the application by its APP- number too', async () => {

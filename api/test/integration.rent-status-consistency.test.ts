@@ -45,12 +45,18 @@ const APPS: Record<string, any | null> = {
   rs_transfer_pending:   app('rs_transfer_pending', 'P-11', false),
   rs_lh_down:            null,
   rs_premium_ok_lh_down: null,
+  // Applications that are not lockers owing rent:
+  rs_cancelled:          { ...app('rs_cancelled', 'P-12', false), status: 'cancelled' },  // cancelled on LockerHub
+  rs_stale:              app('rs_stale', 'P-1', false),    // a duplicate on rs_paid's locker; the customer paid the other one
+  rs_removed:            app('rs_removed', 'P-13', false), // removed from NCD's view by staff
 };
+// Cancelled and superseded applications are not on LockerHub's roster.
+const OFF_ROSTER = new Set(['rs_cancelled', 'rs_stale']);
 
 const EXPECT: Record<string, string> = {
   rs_paid: 'paid', rs_unpaid: 'unpaid', rs_premium_ok: 'premium', rs_waived_ok: 'waived', rs_partial: 'paid',
   rs_premium_pending: 'unpaid', rs_premium_rejected: 'paid', rs_ncd_backed: 'paid',
-  rs_cheque_unsettled: 'unpaid', rs_transfer_unsettled: 'unpaid', rs_transfer_pending: 'unpaid',
+  rs_cheque_unsettled: 'paid', rs_transfer_unsettled: 'paid', rs_transfer_pending: 'unpaid',
   rs_lh_down: 'unknown', rs_premium_ok_lh_down: 'premium',
 };
 
@@ -62,9 +68,9 @@ beforeAll(async () => {
     const send = (code: number, obj: unknown) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)); };
     if (/\/branches$/.test(url.pathname)) return send(200, { branches: [{ id: 'br1', name: 'HOPE COLLAGE BRANCH' }] });
     if (/\/locker-tenants$/.test(url.pathname)) {
-      return send(200, { tenants: Object.keys(APPS).map((id, i) => ({
+      return send(200, { tenants: Object.keys(APPS).filter((id) => !OFF_ROSTER.has(id)).map((id, i) => ({
         tenant_id: `t_${id}`, application_id: id, branch_id: 'br1', branch_name: 'HOPE COLLAGE BRANCH', size: 'Extra Large',
-        locker_number: `L-${i}`, tenant: { name: `Tenant ${id}`, phone: `97000000${String(i).padStart(2, '0')}` },
+        locker_number: APPS[id]?.allotment?.locker_number ?? `L-${i}`, tenant: { name: `Tenant ${id}`, phone: `97000000${String(i).padStart(2, '0')}` },
       })) });
     }
     const m = url.pathname.match(/\/locker-applications\/([^/]+)$/);
@@ -96,6 +102,15 @@ beforeAll(async () => {
     `INSERT INTO locker_offline_payments (lockerhub_application_id, leg, method, reference, amount, status, created_by_user_id)
      VALUES ($1,'rent','transfer','UTR-9',23600,$2,$3)`, [id, status, adminId]);
   await off('rs_transfer_unsettled', 'Approved');
+  // Applications that exist in NCD's tables only through the automatic deposit waiver.
+  for (const id of ['rs_cancelled', 'rs_stale', 'rs_removed']) {
+    await ctx.db.query(
+      `INSERT INTO locker_fee_waivers (lockerhub_application_id, leg, waiver_pct, category, reason, status, created_by_user_id, approved_by_user_id)
+       VALUES ($1,'deposit',100,'waiver','Rent-only locker','Approved',$2,$2)`, [id, adminId]);
+  }
+  await ctx.db.query(
+    `INSERT INTO locker_tenant_overrides (lockerhub_tenant_id, removed_at, removed_reason, removed_by_user_id, tenant_name, locker_no, branch_id, lockerhub_cancelled)
+     VALUES ('t_rs_removed', now(), 'duplicate', $1, 'Tenant rs_removed', 'P-13', 'br1', FALSE)`, [adminId]);
   await off('rs_transfer_pending', 'PendingApproval');
 
   admin = new Client(ctx.base);
@@ -136,11 +151,71 @@ describe('Locker Tenants and the Locker Rent Report agree', () => {
     expect(tenant.get('rs_premium_pending').rent_reason).toMatch(/awaiting approval/i);
   });
 
-  it('every Unpaid says why — including money NCD collected that LockerHub never settled', async () => {
+  it('money NCD collected but LockerHub never settled reads Paid, flagged, with the reason', async () => {
     const { tenant, report } = await both();
     for (const [id, re] of [
-      ['rs_cheque_unsettled', /CHQ-77 cleared in NCD — rent not settled on LockerHub \(LockerHub unreachable\)/],
-      ['rs_transfer_unsettled', /UTR-9 approved in NCD — rent not settled on LockerHub/],
+      ['rs_cheque_unsettled', /Cheque CHQ-77 cleared in NCD — settlement to LockerHub pending \(LockerHub unreachable\)/],
+      ['rs_transfer_unsettled', /Transfer UTR-9 approved in NCD — settlement to LockerHub pending/],
+    ] as const) {
+      expect(report.get(id).rent_status, id).toBe('paid');
+      expect(report.get(id).settlement_pending, id).toBe(true);
+      expect(report.get(id).reason, id).toMatch(re);
+      expect(tenant.get(id).rent_settlement_pending, id).toBe(true);
+      expect(tenant.get(id).rent_reason, id).toMatch(re);
+    }
+    // a cleanly settled locker carries no flag
+    expect(report.get('rs_paid').settlement_pending).toBe(false);
+  });
+
+  it('applications that are not lockers owing rent are not listed: cancelled, removed, and a stale duplicate of a paid locker', async () => {
+    const { tenant, report, reportJson } = await both();
+    for (const id of ['rs_cancelled', 'rs_removed', 'rs_stale']) expect(report.has(id), id).toBe(false);
+    expect(tenant.has('rs_removed')).toBe(false);               // Tenants agrees on the removed one
+    expect(report.get('rs_paid').rent_status).toBe('paid');     // the live application on that locker is untouched
+    expect(reportJson.hidden).toEqual({ removed: 1, cancelled: 1, superseded: 1 });
+    // and the report never holds two applications for one locker at one branch
+    const seen = new Map<string, string>();
+    for (const r of report.values()) {
+      if (!r.locker_no) continue; // outage rows have no locker to compare
+      const k = `${r.branch}|${r.locker_no}`;
+      expect(seen.has(k), `${k} listed twice (${seen.get(k)}, ${r.lockerhub_application_id})`).toBe(false);
+      seen.set(k, r.lockerhub_application_id);
+    }
+  });
+
+  it('with the roster unreadable nothing is called a duplicate — a stale application cannot be told from a live one', async () => {
+    const saved = config.LOCKERHUB_API_URL;
+    // Serve the applications but not the roster.
+    const only = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', 'http://x');
+      const m = url.pathname.match(/\/locker-applications\/([^/]+)$/);
+      const a = m ? APPS[decodeURIComponent(m[1]!)] : null;
+      res.writeHead(a ? 200 : 500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(a ?? { error: 'x' }));
+    });
+    await new Promise<void>((r) => only.listen(0, '127.0.0.1', r));
+    config.LOCKERHUB_API_URL = `http://127.0.0.1:${(only.address() as { port: number }).port}`;
+    try {
+      const r = await admin.get('/api/lockers/rent-report');
+      const ids = (r.json.rows as any[]).map((x) => x.lockerhub_application_id);
+      expect(ids).toContain('rs_stale');           // kept: cannot be proven superseded
+      expect(ids).not.toContain('rs_cancelled');   // LockerHub says so directly; no roster needed
+      // (a removal keyed on the TENANT id needs the roster to find its application — the same limit Tenants has)
+      expect(r.json.lockerhub_error).toBeTruthy();
+    } finally { config.LOCKERHUB_API_URL = saved; await new Promise<void>((res) => only.close(() => res())); }
+  });
+
+  it('both pages show the SAME rent amount — what LockerHub bills, not the price list', async () => {
+    const { tenant, report } = await both();
+    for (const [id, r] of report) {
+      if (!tenant.has(id)) continue;
+      expect(tenant.get(id).rent_amount, id).toBe(r.rent_amount);
+    }
+    expect(report.get('rs_paid').rent_amount).toBe(23600);
+  });
+
+  it('every Unpaid says why', async () => {
+    const { tenant, report } = await both();
+    for (const [id, re] of [
       ['rs_transfer_pending', /awaiting approval/],
       ['rs_unpaid', /LockerHub shows the rent unsettled.*no payment recorded in NCD/],
     ] as const) {

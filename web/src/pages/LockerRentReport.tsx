@@ -12,9 +12,9 @@ import { RentStatusBadge } from '../components/RentStatusBadge.js';
 interface Row {
   lockerhub_application_id: string; locker_no: string | null; branch: string | null; size: string | null;
   customer_name: string | null; customer_code: string | null; phone: string | null;
-  rent_amount: number | null; rent_status: RentStatus; reason: string | null;
+  rent_amount: number | null; rent_status: RentStatus; reason: string | null; settlement_pending: boolean; application_no: string | null;
 }
-interface Report { rows: Row[]; totals: Record<RentStatus, number>; lockerhub_error: string | null }
+interface Report { rows: Row[]; totals: Record<RentStatus, number>; hidden: { removed: number; cancelled: number; superseded: number }; lockerhub_error: string | null }
 
 export function LockerRentReportPage() {
   const rep = useQuery({ queryKey: ['locker-rent-report'], queryFn: () => api.get<Report>('/api/lockers/rent-report') });
@@ -47,12 +47,21 @@ export function LockerRentReportPage() {
               className="ml-auto text-sm bg-primary hover:bg-primary-hover text-white rounded px-4 py-2 font-semibold no-underline inline-block">↓ Excel</a>
           </div>
 
+          {rep.data.hidden && (rep.data.hidden.removed + rep.data.hidden.cancelled + rep.data.hidden.superseded) > 0 && (
+            <div className="text-xs text-text-muted mb-2">
+              Not listed: {[
+                rep.data.hidden.cancelled ? `${rep.data.hidden.cancelled} cancelled on LockerHub` : '',
+                rep.data.hidden.superseded ? `${rep.data.hidden.superseded} duplicate of a locker let under another application` : '',
+                rep.data.hidden.removed ? `${rep.data.hidden.removed} removed from NCD` : '',
+              ].filter(Boolean).join(' · ')}.
+            </div>
+          )}
           <div className="overflow-x-auto bg-surface border border-border rounded-lg shadow-card">
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="border-b border-border">
                   <th className={th}>#</th><th className={th}>Locker</th><th className={th}>Branch</th><th className={th}>Size</th>
-                  <th className={th}>Customer</th><th className={`${th} text-right`}>Rent</th><th className={th}>Rent status</th><th className={th}>Reason</th>
+                  <th className={th}>Customer</th><th className={`${th} text-right`}>Rent</th><th className={th}>Rent status</th><th className={th}>Reason</th><th className={th}>Application</th>
                 </tr>
               </thead>
               <tbody>
@@ -67,10 +76,11 @@ export function LockerRentReportPage() {
                     </td>
                     <td className={`${td} text-right mono`}>{r.rent_amount != null ? formatINR(r.rent_amount) : '—'}</td>
                     <td className={td}><RentStatusBadge status={r.rent_status} reason={r.reason} /></td>
-                    <td className={`${td} text-xs text-text-muted`}>{r.reason ?? ''}</td>
+                    <td className={`${td} text-xs ${r.settlement_pending ? 'text-warn' : 'text-text-muted'}`}>{r.settlement_pending ? '⚠ ' : ''}{r.reason ?? ''}</td>
+                    <td className={`${td} font-mono text-xs text-text-muted`}>{r.application_no ?? '—'}</td>
                   </tr>
                 ))}
-                {rows.length === 0 && <tr><td className={`${td} text-text-muted`} colSpan={8}>No lockers.</td></tr>}
+                {rows.length === 0 && <tr><td className={`${td} text-text-muted`} colSpan={9}>No lockers.</td></tr>}
               </tbody>
             </table>
           </div>

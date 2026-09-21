@@ -20,7 +20,7 @@ import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { toISODate } from '../../lib/dates.js';
 import * as lh from '../../integrations/lockerhub/client.js';
-import { rentDecisions } from './rentStatus.js';
+import { rentDecisions, rentAmountOf } from './rentStatus.js';
 
 export interface LockerLink {
   id: number;
@@ -735,6 +735,11 @@ export async function lockerTenants(db: Db, opts: { branchId?: string | string[]
     const d = r.lockerhub_application_id ? rent.decisions.get(String(r.lockerhub_application_id)) : undefined;
     r.rent_status = d?.status ?? null;
     r.rent_reason = d?.reason ?? null;
+    r.rent_settlement_pending = d?.settlement_pending === true;
+    // What LockerHub bills for the rent — the very figure the Rent Report shows.
+    // annual_rent stays as it was (the price list, before GST): renewals and the
+    // waiver maths read it. The page shows rent_amount, and the list price on hover.
+    r.rent_amount = r.lockerhub_application_id ? rentAmountOf(rent.apps.get(String(r.lockerhub_application_id)) ?? null) : null;
   }
 
   const { openWaivers } = await import('./waivers.js');

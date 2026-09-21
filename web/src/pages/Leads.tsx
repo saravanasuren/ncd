@@ -199,9 +199,19 @@ export function LeadsPage() {
           <h1 className="text-xl font-bold tracking-tight m-0">Leads</h1>
           <p className="text-sm text-text-muted mt-1">Prospective investors you're following up.</p>
         </div>
-        {can('leads:create') && !creating && (
-          <button onClick={() => { setErr(''); setCreating(true); }} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">+ Create Lead</button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Every lead this person can see, plus the App prospects tab, as a
+              spreadsheet (owner 2026-09-21). The whole list, not just the tab
+              or search on screen — Status is a column, so filter in Excel. */}
+          <a href="/api/leads/report.xlsx"
+             className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg"
+             title="All your leads (every status) and the app prospects, with who created each lead, its branch and the latest follow-up note">
+            ↓ Download Excel
+          </a>
+          {can('leads:create') && !creating && (
+            <button onClick={() => { setErr(''); setCreating(true); }} className="text-xs bg-primary text-white rounded px-3 py-1.5 hover:bg-primary-hover">+ Create Lead</button>
+          )}
+        </div>
       </div>
 
       {can('leads:create') && creating && (

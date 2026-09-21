@@ -11,6 +11,30 @@ export const leadsRouter = Router();
 leadsRouter.get('/', requirePermission('leads:read'),
   asyncHandler(async (req, res) => res.json({ rows: await s.listLeads(getDb(), req.user!) })));
 
+/**
+ * The Leads page as an Excel file (owner 2026-09-21).
+ *
+ * Same permission and the SAME scope as the list above — the rows come from
+ * leadsReportRows, which shares listLeads' scope rule — so a branch user gets
+ * their own leads and nobody else's. It is still every phone number in that
+ * scope in one file, so the download is written to the audit log.
+ */
+leadsRouter.get('/report.xlsx', requirePermission('leads:read'),
+  asyncHandler(async (req, res) => {
+    const db = getDb();
+    const [rows, prospects] = await Promise.all([s.leadsReportRows(db, req.user!), s.listAppProspects(db)]);
+    // Today in IST — a UTC date would name yesterday's file before 5:30 am.
+    const asOf = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+    const { leadsReportXlsx } = await import('../reports/documents.js');
+    const buf = await leadsReportXlsx(rows, prospects as never, asOf);
+    const { writeAudit } = await import('../../lib/audit.js');
+    await writeAudit(db, { actorId: req.user!.id, action: 'leads.export', entityType: 'investor_leads', entityId: 0,
+      after: { leads: rows.length, app_prospects: prospects.length } });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="leads-${asOf}.xlsx"`);
+    res.end(buf);
+  }));
+
 // Dhanamfin app prospects (profile-only customers with no application).
 leadsRouter.get('/app-prospects', requirePermission('leads:read'),
   asyncHandler(async (_req, res) => res.json({ rows: await s.listAppProspects(getDb()) })));

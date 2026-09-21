@@ -706,8 +706,16 @@ export async function lockerAgreementPdf(db: Db, input: AgreementInput): Promise
       .text(SIGNATORY_DESIGNATION, 320, ruleY + 4, { width: 225, align: 'right' });
     doc.y = ruleY + 22;
 
+    // The Date is the Schedule's (ANNEXURE I), not a blank to write in: the
+    // sentence above the signatures says the agreement is executed "on this date
+    // (date as mentioned above)", so the person signing should not have to copy a
+    // date the document already holds. Same `when`, same formatter, so the two can
+    // never disagree. Place stays a ruled line — it is where they sign, which may
+    // not be the branch.
     doc.font('Helvetica').fontSize(8).fillColor(COLORS.MUTED)
-      .text('Date  ______________________          Place  ______________________', 50, doc.y, { width: W });
+      .text('Date  ', 50, doc.y, { width: W, continued: true })
+      .font('Helvetica-Bold').fillColor(COLORS.TEXT).text(fmtDate(when), { continued: true })
+      .font('Helvetica').fillColor(COLORS.MUTED).text('          Place  ______________________');
     doc.y += 14;
     doc.font('Helvetica').fontSize(7.5).fillColor(COLORS.MUTED)
       .text('Branch use: scan the signed agreement and upload it against this locker application in the NCD system.',

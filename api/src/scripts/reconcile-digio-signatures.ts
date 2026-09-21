@@ -37,11 +37,13 @@
  * COMMIT (--commit): applies it.
  *
  *   cd ~/ncd/api && set -a && . ./.env && set +a
+ *   export FILE_STORAGE_DIR=/var/lib/dhanam-newwealth   # REQUIRED for --commit: it is in the systemd unit, not .env
  *   node dist/scripts/reconcile-digio-signatures.js            # dry-run
  *   node dist/scripts/reconcile-digio-signatures.js --commit   # apply
  */
 import { loadSecretsFromSsm } from '../secrets.js';
 import { createDb } from '../db/index.js';
+import { requireServiceStorageDir } from '../lib/storage.js';
 
 const sleep = (ms: number) => new Promise<void>((r) => { setTimeout(r, ms); });
 
@@ -73,6 +75,10 @@ async function statusOf(fetchStatus: (id: string) => Promise<string | null>,
 
 async function main(): Promise<void> {
   const commit = process.argv.includes('--commit');
+  // completeSigning saves signed PDFs, bonds and consent letters. Saved without the
+  // service's FILE_STORAGE_DIR (which is in its systemd unit, not .env) they land
+  // where the service never reads them: signed, reference saved, file "missing".
+  if (commit) requireServiceStorageDir();
   await loadSecretsFromSsm();
   const db = createDb();
   const { fetchStatus, isRateLimited, isSignedStatus, isFailedStatus, digioConfigured } = await import('../integrations/digio/index.js');

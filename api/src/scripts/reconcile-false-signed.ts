@@ -31,16 +31,19 @@
  * COMMIT (--commit): applies it.
  *
  *   cd ~/ncd/api && set -a && . ./.env && set +a
+ *   export FILE_STORAGE_DIR=/var/lib/dhanam-newwealth   # REQUIRED for --commit: it is in the systemd unit, not .env
  *   node dist/scripts/reconcile-false-signed.js            # dry-run
  *   node dist/scripts/reconcile-false-signed.js --commit   # apply
  */
 import { loadSecretsFromSsm } from '../secrets.js';
 import { createDb } from '../db/index.js';
+import { requireServiceStorageDir } from '../lib/storage.js';
 
 const sleep = (ms: number) => new Promise<void>((r) => { setTimeout(r, ms); });
 
 async function main(): Promise<void> {
   const commit = process.argv.includes('--commit');
+  if (commit) requireServiceStorageDir();   // a recovered signature saves its PDF — see storage.ts
   await loadSecretsFromSsm();
   const db = createDb();
   const { reconcileSignedClaim, listFalselySigned } = await import('../modules/lockers/agreements.js');

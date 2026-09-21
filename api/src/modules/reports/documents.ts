@@ -422,6 +422,76 @@ export async function monthlyIncentivesXlsx(
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+/** Staff-wise investments, broken down month-wise AND series-wise (owner
+ *  2026-09-21). Three sheets off the one grain (book.staffMonthSeriesReport):
+ *   • "By Month"  — staff × month pivot of amount, row + column totals.
+ *   • "By Series" — staff × series pivot of amount, row + column totals.
+ *   • "Detail"    — staff · month · series · #investments · amount (the grain).
+ *  Amount is the subscribed investment brought in, not live outstanding. */
+export async function staffMonthSeriesXlsx(
+  rows: import('./book.js').StaffMonthSeriesRow[],
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const MONEY = '#,##0';
+
+  // Distinct staff (row axis) and the two column axes, each sorted so the file
+  // is stable run to run — months chronologically, series alphabetically.
+  const staff = [...new Set(rows.map((r) => r.staff))].sort((a, b) => a.localeCompare(b));
+  const months = [...new Set(rows.map((r) => r.month))].sort();
+  const seriesCodes = [...new Set(rows.map((r) => r.series_code))].sort((a, b) => a.localeCompare(b));
+
+  /** Build a staff × <cols> pivot sheet summing `amount`, with totals. */
+  const pivot = (title: string, cols: string[], keyOf: (r: import('./book.js').StaffMonthSeriesRow) => string) => {
+    const ws = wb.addWorksheet(title);
+    // cell[staff][col] = amount
+    const cell = new Map<string, Map<string, number>>();
+    for (const s of staff) cell.set(s, new Map());
+    for (const r of rows) {
+      const m = cell.get(r.staff)!;
+      m.set(keyOf(r), (m.get(keyOf(r)) ?? 0) + r.amount);
+    }
+    ws.addRow([title]).eachCell((c) => { c.font = { bold: true, size: 13 }; });
+    ws.addRow([]);
+    ws.addRow(['Staff', ...cols, 'Total']).eachCell((c) => { c.font = { bold: true }; });
+    const colTotals = new Array(cols.length).fill(0);
+    let grand = 0;
+    for (const s of staff) {
+      const m = cell.get(s)!;
+      const vals = cols.map((c) => m.get(c) ?? 0);
+      const rowTotal = vals.reduce((a, b) => a + b, 0);
+      vals.forEach((v, i) => { colTotals[i] += v; });
+      grand += rowTotal;
+      const row = ws.addRow([s, ...vals, rowTotal]);
+      row.eachCell((c, n) => { if (n > 1) c.numFmt = MONEY; });
+      row.getCell(cols.length + 2).font = { bold: true };
+    }
+    const totalRow = ws.addRow(['TOTAL', ...colTotals, grand]);
+    totalRow.eachCell((c, n) => { c.font = { bold: true }; if (n > 1) c.numFmt = MONEY; });
+    ws.columns = ['Staff', ...cols, 'Total'].map((h, i) => ({ width: i === 0 ? 26 : Math.max(12, h.length + 2) }));
+    ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 3 }];
+  };
+
+  pivot('By Month', months, (r) => r.month);
+  pivot('By Series', seriesCodes, (r) => r.series_code);
+
+  // Detail grain — every staff · month · series bucket, so anyone can re-pivot.
+  const det = wb.addWorksheet('Detail');
+  det.addRow(['Staff-wise investments — detail']).eachCell((c) => { c.font = { bold: true, size: 13 }; });
+  det.addRow([]);
+  det.addRow(['Staff', 'Month', 'Series', '# Investments', 'Amount']).eachCell((c) => { c.font = { bold: true }; });
+  for (const r of rows) {
+    const row = det.addRow([r.staff, r.month, r.series_code, r.count, r.amount]);
+    row.getCell(5).numFmt = MONEY;
+  }
+  const dTotal = det.addRow(['TOTAL', '', '', rows.reduce((s, r) => s + r.count, 0), rows.reduce((s, r) => s + r.amount, 0)]);
+  dTotal.eachCell((c) => { c.font = { bold: true }; });
+  dTotal.getCell(5).numFmt = MONEY;
+  det.columns = [{ width: 26 }, { width: 10 }, { width: 12 }, { width: 14 }, { width: 15 }];
+  det.views = [{ state: 'frozen', ySplit: 3 }];
+
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
 /**
  * The Leads page as a workbook (owner 2026-09-21: "in leads page - get me a
  * download button to download the leads report in excel").

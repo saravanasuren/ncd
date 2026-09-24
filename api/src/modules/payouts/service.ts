@@ -380,8 +380,8 @@ export interface LastInterestBatchSummary {
  * comparison under the payouts total (owner 2026-08-10). Null if none paid yet.
  */
 export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Promise<LastInterestBatchSummary | null> {
-  const batch = (await db.query<{ id: string; batch_no: string; payout_date: string; product_type: ProductType }>(
-    `SELECT id, batch_no, payout_date, product_type FROM payout_batches
+  const batch = (await db.query<{ id: string; batch_no: string; payout_date: string; product_type: ProductType; outstanding_at_payout: string | null; created_at: string }>(
+    `SELECT id, batch_no, payout_date, product_type, outstanding_at_payout, created_at FROM payout_batches
       WHERE kind = 'interest' AND status = 'Paid'
       ORDER BY payout_date DESC, id DESC LIMIT 1`)).rows[0];
   if (!batch) return null;
@@ -481,31 +481,75 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
       WHERE r.redemption_date > $1::date
         AND a.date_money_received <= $1::date`, [since])).rows[0]!;
 
+  /**
+   * THE BOOK AS AT THAT DATE — remembered, not recomputed (owner 2026-09-24:
+   * "THE OLD BATCH AMOUNT WHY IS IT CHANGING - IF THERE IS REDEMPTION OR
+   * ADDITION ?").
+   *
+   * It should never change, and while it was rebuilt from live rows it did. The
+   * owner's ₹69,49,00,000 read ₹69,69,00,000 two weeks on: four redemptions
+   * raised that morning still carried their full outstanding, so the add-back
+   * counted their ₹20,00,000 twice — once live, once reconstructed. Redemption
+   * status was no defence either; three redemptions marked Paid still carry an
+   * outstanding balance.
+   *
+   * Batches cut from now on carry `outstanding_at_payout`, written when the
+   * batch was created and read verbatim here. The old reconstruction survives
+   * ONLY as the fallback for batches cut before the column existed.
+   */
+  const snapshot = batch.outstanding_at_payout != null ? Number(batch.outstanding_at_payout) : null;
+  const lastOutstanding = round2(snapshot ?? (Number(split.before_amount) + Number(red.amount)));
+
+  /**
+   * What has LEFT that book since, measured against the book itself rather than
+   * counted from redemption rows: `snapshot − what those investments are worth
+   * now`. It needs no view on whether a redemption has settled, and it catches
+   * a maturity too, which counting redemptions never did.
+   *
+   * Above zero the other way round means money was added INTO that period after
+   * the snapshot — a backdated investment keyed in later. That is an addition,
+   * not a negative redemption, so it is reported as one.
+   *
+   * Either way the row reconciles by construction:
+   *   Last + Added − Redeemed = This
+   */
+  // Money keyed in AFTER the batch was cut whose money date falls on or before
+  // the payout date — a backdated entry. Measured on its own, because it moves
+  // `before_amount` UP while a redemption moves it DOWN: netting the two
+  // against the snapshot let them cancel, and a ₹10,00,000 redemption reported
+  // as ₹0 while a ₹10,00,000 backdated entry sat beside it.
+  const backdatedIn = snapshot == null ? 0 : round2(Number((await db.query<{ amount: string }>(
+    `SELECT COALESCE(sum(l.outstanding_amount), 0) AS amount
+       FROM applications a JOIN application_lines l ON l.application_id = a.id
+      WHERE a.id = ANY($1::bigint[])
+        AND a.date_money_received <= $2::date
+        AND a.created_at > $3`, [runIds.length ? runIds : [0], since, batch.created_at])).rows[0]!.amount));
+
+  // What has LEFT the remembered book: the snapshot, less what that same book is
+  // worth now once the backdated arrivals are taken back out. Needs no view on
+  // whether a redemption has settled — on production three redemptions marked
+  // Paid still carried an outstanding balance, and four marked Requested had
+  // already gone — and it catches a maturity, which counting redemptions never did.
+  const leftSince = snapshot != null
+    ? round2(snapshot - (Number(split.before_amount) - backdatedIn))
+    : round2(Number(red.amount));
+  const redeemedAmount = Math.max(0, leftSince);
+
   return {
     batch_no: batch.batch_no, payout_date: since,
     customers: Number(agg.customers), investments: Number(agg.investments),
     gross: round2(Number(agg.gross)), tds: round2(Number(agg.tds)), net: round2(Number(agg.net)),
-    // The book AS IT STOOD on that date, not as it stands today (owner
-    // 2026-09-10, who had ₹69,49,00,000 against our ₹69,29,00,000 — a ₹20 lakh
-    // gap that was exactly the three redemptions since).
-    //
-    // outstanding_amount is read LIVE, so an investment redeemed after the
-    // batch has already fallen to zero and silently left this figure — even
-    // though it was genuinely part of that period's book. Adding back what has
-    // since been redeemed restores the historical position, and it is what
-    // makes the row honest: a column headed "Last batch" should say what was
-    // outstanding THEN.
-    //
-    // It also makes Redeemed do real work. Before, the three columns did not
-    // reconcile and the screen carried a note explaining why not; now
-    //   Last (69,49) + Added (2,90) − Redeemed (0,20) = This (72,19)
-    // exactly, because the same figure that is added back here is the one
-    // subtracted there.
-    outstanding: round2(Number(split.before_amount) + Number(red.amount)),
+    outstanding: lastOutstanding,
     movement: {
       since,
-      added: { customers: Number(add.customers), investments: Number(add.investments), amount: round2(Number(add.amount)) },
-      redeemed: { customers: Number(red.customers), redemptions: Number(red.redemptions), amount: round2(Number(red.amount)) },
+      added: {
+        customers: Number(add.customers), investments: Number(add.investments),
+        amount: round2(Number(add.amount) + backdatedIn),
+      },
+      redeemed: {
+        customers: Number(red.customers), redemptions: Number(red.redemptions),
+        amount: redeemedAmount,
+      },
     },
   };
 }
@@ -525,9 +569,15 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
     const { rows } = await tx.query<{ id: string }>(
       // product_type stamps WHICH run this is, so its NEFT file and summary
       // sheet stay that product's alone and the two can never merge later.
-      `INSERT INTO payout_batches (batch_no, kind, payout_date, total_gross, total_tds, total_net, status, created_by_user_id, product_type)
-       VALUES ($1,'interest',$2,$3,$4,$5,'PendingChecker',$6,$7) RETURNING id`,
-      [batchNo, payoutDate, due.totals.gross, due.totals.tds, due.totals.total, actor.id, productType]
+      // outstanding_at_payout is the book AS AT THIS MOMENT, written once and
+      // never recomputed (owner 2026-09-24: "THE OLD BATCH AMOUNT WHY IS IT
+      // CHANGING - IF THERE IS REDEMPTION OR ADDITION ?"). It is the same
+      // measure the screen shows as "This batch", captured while it is still
+      // true, so once this batch becomes the last paid one the comparison reads
+      // a remembered number instead of reconstructing the past from live rows.
+      `INSERT INTO payout_batches (batch_no, kind, payout_date, total_gross, total_tds, total_net, status, created_by_user_id, product_type, outstanding_at_payout)
+       VALUES ($1,'interest',$2,$3,$4,$5,'PendingChecker',$6,$7,$8) RETURNING id`,
+      [batchNo, payoutDate, due.totals.gross, due.totals.tds, due.totals.total, actor.id, productType, due.totals.outstanding]
     );
     const batchId = Number(rows[0]!.id);
 

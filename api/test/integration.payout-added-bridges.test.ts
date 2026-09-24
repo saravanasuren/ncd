@@ -91,23 +91,31 @@ describe('the payout comparison explains its own total', () => {
     await invest(a, 'Day After', '9564000005', 900000, '2026-08-29');
   });
 
-  it('Added is only what landed AFTER the payout date', async () => {
+  it('Last batch is FROZEN at what the book was when the batch was cut', async () => {
     const s = await summary(await admin(), NEXT);
     expect(s).toBeTruthy();
     expect(s!.payout_date).toBe(PAYOUT);
-    // Just the 29-Aug one. The boundary and backdated investments belong to
-    // Last batch, which is the correction the owner asked for.
-    expect(s!.movement.added.investments).toBe(1);
-    expect(s!.movement.added.amount).toBe(900000);
-    expect(s!.movement.added.customers).toBe(1);
+    // Only the two investments that existed when the batch was created.
+    // 1,000,000 + 500,000. The boundary and backdated entries were keyed in
+    // afterwards and CANNOT be in a figure that was already written down.
+    expect(s!.outstanding).toBe(1500000);
   });
 
-  it('money ON the payout date counts in Last batch, not Added', async () => {
-    // The ₹1.26 crore that used to be in neither column. Both the boundary
-    // (700000) and the backdated (300000) sit in Last batch's outstanding,
-    // alongside the two originals (1000000 + 500000).
+  it('money keyed in after the batch shows as Added, wherever its money date falls', async () => {
+    // THE TRADE-OFF, stated out loud (owner 2026-09-24: "THE OLD BATCH AMOUNT
+    // WHY IS IT CHANGING - IF THERE IS REDEMPTION OR ADDITION ?").
+    //
+    // On 2026-09-10 the owner asked that money received ON or BEFORE the payout
+    // date count in Last batch even when keyed in later. On 2026-09-24 they
+    // asked that Last batch never move. Those two cannot both hold: a number
+    // fixed when the batch was cut cannot later absorb an entry nobody had made
+    // yet. Freezing won, so backdated money is reported as an ADDITION — which
+    // is what it is, to the book, on the day it was keyed in.
+    //
+    // The boundary (700,000 on the payout date) + backdated (300,000 on 05-Aug)
+    // + the genuine 29-Aug one (900,000).
     const s = await summary(await admin(), NEXT);
-    expect(s!.outstanding).toBe(2500000);
+    expect(s!.movement.added.amount).toBe(1900000);
   });
 
   it('bridges exactly: last + added − redeemed = this', async () => {
@@ -120,26 +128,39 @@ describe('the payout comparison explains its own total', () => {
       .toBe(preview.totals.outstanding);
   });
 
-  it('Last batch keeps money that has since been REDEEMED', async () => {
-    // The owner's ₹20 lakh. An investment redeemed after the batch falls to
-    // zero outstanding, so reading it live drops money that genuinely was in
-    // that period's book. It must still be counted on the last-batch side, and
-    // subtracted once as Redeemed.
+  it('a redemption of money that WAS in the book shows as Redeemed, and Last batch still does not move', async () => {
+    // The owner's ₹20 lakh, restated for a remembered figure. Redeeming an
+    // investment that was in the snapshot must NOT quietly shrink the snapshot —
+    // it must show up as money leaving, once.
+    //
+    // Redemption STATUS is deliberately not consulted: on production three
+    // redemptions marked Paid still carried an outstanding balance, and four
+    // marked Requested had already been counted. What has left is measured
+    // against the remembered figure instead, so it is true whatever the
+    // paperwork says.
     const a = await admin();
     const before = (await summary(a, NEXT))!;
-    const app = await invest(a, 'Redeemed Later', '9564000006', 400000, '2026-08-10');
-    // Redeem it AFTER the payout date, the way Chandra R's three were.
+    const app = Number((await ctx.db.query(
+      `SELECT a.id FROM applications a JOIN customers c ON c.id = a.customer_id
+        WHERE c.full_name = 'Before Batch A'`)).rows[0]!.id);
+
     await ctx.db.query("UPDATE application_lines SET outstanding_amount = 0, status = 'Redeemed' WHERE application_id = $1", [app]);
     await ctx.db.query("UPDATE applications SET status = 'Redeemed' WHERE id = $1", [app]);
     await ctx.db.query(
       `INSERT INTO redemptions (redemption_no, application_id, type, principal, net_payment, redemption_date, status)
-       VALUES ($2, $1, 'maturity', 400000, 400000, '2026-09-05', 'Completed')`,
+       VALUES ($2, $1, 'maturity', 1000000, 1000000, '2026-09-05', 'Completed')`,
       [app, `RED-TEST-${app}`]);
 
     const after = (await summary(a, NEXT))!;
-    // Still in the last-batch book, even though its outstanding is now zero.
-    expect(after.outstanding).toBe(before.outstanding + 400000);
-    expect(after.movement.redeemed.amount).toBe(before.movement.redeemed.amount + 400000);
+    // FROZEN. This is the whole point.
+    expect(after.outstanding).toBe(before.outstanding);
+    // And the money that left is reported as having left.
+    expect(after.movement.redeemed.amount).toBe(before.movement.redeemed.amount + 1000000);
+
+    // The row still explains itself.
+    const preview = (await a.get(`/api/payouts/preview?date=${NEXT}`)).json as { totals: { outstanding: number } };
+    expect(after.outstanding + after.movement.added.amount - after.movement.redeemed.amount)
+      .toBe(preview.totals.outstanding);
   });
 
   it('a Skipped row does not move an investment between the columns', async () => {
@@ -152,5 +173,86 @@ describe('the payout comparison explains its own total', () => {
       `UPDATE disbursement_schedule SET status = 'Skipped' WHERE application_id = $1`, [onBoundary]);
     const after = (await summary(a, NEXT))!.movement.added.investments;
     expect(after).toBe(before);
+  });
+});
+
+/**
+ * The owner's question, asked as a test (2026-09-24): "THE OLD BATCH AMOUNT WHY
+ * IS IT CHANGING - IF THERE IS REDEMPTION OR ADDITION ?"
+ *
+ * It should not change. For anything. These are the four events that used to
+ * move it, fired one after another against a single batch, asserting the same
+ * remembered figure each time.
+ */
+describe('the old batch amount never changes', () => {
+  const D = '2026-11-28';
+  let frozen = 0;
+
+  it('remembers what the book was when the batch was cut', async () => {
+    const a = await admin();
+    await invest(a, 'Snap One', '9565000001', 1000000, '2026-11-01');
+    await invest(a, 'Snap Two', '9565000002', 2000000, '2026-11-02');
+    const batch = await a.post('/api/payouts', { payout_date: D });
+    const id = Number(batch.json.id ?? batch.json.batch_id);
+    await ctx.db.query("UPDATE payout_batches SET status = 'Paid' WHERE id = $1", [id]);
+    await ctx.db.query("UPDATE disbursement_schedule SET status = 'Paid', paid_at = $2::date WHERE batch_id = $1", [id, D]);
+
+    // Written down at creation, not derived from anything live. The absolute
+    // figure depends on what else this file has already put on the book, so what
+    // is asserted is that it was stored at all — and then, in every test below,
+    // that it never moves. That is the property the owner asked for.
+    const stored = (await ctx.db.query<{ o: string }>(
+      'SELECT outstanding_at_payout AS o FROM payout_batches WHERE id = $1', [id])).rows[0]!.o;
+    expect(stored).not.toBeNull();
+    frozen = Number(stored);
+    expect(frozen).toBeGreaterThan(0);
+    // The two investments above are in it.
+    expect(frozen).toBeGreaterThanOrEqual(3000000);
+    // And it is what the screen reads.
+    expect((await summary(a, D))!.outstanding).toBe(frozen);
+  });
+
+  it('a NEW investment does not move it', async () => {
+    const a = await admin();
+    await invest(a, 'After The Batch', '9565000003', 5000000, '2026-12-01');
+    expect((await summary(a, '2026-12-28'))!.outstanding).toBe(frozen);
+  });
+
+  it('a BACKDATED investment does not move it', async () => {
+    // Money dated inside the batch's period, keyed in afterwards — the case the
+    // old reconstruction absorbed, silently raising a historical figure.
+    const a = await admin();
+    await invest(a, 'Backdated After', '9565000004', 700000, '2026-11-03');
+    expect((await summary(a, '2026-12-28'))!.outstanding).toBe(frozen);
+  });
+
+  it('a REDEMPTION does not move it', async () => {
+    const a = await admin();
+    const app = Number((await ctx.db.query(
+      `SELECT a.id FROM applications a JOIN customers c ON c.id = a.customer_id WHERE c.full_name = 'Snap Two'`)).rows[0]!.id);
+    await ctx.db.query("UPDATE application_lines SET outstanding_amount = 0, status = 'Redeemed' WHERE application_id = $1", [app]);
+    await ctx.db.query("UPDATE applications SET status = 'Redeemed' WHERE id = $1", [app]);
+    await ctx.db.query(
+      `INSERT INTO redemptions (redemption_no, application_id, type, principal, net_payment, redemption_date, status)
+       VALUES ($2, $1, 'maturity', 2000000, 2000000, '2026-12-05', 'Completed')`, [app, `RED-SNAP-${app}`]);
+    expect((await summary(a, '2026-12-28'))!.outstanding).toBe(frozen);
+  });
+
+  it('a redemption NOT YET settled does not move it either — the ₹20 lakh case', async () => {
+    // Four redemptions raised on the morning of 2026-09-24 were still carrying
+    // their full outstanding. The old code added their principal back while the
+    // live figure still held it, counting ₹20,00,000 twice.
+    const a = await admin();
+    const app = Number((await ctx.db.query(
+      `SELECT a.id FROM applications a JOIN customers c ON c.id = a.customer_id WHERE c.full_name = 'Snap One'`)).rows[0]!.id);
+    await ctx.db.query(
+      `INSERT INTO redemptions (redemption_no, application_id, type, principal, net_payment, redemption_date, status)
+       VALUES ($2, $1, 'premature', 1000000, 1000000, '2026-12-06', 'Requested')`, [app, `RED-PEND-${app}`]);
+    // Principal deliberately still on the book, exactly as it was in production.
+    const s = (await summary(a, '2026-12-28'))!;
+    expect(s.outstanding).toBe(frozen);
+    // And it is NOT reported as having left, because it has not.
+    const preview = (await a.get('/api/payouts/preview?date=2026-12-28')).json as { totals: { outstanding: number } };
+    expect(s.outstanding + s.movement.added.amount - s.movement.redeemed.amount).toBe(preview.totals.outstanding);
   });
 });

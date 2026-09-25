@@ -256,3 +256,68 @@ describe('the old batch amount never changes', () => {
     expect(s.outstanding + s.movement.added.amount - s.movement.redeemed.amount).toBe(preview.totals.outstanding);
   });
 });
+
+/**
+ * Redeemed must be the REDEMPTIONS (owner 2026-09-25: "there was never 1 cr
+ * redemption at all. why is it showong like this").
+ *
+ * It briefly read ₹1,71,00,000 against ₹40,00,000 of real redemptions, because
+ * it was derived as "snapshot − what that book is worth now", with money keyed
+ * in later subtracted back out. The 28-08 snapshot had been BACKFILLED with a
+ * figure measured four weeks after the batch, so investments keyed in between
+ * were already inside it — and counting them again as late arrivals pushed
+ * exactly that much into Redeemed.
+ *
+ * The lesson is in the shape, not the arithmetic: a figure whose as-at moment
+ * is unknown cannot be used to infer a second figure. So Redeemed is measured
+ * and Added carries the remainder.
+ */
+describe('Redeemed says what was redeemed', () => {
+  const D = '2027-03-28';
+  let frozen = 0;
+
+  it('a batch whose snapshot was taken LATER still reports redemptions honestly', async () => {
+    const a = await admin();
+    await invest(a, 'Honest One', '9566000001', 1000000, '2027-02-01');
+    await invest(a, 'Honest Two', '9566000002', 1000000, '2027-02-02');
+    const batch = await a.post('/api/payouts', { payout_date: '2027-02-28' });
+    const id = Number(batch.json.id ?? batch.json.batch_id);
+    await ctx.db.query("UPDATE payout_batches SET status = 'Paid' WHERE id = $1", [id]);
+    await ctx.db.query("UPDATE disbursement_schedule SET status = 'Paid', paid_at = '2027-02-28'::date WHERE batch_id = $1", [id]);
+
+    // Keyed in AFTER the batch, money dated before it — the shape that was
+    // being double-counted.
+    await invest(a, 'Keyed Later', '9566000003', 3000000, '2027-02-10');
+
+    // Now restate the snapshot the way the 28-08 one was backfilled: measured
+    // LATE, so it already contains the investment above.
+    const live = Number((await ctx.db.query(
+      `SELECT COALESCE(sum(l.outstanding_amount),0) AS a FROM applications a
+         JOIN application_lines l ON l.application_id = a.id
+        WHERE a.date_money_received <= '2027-02-28'::date`)).rows[0]!.a);
+    await ctx.db.query('UPDATE payout_batches SET outstanding_at_payout = $1 WHERE id = $2', [live, id]);
+    frozen = live;
+
+    // Redeem ONE investment, for a known amount.
+    const app = Number((await ctx.db.query(
+      `SELECT a.id FROM applications a JOIN customers c ON c.id = a.customer_id WHERE c.full_name = 'Honest One'`)).rows[0]!.id);
+    await ctx.db.query("UPDATE application_lines SET outstanding_amount = 0, status = 'Redeemed' WHERE application_id = $1", [app]);
+    await ctx.db.query("UPDATE applications SET status = 'Redeemed' WHERE id = $1", [app]);
+    await ctx.db.query(
+      `INSERT INTO redemptions (redemption_no, application_id, type, principal, net_payment, redemption_date, status)
+       VALUES ($2, $1, 'maturity', 1000000, 1000000, '2027-03-05', 'Completed')`, [app, `RED-HON-${app}`]);
+
+    const s = (await summary(a, D))!;
+    // THE POINT: one redemption of ₹10,00,000, reported as ₹10,00,000 — not
+    // inflated by the ₹30,00,000 that was keyed in late.
+    expect(s.movement.redeemed.amount).toBe(1000000);
+    expect(s.outstanding).toBe(frozen);
+  });
+
+  it('and the row still adds up', async () => {
+    const a = await admin();
+    const s = (await summary(a, D))!;
+    const preview = (await a.get(`/api/payouts/preview?date=${D}`)).json as { totals: { outstanding: number } };
+    expect(s.outstanding + s.movement.added.amount - s.movement.redeemed.amount).toBe(preview.totals.outstanding);
+  });
+});

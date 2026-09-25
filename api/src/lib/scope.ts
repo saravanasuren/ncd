@@ -9,6 +9,8 @@ export type Scope =
   | { kind: 'all' }
   | { kind: 'branch'; branchIds: number[]; userId: number }
   | { kind: 'own-staff'; userId: number }
+  /** Customers who hold a locker, plus anyone this user enrolled. */
+  | { kind: 'locker-customers'; userId: number }
   | { kind: 'own-agent'; agentId: number | null; userId: number }
   | { kind: 'self-customer'; customerId: number | null; userId: number };
 
@@ -31,6 +33,11 @@ export function scopeFor(user: ScopeUser): Scope {
       return { kind: 'branch', branchIds: user.branchIds, userId: user.id };
     case 'branch_staff':
       return { kind: 'own-staff', userId: user.id };
+    // Lockers everywhere, the NCD book nowhere — except the customers who hold
+    // a locker, whose investments they may see (owner 2026-09-25: "only
+    // customers with locker their investments can be seen").
+    case 'locker_manager':
+      return { kind: 'locker-customers', userId: user.id };
     case 'agent':
       return { kind: 'own-agent', agentId: user.agentId, userId: user.id };
     case 'customer':
@@ -71,7 +78,11 @@ function referrerMatchSql(refCol: string | undefined, userParam: string): string
 
 export function scopeWhere(
   scope: Scope,
-  cols: { userCol: string; agentCol: string; branchCol: string; selfIdCol?: string; refCol?: string },
+  cols: { userCol: string; agentCol: string; branchCol: string; selfIdCol?: string; refCol?: string;
+          /** Where this query's customer id lives. Required by the
+           *  'locker-customers' scope; without it that scope denies the whole
+           *  query rather than guessing. */
+          customerCol?: string },
   paramOffset = 0
 ): { sql: string; params: unknown[] } {
   let p = paramOffset;
@@ -92,6 +103,23 @@ export function scopeWhere(
       const userParam = `$${++p}`;
       return {
         sql: `(${cols.userCol} = ${userParam}${referrerMatchSql(cols.refCol, userParam)})`,
+        params: [scope.userId],
+      };
+    }
+    case 'locker-customers': {
+      // Holders of a locker, plus anyone this user enrolled themselves — the
+      // same "and their own" allowance the branch scope makes, so a customer
+      // created to book a locker stays visible in the moment before the locker
+      // application exists.
+      //
+      // DENIES when the caller supplies no customer column. A screen nobody has
+      // scoped yet shows nothing, which is recoverable; showing the whole book
+      // to a role defined by not having it is not.
+      if (!cols.customerCol) return { sql: 'FALSE', params: [] };
+      const userParam = `$${++p}`;
+      return {
+        sql: `(${cols.customerCol} IN (SELECT customer_id FROM locker_applications WHERE customer_id IS NOT NULL)
+               OR ${cols.userCol} = ${userParam})`,
         params: [scope.userId],
       };
     }

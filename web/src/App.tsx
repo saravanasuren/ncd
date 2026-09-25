@@ -73,6 +73,10 @@ function HomeRedirect() {
   const { can } = useAuth();
   if (can('dashboard:view')) return <Navigate to="/app/dashboard" replace />;
   if (can('leads:read')) return <Navigate to="/app/leads" replace />;
+  // A Locker Manager holds neither of the above — lockers are the whole job,
+  // so the tenants roster is their home rather than an earnings page that would
+  // be empty for them (owner 2026-09-25).
+  if (can('lockers:enroll')) return <Navigate to="/app/locker-tenants" replace />;
   return <Navigate to="/app/my-earnings" replace />;
 }
 

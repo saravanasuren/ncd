@@ -17,12 +17,16 @@ const ROLE_IDS: Record<string, number> = Object.fromEntries(ROLES.map((r, i) => 
 
 let db: PgliteDb;
 
-// Minimal clean target: schema + the 8 roles (no demo book, so counts are exact).
+// Minimal clean target: schema + every role (no demo book, so counts are exact).
 beforeEach(async () => {
   db = new PgliteDb();
   await migrate(db);
   for (const role of ROLES) {
-    await db.query('INSERT INTO roles (id, name, label, level) VALUES ($1,$2,$3,$4)', [
+    // ON CONFLICT because migrate() seeds some roles itself now — locker_manager
+    // arrives in migration 099, since production never runs the seed.
+    await db.query(
+      `INSERT INTO roles (id, name, label, level) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, label = EXCLUDED.label, level = EXCLUDED.level`, [
       ROLE_IDS[role], role, ROLE_LABELS[role], ROLE_LEVEL[role],
     ]);
   }

@@ -8,6 +8,11 @@ export const ROLES = [
   'branch_staff',
   'agent',
   'customer',
+  // APPEND ONLY, NEVER INSERT. Role ids are POSITIONAL — seed.ts derives them
+  // as `ROLES.map((r, i) => [r, i + 1])` — so putting a role anywhere but the
+  // end renumbers every role after it and silently repoints every existing
+  // user to the wrong one.
+  'locker_manager',
 ] as const;
 
 export type Role = (typeof ROLES)[number];
@@ -22,6 +27,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   branch_staff: 'Branch Staff',
   agent: 'Agent',
   customer: 'Customer',
+  locker_manager: 'Locker Manager',
 };
 
 /**
@@ -38,6 +44,8 @@ export const ROLE_LEVEL: Record<Role, number> = {
   branch_staff: 2,
   agent: 2,
   customer: 0,
+  // Alongside a branch manager: senior on lockers, no reach into the NCD book.
+  locker_manager: 3,
 };
 
 /** Roles that are internal staff (get the AppShell, not the customer portal). */

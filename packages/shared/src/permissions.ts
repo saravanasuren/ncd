@@ -212,6 +212,33 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'lockers:link-tenant',
   ],
 
+  /**
+   * Locker Manager (owner 2026-09-25) — lockers across EVERY branch, and
+   * nothing of the NCD book beyond the customers who hold one.
+   *
+   * No delete: `lockers:remove-tenant`, `customers:delete` and
+   * `applications:delete` are Super-Admin-only (SUPER_ADMIN_ONLY above), so
+   * this role simply never receives them.
+   *
+   * All branches comes free — locker branch scoping restricts `branch_staff`
+   * alone, so any other role is unrestricted there. What DOES need saying is
+   * the other half: this role must not see the whole customer book, which is
+   * why scopeFor gives it the 'locker-customers' scope.
+   *
+   * `customers:create` is here because a walk-in has no customer record yet and
+   * a locker cannot be booked without one. The scope covers customers this user
+   * enrolled as well as locker holders, so someone created mid-booking does not
+   * vanish before their locker exists.
+   */
+  locker_manager: [
+    'lockers:enroll',   // every locker page, and booking
+    'lockers:waive',    // maker only — Admin/CXO still approve (owner 2026-09-25)
+    'applications:confirm-collection', // record cheque / offline locker rent
+    'reports:download',
+    'customers:read',
+    'customers:create',
+  ],
+
   branch_manager: [
     ...STAFF_FUNNEL,
     'dashboard:drilldown',

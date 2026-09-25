@@ -36,7 +36,12 @@ async function buildDryRunTarget(): Promise<Db> {
   await migrate(db);
   const roleId: Record<string, number> = Object.fromEntries(ROLES.map((r, i) => [r, i + 1]));
   for (const role of ROLES) {
-    await db.query('INSERT INTO roles (id, name, label, level) VALUES ($1,$2,$3,$4)', [
+    // ON CONFLICT because migrate() now seeds some roles itself — locker_manager
+    // arrives in migration 099, since production never runs the seed. A plain
+    // INSERT collided on roles_pkey and took the whole dry run down with it.
+    await db.query(
+      `INSERT INTO roles (id, name, label, level) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, label = EXCLUDED.label, level = EXCLUDED.level`, [
       roleId[role], role, ROLE_LABELS[role], ROLE_LEVEL[role],
     ]);
   }

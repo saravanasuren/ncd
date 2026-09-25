@@ -30,6 +30,7 @@ const SCOPE_COLS = {
   userCol: 'c.enrolled_by_user_id',
   agentCol: 'c.enrolled_by_agent_id',
   branchCol: 'c.branch_id',
+  customerCol: 'c.id',
   selfIdCol: 'c.id',
   // Staff also own the customers they REFERRED, not just the ones they keyed
   // in — see scope.ts referrerMatchSql.

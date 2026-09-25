@@ -513,27 +513,39 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
    * Either way the row reconciles by construction:
    *   Last + Added − Redeemed = This
    */
-  // Money keyed in AFTER the batch was cut whose money date falls on or before
-  // the payout date — a backdated entry. Measured on its own, because it moves
-  // `before_amount` UP while a redemption moves it DOWN: netting the two
-  // against the snapshot let them cancel, and a ₹10,00,000 redemption reported
-  // as ₹0 while a ₹10,00,000 backdated entry sat beside it.
-  const backdatedIn = snapshot == null ? 0 : round2(Number((await db.query<{ amount: string }>(
-    `SELECT COALESCE(sum(l.outstanding_amount), 0) AS amount
-       FROM applications a JOIN application_lines l ON l.application_id = a.id
-      WHERE a.id = ANY($1::bigint[])
-        AND a.date_money_received <= $2::date
-        AND a.created_at > $3`, [runIds.length ? runIds : [0], since, batch.created_at])).rows[0]!.amount));
+  /**
+   * REDEEMED IS THE REDEMPTIONS. Nothing derived, nothing inferred — the
+   * principal of redemptions raised after the batch on money that was on the
+   * book by then (owner 2026-09-25: "there was never 1 cr redemption at all").
+   *
+   * It briefly was derived, as `snapshot − what that book is worth now`, with
+   * money keyed in later subtracted back out. That read ₹1,71,00,000 against
+   * ₹40,00,000 of real redemptions. The arithmetic was sound; its premise was
+   * not. The 28-08 snapshot was BACKFILLED by hand with a figure measured on
+   * 24-09, so five investments keyed between 29-Aug and 09-Sep (₹1,31,00,000)
+   * were already inside it — and counting them again as late arrivals pushed
+   * exactly that much into Redeemed. 40,00,000 + 1,31,00,000 = 1,71,00,000.
+   *
+   * A measured figure cannot be second-guessed from a snapshot whose own
+   * as-at moment is unknown. So the column that has to be TRUE is measured
+   * directly, and ADDED carries the remainder.
+   */
+  const redeemedAmount = round2(Number(red.amount));
 
-  // What has LEFT the remembered book: the snapshot, less what that same book is
-  // worth now once the backdated arrivals are taken back out. Needs no view on
-  // whether a redemption has settled — on production three redemptions marked
-  // Paid still carried an outstanding balance, and four marked Requested had
-  // already gone — and it catches a maturity, which counting redemptions never did.
-  const leftSince = snapshot != null
-    ? round2(snapshot - (Number(split.before_amount) - backdatedIn))
-    : round2(Number(red.amount));
-  const redeemedAmount = Math.max(0, leftSince);
+  /**
+   * ADDED is everything else: the money in, whenever it was keyed. Derived
+   * rather than measured, so the row always reconciles —
+   *   Last + Added − Redeemed = This
+   * — whatever else has moved on the book since. Its investment and customer
+   * COUNTS still describe money that landed after the payout date, which is
+   * the question a reader asks of them; the amount is the whole inflow.
+   */
+  const thisBatch = Number(split.before_amount) + Number(split.after_amount);
+  const addedAmount = snapshot != null
+    ? round2(thisBatch - snapshot + redeemedAmount)
+    // No snapshot (a batch cut before the column existed): nothing to bridge
+    // from, so report what was actually measured.
+    : round2(Number(split.after_amount));
 
   return {
     batch_no: batch.batch_no, payout_date: since,
@@ -544,7 +556,7 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
       since,
       added: {
         customers: Number(add.customers), investments: Number(add.investments),
-        amount: round2(Number(add.amount) + backdatedIn),
+        amount: addedAmount,
       },
       redeemed: {
         customers: Number(red.customers), redemptions: Number(red.redemptions),

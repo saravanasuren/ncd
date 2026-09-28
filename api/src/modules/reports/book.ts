@@ -713,7 +713,25 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
   // (same rule as OUTSTANDING_APPLICATION_STATUSES), so it must not inflate
   // "issued" — since the go-live change that is where every new investment
   // waits, and it was making NCD_28 read ₹15L against ₹10L outstanding.
+  //
+  // MONEY THAT LEFT BEFORE THE SERIES WAS ISSUED WAS NEVER ISSUED (owner
+  // 2026-09-28: "during allotment the issued amount was 4,88 cr only - so the
+  // issue should come as 4.88 - only redemptions after issue should fall into
+  // redemption"). NCD_28 was the case: ₹3L came in on 23 Jul and was redeemed on
+  // 12 Aug, eight days before the 20 Aug allotment, so it was never allotted —
+  // yet the register counted it in BOTH Issued (₹4.91cr against the ₹4.88cr
+  // actually allotted) and Redeemed. It belongs in neither.
+  //
+  // `allotment_date` is the marker of having been issued: an investment that
+  // exits AFTER allotment keeps its date, so it still counts as issued AND as
+  // redeemed, and Issued = Outstanding + Redeemed continues to hold. An open
+  // series is untouched — nothing has exited there, so nothing is excluded.
+  //
+  // The TRANSACTION register deliberately keeps both legs of such an investment:
+  // that one is a log of what happened, not of what survives.
   if (seriesLike) {
+    const EXITED = `a.status IN ('Redeemed','Matured','PrematureWithdrawn','RolledOver','Transferred')`;
+    const NEVER_ISSUED = `(a.allotment_date IS NULL AND ${EXITED})`;
     // Channel views (Locker Hub / Dhanamfin App) apply the SAME channel filter
     // so their Issued/Redeemed are channel-specific and reconcile with the tab's
     // Outstanding (Issued = Outstanding + Redeemed).
@@ -721,8 +739,9 @@ export async function segmentGrouped(db: Db, actor: AuthUser, by: SegmentBy, fil
     const { rows: regRows } = await db.query<any>(
       `SELECT s.code AS series_code,
               min(a.date_money_received) AS win_from, max(a.date_money_received) AS win_to,
-              COALESCE(sum(a.total_amount) FILTER (WHERE a.status NOT IN ('Rejected','Cancelled','Draft','PendingApproval')),0) AS issued,
-              COALESCE(sum(a.total_amount) FILTER (WHERE a.status IN ('Redeemed','Matured','PrematureWithdrawn','RolledOver','Transferred')),0) AS redeemed
+              COALESCE(sum(a.total_amount) FILTER (WHERE a.status NOT IN ('Rejected','Cancelled','Draft','PendingApproval')
+                                                     AND NOT ${NEVER_ISSUED}),0) AS issued,
+              COALESCE(sum(a.total_amount) FILTER (WHERE ${EXITED} AND a.allotment_date IS NOT NULL),0) AS redeemed
        ${FROM} WHERE ${reg.sql} GROUP BY s.code`, reg.params);
     const regMap = new Map<string, any>(regRows.map((r: any) => [r.series_code, r]));
     for (const g of groups.values()) {

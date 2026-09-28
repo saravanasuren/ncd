@@ -1511,6 +1511,17 @@ function BankAccounts({ customerId, accounts, canEdit, canDelete, onChange, onEr
                   const next = await promptText({ title: 'Edit beneficiary name', body: 'As it should appear on the bank file.', label: 'Beneficiary name', defaultValue: b.holder_name ?? '', confirmLabel: 'Save' });
                   if (next === null) return;
                   if (next.trim().length < 2) { fail('Beneficiary name is required.'); return; }
+                  // Warn BEFORE saving when this will cost the verification, so
+                  // the choice is made knowingly rather than discovered after.
+                  const key = (v: string) => v.replace(/[^a-z0-9]/gi, '').toUpperCase();
+                  if (b.penny_drop_status === 'Verified' && key(next) !== key(b.holder_name ?? '')) {
+                    if (!await confirm({
+                      title: 'This will clear the verification',
+                      body: `The bank confirmed this account under "${b.holder_name ?? ''}". Changing the name to "${next.trim()}" means that confirmation no longer applies, so the account goes back to Pending and has to be verified again.\n\n`
+                        + 'The beneficiary name is what goes on the NEFT file.',
+                      confirmLabel: 'Change it and re-verify',
+                    })) return;
+                  }
                   wrapSet(api.patch(`/api/customers/${customerId}/bank-accounts/${b.id}`, { holder_name: next.trim() }));
                 }} className="text-xs text-primary hover:underline">Edit name</button>
               )}

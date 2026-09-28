@@ -20,6 +20,7 @@ import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { toISODate } from '../../lib/dates.js';
 import * as lh from '../../integrations/lockerhub/client.js';
+import { rentDecisions, rentAmountOf } from './rentStatus.js';
 
 export interface LockerLink {
   id: number;
@@ -717,23 +718,28 @@ export async function lockerTenants(db: Db, opts: { branchId?: string | string[]
   rows.length = 0;
   rows.push(...visible);
 
-  // Rent status overlay (owner 2026-08-22): premium / waived / paid, from NCD's
-  // own RENT fee-waivers keyed on the application id. A roster tenant with no
-  // application_id cannot be ours, so it stays blank rather than guessing 'paid'.
-  const rentW = (await db.query<Record<string, any>>(
-    "SELECT lockerhub_application_id, category, waiver_pct FROM locker_fee_waivers WHERE leg = 'rent' AND status = 'Approved'")).rows;
-  const rentByApp = new Map<string, Array<Record<string, any>>>();
-  for (const w of rentW) {
-    const k = String(w.lockerhub_application_id);
-    if (!rentByApp.has(k)) rentByApp.set(k, []);
-    rentByApp.get(k)!.push(w);
+  // Rent status overlay (owner 2026-08-22): paid / waived / premium / unpaid /
+  // unknown. Decided by rentDecisions() — the same call the Locker Rent Report
+  // makes — so the two pages cannot disagree. (This used to presume "Paid" for
+  // any tenant without an approved waiver; it never looked at the money.) A row
+  // with no application id cannot be ours, so it stays blank. Applications
+  // already read above are handed over rather than fetched twice.
+  const preloaded = new Map<string, Record<string, any> | null>();
+  for (const x of resolved as Array<Record<string, any>>) {
+    if (x.app) preloaded.set(String(x.row.lockerhub_application_id), x.app);
   }
+  const appIds = rows.map((r) => (r.lockerhub_application_id ? String(r.lockerhub_application_id) : '')).filter(Boolean);
+  const rent = await rentDecisions(db, appIds, { preloaded });
+  if (!lockerhub_error) lockerhub_error = rent.lockerhub_error;
   for (const r of rows) {
-    const appId = r.lockerhub_application_id ? String(r.lockerhub_application_id) : '';
-    const ws = appId ? (rentByApp.get(appId) ?? []) : [];
-    r.rent_status = ws.some((w) => String(w.category) === 'premium') ? 'premium'
-      : ws.some((w) => Number(w.waiver_pct) === 100) ? 'waived'
-      : appId ? 'paid' : null;
+    const d = r.lockerhub_application_id ? rent.decisions.get(String(r.lockerhub_application_id)) : undefined;
+    r.rent_status = d?.status ?? null;
+    r.rent_reason = d?.reason ?? null;
+    r.rent_settlement_pending = d?.settlement_pending === true;
+    // What LockerHub bills for the rent — the very figure the Rent Report shows.
+    // annual_rent stays as it was (the price list, before GST): renewals and the
+    // waiver maths read it. The page shows rent_amount, and the list price on hover.
+    r.rent_amount = r.lockerhub_application_id ? rentAmountOf(rent.apps.get(String(r.lockerhub_application_id)) ?? null) : null;
   }
 
   const { openWaivers } = await import('./waivers.js');

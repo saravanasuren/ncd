@@ -338,22 +338,69 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
  * Only the name changes. Account number and IFSC are identity — changing those
  * is a different account, so it stays add-then-delete and keeps its penny-drop.
  */
+/** Letters and digits only, upper-cased — so "sathya s" and "SATHYA S" are the
+ *  same name, and "Saroja J" and "Mrs Saroja J" are not. */
+const nameKey = (v: string | null | undefined): string =>
+  String(v ?? '').replace(/[^a-z0-9]/gi, '').toUpperCase();
+
+/**
+ * Correct a beneficiary name — and DROP THE VERIFICATION if the name actually
+ * changed (owner 2026-09-28: "when im editing an bank account nenificery name
+ * after its been verified - the name changes and no verification is made -
+ * this cannot and should not happen").
+ *
+ * Verified meant: the bank confirmed THIS name holds THIS account. The penny
+ * drop sends the name and matches on it, and nothing writes the bank's own
+ * answer back over ours — so renaming afterwards left a badge attesting to a
+ * name that had been replaced. 128 accounts on the book had been renamed while
+ * Verified, some of them materially: PALANISAMY S became PALANISAMY SUBBARAYAN,
+ * SAROJA J became Mrs Saroja J. holder_name is the beneficiary on the NEFT
+ * file, so the badge was vouching for the name money is actually sent to.
+ *
+ * A change of LETTER CASE or punctuation keeps the verification — "SATHYA
+ * CHANDRASEKAR" to "Sathya Chandrasekar" is the same name to the bank, and
+ * invalidating those would be noise that teaches people to ignore the warning.
+ * Anything else, including adding an initial or a "Mrs", returns the account to
+ * Pending and it must be verified again.
+ *
+ * The rename itself is NOT refused. Fixing the name is exactly how a failed
+ * penny drop gets retried — Decentro rejects the "." in "Mr." — so blocking it
+ * would break the repair path this button exists for.
+ */
 export async function updateBankAccountName(db: Db, actor: AuthUser, customerId: number, bankId: number, holderName: string) {
   await assertVisible(db, actor, customerId);
   const name = holderName.trim();
   if (name.length < 2) throw errors.badRequest('Beneficiary name is required');
   return db.withTx(async (tx) => {
-    const before = (await tx.query<{ holder_name: string | null; account_number: string }>(
-      'SELECT holder_name, account_number FROM customer_bank_accounts WHERE id = $1 AND customer_id = $2',
+    const before = (await tx.query<{ holder_name: string | null; account_number: string; penny_drop_status: string }>(
+      'SELECT holder_name, account_number, penny_drop_status FROM customer_bank_accounts WHERE id = $1 AND customer_id = $2',
       [bankId, customerId])).rows[0];
     if (!before) throw errors.notFound('Bank account not found for this customer');
-    await tx.query('UPDATE customer_bank_accounts SET holder_name = $1 WHERE id = $2', [name, bankId]);
+
+    const materiallyChanged = nameKey(before.holder_name) !== nameKey(name);
+    const clearVerification = materiallyChanged && before.penny_drop_status === 'Verified';
+
+    if (clearVerification) {
+      await tx.query(
+        `UPDATE customer_bank_accounts
+            SET holder_name = $1, penny_drop_status = 'Pending', verified_at = NULL,
+                penny_drop_detail = $3
+          WHERE id = $2`,
+        [name, bankId, `Verification cleared: the beneficiary name was changed from "${before.holder_name ?? ''}" to "${name}" after it had been verified. Run the penny drop again.`]);
+    } else {
+      await tx.query('UPDATE customer_bank_accounts SET holder_name = $1 WHERE id = $2', [name, bankId]);
+    }
+
     await writeAudit(tx, {
       actorId: actor.id, action: 'customer.bank.rename', entityType: 'customer_bank_accounts', entityId: bankId,
-      before: { holder_name: before.holder_name },
-      after: { holder_name: name, account_number: before.account_number },
+      before: { holder_name: before.holder_name, penny_drop_status: before.penny_drop_status },
+      after: {
+        holder_name: name, account_number: before.account_number,
+        penny_drop_status: clearVerification ? 'Pending' : before.penny_drop_status,
+        verification_cleared: clearVerification,
+      },
     });
-    return { ok: true, id: bankId, holder_name: name };
+    return { ok: true, id: bankId, holder_name: name, verification_cleared: clearVerification };
   });
 }
 

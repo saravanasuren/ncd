@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import type { Writable } from 'node:stream';
 import type { Db } from '../../db/types.js';
 import { renderPdf, letterhead } from '../../lib/pdf.js';
+import { round2 } from '../../lib/dates.js';
 import { formatINR } from '@new-wealth/shared';
 import { getSettingsMap } from '../settings/service.js';
 import { errors } from '../../lib/errors.js';
@@ -583,5 +584,124 @@ export async function leadsReportXlsx(
   ap.columns = [{ width: 15 }, { width: 26 }, { width: 14, style: { numFmt: '@' } }, { width: 14 }, { width: 12 }, { width: 12 }];
   ap.views = [{ state: 'frozen', ySplit: 1 }];
 
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/**
+ * ONE investment's interest & redemption schedule — what the Download button on
+ * the investment page hands over (owner 2026-10-06).
+ *
+ * The rows are the page's OWN consolidated schedule, passed straight in rather
+ * than queried again, so the file and the table on screen can never disagree: a
+ * clubbed investment's tranches club here exactly as they do there, and the Rs 0
+ * sibling rows a settled batch leaves behind are absorbed the same way.
+ *
+ * Two things the table cannot give, and the reason this is worth a file at all:
+ * the TOTALS over the whole term (65 rows on a 60-month NCD, well past what fits
+ * a screen), and the date each settled row was actually paid — which the data
+ * carries but the table has no column for.
+ */
+/** Every field read off a consolidated schedule row. All optional so the
+ *  service's own `Record<string, unknown>` rows pass straight in, unmapped. */
+export interface ScheduleExportRow {
+  due_date?: unknown; due_type?: unknown; gross_amount?: unknown; tds_amount?: unknown;
+  net_amount?: unknown; status?: unknown; paid_at?: unknown; combined?: unknown; tranche_count?: unknown;
+}
+export async function applicationScheduleXlsx(
+  app: Record<string, unknown>, lines: Record<string, unknown>[], rows: ScheduleExportRow[],
+): Promise<Buffer> {
+  const money = '#,##,##0.00';
+  const num = (v: unknown) => Number(v ?? 0);
+  // A one-off deduction consumed by a payout: net < gross - TDS. The screen flags
+  // it on the Net cell; here it earns a column, but only when this investment
+  // actually has one — an all-blank money column just invites the reader to ask
+  // what it means.
+  const adjOf = (r: ScheduleExportRow) => Math.max(0, num(r.gross_amount) - num(r.tds_amount) - num(r.net_amount));
+  const anyAdj = rows.some((r) => adjOf(r) > 0.005);
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Dhanam NCD';
+  const ws = wb.addWorksheet('Schedule');
+
+  // Rate and tenure live on the LINES, so a clubbed investment can carry several.
+  // Show every distinct value rather than the first — "12% / 11.5%" is the truth
+  // where picking one would be a quiet lie.
+  const distinct = (key: string, fmt: (v: unknown) => string) =>
+    [...new Set(lines.map((l) => fmt(l[key])).filter((s) => s !== ''))].join(' / ');
+  const detail = [
+    app.series_code, formatINR(num(app.total_amount)),
+    distinct('coupon_rate_pct', (v) => (v == null ? '' : `${Number(v)}%`)),
+    distinct('tenure_months', (v) => (v == null ? '' : `${Number(v)} months`)),
+    app.date_money_received ? `money received ${ddmmyyyy(String(app.date_money_received))}` : '',
+    app.maturity_date ? `matures ${ddmmyyyy(String(app.maturity_date))}` : '',
+    app.status,
+  ].filter((s) => s != null && s !== '').join(' · ');
+
+  ws.addRow([`${app.application_no} · ${app.customer_name}${app.customer_code ? ` (${app.customer_code})` : ''}`])
+    .eachCell((c) => { c.font = { bold: true, size: 13 }; });
+  ws.addRow([detail]).eachCell((c) => { c.font = { color: { argb: 'FF6B7380' } }; });
+  ws.addRow([]);
+
+  const headers = ['Due date', 'Type', 'Gross (Rs)', 'TDS (Rs)',
+    ...(anyAdj ? ['Adjustment (Rs)'] : []), 'Net (Rs)', 'Status', 'Paid on'];
+  const HDR = 4; // the header row's number, once the two title rows and the gap are in
+  ws.addRow(headers).eachCell((c) => {
+    c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B3A6F' } };
+  });
+
+  for (const r of rows) {
+    const n = Number(r.tranche_count ?? 1);
+    ws.addRow([
+      ddmmyyyy(String(r.due_date)),
+      r.combined && n > 1 ? `${String(r.due_type ?? '')} (${n} tranches)` : String(r.due_type ?? ''),
+      round2(num(r.gross_amount)), round2(num(r.tds_amount)),
+      ...(anyAdj ? [adjOf(r) > 0.005 ? round2(adjOf(r)) : null] : []),
+      round2(num(r.net_amount)), String(r.status ?? ''),
+      r.paid_at ? ddmmyyyy(String(r.paid_at).slice(0, 10)) : '',
+    ]);
+  }
+  if (!rows.length) ws.addRow(['The schedule is generated at allotment.']);
+
+  // Column positions are looked up by header name, so adding or moving a column
+  // can never silently mis-align a money format or a total (as in seriesWiseXlsx).
+  const col = (h: string) => headers.indexOf(h) + 1; // 1-based
+  const moneyCols = ['Gross (Rs)', 'TDS (Rs)', ...(anyAdj ? ['Adjustment (Rs)'] : []), 'Net (Rs)'];
+  const totalRow = (label: string, subset: ScheduleExportRow[]) => {
+    const row = ws.addRow([]);
+    row.getCell(col('Type')).value = label;
+    for (const h of moneyCols) {
+      const pick = h === 'Gross (Rs)' ? (r: ScheduleExportRow) => num(r.gross_amount)
+        : h === 'TDS (Rs)' ? (r: ScheduleExportRow) => num(r.tds_amount)
+          : h === 'Net (Rs)' ? (r: ScheduleExportRow) => num(r.net_amount) : adjOf;
+      row.getCell(col(h)).value = round2(subset.reduce((s, r) => s + pick(r), 0));
+    }
+    row.eachCell((c) => { c.font = { bold: true }; });
+    return row;
+  };
+  if (rows.length) {
+    ws.addRow([]);
+    // Interest and principal are totalled SEPARATELY first. A single figure over
+    // a schedule that ends in a redemption row silently adds the capital back to
+    // the earnings — Rs 40.7L on a Rs 25L investment — and a reader who takes
+    // that for interest is out by the whole principal.
+    const isInterest = (r: ScheduleExportRow) => String(r.due_type ?? '').includes('Interest');
+    totalRow('Interest over the term', rows.filter(isInterest));
+    totalRow('Total due (interest + principal)', rows);
+    // What has actually been settled, so the file answers "how much has this
+    // customer had so far" without the reader picking out the Paid rows.
+    totalRow('Of which paid', rows.filter((r) => String(r.status) === 'Paid'));
+  }
+
+  const widthOf: Record<string, number> = {
+    'Due date': 12, 'Type': 24, 'Gross (Rs)': 15, 'TDS (Rs)': 13,
+    'Adjustment (Rs)': 16, 'Net (Rs)': 15, 'Status': 12, 'Paid on': 12,
+  };
+  // Widths first: assigning ws.columns REPLACES the column definitions, so a
+  // numFmt set before this line would be dropped.
+  ws.columns = headers.map((h) => ({ width: widthOf[h] ?? 14 }));
+  for (const h of moneyCols) ws.getColumn(col(h)).numFmt = money;
+  ws.views = [{ state: 'frozen', ySplit: HDR }];
+  if (rows.length) ws.autoFilter = { from: { row: HDR, column: 1 }, to: { row: HDR, column: headers.length } };
   return Buffer.from(await wb.xlsx.writeBuffer());
 }

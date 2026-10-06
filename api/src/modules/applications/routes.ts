@@ -186,6 +186,26 @@ applicationsRouter.get('/:id/signed-application.pdf', requirePermission('custome
     res.end(d.buffer);
   }));
 
+// The interest & redemption schedule on the investment page, as a spreadsheet
+// (owner 2026-10-06: "get me a excel download for this table").
+//
+// Built from getApplicationDetail — the SAME call the page itself makes — so the
+// file is that table, not a second rendering of it that could drift. That also
+// means the scope check lives where it already lived: a branch user reaches only
+// their own branch's investments, and customers:read matches the table's own gate.
+applicationsRouter.get('/:id/schedule.xlsx', requirePermission('customers:read'),
+  asyncHandler(async (req, res) => {
+    const d = await s.getApplicationDetail(getDb(), req.user!, Number(req.params.id));
+    const { applicationScheduleXlsx } = await import('../reports/documents.js');
+    const buf = await applicationScheduleXlsx(d.application, d.lines, d.schedule);
+    // Whatever the application number turns out to be, it ends up inside a
+    // response header — keep it to characters that cannot break one.
+    const stem = String(d.application.application_no ?? req.params.id).replace(/[^A-Za-z0-9._-]/g, '');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="schedule-${stem}.xlsx"`);
+    res.end(buf);
+  }));
+
 // Correct the investment (money-received) date — Super Admin only, enforced in
 // the service; refused once interest is paid/batched. Rebuilds the schedule.
 applicationsRouter.patch('/:id/investment-date', requirePermission('applications:update'),

@@ -56,6 +56,47 @@ function PayoutAccount({ appId, customerId, current, onChange }: { appId: number
   );
 }
 
+/**
+ * Download the interest & redemption schedule as a spreadsheet (owner
+ * 2026-10-06). The server builds it from the same call that fills the table
+ * below, so the file is that table — plus the term totals and the date each
+ * settled row was paid, neither of which fits on screen.
+ *
+ * It fetches rather than linking, for the reasons SignedAgreementActions gives:
+ * an expired 15-minute session is refreshed (api.blob) instead of handing the
+ * browser a page of raw JSON, and a failure lands HERE as a readable sentence.
+ */
+function ScheduleDownload({ appId, fileStem }: { appId: number; fileStem: string }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  async function download() {
+    setErr(''); setBusy(true);
+    try {
+      const blob = await api.blob(`/api/applications/${appId}/schedule.xlsx`);
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = href; a.download = `schedule-${fileStem}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 1000);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not download the schedule.');
+    } finally { setBusy(false); }
+  }
+
+  // normal-case / font-normal: the card header this sits in is uppercase+semibold,
+  // which a button would otherwise inherit.
+  return (
+    <div className="flex items-center gap-2">
+      {err && <span role="alert" className="text-xs text-danger normal-case font-normal">{err}</span>}
+      <button type="button" onClick={download} disabled={busy} title="Download this schedule as an Excel file"
+        className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg normal-case font-normal disabled:opacity-50">
+        {busy ? 'Preparing…' : '↓ Excel'}
+      </button>
+    </div>
+  );
+}
+
 /** Lifecycle actions for an Active investment: premature/maturity redemption,
  * rollover, holder transfer, transformation. Each posts and lands in approvals. */
 // Local (not UTC) YYYY-MM-DD — the redemption date defaults to today so staff
@@ -501,7 +542,10 @@ export function ApplicationDetailPage() {
       )}
 
       <div className="bg-surface border border-border rounded-lg shadow-card mt-4 overflow-hidden">
-        <div className="px-4 py-3 border-b border-border text-xs font-semibold text-text-label uppercase tracking-wide">Interest & redemption schedule</div>
+        <div className="px-4 py-3 border-b border-border text-xs font-semibold text-text-label uppercase tracking-wide flex items-center justify-between gap-3">
+          <span>Interest &amp; redemption schedule</span>
+          {data.schedule.length > 0 && <ScheduleDownload appId={Number(id)} fileStem={a.application_no} />}
+        </div>
         {data.schedule.length === 0 ? (
           <div className="p-6 text-center text-text-muted text-sm">Schedule is generated at allotment.</div>
         ) : (

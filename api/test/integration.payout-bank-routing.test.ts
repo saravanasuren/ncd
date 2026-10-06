@@ -187,23 +187,60 @@ describe('payout bank routing', () => {
     expect((await a.del(`/api/customers/${cid}/bank-accounts/${activeId}`)).status).toBe(409);
   });
 
-  it('an NCD pinned to its own account ignores the customer default', async () => {
+  it('ONE debenture: the ACTIVE account wins and the assignment is cleared', async () => {
+    // CHANGED 2026-09-28. This used to assert that a pin beats the customer
+    // default, full stop. The owner narrowed the rule: "if a customer has only
+    // one debenture and multiple bank account are there - the one marked as
+    // active should get the payout interest."
+    //
+    // The assignment is CLEARED, not merely ignored, so it cannot spring back
+    // the day a second debenture is opened and move the money with nobody
+    // touching it.
     const a = await admin();
     const { cid, appId } = await customerWithSchedule(a, 'Pinned Bank Cust', '9520000003');
     await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '33330003333', ifsc: 'ICIC0001234' });
     const pinned = await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '44440004444', ifsc: 'HDFC0005678' });
     const pinnedId = Number(pinned.json.id);
 
-    // Route THIS NCD to the second bank — the per-NCD scenario.
     const set = await a.post(`/api/applications/${appId}/payout-account`, { bank_account_id: pinnedId });
     expect(set.status).toBe(200);
-    expect((await scheduleRows(cid)).rows.every((r) => r.payee_account === '44440004444')).toBe(true);
 
-    // Changing the customer-level default must NOT drag the pinned NCD back.
     const third = await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '55550005555', ifsc: 'SBIN0000827' });
     await a.post(`/api/customers/${cid}/bank-accounts/${Number(third.json.id)}/set-active`, {});
 
+    // One debenture → the active account governs, and the assignment is gone.
     const after = await scheduleRows(cid);
-    expect(after.rows.every((r) => r.payee_account === '44440004444')).toBe(true);
+    expect(after.rows.filter((r) => r.status === 'Scheduled').every((r) => r.payee_account === '55550005555')).toBe(true);
+    expect((await ctx.db.query<{ p: string | null }>(
+      'SELECT payout_bank_account_id AS p FROM applications WHERE id = $1', [appId])).rows[0]!.p).toBeNull();
+  });
+
+  it('SEVERAL debentures: an assignment is honoured, and only that one moves', async () => {
+    // The case the assignment exists for: "if they have multiple debentures and
+    // multiple bank accounts - they can assign each to different ones."
+    const a = await admin();
+    const { cid, appId: first } = await customerWithSchedule(a, 'Two NCD Cust', '9520000004');
+    const second = await a.post('/api/applications', { ...requiredInvestmentFields(),
+      customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-01' });
+    await approveInvestment(await as('ncd@demo.local'), second);
+    const secondId = Number(second.json.id);
+
+    // TWO accounts, or both debentures legitimately point at the only one there
+    // is and the test proves nothing. The first added becomes the default.
+    const home = await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '77770007777', ifsc: 'CNRB0003028' });
+    await a.post(`/api/customers/${cid}/bank-accounts/${Number(home.json.id)}/set-active`, {});
+    const other = await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '66660006666', ifsc: 'HDFC0005678' });
+    const otherId = Number(other.json.id);
+    expect((await a.post(`/api/applications/${secondId}/payout-account`, { bank_account_id: otherId })).status).toBe(200);
+
+    const rowsFor = async (appId: number) => (await ctx.db.query<{ payee_account: string }>(
+      `SELECT DISTINCT payee_account FROM disbursement_schedule WHERE application_id = $1 AND status = 'Scheduled'`, [appId])).rows;
+
+    // The assigned one goes to its own account; the other stays on the default.
+    expect((await rowsFor(secondId)).map((r) => r.payee_account)).toEqual(['66660006666']);
+    expect((await rowsFor(first)).map((r) => r.payee_account)).toEqual(['77770007777']);
+    // And the assignment survives, because this customer has several debentures.
+    expect((await ctx.db.query<{ p: string | null }>(
+      'SELECT payout_bank_account_id AS p FROM applications WHERE id = $1', [secondId])).rows[0]!.p).not.toBeNull();
   });
 });

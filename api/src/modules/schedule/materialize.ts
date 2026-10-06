@@ -14,10 +14,18 @@ import { getSettingsMap } from '../settings/service.js';
  * account. Money already sent keeps the account it was sent to — only rows
  * that haven't been paid and aren't locked into a batch move.
  *
- * Applications pinned to their own account (`payout_bank_account_id`) are left
- * alone: a customer with several NCDs routes each one to a different bank via
- * that pin, and the customer-level default must not overwrite those choices.
- * Only unpinned applications follow the default.
+ * WHICH ACCOUNT GOVERNS (owner 2026-09-28): "if a customer has only one
+ * debenture and multiple bank account are there - the one marked as active
+ * should get the payout interest. if they have multiple debentures and multiple
+ * bank accounts - they can assign each to different ones."
+ *
+ * So the per-investment pin is for customers with SEVERAL debentures. A
+ * customer with ONE has nothing to route between, and their pin is CLEARED —
+ * not merely ignored. A dormant pin that springs back to life the day a second
+ * debenture is opened would move a customer's interest to a different bank with
+ * nobody touching it, months after someone set it and forgot (owner chose this
+ * over keeping it asleep). If that investment really should pay elsewhere, a
+ * person assigns it again, that day.
  *
  * Call this from every path that changes which account is the default —
  * without it, a bank account added after the schedule was built never reaches
@@ -25,6 +33,25 @@ import { getSettingsMap } from '../settings/service.js';
  * 18k scheduled rows.
  */
 export async function resnapshotPayeeBank(tx: Db, customerId: number): Promise<number> {
+  // One live debenture → the pin has nothing to route between, so drop it and
+  // let the active account govern. Redeemed and cancelled ones do not count:
+  // what matters is how many the customer holds NOW.
+  const live = Number((await tx.query<{ n: string }>(
+    `SELECT count(*) AS n FROM applications
+      WHERE customer_id = $1
+        AND status IN ('Active','PendingAllotment','PendingActivation','PendingEsign','PendingFundVerification')`,
+    [customerId])).rows[0]!.n);
+  if (live <= 1) {
+    await tx.query(
+      `UPDATE applications SET payout_bank_account_id = NULL, updated_at = now()
+        WHERE customer_id = $1 AND payout_bank_account_id IS NOT NULL`, [customerId]);
+  }
+
+  // Every unpaid, unbatched row follows the account that actually governs it:
+  // its own pin where one survives, otherwise the active account. Previously
+  // only UNPINNED investments were repointed, so a pin that changed left its
+  // rows behind — the schedule kept paying the old bank while the screen showed
+  // the new one.
   const r = await tx.query(
     `UPDATE disbursement_schedule ds
         SET payee_account = b.account_number, payee_ifsc = b.ifsc
@@ -32,12 +59,14 @@ export async function resnapshotPayeeBank(tx: Db, customerId: number): Promise<n
        JOIN LATERAL (
          SELECT cba.account_number, cba.ifsc
            FROM customer_bank_accounts cba
-          WHERE cba.customer_id = a.customer_id AND cba.is_active = TRUE
-          ORDER BY cba.id DESC LIMIT 1
+          WHERE cba.customer_id = a.customer_id
+            AND (cba.id = a.payout_bank_account_id
+                 OR (a.payout_bank_account_id IS NULL AND cba.is_active = TRUE))
+          ORDER BY (cba.id = a.payout_bank_account_id) DESC, cba.id DESC
+          LIMIT 1
        ) b ON TRUE
       WHERE ds.application_id = a.id
         AND a.customer_id = $1
-        AND a.payout_bank_account_id IS NULL
         AND ds.status = 'Scheduled'
         AND ds.batch_id IS NULL
         AND (ds.payee_account IS DISTINCT FROM b.account_number

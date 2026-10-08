@@ -12,6 +12,7 @@
 import ExcelJS from 'exceljs';
 import { RENT_STATUSES, RENT_STATUS_LABEL, type RentStatus } from '@new-wealth/shared';
 import type { Db } from '../../db/types.js';
+import type { AuthUser } from '../../lib/authUser.js';
 import * as lh from '../../integrations/lockerhub/client.js';
 import { rentDecisions, rentAmountOf, removedKeys, isRemoved, isCancelled, isSuperseded } from './rentStatus.js';
 
@@ -28,7 +29,14 @@ export interface LockerRentRow {
 export interface HiddenApplications { removed: number; cancelled: number; superseded: number }
 export interface LockerRentReport { rows: LockerRentRow[]; totals: Record<RentStatus, number>; hidden: HiddenApplications; lockerhub_error: string | null }
 
-export async function lockerRentReport(db: Db): Promise<LockerRentReport> {
+/**
+ * `actor` is optional only so the one-off scripts that render this report can
+ * still call it unscoped. Every HTTP caller passes it, and must: until
+ * 2026-10-08 this report applied NO scope at all, so anyone who could open the
+ * Locker pages read every tenant's name, phone and rent across every branch —
+ * 83 rows, and the .xlsx of the same, taken by the self-registered accounts.
+ */
+export async function lockerRentReport(db: Db, actor?: AuthUser): Promise<LockerRentReport> {
   let lockerhub_error: string | null = null;
   const last10 = (v: unknown) => String(v ?? '').replace(/\D/g, '').slice(-10);
 
@@ -113,9 +121,25 @@ export async function lockerRentReport(db: Db): Promise<LockerRentReport> {
   // Allotted lockers first, then by locker number.
   rows.sort((a, b) => (a.locker_no ?? 'zzz').localeCompare(b.locker_no ?? 'zzz'));
 
+  // Branch scope, the same rule as the locker lists. Filtered on the row's
+  // branch NAME because that is what the report carries; a row whose branch
+  // could not be resolved is withheld from a restricted caller rather than
+  // shown to everyone.
+  let visible = rows;
+  if (actor) {
+    const { lockerBranchScopeFor } = await import('./branchScope.js');
+    const scope = await lockerBranchScopeFor(db, actor);
+    if (scope.restricted) {
+      const allowed = new Set(scope.branches.map((b) => b.name.trim().toLowerCase()));
+      visible = rows.filter((r) => !!r.branch && allowed.has(r.branch.trim().toLowerCase()));
+    }
+  }
+
+  // Totals describe what the caller can actually see, or they would leak the
+  // size of the branches they cannot.
   const totals = Object.fromEntries(RENT_STATUSES.map((s) => [s, 0])) as Record<RentStatus, number>;
-  for (const r of rows) totals[r.rent_status]++;
-  return { rows, totals, hidden, lockerhub_error };
+  for (const r of visible) totals[r.rent_status]++;
+  return { rows: visible, totals, hidden, lockerhub_error };
 }
 
 export async function lockerRentReportXlsx(rep: LockerRentReport): Promise<Buffer> {

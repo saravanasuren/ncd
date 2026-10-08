@@ -13,6 +13,11 @@ import type { Role } from './roles.js';
 
 export const PERMISSIONS = [
   // leads
+  // The company's OWN bank accounts, with full account numbers. Behind a
+  // permission since 2026-10-08: /api/banks was guarded by login alone, so any
+  // role — an external AGENT included — could read all six accounts. The
+  // 23.153.36.167 sign-ups took exactly that.
+  'banks:read',
   'leads:create',
   'leads:read', // scoped
   'leads:read-all',
@@ -154,6 +159,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   admin: ALL.filter((p) => !SUPER_ADMIN_ONLY.includes(p)),
 
   cxo: [
+    'banks:read',
     'customers:read',
     'dashboard:view',
     'dashboard:drilldown',
@@ -174,6 +180,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   ],
 
   ncd_manager: [
+    'banks:read',
     'leads:create',
     'leads:read',
     'leads:read-all',
@@ -231,6 +238,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
    * vanish before their locker exists.
    */
   locker_manager: [
+    'banks:read',
     'lockers:enroll',   // every locker page, and booking
     'lockers:waive',    // maker only — Admin/CXO still approve (owner 2026-09-25)
     'applications:confirm-collection', // record cheque / offline locker rent
@@ -240,6 +248,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   ],
 
   branch_manager: [
+    'banks:read',
     ...STAFF_FUNNEL,
     'dashboard:drilldown',
     'reports:download',
@@ -283,6 +292,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   // Left alone deliberately: it is a string in the live role_permissions table,
   // and renaming it would need a data migration for no behavioural gain.
   branch_staff: [
+    'banks:read',
     ...STAFF_FUNNEL.filter((p) => p !== 'dashboard:view'),
     'applications:mark-esigned',
     'lockers:enroll',

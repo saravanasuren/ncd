@@ -59,8 +59,12 @@ productsRouter.post('/series/:id/isin', manage, asyncHandler(async (req, res) =>
 productsRouter.get('/tds-rules', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listTdsRules(getDb()) })));
 productsRouter.post('/tds-rules', manage, asyncHandler(async (req, res) => res.status(201).json(await s.createTdsRule(getDb(), req.user!, req.body))));
 
-// Banks
-productsRouter.get('/banks', requireAuth, asyncHandler(async (_req, res) => res.json({ rows: await s.listBanks(getDb()) })));
+// Banks. requirePermission('banks:read'), NOT requireAuth: this returns the
+// company's six accounts with FULL account numbers and IFSC codes, and with
+// only a login in front of it an external agent could read them — which is
+// what the 23.153.36.167 sign-ups did on 2026-10-08. Every in-house role holds
+// banks:read (they need the credited-to list); agents and customers do not.
+productsRouter.get('/banks', requirePermission('banks:read'), asyncHandler(async (_req, res) => res.json({ rows: await s.listBanks(getDb()) })));
 productsRouter.post('/banks', manage, asyncHandler(async (req, res) => res.status(201).json(await s.createBank(getDb(), req.user!, req.body))));
 productsRouter.delete('/banks/:id', manage, asyncHandler(async (req, res) => res.json(await s.deleteBank(getDb(), req.user!, Number(req.params.id)))));
 

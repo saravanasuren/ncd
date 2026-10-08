@@ -249,13 +249,14 @@ lockersRouter.get('/applications/:id', asyncHandler(async (req, res) => {
 }));
 
 // Rent report — every NCD locker as paid / waived / premium (owner 2026-08-22).
-lockersRouter.get('/rent-report', asyncHandler(async (_req, res) => {
+lockersRouter.get('/rent-report', asyncHandler(async (req, res) => {
   const { lockerRentReport } = await import('./report.js');
-  res.json(await lockerRentReport(getDb()));
+  res.json(await lockerRentReport(getDb(), req.user!));
 }));
-lockersRouter.get('/rent-report.xlsx', asyncHandler(async (_req, res) => {
+lockersRouter.get('/rent-report.xlsx', asyncHandler(async (req, res) => {
   const { lockerRentReport, lockerRentReportXlsx } = await import('./report.js');
-  const buf = await lockerRentReportXlsx(await lockerRentReport(getDb()));
+  // The spreadsheet is the same data by another door — it gets the same scope.
+  const buf = await lockerRentReportXlsx(await lockerRentReport(getDb(), req.user!));
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="locker-rent-report.xlsx"');
   res.send(buf);

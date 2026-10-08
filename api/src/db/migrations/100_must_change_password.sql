@@ -1,0 +1,11 @@
+-- Force a password change at next sign-in (owner 2026-10-08).
+--
+-- WHY: odpulse's /api/users handed its whole user list — WITH plaintext
+-- passwords — to anyone who asked, and 23.153.36.167 took it three times on
+-- 2026-10-08. Eleven NCD logins used one of those two passwords, among them a
+-- CXO, an NCD Manager and a Branch Manager. Each was given a fresh temporary
+-- password; this flag makes the holder replace it before they can do anything
+-- else, so a temporary password cannot quietly become a permanent one.
+--
+-- FALSE for everybody else, so nothing changes for the rest of the staff.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;

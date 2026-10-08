@@ -63,6 +63,27 @@ export const requireApprovedAccount: RequestHandler = async (req, _res, next) =>
   }
 };
 
+/**
+ * Someone holding a TEMPORARY password may do exactly one thing: set a real one.
+ *
+ * Eleven NCD logins used a password that leaked through odpulse on 2026-10-08
+ * (its /api/users returned every account with its plaintext password, and
+ * 23.153.36.167 took that three times). Each was given a fresh temporary
+ * password. Without this, "please change your password" is a polite request;
+ * with it, the temporary password cannot be used for anything else — including
+ * by anyone else who may hold it.
+ *
+ * The allow-list is what a person needs in order to comply, and nothing more:
+ * see who they are, change the password, refresh, sign out. Everything else is
+ * a 403 carrying PASSWORD_CHANGE_REQUIRED, which the screen acts on.
+ */
+const ALLOWED_WHILE_LOCKED = ['/auth/me', '/auth/change-password', '/auth/logout', '/auth/refresh', '/auth/login'];
+export const blockUntilPasswordChanged: RequestHandler = (req, _res, next) => {
+  if (!req.user?.mustChangePassword) return next();
+  if (ALLOWED_WHILE_LOCKED.some((p) => req.path === p || req.path.startsWith(`${p}/`))) return next();
+  next(errors.forbidden('PASSWORD_CHANGE_REQUIRED: set a new password before continuing.'));
+};
+
 export function requirePermission(...perms: Permission[]): RequestHandler {
   return (req, _res, next) => {
     if (!req.user) return next(errors.unauthorized());

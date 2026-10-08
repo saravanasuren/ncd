@@ -10,6 +10,7 @@ interface UserRow {
   full_name: string;
   role_name: string;
   is_active: boolean;
+  must_change_password?: boolean;
 }
 
 async function hydrate(db: Db, row: UserRow): Promise<AuthUser> {
@@ -40,6 +41,7 @@ async function hydrate(db: Db, row: UserRow): Promise<AuthUser> {
     branchIds: branches.rows.map((b) => Number(b.branch_id)),
     agentId: agent.rows[0] ? Number(agent.rows[0].id) : null,
     customerId,
+    mustChangePassword: row.must_change_password === true,
   };
 }
 
@@ -48,7 +50,7 @@ export async function findByEmailWithSecret(
   email: string
 ): Promise<{ user: AuthUser; passwordHash: string | null; isActive: boolean } | null> {
   const { rows } = await db.query<UserRow>(
-    `SELECT u.id, u.email, u.password_hash, u.full_name, r.name AS role_name, u.is_active
+    `SELECT u.id, u.email, u.password_hash, u.full_name, r.name AS role_name, u.is_active, u.must_change_password
      FROM users u JOIN roles r ON r.id = u.role_id
      WHERE lower(u.email) = lower($1)`,
     [email]
@@ -67,7 +69,7 @@ export async function findByLoginWithSecret(
 ): Promise<{ user: AuthUser; passwordHash: string | null; isActive: boolean; isSelfSignup: boolean; verifiedAt: string | null; createdAt: string } | null> {
   const digits = identifier.replace(/\D/g, '');
   const { rows } = await db.query<UserRow & { is_self_signup: boolean; verified_at: string | null; created_at: string }>(
-    `SELECT u.id, u.email, u.password_hash, u.full_name, r.name AS role_name, u.is_active,
+    `SELECT u.id, u.email, u.password_hash, u.full_name, r.name AS role_name, u.is_active, u.must_change_password,
             u.is_self_signup, u.verified_at, u.created_at
      FROM users u JOIN roles r ON r.id = u.role_id
      WHERE lower(u.email) = lower($1)
@@ -84,7 +86,7 @@ export async function findByLoginWithSecret(
 
 export async function findAuthUserById(db: Db, id: number): Promise<AuthUser | null> {
   const { rows } = await db.query<UserRow>(
-    `SELECT u.id, u.email, u.password_hash, u.full_name, r.name AS role_name, u.is_active
+    `SELECT u.id, u.email, u.password_hash, u.full_name, r.name AS role_name, u.is_active, u.must_change_password
      FROM users u JOIN roles r ON r.id = u.role_id
      WHERE u.id = $1 AND u.is_active = TRUE`,
     [id]

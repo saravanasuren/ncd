@@ -1,19 +1,44 @@
 /**
- * Self-service sign-up (Staff / Agent) — owner spec 2026-07-18.
- * Login by mobile, immediate own-scope access (unverified), an Admin/CXO
- * verification item in Approvals, and the 30-day unverified login block.
+ * Self-service sign-up (Staff / Agent) — owner spec 2026-07-18, tightened
+ * 2026-10-08.
+ *
+ * The MECHANICS are unchanged and still tested here: login by mobile, an
+ * Admin/CXO verification item in Approvals, agent numbering, the real email,
+ * duplicates, password rules.
+ *
+ * What changed is when the login starts working. It used to work the moment
+ * someone signed up, blocked only after 30 days unverified; now an admin must
+ * approve it first, and sign-up is OFF unless the owner turns it on. So these
+ * tests turn the switch on, and the 30-day case is replaced by the real rule
+ * (see integration.signup-needs-approval.test.ts for the gate itself).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, Client, type TestCtx } from './helpers/server.js';
 
 let ctx: TestCtx;
-beforeAll(async () => { ctx = await startTestServer(); });
+beforeAll(async () => {
+  ctx = await startTestServer();
+  // Sign-up is off by default now (owner 2026-10-08). These tests are about
+  // what happens WHEN it is open, so they open it.
+  const a = await admin();
+  const r = await a.put('/api/settings/auth.self_signup_enabled', { value: true });
+  expect(r.status, JSON.stringify(r.json)).toBe(200);
+});
 afterAll(async () => { await ctx.close(); });
 
 async function admin() {
   const c = new Client(ctx.base);
   await c.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' });
   return c;
+}
+
+/** Approve the verification request a sign-up raised, so the login works. */
+async function approveSignup(mobile: string): Promise<void> {
+  const a = await admin();
+  const q = await a.get('/api/approvals/queue');
+  const req = q.json.rows.find((x: any) => x.request_type === 'user_verification' && x.metadata.mobile === mobile);
+  expect(req, `no verification request for ${mobile}`).toBeTruthy();
+  expect((await a.post(`/api/approvals/${req.id}/approve`)).status).toBe(200);
 }
 
 describe('self-service sign-up', () => {
@@ -23,11 +48,10 @@ describe('self-service sign-up', () => {
     const su = await c.post('/api/auth/signup', { type: 'staff', mobile: '9800000001', email: 'u9800000001@example.com', password: 'Passw0rd', full_name: 'New Staff', employee_id: 'E-1', branch_id: branchId });
     expect(su.status).toBe(201);
 
-    // Log in immediately with the mobile — own-scope branch_staff, unverified.
+    // NOT yet: the login does nothing until an admin approves it.
     const login = new Client(ctx.base);
-    const lr = await login.post('/api/auth/login', { email: '9800000001', password: 'Passw0rd' });
-    expect(lr.status).toBe(200);
-    expect(lr.json.user.role).toBe('branch_staff');
+    const early = await login.post('/api/auth/login', { email: '9800000001', password: 'Passw0rd' });
+    expect(early.status).toBe(403);
 
     // A user_verification item is waiting for Admin/CXO.
     const a = await admin();
@@ -37,6 +61,11 @@ describe('self-service sign-up', () => {
 
     const ap = await a.post(`/api/approvals/${req.id}/approve`);
     expect(ap.status).toBe(200);
+
+    // ...and now it works, by mobile, own-scope branch_staff.
+    const lr = await login.post('/api/auth/login', { email: '9800000001', password: 'Passw0rd' });
+    expect(lr.status).toBe(200);
+    expect(lr.json.user.role).toBe('branch_staff');
     expect((await ctx.db.query("SELECT verified_at FROM users WHERE phone = '9800000001'")).rows[0]!.verified_at).toBeTruthy();
   });
 
@@ -48,9 +77,11 @@ describe('self-service sign-up', () => {
     const row = (await ctx.db.query("SELECT agent_code, user_id FROM agents WHERE phone = '9800000002'")).rows[0]!;
     expect(row.agent_code).toBe(su.json.agent_code);
     expect(row.user_id).toBeTruthy();
-    // logs in by mobile with role 'agent'
+    // ...and once approved, logs in by mobile with role 'agent'.
+    await approveSignup('9800000002');
     const login = new Client(ctx.base);
     const lr = await login.post('/api/auth/login', { email: '9800000002', password: 'Secret99' });
+    expect(lr.status, JSON.stringify(lr.json)).toBe(200);
     expect(lr.json.user.role).toBe('agent');
   });
 
@@ -73,14 +104,21 @@ describe('self-service sign-up', () => {
     expect(su.status).toBe(400);
   });
 
-  it('an unverified account older than 30 days is blocked from login', async () => {
+  it('an unapproved account is blocked from login — however old it is', async () => {
+    // This replaces the 30-day rule. Age is no longer what decides: a brand new
+    // unapproved account is blocked, and so is one left for 40 days.
     const branchId = Number((await ctx.db.query("SELECT id FROM branches WHERE code = 'HO'")).rows[0]!.id);
     const c = new Client(ctx.base);
     await c.post('/api/auth/signup', { type: 'staff', mobile: '9800000003', email: 'u9800000003@example.com', password: 'Passw0rd', full_name: 'Old Staff', employee_id: 'E-3', branch_id: branchId });
-    await ctx.db.query("UPDATE users SET created_at = now() - interval '40 days' WHERE phone = '9800000003'");
     const login = new Client(ctx.base);
-    const lr = await login.post('/api/auth/login', { email: '9800000003', password: 'Passw0rd' });
-    expect(lr.status).toBe(403);
+    expect((await login.post('/api/auth/login', { email: '9800000003', password: 'Passw0rd' })).status).toBe(403);
+
+    await ctx.db.query("UPDATE users SET created_at = now() - interval '40 days' WHERE phone = '9800000003'");
+    expect((await login.post('/api/auth/login', { email: '9800000003', password: 'Passw0rd' })).status).toBe(403);
+
+    // Approval is the only thing that opens it.
+    await approveSignup('9800000003');
+    expect((await login.post('/api/auth/login', { email: '9800000003', password: 'Passw0rd' })).status).toBe(200);
   });
 
   // Owner 2026-07-23: store the address they actually signed up with — the old
@@ -99,19 +137,22 @@ describe('self-service sign-up', () => {
     expect(row.email).toBe('aneesha.k@dhanam.finance');
     expect(row.email).not.toMatch(/signup\.local/);
 
-    // Either identifier signs them in.
-    for (const ident of ['aneesha.k@dhanam.finance', '9800000021']) {
-      const lr = await new Client(ctx.base).post('/api/auth/login', { email: ident, password: 'Passw0rd' });
-      expect(lr.status).toBe(200);
-    }
-
-    // The approver sees the real address.
+    // The approver sees the real address — read while the request is still
+    // pending, because approving it takes it out of the queue.
     const a = await admin();
     const q = await a.get('/api/approvals/queue');
     const req = q.json.rows.find((x: any) => x.request_type === 'user_verification' && x.metadata.mobile === '9800000021');
+    expect(req, 'verification request should be in the queue').toBeTruthy();
     expect(req.metadata.email).toBe('aneesha.k@dhanam.finance');
     const det = await a.get(`/api/approvals/${req.id}`);
     expect(JSON.stringify(det.json)).toContain('aneesha.k@dhanam.finance');
+
+    // Then, approved, either identifier signs them in.
+    expect((await a.post(`/api/approvals/${req.id}/approve`)).status).toBe(200);
+    for (const ident of ['aneesha.k@dhanam.finance', '9800000021']) {
+      const lr = await new Client(ctx.base).post('/api/auth/login', { email: ident, password: 'Passw0rd' });
+      expect(lr.status, ident).toBe(200);
+    }
   });
 
   it('rejects a missing/invalid email, and a duplicate one with a clean 409', async () => {

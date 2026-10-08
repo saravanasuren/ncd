@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth/AuthContext.js';
-import { ApiError } from '../api/client.js';
+import { api, ApiError } from '../api/client.js';
 
 /** Sign-in card — styled per the reference site (docs/05 §1). */
 export function LoginPage() {
@@ -11,6 +12,14 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  /** Self sign-up is a setting, off by default (owner 2026-10-08). The link is
+   *  hidden when it is off — the server refuses the sign-up either way, so this
+   *  is about not offering a door that is locked. */
+  const signupOpen = useQuery({
+    queryKey: ['signup-enabled'],
+    queryFn: () => api.get<{ enabled: boolean }>('/api/auth/signup-enabled'),
+    staleTime: 5 * 60_000,
+  });
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -61,8 +70,12 @@ export function LoginPage() {
           )}
           <div className="mt-3.5 text-center flex items-center justify-center gap-3">
             <Link to="/forgot-password" className="text-xs text-primary hover:underline">Forgot password?</Link>
-            <span className="text-border">·</span>
-            <Link to="/signup" className="text-xs text-primary hover:underline">Sign up</Link>
+            {signupOpen.data?.enabled && (
+              <>
+                <span className="text-border">·</span>
+                <Link to="/signup" className="text-xs text-primary hover:underline">Sign up</Link>
+              </>
+            )}
           </div>
         </form>
       </div>

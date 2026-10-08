@@ -28,6 +28,21 @@ export interface SettingDef {
 }
 
 export const SETTINGS_CATALOG: SettingDef[] = [
+  // ── Who may create a login (owner 2026-10-08) ──
+  // Seven accounts self-registered from one address via curl on 2026-10-08 and
+  // were usable within seconds. Self sign-up is now OFF by default and is a
+  // switch the owner can see, rather than a door nobody knew was open.
+  {
+    key: 'auth.self_signup_enabled',
+    group: 'Access',
+    label: 'Let staff and agents create their own login',
+    description: 'OFF (recommended): nobody can sign themselves up — an admin creates every login. '
+      + 'When ON, the Sign up form is offered on the login page; a new login still does nothing until '
+      + 'an admin approves it in Approvals.',
+    type: 'boolean',
+    default: false,
+    editableBy: 'super_admin',
+  },
   // ── NEFT payout sheet (owner-confirmed 2026-07-20) ──
   {
     key: 'payouts.neft_debit_account',

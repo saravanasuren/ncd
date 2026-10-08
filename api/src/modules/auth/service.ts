@@ -28,15 +28,27 @@ export async function issueSession(
   return { accessToken: signAccess({ sub: user.id, role: user.role }), refreshRaw: raw };
 }
 
-/** Block a self-signup that hasn't been verified within 30 days. Enforced at
- * login AND on every refresh (see refresh()). */
-async function assertNotExpiredUnverified(db: Db, userId: number): Promise<void> {
-  const r = (await db.query<{ is_self_signup: boolean; verified_at: string | null; created_at: string }>(
-    'SELECT is_self_signup, verified_at, created_at FROM users WHERE id = $1', [userId])).rows[0];
-  if (r && r.is_self_signup && !r.verified_at) {
-    const ageDays = (Date.now() - new Date(r.created_at).getTime()) / 86_400_000;
-    if (ageDays > 30) throw errors.forbidden('Your account has not been verified within 30 days. Please contact an administrator.');
-  }
+/** What a self-signed-up account is told until an admin approves it. */
+const AWAITING_APPROVAL = 'Your account is waiting for an administrator to approve it. '
+  + 'You will be able to sign in once it has been approved.';
+
+/**
+ * A self-signed-up account does NOT work until an admin approves it (owner
+ * 2026-10-08: "make signup need admin approval before the account works").
+ *
+ * It used to work immediately and was only blocked after THIRTY DAYS unverified,
+ * which is how seven accounts self-registered from one address via curl on
+ * 2026-10-08 and were creating customers within seconds. Approval is now the
+ * gate, not a deadline.
+ *
+ * Enforced at login AND on every refresh, so an account that is approved and
+ * later rejected loses access within one 15-minute access token rather than
+ * rolling its session on for ever.
+ */
+async function assertSelfSignupApproved(db: Db, userId: number): Promise<void> {
+  const r = (await db.query<{ is_self_signup: boolean; verified_at: string | null }>(
+    'SELECT is_self_signup, verified_at FROM users WHERE id = $1', [userId])).rows[0];
+  if (r && r.is_self_signup && !r.verified_at) throw errors.forbidden(AWAITING_APPROVAL);
 }
 
 export async function login(
@@ -51,11 +63,10 @@ export async function login(
   const ok = await bcrypt.compare(password, hash);
   if (!found || !ok) throw errors.unauthorized('Invalid credentials');
   if (!found.isActive) throw errors.forbidden('Account is disabled');
-  // A self-signed-up account that hasn't been verified within 30 days is blocked.
-  if (found.isSelfSignup && !found.verifiedAt) {
-    const ageDays = (Date.now() - new Date(found.createdAt).getTime()) / 86_400_000;
-    if (ageDays > 30) throw errors.forbidden('Your account has not been verified within 30 days. Please contact an administrator.');
-  }
+  // Not approved yet → no session at all. Credentials were correct, so saying
+  // so plainly is not a disclosure, and it is the only way the person knows to
+  // wait for an admin rather than keep retrying their password.
+  if (found.isSelfSignup && !found.verifiedAt) throw errors.forbidden(AWAITING_APPROVAL);
   const tokens = await issueSession(db, found.user, meta);
   return { user: found.user, tokens };
 }
@@ -77,8 +88,19 @@ function assertStrongPassword(pw: string): void {
   }
 }
 
+/** Is self sign-up open at all? Off by default (owner 2026-10-08). */
+export async function selfSignupEnabled(db: Db): Promise<boolean> {
+  const { getSettingsMap } = await import('../settings/service.js');
+  return (await getSettingsMap(db))['auth.self_signup_enabled'] === true;
+}
+
 /** Create a Staff/Agent login, own-scope by role, unverified pending review. */
 export async function signup(db: Db, input: SignupInput): Promise<{ id: number; mobile: string; agent_code?: string }> {
+  // The switch is checked HERE, not only in the page: hiding the button is a
+  // courtesy, and the seven accounts of 2026-10-08 were created with curl.
+  if (!await selfSignupEnabled(db)) {
+    throw errors.forbidden('Self sign-up is turned off. Please ask an administrator to create your login.');
+  }
   const digits = input.mobile.replace(/\D/g, '');
   if (digits.length !== 10) throw errors.badRequest('Mobile number must be 10 digits');
   const email = input.email.trim().toLowerCase();
@@ -165,11 +187,9 @@ export async function refresh(
   }
   const user = await findAuthUserById(db, Number(row.user_id));
   if (!user) throw errors.unauthorized('Session invalid');
-  // Re-check the 30-day unverified block on EVERY refresh (not just login) —
-  // otherwise a self-signup who logged in once kept rolling a fresh session
-  // forever and was never blocked. Access tokens are 15-min, so this bites
-  // within one refresh cycle of the 30-day mark.
-  await assertNotExpiredUnverified(db, Number(row.user_id));
+  // Re-checked on EVERY refresh, not just login: a session must not outlive the
+  // approval it depends on.
+  await assertSelfSignupApproved(db, Number(row.user_id));
   // Rotate: revoke old, issue new.
   await db.query('UPDATE sessions SET revoked_at = now() WHERE id = $1', [row.id]);
   const tokens = await issueSession(db, user, meta);

@@ -3,9 +3,13 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client.js';
 
-/** Public self-service sign-up — Staff or Agent. Creates an unverified,
- * own-scope login; the account works immediately but shows as pending
- * verification until an Admin/CXO reviews it. */
+/** Public self-service sign-up — Staff or Agent, and only when the owner has
+ * turned it on (off by default, owner 2026-10-08).
+ *
+ * The login it creates does NOT work until an Admin/CXO approves it in
+ * Approvals. It used to work at once and was blocked only after 30 days
+ * unverified, which is how seven accounts self-registered from one address on
+ * 2026-10-08 and were creating customers within seconds. */
 export function SignupPage() {
   const [type, setType] = useState<'staff' | 'agent' | null>(null);
   const [f, setF] = useState({ full_name: '', employee_id: '', mobile: '', email: '', branch_id: '', password: '', confirm: '' });
@@ -13,6 +17,10 @@ export function SignupPage() {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<{ mobile: string; agent_code?: string } | null>(null);
 
+  const open = useQuery({
+    queryKey: ['signup-enabled'],
+    queryFn: () => api.get<{ enabled: boolean }>('/api/auth/signup-enabled'),
+  });
   const branches = useQuery({
     queryKey: ['signup-branches'],
     queryFn: () => api.get<{ rows: { id: number; code: string; name: string }[] }>('/api/auth/branches'),
@@ -61,14 +69,30 @@ export function SignupPage() {
           <p className="text-xs text-text-muted mt-3">Create your account.</p>
         </div>
 
-        {done ? (
+        {open.isLoading ? (
+          <p className="text-xs text-text-muted text-center">Loading…</p>
+        ) : open.data?.enabled === false ? (
+          /* A bookmarked /signup must not keep offering a form the server will
+             refuse — say plainly what to do instead. */
+          <div className="text-center">
+            <div className="text-sm font-semibold mb-2">Sign-up is turned off</div>
+            <p className="text-xs text-text-muted">
+              Logins are created by an administrator. Please ask your admin to create one for you.
+            </p>
+            <Link to="/login" className="inline-block mt-4 text-sm bg-primary hover:bg-primary-hover text-white rounded px-4 py-2 no-underline">Back to sign in</Link>
+          </div>
+        ) : done ? (
           <div className="text-center">
             <div className="text-success text-sm font-semibold mb-2">Account created ✓</div>
             <p className="text-xs text-text-muted">
-              You can sign in now with your mobile <span className="font-mono">{done.mobile}</span> and the password you set.
+              Your mobile is <span className="font-mono">{done.mobile}</span>.
               {done.agent_code && <> Your agent number is <span className="font-mono">{done.agent_code}</span>.</>}
             </p>
-            <p className="text-xs text-text-muted mt-2">Your account is <strong>pending verification</strong> by an administrator.</p>
+            {/* It no longer works straight away, so it must not say it does. */}
+            <p className="text-xs text-text-muted mt-2">
+              You cannot sign in yet. An administrator has to <strong>approve your account</strong> first —
+              you will be able to sign in once they have.
+            </p>
             <Link to="/login" className="inline-block mt-4 text-sm bg-primary hover:bg-primary-hover text-white rounded px-4 py-2 no-underline">Go to sign in</Link>
           </div>
         ) : !type ? (

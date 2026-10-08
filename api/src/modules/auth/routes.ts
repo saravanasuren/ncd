@@ -71,6 +71,15 @@ authRouter.post(
   })
 );
 
+// Whether the Sign up form is on offer. Public, because the login page has to
+// ask before anyone is signed in. Says nothing but on/off.
+authRouter.get(
+  '/signup-enabled',
+  asyncHandler(async (_req, res) => {
+    res.json({ enabled: await service.selfSignupEnabled(getDb()) });
+  })
+);
+
 // Public branch list for the staff sign-up dropdown (non-secret reference data).
 authRouter.get(
   '/branches',

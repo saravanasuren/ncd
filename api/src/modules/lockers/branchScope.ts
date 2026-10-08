@@ -9,11 +9,20 @@
  *
  * NCD's own `branches` table and LockerHub's branch list are two separate
  * systems with no shared id, so the match is by NAME — live, RS Puram, Erode,
- * Hosur, Salem and Tiruppur all match exactly. Fails OPEN to full access
- * whenever the match can't be made: no branch assigned, a name with no
- * LockerHub counterpart (HO — head office — is the live case), or LockerHub
- * itself unreachable. This is a viewing-only page; locking someone out of it
- * entirely over a naming mismatch is worse than the over-permissive default.
+ * Hosur, Salem and Tiruppur all match exactly. Fails OPEN whenever the MATCH
+ * cannot be made: a name with no LockerHub counterpart (HO — head office — is
+ * the live case), or LockerHub itself unreachable. Locking someone out over a
+ * naming mismatch is worse than the over-permissive default, and that remains
+ * the owner's call.
+ *
+ * NO BRANCH ASSIGNED IS DIFFERENT, and since 2026-10-08 it fails CLOSED. That
+ * is not a naming mismatch, it is an unconfigured account — and it was the hole
+ * the self-registered accounts walked through: branch_staff with no branch, so
+ * "unrestricted", so all 117 locker applications and the whole rent report,
+ * names and phone numbers included. A staff member assigned to no branch has no
+ * portfolio to look at. Checked against production first: of 54 active logins,
+ * ZERO branch_staff lack a branch, so this closes the hole without taking
+ * anything from anyone.
  */
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
@@ -50,7 +59,8 @@ export async function lockerBranchScopeFor(db: Db, actor: AuthUser): Promise<Loc
   const rows = (await db.query<{ branch_id: string }>(
     `SELECT branch_id FROM users WHERE id = $1 AND branch_id IS NOT NULL
      UNION SELECT branch_id FROM user_branches WHERE user_id = $1`, [actor.id])).rows;
-  if (!rows.length) return UNRESTRICTED;
+  // No branch at all → nothing, rather than everything (see the note above).
+  if (!rows.length) return { restricted: true, branchIds: [], branches: [] };
 
   const ncdNames = (await db.query<{ name: string }>(
     'SELECT name FROM branches WHERE id = ANY($1)', [rows.map((r) => Number(r.branch_id))])).rows.map((r) => r.name);

@@ -221,10 +221,29 @@ describe('branch_staff restriction — real HTTP, mock LockerHub', () => {
     expect((await staff.get('/api/lockers/tenants?branch_id=br_salem')).status).toBe(200);
   });
 
-  it('fails OPEN — no branch assigned at all', async () => {
+  it('fails CLOSED — no branch assigned at all (changed 2026-10-08)', async () => {
+    // This asserted the opposite until 2026-10-08, and the opposite was the
+    // hole: a branch_staff with NO branch counted as unrestricted, which is
+    // exactly what a self-registered account is. Seven of them signed up from
+    // one address via curl and read all 117 locker applications, 116 phone
+    // numbers among them, plus the whole rent report.
+    //
+    // The other fail-OPEN cases are deliberate and unchanged (see the test
+    // above): a branch whose NAME has no LockerHub counterpart, or LockerHub
+    // being unreachable, still widen to full access, because locking someone
+    // out over a naming mismatch is worse. "Assigned to nothing" is not a
+    // naming mismatch — it is an account nobody has configured.
+    //
+    // Checked against production before changing it: of 54 active logins, ZERO
+    // branch_staff lack a branch, so nobody real lost anything.
     const staff = await makeStaff('unassigned.staff@demo.local', null);
     const t = await staff.get('/api/lockers/tenants');
-    expect(t.json.restricted_to).toBeNull();
+    expect(t.status).toBe(200);
+    expect(t.json.restricted_to, 'no branch must NOT read as unrestricted').toEqual([]);
+    // And it really is confined: a named branch is not reachable either.
+    const salem = await staff.get('/api/lockers/tenants?branch_id=br_salem');
+    expect([200, 403]).toContain(salem.status);
+    if (salem.status === 200) expect(salem.json.rows ?? []).toEqual([]);
   });
 
   it('branch_manager is never restricted, even assigned to a matching branch', async () => {

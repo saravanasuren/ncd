@@ -64,6 +64,10 @@ export async function changePassword(db: Db, userId: number, currentPassword: st
   const ok = current ? await bcrypt.compare(currentPassword, current) : false;
   if (!ok) throw errors.badRequest('Current password is incorrect');
   const hash = await bcrypt.hash(newPassword, 10);
-  await db.query('UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2', [hash, userId]);
+  // Clearing must_change_password HERE is what lifts the lock: the person has
+  // replaced the temporary password with one only they know.
+  await db.query(
+    'UPDATE users SET password_hash = $1, must_change_password = FALSE, updated_at = now() WHERE id = $2',
+    [hash, userId]);
   await writeAudit(db, { actorId: userId, action: 'user.password-change', entityType: 'users', entityId: userId });
 }

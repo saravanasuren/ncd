@@ -11,7 +11,7 @@ import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
 import { config } from './config.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
-import { attachUser } from './middleware/auth.js';
+import { attachUser, blockUntilPasswordChanged } from './middleware/auth.js';
 import { csrfGuard } from './middleware/csrf.js';
 import { authRouter } from './modules/auth/routes.js';
 import { settingsRouter } from './modules/settings/routes.js';
@@ -118,6 +118,9 @@ export function createApp(): Express {
   // CSRF on cookie-authed mutations, then attach the authenticated user.
   app.use('/api', csrfGuard);
   app.use('/api', attachUser);
+  // A temporary password unlocks nothing but the password form (owner
+  // 2026-10-08). One mount here covers every router below.
+  app.use('/api', blockUntilPasswordChanged);
 
   // Module routers.
   app.use('/api/auth', authRouter);

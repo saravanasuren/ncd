@@ -13,9 +13,14 @@ import { useRecentSearches, RecentSearches } from '../components/RecentSearches.
  * screens. */
 export function AppShell() {
   const { user, logout, can } = useAuth();
+  // A temporary password gets you this screen and nothing else (owner
+  // 2026-10-08). The API refuses every other call anyway — this is so the
+  // person sees WHY instead of a wall of errors. Sign out is left available so
+  // nobody is trapped.
+  const mustChange = user?.mustChangePassword === true;
   const nav = useNavigate();
   const location = useLocation();
-  const items = NAV.filter((i) => can(...i.anyOf) && !(user && i.hideForRoles?.includes(user.role)));
+  const items = mustChange ? [] : NAV.filter((i) => can(...i.anyOf) && !(user && i.hideForRoles?.includes(user.role)));
   // Pending-work counts for the sidebar badges — polled so they stay live as
   // items are approved/rejected elsewhere (owner 2026-08-10). Keyed by nav route.
   const badges = useQuery({
@@ -128,10 +133,12 @@ export function AppShell() {
               <div className="font-semibold">{user?.fullName}</div>
               <div className="text-xs text-text-muted">{user ? ROLE_LABELS[user.role] : ''}</div>
             </div>
-            <button onClick={() => setPwOpen(true)}
-              className="text-xs text-text-muted hover:text-primary border border-border rounded px-2 py-1 whitespace-nowrap">
-              Password
-            </button>
+            {!mustChange && (
+              <button onClick={() => setPwOpen(true)}
+                className="text-xs text-text-muted hover:text-primary border border-border rounded px-2 py-1 whitespace-nowrap">
+                Password
+              </button>
+            )}
             <button onClick={async () => { await logout(); nav('/login'); }}
               className="text-xs text-text-muted hover:text-danger border border-border rounded px-2 py-1 whitespace-nowrap">
               Sign out
@@ -139,20 +146,47 @@ export function AppShell() {
           </div>
         </header>
         {pwOpen && <ChangePasswordModal onClose={() => setPwOpen(false)} />}
-        <main className="p-4 lg:p-6 overflow-auto">
-          {/* Keyed on the path so a caught error on one page clears when the
-              user navigates to another — one page's crash never kills the shell. */}
-          <ErrorBoundary key={location.pathname}>
-            <Outlet />
-          </ErrorBoundary>
-        </main>
+        {mustChange ? (
+          /* Nothing else is reachable: the API refuses every other call, so
+             rendering the app would only produce errors. The form is the same
+             ChangePasswordModal, with no way to dismiss it — on success it
+             reloads, the flag is gone, and the app appears. */
+          <main className="p-4 lg:p-6 overflow-auto">
+            <div className="max-w-xl mx-auto mt-10 bg-surface border border-border rounded-lg p-6">
+              <h1 className="text-lg font-bold m-0">Set a new password</h1>
+              <p className="text-sm text-text-muted mt-2">
+                Your password was reset by an administrator because it was found in a security
+                incident. Choose a new one to carry on — nothing else is available until you do.
+              </p>
+              <p className="text-xs text-text-muted mt-2">
+                Use a password you have never used anywhere else.
+              </p>
+              <div className="mt-4"><ChangePasswordModal inline onClose={() => { window.location.reload(); }} /></div>
+            </div>
+          </main>
+        ) : (
+          <main className="p-4 lg:p-6 overflow-auto">
+            {/* Keyed on the path so a caught error on one page clears when the
+                user navigates to another — one page's crash never kills the shell. */}
+            <ErrorBoundary key={location.pathname}>
+              <Outlet />
+            </ErrorBoundary>
+          </main>
+        )}
       </div>
     </div>
   );
 }
 
-/** Self-service change-password modal (topbar → Password). */
-function ChangePasswordModal({ onClose }: { onClose: () => void }) {
+/**
+ * Self-service change-password form.
+ *
+ * `inline` drops the overlay and the Cancel button: it is the forced reset
+ * after an admin issued a temporary password (owner 2026-10-08), where there is
+ * nothing else to go back to. Same submit, same validation — one
+ * implementation, so the two can never drift.
+ */
+function ChangePasswordModal({ onClose, inline }: { onClose: () => void; inline?: boolean }) {
   const [cur, setCur] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -175,10 +209,9 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
     } finally { setBusy(false); }
   }
 
-  return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-surface border border-border rounded-lg shadow-card p-5 w-full max-w-[340px]" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-sm font-bold mb-4">Change password</h2>
+  const form = (
+    <>
+        <h2 className={`text-sm font-bold mb-4${inline ? ' sr-only' : ''}`}>Change password</h2>
         <label className="block text-xs font-semibold text-text-label mb-1.5">Current password</label>
         <input type="password" autoComplete="current-password" className={inp} value={cur} onChange={(e) => setCur(e.target.value)} autoFocus />
         <label className="block text-xs font-semibold text-text-label mt-3 mb-1.5">New password</label>
@@ -187,10 +220,21 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
         <input type="password" autoComplete="new-password" className={inp} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
         {msg && <div className={`text-xs mt-3 ${ok ? 'text-success' : 'text-danger'}`}>{msg}</div>}
         <div className="flex gap-2 justify-end mt-4">
-          <button onClick={onClose} className="text-xs text-text-muted hover:underline px-2">Cancel</button>
+          {/* No Cancel on the forced reset: there is nothing to cancel back to. */}
+          {!inline && <button onClick={onClose} className="text-xs text-text-muted hover:underline px-2">Cancel</button>}
           <button onClick={submit} disabled={busy || !cur || !next}
-            className="text-xs bg-primary text-white rounded px-4 py-2 disabled:opacity-40 hover:bg-primary-hover">Update</button>
+            className="text-xs bg-primary text-white rounded px-4 py-2 disabled:opacity-40 hover:bg-primary-hover">
+            {inline ? 'Set new password' : 'Update'}
+          </button>
         </div>
+    </>
+  );
+
+  if (inline) return <div>{form}</div>;
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-surface border border-border rounded-lg shadow-card p-5 w-full max-w-[340px]" onClick={(e) => e.stopPropagation()}>
+        {form}
       </div>
     </div>
   );

@@ -11,6 +11,9 @@ export interface SessionUser {
   branchIds: number[];
   agentId: number | null;
   customerId: number | null;
+  /** An admin gave this account a temporary password: nothing works until it
+   *  is replaced (owner 2026-10-08). */
+  mustChangePassword?: boolean;
 }
 
 interface AuthState {

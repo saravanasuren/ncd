@@ -10,6 +10,9 @@ export interface AuthUser {
   branchIds: number[];
   agentId: number | null;
   customerId: number | null;
+  /** Given a temporary password by an admin: they must replace it before they
+   *  can use the system (owner 2026-10-08, after the odpulse password leak). */
+  mustChangePassword: boolean;
 }
 
 declare global {

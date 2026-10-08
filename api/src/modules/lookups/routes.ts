@@ -4,7 +4,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../../middleware/error.js';
-import { requirePermission } from '../../middleware/auth.js';
+import { requirePermission, requireApprovedAccount } from '../../middleware/auth.js';
 import { lookupIfsc } from '../../integrations/ifsc.js';
 import { lookupPincode } from '../../integrations/pincode.js';
 import { kycProvider } from '../../integrations/kyc/index.js';
@@ -29,7 +29,10 @@ lookupsRouter.get('/pincode/:pin', requirePermission('customers:read'),
 
 // Penny-drop a bank account during enrolment (verify + name-on-record) WITHOUT
 // saving anything. The staff console reads the verdict before adding the account.
-lookupsRouter.post('/penny-drop', requirePermission('customers:read'),
+// requireApprovedAccount as well as the permission: a penny-drop is a PAID
+// third-party check, and on 2026-10-08 three were spent by an account nobody
+// had approved (owner: "worth putting behind approval too").
+lookupsRouter.post('/penny-drop', requirePermission('customers:read'), requireApprovedAccount,
   asyncHandler(async (req, res) => {
     const b = z.object({ account_number: z.string().min(4), ifsc: z.string().min(11), name: z.string().optional() }).parse(req.body ?? {});
     const r = await kycProvider().pennyDrop(b.account_number.replace(/\s/g, ''), b.ifsc.toUpperCase().trim(), b.name);

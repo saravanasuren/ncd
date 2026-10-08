@@ -15,8 +15,15 @@ applicationsRouter.get('/', requirePermission('customers:read'),
   asyncHandler(async (req, res) => res.json(await s.listApplications(getDb(), req.user!, { status: req.query.status as string, series_id: req.query.series_id ? Number(req.query.series_id) : undefined, showArchived: req.query.showArchived === 'true' }))));
 
 // Specific paths BEFORE '/:id' so they aren't captured by the param route.
+// Both ids are REQUIRED. Without them Number(undefined) is NaN, which reached
+// the query and came back as a 500 — a caller mistake reported as our fault, and
+// the 500 that the 2026-10-08 probe found by simply omitting them.
 applicationsRouter.get('/clubbing-candidates', requirePermission('applications:create'),
-  asyncHandler(async (req, res) => res.json({ rows: await s.clubbingCandidates(getDb(), Number(req.query.customer_id), Number(req.query.series_id)) })));
+  asyncHandler(async (req, res) => {
+    const q = z.object({ customer_id: idFromJson, series_id: idFromJson })
+      .parse({ customer_id: req.query.customer_id, series_id: req.query.series_id });
+    res.json({ rows: await s.clubbingCandidates(getDb(), q.customer_id, q.series_id) });
+  }));
 
 applicationsRouter.get('/:id', requirePermission('customers:read'),
   asyncHandler(async (req, res) => res.json(await s.getApplicationDetail(getDb(), req.user!, Number(req.params.id)))));

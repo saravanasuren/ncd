@@ -3,6 +3,7 @@
  *  - attachUser: reads the access cookie, loads the user, sets req.user.
  *  - requireAuth: 401 if not authenticated.
  *  - requirePermission: 403 unless the user holds the permission.
+ *  - requireApprovedAccount: 403 for a self-signup no admin has approved.
  */
 import type { RequestHandler } from 'express';
 import type { Permission } from '@new-wealth/shared';
@@ -34,6 +35,32 @@ export const attachUser: RequestHandler = async (req, _res, next) => {
 export const requireAuth: RequestHandler = (req, _res, next) => {
   if (!req.user) return next(errors.unauthorized());
   next();
+};
+
+/**
+ * On top of a permission: the account must be one an admin approved.
+ *
+ * For anything that SPENDS or leaves the building — a paid bank verification,
+ * a message to a customer. A self-signed-up account cannot get a session at all
+ * now (auth/service.ts), so this is the second lock on the same door: it also
+ * covers the ~15 minutes an access token stays valid after an approval is
+ * withdrawn, and any future way an unapproved login might arrive.
+ *
+ * On 2026-10-08 three penny-drop calls — a paid Decentro check — were made by an
+ * account nobody had approved, minutes after it signed itself up.
+ */
+export const requireApprovedAccount: RequestHandler = async (req, _res, next) => {
+  try {
+    if (!req.user) return next(errors.unauthorized());
+    const r = (await getDb().query<{ is_self_signup: boolean; verified_at: string | null }>(
+      'SELECT is_self_signup, verified_at FROM users WHERE id = $1', [req.user.id])).rows[0];
+    if (r?.is_self_signup && !r.verified_at) {
+      return next(errors.forbidden('Your account is waiting for an administrator to approve it.'));
+    }
+    next();
+  } catch (e) {
+    next(e);
+  }
 };
 
 export function requirePermission(...perms: Permission[]): RequestHandler {

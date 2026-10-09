@@ -182,8 +182,8 @@ async function main(): Promise<void> {
     await startCrons();
   }
 
-  const server = app.listen(config.PORT, () => {
-    console.log(`[new-wealth-api] listening on :${config.PORT} (${config.NODE_ENV})`);
+  const server = app.listen(config.PORT, config.BIND_HOST, () => {
+    console.log(`[new-wealth-api] listening on ${config.BIND_HOST}:${config.PORT} (${config.NODE_ENV})`);
   });
 
   const shutdown = (signal: string) => {

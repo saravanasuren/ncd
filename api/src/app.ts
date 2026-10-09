@@ -10,6 +10,7 @@ import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
 import { config } from './config.js';
+import { installRedactedUrlToken } from './lib/logRedaction.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
 import { attachUser, blockUntilPasswordChanged } from './middleware/auth.js';
 import { csrfGuard } from './middleware/csrf.js';
@@ -89,7 +90,14 @@ export function createApp(): Express {
   app.use(['/api/applications', '/api/customers', '/api/integration', '/api/portal', '/api/escrow'], express.json({ limit: '8mb' }));
   app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
-  if (config.NODE_ENV !== 'test') app.use(morgan('tiny'));
+  if (config.NODE_ENV !== 'test') {
+    // Several routes carry a phone or PAN in the URL, so the access log was
+    // recording customer identifiers on every call — ~2,100 phone numbers a
+    // week, none of them deliberately logged. Overriding morgan's :url token
+    // redacts them in the one place every format reads the URL from.
+    installRedactedUrlToken(morgan);
+    app.use(morgan('tiny'));
+  }
 
   // Health — public, unauthenticated.
   app.get('/api/health', (_req: Request, res: Response) => {

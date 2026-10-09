@@ -120,6 +120,21 @@ const FREE_AMT = `GREATEST(${AMT} - ${LINKED}, 0)`;
  *  3. A match to an is_staff user → Staff-wise (display = the user's CURRENT
  *     name); a match to an agent → Agent-wise (agent's current name); an
  *     unmatched non-blank referrer → Agent-wise by its raw text; blank → Direct.
+ *  4. DISPLAY ONLY: before falling back to raw text, the same lookup runs once
+ *     more WITHOUT the is_staff gate, purely to put a NAME on the row.
+ *
+ * Why 4 exists (owner 2026-10-09: "i need the names to be visible - not the
+ * codes"): the enrol form stores a payee CODE, so when a referrer is a real
+ * person whose user record simply isn't flagged `is_staff`, neither lateral
+ * matched and the dashboard printed their bare code — "DHN1185" instead of
+ * Eashwar Ram. Six referrers carrying Rs 15.28 cr read that way.
+ *
+ * `uref` deliberately feeds ONLY the display name. `staff_ref` stays
+ * `sref.full_name` alone, because that is what segmentGrouped splits Staff-wise
+ * from Agent-wise on — resolving these names through `sref` instead would have
+ * moved Rs 15.28 cr of business between two tiles on the owner's dashboard,
+ * which is an attribution decision they have not made. Names change here;
+ * not one rupee moves.
  *
  * Going forward the enrol form stores the payee CODE, so renames/spelling
  * variants never break attribution again.
@@ -143,10 +158,20 @@ export const REFERRER_LATERAL_JOINS = `
            OR lower(btrim(ag.full_name)) = lower(${EFF_REF}))
     ORDER BY (upper(btrim(ag.agent_code)) = upper(${EFF_REF})) DESC
     LIMIT 1
-  ) aref ON TRUE`;
+  ) aref ON TRUE
+  -- Display-name-of-last-resort: sref without the is_staff gate. Never used
+  -- for attribution — see note 4 above.
+  LEFT JOIN LATERAL (
+    SELECT u.full_name FROM users u JOIN roles r ON r.id = u.role_id
+    WHERE r.name <> 'customer'
+      AND (upper(btrim(u.code)) = upper(${EFF_REF})
+           OR lower(btrim(u.full_name)) = lower(${EFF_REF}))
+    ORDER BY (upper(btrim(u.code)) = upper(${EFF_REF})) DESC
+    LIMIT 1
+  ) uref ON TRUE`;
 const FROM_ATTR = `${FROM}${REFERRER_LATERAL_JOINS}`;
-// Display referrer: resolved staff name → resolved agent name → raw text.
-export const REFERRER = `COALESCE(sref.full_name, aref.full_name, ${EFF_REF})`;
+// Display referrer: staff name → agent name → any user's name → raw text.
+export const REFERRER = `COALESCE(sref.full_name, aref.full_name, uref.full_name, ${EFF_REF})`;
 
 export async function kpis(db: Db, actor: AuthUser, filters: BookFilters = {}) {
   // FROM_ALL, not FROM: the owner asked for the Outstanding Book to INCLUDE

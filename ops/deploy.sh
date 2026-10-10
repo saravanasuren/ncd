@@ -31,10 +31,25 @@ npm run migrate -w @new-wealth/api
 
 echo "==> restart service"
 sudo systemctl restart "$SERVICE"
-sleep 3
+
+# Wait for the API to answer rather than guessing how long it takes.
+#
+# This was a flat `sleep 3`, and on 2026-10-10 it rolled back a perfectly good
+# deploy: the service restarted at 04:08:21, the script gave up at 04:08:24,
+# and the app logged "listening on 127.0.0.1:3030" at 04:08:25 — one second
+# late. Boot is ~4s now (loading 32 SSM parameters, then listening) and will
+# only grow, so a fixed sleep is a race that gets worse. Poll instead: a
+# healthy deploy still finishes in about the same time, and a genuinely broken
+# one still rolls back, just 60s later.
+echo "==> waiting for the API to answer (up to 60s)"
+HEALTHY=0
+for _ in $(seq 1 30); do
+  if curl -fsS "$HEALTH" >/dev/null 2>&1; then HEALTHY=1; break; fi
+  sleep 2
+done
 
 echo "==> health check"
-if curl -fsS "$HEALTH" >/dev/null; then
+if [ "$HEALTHY" = "1" ]; then
   echo "OK — deployed $(git rev-parse --short HEAD)"
 else
   echo "HEALTH FAILED — rolling back to $PREV"

@@ -14,6 +14,13 @@ dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().default(3030),
+  // The API is reached only through nginx, which proxies to http://127.0.0.1:3030
+  // — so it has no reason to accept connections from the network. It was bound
+  // to 0.0.0.0, and the only thing keeping :3030 off the internet was the AWS
+  // security group: one widened rule away from the whole API being public with
+  // no web server in front of it. Override only if something off-box must
+  // reach the API directly, which today nothing does.
+  BIND_HOST: z.string().default('127.0.0.1'),
   DATABASE_URL: z.string().min(1).optional(),
   JWT_ACCESS_SECRET: z.string().min(16).default('dev_access_secret_change_me_16chars'),
   JWT_REFRESH_SECRET: z.string().min(16).default('dev_refresh_secret_change_me_16chars'),

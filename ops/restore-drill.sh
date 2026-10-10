@@ -16,7 +16,10 @@
 # An untested backup is a hope, not a backup.
 set -uo pipefail
 
-DIR=/var/backups/dhanam-newwealth
+# Overridable so the checks below can be TESTED against a throwaway directory
+# of deliberately broken dumps. A drill that has never been seen to fail is
+# just a green light.
+DIR=${DRILL_BACKUP_DIR:-/var/backups/dhanam-newwealth}
 SCRATCH="ncd_drill_$$"
 FAILED=0
 
@@ -37,6 +40,21 @@ fi
 [ -n "$DUMP" ] || { fail "no backups in $DIR"; exit 1; }
 [ -r "$DUMP" ] || { fail "cannot read $DUMP"; exit 1; }
 note "newest backup: $DUMP ($(du -h "$DUMP" | cut -f1))"
+
+# Is the backup still RUNNING? Everything below asks "does this dump restore",
+# which a three-month-old dump answers perfectly well — so if the nightly job
+# quietly stopped, this drill would go on passing and say nothing. The dump
+# being current is a separate question, and it has to be asked out loud.
+# Skipped when a specific dump was named, since drilling an old one on purpose
+# is exactly what that argument is for.
+if [ -z "${1:-}" ]; then
+  AGE_HOURS=$(( ( $(date +%s) - $(stat -c %Y "$DUMP") ) / 3600 ))
+  if [ "$AGE_HOURS" -gt 48 ]; then
+    fail "the newest backup is ${AGE_HOURS}h old — the nightly backup has stopped running"
+  else
+    note "backup age: ${AGE_HOURS}h"
+  fi
+fi
 
 # The live database, read-only — the yardstick for "did the whole thing restore".
 DATABASE_URL=$(aws ssm get-parameter --name /dhanam/newwealth/DATABASE_URL \

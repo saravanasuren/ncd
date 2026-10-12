@@ -61,6 +61,12 @@ interface Tenant {
   linked_manually?: boolean; override_key?: string | null;
   /** The locker agreement is signed, and by which route (owner 2026-09-04). */
   agreement_signed?: boolean; agreement_method?: 'esign' | 'physical' | null;
+  /** Where the agreement actually stands. `agreement_progressed` is true once a
+   *  signature exists — the server decides it, so this list cannot invent its
+   *  own idea of "signed" (see deposits.ts). */
+  agreement_status?: string | null; agreement_label?: string | null;
+  agreement_progressed?: boolean;
+  agreement_signatures?: number; agreement_signers_needed?: number;
 }
 
 export function LockerTenantsPage() {
@@ -143,9 +149,13 @@ export function LockerTenantsPage() {
   // rather than counted as unsigned.
   const agreementCount = rows.reduce(
     (acc, r) => r.lockerhub_application_id
-      ? { signed: acc.signed + (r.agreement_signed ? 1 : 0), signable: acc.signable + 1 }
+      ? { signed: acc.signed + (r.agreement_signed ? 1 : 0),
+          // Part-signed counted on its own: a locker waiting on one more
+          // signature is a different job from one nobody has started.
+          partial: acc.partial + (!r.agreement_signed && r.agreement_progressed ? 1 : 0),
+          signable: acc.signable + 1 }
       : acc,
-    { signed: 0, signable: 0 });
+    { signed: 0, partial: 0, signable: 0 });
   const ncdCount = all.filter((r) => r.ncd_backed).length;
 
   return (
@@ -270,8 +280,17 @@ export function LockerTenantsPage() {
                 agreementCount.signed === agreementCount.signable ? 'bg-[color:var(--success-bg)] text-success'
                 : agreementCount.signed ? 'bg-[color:var(--warn-bg)] text-warn'
                 : 'bg-[color:var(--danger-bg)] text-danger'}`}
-                title="Locker agreements with a signature on file, by e-Sign or on paper">
+                title="Fully signed locker agreements, by e-Sign or on paper">
                 {agreementCount.signed} / {agreementCount.signable} agreements signed
+              </span>
+            )}
+            {/* The in-between, called out rather than buried in the red count:
+                these are finished bar one signature, and are the ones worth
+                chasing today. */}
+            {agreementCount.partial > 0 && (
+              <span className="ml-2 text-xs font-normal normal-case tracking-normal rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn"
+                title="Signing has started on these — waiting on a joint hirer, the authorised signatory, or a checker">
+                {agreementCount.partial} part-signed
               </span>
             )}
           </h2>
@@ -360,8 +379,18 @@ export function LockerTenantsPage() {
                         ? <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--success-bg)] text-success">
                             ✓ {r.agreement_method === 'physical' ? 'on paper' : 'e-Signed'}
                           </span>
-                        : <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger"
-                            title="No signed agreement on file for this locker">not signed</span>}
+                        /* Part-way is its OWN badge. Showing it as "not signed"
+                           is what hid 11 lockers that need one more signature
+                           and 5 waiting on the authorised signatory. */
+                        : r.agreement_progressed
+                          ? <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn"
+                              title={r.agreement_signers_needed && r.agreement_signers_needed > 1
+                                ? `${r.agreement_signatures ?? 0} of ${r.agreement_signers_needed} hirers have signed`
+                                : 'Signing is under way — see the locker for what it is waiting on'}>
+                              {r.agreement_label ?? 'in progress'}
+                            </span>
+                          : <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--danger-bg)] text-danger"
+                              title="No signature of any kind on file for this locker">not signed</span>}
                   </td>
                   <td className="py-2 pr-3 font-mono text-xs text-text-muted">
                     {/* Re-open the application. This is the ONLY route back to a

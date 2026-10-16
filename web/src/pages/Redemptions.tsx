@@ -82,6 +82,11 @@ const makeColumns = (canDownload: boolean, isSuperAdmin: boolean, refresh: () =>
     // date and the person — rather than silently losing its button, which would
     // read as a permissions glitch. Only Super Admin is offered it again.
     render: (r: Redemption) => {
+      // A payment instruction exists only while there is a payment to make.
+      // Paid / Rejected / Cancelled / Requested get no button at all — the
+      // Status column beside this already says which, so repeating it here
+      // would be noise.
+      if (r.status !== 'Approved') return <span className="text-xs text-text-muted">—</span>;
       const issued = !!r.neft_downloaded_at;
       if (issued && !isSuperAdmin) {
         return (
@@ -128,15 +133,6 @@ export function RedemptionsPage() {
           <p className="text-sm text-text-muted mt-1">Customer/app requests waiting to be processed, plus recent redemptions. To initiate a premature or maturity redemption, open the investment under Applications and use its lifecycle actions.</p>
         </div>
         <div className="flex gap-2">
-          {/* The bulk sheet honours the same one-copy rule, per redemption: it
-              carries only lines that have never been released. Leaving it open
-              would have made the row lock decorative — the same payment line
-              was one click away here. */}
-          <NeftDownload href="/api/redemptions/neft.xlsx" fileStem="redemption-neft" label="↓ NEFT sheet"
-            onDone={() => qc.invalidateQueries({ queryKey: ['redemptions'] })}
-            title={user?.role === 'super_admin'
-              ? 'Every approved redemption still awaiting a UTR, including ones already released'
-              : 'Approved redemptions whose NEFT sheet has not been taken yet'} />
           <a href="/api/redemptions/report.xlsx" className="text-xs border border-border rounded px-3 py-1.5 hover:bg-bg no-underline">↓ Report</a>
         </div>
       </div>

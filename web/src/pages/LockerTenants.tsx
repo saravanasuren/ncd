@@ -76,6 +76,10 @@ export function LockerTenantsPage() {
   const [branchId, setBranchId] = useState('');
   const [q, setQ] = useState('');
   const [ncdOnly, setNcdOnly] = useState(false);
+  // Part-signed is the set someone can actually DO something about today —
+  // one more signature, a counter-signature, or a checker. Counting them was
+  // step one; this makes the count a worklist (owner 2026-10-16).
+  const [partOnly, setPartOnly] = useState(false);
   const [msg, setMsg] = useState('');
 
   const refetchTenants = () => qc.invalidateQueries({ queryKey: ['locker-tenants'] });
@@ -139,6 +143,7 @@ export function LockerTenantsPage() {
   const all = tenants.data?.rows ?? [];
   const rows = all.filter((r) => {
     if (ncdOnly && !r.ncd_backed) return false;
+    if (partOnly && !(r.agreement_progressed && !r.agreement_signed)) return false;
     if (!q.trim()) return true;
     const hay = `${r.tenant_name ?? ''} ${r.tenant_phone ?? ''} ${r.tenant_email ?? ''} ${r.customer_code ?? ''} ${r.locker_no ?? ''} ${r.application_no ?? ''}`.toLowerCase();
     return hay.includes(q.trim().toLowerCase());
@@ -157,6 +162,9 @@ export function LockerTenantsPage() {
       : acc,
     { signed: 0, partial: 0, signable: 0 });
   const ncdCount = all.filter((r) => r.ncd_backed).length;
+  // Counted over `all`, like ncdCount: a filter's own label must not change as
+  // that filter narrows the list, or ticking it makes its number disappear.
+  const partCount = all.filter((r) => r.agreement_progressed && !r.agreement_signed).length;
 
   return (
     <div className="w-full">
@@ -174,6 +182,11 @@ export function LockerTenantsPage() {
         <label className="flex items-center gap-1.5 text-sm text-text-muted select-none">
           <input type="checkbox" checked={ncdOnly} onChange={(e) => setNcdOnly(e.target.checked)} />
           NCD-backed only ({ncdCount})
+        </label>
+        <label className="flex items-center gap-1.5 text-sm text-text-muted select-none"
+          title="Agreements with a signature on them but not finished — waiting on a joint hirer, the authorised signatory, or a checker">
+          <input type="checkbox" checked={partOnly} onChange={(e) => setPartOnly(e.target.checked)} />
+          Part-signed only ({partCount})
         </label>
         {tenants.isFetching && <span className="text-xs text-text-muted">Loading…</span>}
       </div>
@@ -421,7 +434,7 @@ export function LockerTenantsPage() {
               ))}
               {!rows.length && (
                 <tr><td colSpan={9} className="py-6 text-center text-text-muted">
-                  {tenants.isLoading ? 'Loading…' : ncdOnly ? 'No NCD-backed lockers match.' : branchId ? 'No tenants at this branch yet.' : 'No locker tenants found.'}
+                  {tenants.isLoading ? 'Loading…' : partOnly ? 'No part-signed agreements — every signature here is either finished or not started.' : ncdOnly ? 'No NCD-backed lockers match.' : branchId ? 'No tenants at this branch yet.' : 'No locker tenants found.'}
                 </td></tr>
               )}
             </tbody>

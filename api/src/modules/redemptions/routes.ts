@@ -53,6 +53,15 @@ redemptionsRouter.get('/:id/neft.xlsx', requirePermission('redemptions:initiate'
     res.end(buf);
   }));
 
+// Record the bank reference once the money has gone. Anyone who handles
+// redemptions may enter one; only a Super Admin may change one already there
+// (enforced in the service, where the scope check also lives).
+redemptionsRouter.post('/:id/utr', requirePermission('redemptions:initiate'),
+  asyncHandler(async (req, res) => {
+    const { utr } = z.object({ utr: z.string().min(1) }).parse(req.body);
+    res.json(await s.setRedemptionUtr(getDb(), req.user!, Number(req.params.id), utr));
+  }));
+
 redemptionsRouter.get('/report.xlsx', requirePermission('redemptions:initiate', 'reports:download'),
   asyncHandler(async (req, res) => {
     const buf = await s.redemptionReport(getDb(), req.user!);

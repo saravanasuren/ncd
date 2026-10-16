@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatINR } from '@new-wealth/shared';
 import { api, ApiError } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.js';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { Tabs, type TabDef } from '../components/Tabs.js';
 import { redemptionTypeLabel } from '../labels.js';
@@ -15,6 +15,8 @@ interface Redemption {
   /** When the payment instruction was released, and by whom. Set means the
    *  NEFT sheet for this redemption has already gone out once. */
   neft_downloaded_at: string | null; neft_downloaded_by: string | null; neft_download_count: number;
+  reason: string | null; utr: string | null; utr_entered_by: string | null; utr_entered_at: string | null;
+  broken_interest: string; requested_date: string | null; created_at: string; created_by: string | null;
 }
 
 type RedTab = 'all' | 'premature' | 'maturity';
@@ -65,8 +67,112 @@ function NeftDownload({ href, fileStem, label, title, reissue, onDone }: {
   );
 }
 
-const makeColumns = (canDownload: boolean, isSuperAdmin: boolean, refresh: () => void): Column<Redemption>[] => [
-  { key: 'redemption_no', header: 'Ref', tdClassName: 'font-mono text-xs whitespace-nowrap' },
+
+/** One labelled fact in the detail panel. */
+const Fact = ({ label, children }: { label: string; children: ReactNode }) => (
+  <div>
+    <div className="text-[11px] uppercase tracking-wide text-text-label">{label}</div>
+    <div className="text-sm mt-0.5">{children}</div>
+  </div>
+);
+
+/**
+ * What is behind a redemption, opened under its own row.
+ *
+ * Owner 2026-10-16: "i should be able to see the reson for redeemetion when i
+ * click on the customers redeemetion" — the reason was captured at request time
+ * and then shown nowhere, so the person answering a customer could not say why
+ * their own money was being returned.
+ *
+ * The UTR field lives here too, because this is where someone sits once the
+ * payment has gone out. Entering it records the transaction and nothing else:
+ * the status does not move (owner's choice), so the NEFT rules are untouched.
+ */
+function RedemptionDetail({ r, canEnterUtr, isSuperAdmin, onSaved }: {
+  r: Redemption; canEnterUtr: boolean; isSuperAdmin: boolean; onSaved: () => void;
+}) {
+  const [utr, setUtr] = useState(r.utr ?? '');
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState(false);
+  const save = useMutation({
+    mutationFn: () => api.post(`/api/redemptions/${r.id}/utr`, { utr }),
+    onSuccess: () => { setErr(''); setDone(true); onSaved(); },
+    onError: (e) => { setDone(false); setErr(e instanceof ApiError ? e.message : 'Could not save the UTR.'); },
+  });
+  // A reference already on file may only be rewritten by a Super Admin — the
+  // server enforces it; this keeps the field from inviting an edit that fails.
+  const locked = !!r.utr && !isSuperAdmin;
+
+  return (
+    <div className="bg-bg border-t border-border px-4 py-4">
+      <div className="grid gap-4 md:grid-cols-3">
+        <Fact label="Reason given">
+          {r.reason ? <span className="whitespace-pre-wrap">{r.reason}</span> : <span className="text-text-muted">— none recorded</span>}
+        </Fact>
+        <Fact label="Investment">
+          <span className="font-mono text-xs">{r.application_no}</span>
+        </Fact>
+        <Fact label="Raised by">
+          {r.created_by ?? '—'}<span className="text-text-muted"> · {String(r.created_at).slice(0, 10)}</span>
+        </Fact>
+        <Fact label="Principal"><span className="mono">{formatINR(r.principal)}</span></Fact>
+        <Fact label="Penalty">
+          <span className="mono">{Number(r.penalty) > 0 ? `− ${formatINR(r.penalty)}` : '—'}</span>
+        </Fact>
+        <Fact label="Broken interest">
+          <span className="mono">{Number(r.broken_interest) > 0 ? formatINR(r.broken_interest) : '—'}</span>
+        </Fact>
+        <Fact label="Net payable"><span className="mono font-semibold">{formatINR(r.net_payment)}</span></Fact>
+        <Fact label="NEFT sheet">
+          {r.neft_downloaded_at
+            ? <>released {String(r.neft_downloaded_at).slice(0, 10)}
+                <span className="text-text-muted">{r.neft_downloaded_by ? ` by ${r.neft_downloaded_by}` : ''}
+                  {r.neft_download_count > 1 ? ` · ${r.neft_download_count} copies` : ''}</span></>
+            : <span className="text-text-muted">not downloaded</span>}
+        </Fact>
+        <Fact label="Bank reference (UTR)">
+          {!canEnterUtr
+            ? <span className="mono">{r.utr ?? <span className="text-text-muted font-sans">— not recorded</span>}</span>
+            : locked
+              ? <span className="mono" title={`Recorded${r.utr_entered_by ? ` by ${r.utr_entered_by}` : ''}${r.utr_entered_at ? ` on ${String(r.utr_entered_at).slice(0, 10)}` : ''}. Only a Super Admin can change it.`}>
+                  {r.utr}
+                </span>
+              : (
+                <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (utr.trim()) save.mutate(); }}>
+                  <input value={utr} onChange={(e) => { setUtr(e.target.value); setDone(false); }}
+                    placeholder="e.g. SBIN226291938401" aria-label="Bank reference (UTR)"
+                    className="text-xs mono border border-border-strong rounded px-2 py-1 w-52" />
+                  <button type="submit" disabled={save.isPending || !utr.trim() || utr.trim().toUpperCase() === (r.utr ?? '')}
+                    className="text-xs border border-border rounded px-2.5 py-1 hover:bg-surface disabled:opacity-50">
+                    {save.isPending ? 'Saving…' : r.utr ? 'Change' : 'Record'}
+                  </button>
+                  {done && <span className="text-xs text-success">saved</span>}
+                </form>
+              )}
+          {r.utr && r.utr_entered_by && (
+            <div className="text-[11px] text-text-muted mt-0.5">
+              recorded by {r.utr_entered_by}{r.utr_entered_at ? ` on ${String(r.utr_entered_at).slice(0, 10)}` : ''}
+            </div>
+          )}
+          {err && <div role="alert" className="text-[11px] text-danger mt-1 max-w-sm">{err}</div>}
+        </Fact>
+      </div>
+    </div>
+  );
+}
+
+const makeColumns = (canDownload: boolean, isSuperAdmin: boolean, refresh: () => void,
+                    openId: number | null, toggle: (id: number) => void): Column<Redemption>[] => [
+  // The Ref opens the row. Clicking the whole <tr> would fight the NEFT button
+  // in the last column, so the handle is explicit and keyboard-reachable.
+  { key: 'redemption_no', header: 'Ref', tdClassName: 'font-mono text-xs whitespace-nowrap',
+    render: (r) => (
+      <button type="button" onClick={() => toggle(r.id)}
+        title="Show the reason, the amounts and the bank reference"
+        className="font-mono text-xs text-primary hover:underline">
+        {openId === r.id ? '▾ ' : '▸ '}{r.redemption_no}
+      </button>
+    ) },
   { key: 'redemption_date', header: 'Date', tdClassName: 'whitespace-nowrap',
     value: (r) => r.redemption_date ?? '',
     render: (r) => r.redemption_date ? <span className="mono text-xs">{String(r.redemption_date).slice(0, 10)}</span> : '—' },
@@ -112,6 +218,10 @@ export function RedemptionsPage() {
   const { can, user } = useAuth();
   const [msg, setMsg] = useState('');
   const [tab, setTab] = useState<RedTab>('all');
+  // One open at a time: these panels are tall, and a page of them is a page
+  // nobody can read.
+  const [openId, setOpenId] = useState<number | null>(null);
+  const toggleOpen = (id: number) => setOpenId((cur) => (cur === id ? null : id));
   const { data, isLoading, error } = useQuery({ queryKey: ['redemptions'], queryFn: () => api.get<{ rows: Redemption[] }>('/api/redemptions') });
 
   const submit = useMutation({
@@ -171,11 +281,17 @@ export function RedemptionsPage() {
         onChange={setTab}
       />
       <DataTable
-        columns={makeColumns(can('redemptions:initiate'), user?.role === 'super_admin', () => qc.invalidateQueries({ queryKey: ['redemptions'] }))}
+        columns={makeColumns(can('redemptions:initiate'), user?.role === 'super_admin',
+          () => qc.invalidateQueries({ queryKey: ['redemptions'] }), openId, toggleOpen)}
         rows={rest.filter((r) => redMatch(tab, r.type))}
         rowKey={(r) => r.id}
         defaultSort={{ key: 'redemption_date', dir: 'desc' }}
         empty="No redemptions in this view."
+        renderExpanded={(r) => r.id === openId
+          ? <RedemptionDetail r={r} canEnterUtr={can('redemptions:initiate')}
+              isSuperAdmin={user?.role === 'super_admin'}
+              onSaved={() => qc.invalidateQueries({ queryKey: ['redemptions'] })} />
+          : null}
       />
     </div>
   );

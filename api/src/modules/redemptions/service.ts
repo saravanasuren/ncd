@@ -523,9 +523,20 @@ export async function listRedemptions(db: Db, actor: AuthUser, filter?: 'request
             -- the page can say "issued 14 Oct by X" instead of offering a second
             -- copy of it (owner 2026-10-16).
             r.neft_downloaded_at, r.neft_download_count, nu.full_name AS neft_downloaded_by,
+            -- The reason the customer gave, and the bank reference once the
+            -- money has gone (owner 2026-10-16: "i should be able to see the
+            -- reson for redeemetion when i click on the customers redeemetion"
+            -- + "only when i enter the utr number for the transaction").
+            -- Carried on the list rather than behind a detail call: the panel
+            -- opens under the row it belongs to, and a second round trip to
+            -- show two fields already in hand would just be latency.
+            r.reason, r.utr, r.broken_interest, r.requested_date, r.created_at,
+            cb.full_name AS created_by, uu.full_name AS utr_entered_by, r.utr_entered_at,
             a.application_no, c.full_name AS customer_name
      FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
      LEFT JOIN users nu ON nu.id = r.neft_downloaded_by_user_id
+     LEFT JOIN users cb ON cb.id = r.created_by_user_id
+     LEFT JOIN users uu ON uu.id = r.utr_entered_by_user_id
      WHERE ${conds.join(' AND ')} ORDER BY r.created_at DESC LIMIT 2000`, sc.params)).rows;
 }
 
@@ -540,3 +551,54 @@ async function rejectRedemption(tx: Db, req: ApprovalRow) {
 }
 registerOnReject('premature_redemption', rejectRedemption);
 registerOnReject('redemption', rejectRedemption);
+
+/**
+ * Record the bank reference for a redemption that has been paid.
+ *
+ * Owner 2026-10-16: "only when i enter the utr number for the transaction. so
+ * get me that field also." Asked and answered the same day — the UTR RECORDS
+ * the transaction and nothing more. It does not move the redemption's status,
+ * so the NEFT rules in redemptionNeft are untouched by it.
+ *
+ * That matters because the column has been on the table since 003 and nothing
+ * has ever written to it: 1 of 88 settled redemptions carries a reference, and
+ * that one came in with the wealth import. Until now there was no way to say
+ * from inside NCD that a redemption's money actually moved.
+ *
+ * Anyone who handles redemptions may enter one — they are recording a fact the
+ * bank gave them, not authorising anything. CHANGING one is Super Admin only
+ * (owner's choice), because a payment reference that can be quietly rewritten
+ * is worth less than no reference at all. Both are audited; the correction
+ * keeps the old value in `before`.
+ */
+export async function setRedemptionUtr(db: Db, actor: AuthUser, redemptionId: number, rawUtr: string) {
+  // Permissive on shape, like the NEFT sheet itself: banks hand back references
+  // in several formats and a validator that guesses wrong blocks a real payment
+  // from being recorded. Non-empty, sane length, no control characters.
+  const utr = rawUtr.trim().toUpperCase();
+  if (utr.length < 6 || utr.length > 40) throw errors.badRequest('A UTR is between 6 and 40 characters.');
+  if (!/^[A-Z0-9/-]+$/.test(utr)) throw errors.badRequest('A UTR may contain only letters, digits, hyphens and slashes.');
+
+  const sc = redemptionScope(actor, 1);
+  const cur = (await db.query<{ id: string; utr: string | null; status: string; redemption_no: string }>(
+    `SELECT r.id, r.utr, r.status, r.redemption_no FROM redemptions r
+       JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
+      WHERE r.id = $1 AND ${sc.sql}`, [redemptionId, ...sc.params])).rows[0];
+  if (!cur) throw errors.notFound('Redemption not found');
+
+  if (cur.utr && cur.utr !== utr && actor.role !== 'super_admin') {
+    throw errors.conflict(
+      `This redemption already carries UTR ${cur.utr}. Only a Super Admin can change a payment reference once it is recorded.`);
+  }
+  if (cur.utr === utr) return { ok: true, utr, unchanged: true };
+
+  await db.query(
+    `UPDATE redemptions SET utr = $2, utr_entered_by_user_id = $3, utr_entered_at = now() WHERE id = $1`,
+    [redemptionId, utr, actor.id]);
+  await writeAudit(db, {
+    actorId: actor.id, action: cur.utr ? 'redemption.utr-corrected' : 'redemption.utr-recorded',
+    entityType: 'redemptions', entityId: redemptionId,
+    before: { utr: cur.utr }, after: { utr, redemption_no: cur.redemption_no, status_unchanged: cur.status },
+  });
+  return { ok: true, utr, unchanged: false };
+}

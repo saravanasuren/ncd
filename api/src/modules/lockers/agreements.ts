@@ -69,9 +69,16 @@ export interface SigningView {
  * than composing its own, so a locker can never show a bare "Signed" that hides
  * which way it happened — the whole point of the exercise.
  */
-export function signingLabel(method: string, status: string): string {
+export function signingLabel(method: string, status: string, progress?: { signed: number; needed: number }): string {
   if (status === 'Signed') return method === 'physical' ? 'Physically signed' : 'e-Signed';
   if (status === 'PendingApproval') return 'Scan awaiting approval';
+  // Part-way through a multi-hirer agreement. "Awaiting e-signature" is true but
+  // reads as though nobody has signed, when on 11 live lockers the customer
+  // signed weeks ago and only the joint hirer is outstanding (owner 2026-10-12:
+  // "all shows aggrement not signed - but some are signed").
+  if (status === 'AwaitingSignature' && progress && progress.signed > 0 && progress.needed > progress.signed) {
+    return `${progress.signed} of ${progress.needed} hirers signed`;
+  }
   if (status === 'AwaitingSignature') return method === 'physical' ? 'Awaiting signature on paper' : 'Awaiting e-signature';
   if (status === 'CustomerSigned') return 'Awaiting authorised signatory';
   // Without this AwaitingCEO fell through to "e-Sign started", which reads

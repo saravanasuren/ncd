@@ -772,23 +772,52 @@ export async function lockerTenants(db: Db, opts: { branchId?: string | string[]
     });
   }
 
-  // Which agreements are signed, and how (owner 2026-09-04: the same count the
-  // Allotments page now shows per series, for lockers). Nothing counted this
-  // either — the signing record existed per locker but no list ever said how
-  // many of them were done.
+  // Where each agreement actually STANDS (owner 2026-09-04 asked for the count;
+  // 2026-10-12: "all shows aggrement not signed - but some are signed").
+  //
+  // This used to ask only `WHERE status = 'Signed'`, which collapsed six states
+  // into one red badge: a locker the customer e-signed weeks ago read exactly
+  // like one nobody had touched. On the live book that was 3 of 55 ticked while
+  // 20 carried real signature progress. The status comes back whole now, and the
+  // wording comes from signingLabel so this list, the locker profile and the
+  // enrolment card cannot drift apart.
   //
   // One query for the whole page rather than a lookup per row, and best-effort:
   // an unreadable signing table must not take down the roster.
   try {
+    const { signingLabel } = await import('./agreements.js');
     const { rows: sig } = await db.query<Record<string, unknown>>(
-      `SELECT lockerhub_application_id, method, status FROM locker_agreement_signings
-        WHERE status = 'Signed'`);
-    const byApp = new Map(sig.map((r) => [String(r.lockerhub_application_id), String(r.method)]));
+      `SELECT s.lockerhub_application_id, s.method, s.status,
+              (SELECT count(*) FROM digio_signing_sessions d
+                WHERE d.locker_agreement_signing_id = s.id
+                  AND d.status = 'signed' AND d.document_type = 'locker_agreement') AS signed_count,
+              1 + (SELECT count(*) FROM locker_application_hirers h
+                    WHERE h.lockerhub_application_id = s.lockerhub_application_id) AS signers_needed
+         FROM locker_agreement_signings s
+        -- The partial unique index guarantees at most one LIVE row per locker;
+        -- a cancelled or rejected attempt must not mask the one that governs.
+        WHERE s.status NOT IN ('Cancelled', 'Rejected')`);
+    const byApp = new Map(sig.map((r) => [String(r.lockerhub_application_id), r]));
     for (const r of rows) {
       const appId = r.lockerhub_application_id ? String(r.lockerhub_application_id) : null;
-      const m = appId ? byApp.get(appId) : undefined;
-      r.agreement_signed = !!m;
-      r.agreement_method = m ?? null;
+      const g = appId ? byApp.get(appId) : undefined;
+      const signedCount = g ? Number(g.signed_count) : 0;
+      const needed = g ? Number(g.signers_needed) : 0;
+      r.agreement_signed = g ? String(g.status) === 'Signed' : false;
+      r.agreement_method = g ? String(g.method) : null;
+      r.agreement_status = g ? String(g.status) : null;
+      r.agreement_label = g
+        ? signingLabel(String(g.method), String(g.status), { signed: signedCount, needed })
+        : null;
+      // Real progress = at least one signature collected, or a state that only
+      // exists because somebody signed. Draft and an untouched AwaitingSignature
+      // deliberately do NOT count, so the screen can still tell a dead locker
+      // from one mid-signature — that distinction is the whole fix.
+      r.agreement_progressed = g
+        ? signedCount > 0 || ['CustomerSigned', 'AwaitingCEO', 'PendingApproval', 'Signed'].includes(String(g.status))
+        : false;
+      r.agreement_signatures = signedCount;
+      r.agreement_signers_needed = needed;
     }
   } catch { /* the roster is worth more than the column */ }
 

@@ -368,12 +368,28 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
 
 /** Federal Bank NEFT sheet for approved (unpaid) redemptions. */
 /**
- * `redemptionId` given → the single-row sheet for that one customer (any
- * status — a reprint, not a payment run). Omitted → the bulk sheet, which
- * stays scoped to what's actually still payable ('Approved' with no UTR yet)
- * so it never re-sends something already settled.
+ * `redemptionId` given → the single-row sheet for that one customer. Omitted →
+ * the bulk sheet, scoped to what is actually still payable ('Approved' with no
+ * UTR yet) so it never re-sends something already settled.
+ *
+ * ONE COPY PER REDEMPTION (owner 2026-10-16: "keep it as downloaded only once.
+ * only super admin will have the access to download it again"). The sheet IS
+ * the instruction to pay; a second copy of the same line is how a customer gets
+ * paid twice, and nothing downstream catches it — the UTR is written only after
+ * the bank confirms, so until then the row looks freshly payable on every click.
+ * The single-row route used to be an unrestricted reprint; it is now the same
+ * one-shot as the bulk sheet.
+ *
+ * The rule is per REDEMPTION, not per route, and the bulk sheet honours it too.
+ * Locking only the row button would have been decorative: the same payment line
+ * was one click away on the bulk sheet. Super Admin is the way back in, and
+ * every re-issue is audited with who and when.
+ *
+ * Marking happens only once the workbook has actually been built. A sheet that
+ * failed to generate was never handed over, and must not burn the one copy.
  */
-export async function redemptionNeft(db: Db, redemptionId?: number): Promise<Buffer> {
+export async function redemptionNeft(db: Db, actor: AuthUser, redemptionId?: number): Promise<Buffer> {
+  const superAdmin = actor.role === 'super_admin';
   const debit = (await db.query<{ account_number: string }>("SELECT account_number FROM banks WHERE is_disbursement_account = TRUE AND is_active = TRUE ORDER BY id LIMIT 1")).rows[0];
   const neftSettings = await getSettingsMap(db);
   const asText = (v: unknown): string => {
@@ -382,18 +398,39 @@ export async function redemptionNeft(db: Db, redemptionId?: number): Promise<Buf
   };
   const debitSetting = asText(neftSettings['payouts.neft_debit_account']);
   const fallbackEmail = asText(neftSettings['payouts.neft_beneficiary_email']);
+  // Anyone but Super Admin sees only lines that have never been issued.
+  const unissued = superAdmin ? '' : ' AND r.neft_downloaded_at IS NULL';
   const rows = (await db.query<Record<string, unknown>>(
-    `SELECT r.redemption_no, r.net_payment, r.redemption_date, c.full_name AS name, c.email,
+    `SELECT r.id, r.redemption_no, r.net_payment, r.redemption_date, r.neft_download_count, c.full_name AS name, c.email,
             cba.account_number AS payee_account, cba.ifsc AS payee_ifsc,
             cba.holder_name AS beneficiary_name, s.name AS series_name
      FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
      LEFT JOIN customer_bank_accounts cba ON cba.customer_id = c.id AND cba.is_active = TRUE
      LEFT JOIN series s ON s.id = a.series_id
-     WHERE ${redemptionId ? 'r.id = $1' : "r.status = 'Approved' AND r.utr IS NULL"}
+     WHERE ${redemptionId ? 'r.id = $1' : `r.status = 'Approved' AND r.utr IS NULL${unissued}`}
      ORDER BY c.full_name`, redemptionId ? [redemptionId] : [])).rows;
-  if (redemptionId && rows.length === 0) throw errors.notFound('Redemption not found');
+
+  if (redemptionId) {
+    if (rows.length === 0) throw errors.notFound('Redemption not found');
+    // Refuse by NAME and DATE, not a bare "already downloaded" — the next thing
+    // the person does is go and ask someone, and they need to know who.
+    const prev = (await db.query<{ neft_downloaded_at: string | null; who: string | null; n: number }>(
+      `SELECT r.neft_downloaded_at, u.full_name AS who, r.neft_download_count AS n
+         FROM redemptions r LEFT JOIN users u ON u.id = r.neft_downloaded_by_user_id
+        WHERE r.id = $1`, [redemptionId])).rows[0];
+    if (prev?.neft_downloaded_at && !superAdmin) {
+      throw errors.conflict(
+        `This NEFT sheet was already downloaded on ${String(prev.neft_downloaded_at).slice(0, 10)}`
+        + `${prev.who ? ` by ${prev.who}` : ''}. Paying from a second copy would pay the customer twice.`
+        + ' A Super Admin can release it again if the first file was lost.');
+    }
+  } else if (rows.length === 0) {
+    throw errors.conflict(superAdmin
+      ? 'Nothing to pay: every approved redemption already has a UTR.'
+      : 'Nothing new to pay: every approved redemption has already been downloaded. A Super Admin can release one again if a file was lost.');
+  }
   const { buildNeftSheet } = await import('../../lib/neft.js');
-  return buildNeftSheet(
+  const sheet = await buildNeftSheet(
     { debitAccount: debitSetting || debit?.account_number || 'DISBURSEMENT-ACCT',
       sheetName: 'Sheet 1',
       valueDate: new Date(),     // value date = the day the sheet is generated
@@ -413,6 +450,31 @@ export async function redemptionNeft(db: Db, redemptionId?: number): Promise<Buf
       reference: String(r.redemption_no).replace(/[^A-Za-z0-9]/g, ''),
     }))
   );
+
+  // Burn the copy only now that a real workbook exists. Order matters: a build
+  // that threw never reached a person, and marking it first would have locked
+  // the redemption on a failure nobody could see.
+  const issued = rows.map((r) => Number(r.id));
+  if (issued.length) {
+    await db.query(
+      `UPDATE redemptions
+          SET neft_downloaded_at = COALESCE(neft_downloaded_at, now()),
+              neft_downloaded_by_user_id = COALESCE(neft_downloaded_by_user_id, $2),
+              neft_download_count = neft_download_count + 1
+        WHERE id = ANY($1::bigint[])`, [issued, actor.id]);
+    // The FIRST issue is routine; a re-issue is the event worth finding later,
+    // so only that is audited — one row per redemption, naming the Super Admin.
+    for (const r of rows) {
+      if (Number(r.neft_download_count ?? 0) > 0) {
+        await writeAudit(db, {
+          actorId: actor.id, action: 'redemption.neft-reissued', entityType: 'redemptions', entityId: Number(r.id),
+          before: { neft_download_count: Number(r.neft_download_count) },
+          after: { reissued_by_role: actor.role, redemption_no: r.redemption_no },
+        });
+      }
+    }
+  }
+  return sheet;
 }
 
 /** Scope predicate for redemptions, by the underlying application's owner. */
@@ -443,8 +505,13 @@ export async function listRedemptions(db: Db, actor: AuthUser, filter?: 'request
   if (filter === 'requests') conds.push("r.status = 'Requested' AND r.approval_request_id IS NULL");
   return (await db.query(
     `SELECT r.id, r.redemption_no, r.type, r.status, r.source, r.requested_by_customer, r.principal, r.penalty, r.net_payment, r.redemption_date, r.approval_request_id,
+            -- Whether the payment instruction has already left the building, so
+            -- the page can say "issued 14 Oct by X" instead of offering a second
+            -- copy of it (owner 2026-10-16).
+            r.neft_downloaded_at, r.neft_download_count, nu.full_name AS neft_downloaded_by,
             a.application_no, c.full_name AS customer_name
      FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
+     LEFT JOIN users nu ON nu.id = r.neft_downloaded_by_user_id
      WHERE ${conds.join(' AND ')} ORDER BY r.created_at DESC LIMIT 2000`, sc.params)).rows;
 }
 

@@ -40,8 +40,8 @@ redemptionsRouter.post('/maturity', requirePermission('redemptions:initiate'),
   }));
 
 redemptionsRouter.get('/neft.xlsx', requirePermission('redemptions:initiate'),
-  asyncHandler(async (_req, res) => {
-    const buf = await s.redemptionNeft(getDb());
+  asyncHandler(async (req, res) => {
+    const buf = await s.redemptionNeft(getDb(), req.user!);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="redemption-neft.xlsx"');
     res.end(buf);
@@ -50,7 +50,7 @@ redemptionsRouter.get('/neft.xlsx', requirePermission('redemptions:initiate'),
 redemptionsRouter.get('/:id/neft.xlsx', requirePermission('redemptions:initiate'),
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
-    const buf = await s.redemptionNeft(getDb(), id);
+    const buf = await s.redemptionNeft(getDb(), req.user!, id);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="redemption-neft-${id}.xlsx"`);
     res.end(buf);

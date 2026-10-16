@@ -368,27 +368,36 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
 
 /** Federal Bank NEFT sheet for approved (unpaid) redemptions. */
 /**
- * `redemptionId` given → the single-row sheet for that one customer. Omitted →
- * the bulk sheet, scoped to what is actually still payable ('Approved' with no
- * UTR yet) so it never re-sends something already settled.
+ * The NEFT sheet for ONE redemption — the instruction to pay that customer.
  *
- * ONE COPY PER REDEMPTION (owner 2026-10-16: "keep it as downloaded only once.
- * only super admin will have the access to download it again"). The sheet IS
- * the instruction to pay; a second copy of the same line is how a customer gets
- * paid twice, and nothing downstream catches it — the UTR is written only after
- * the bank confirms, so until then the row looks freshly payable on every click.
- * The single-row route used to be an unrestricted reprint; it is now the same
- * one-shot as the bulk sheet.
+ * Two rules, both owner 2026-10-16, and both exist because a second copy of a
+ * payment line is how somebody gets paid twice. Nothing downstream catches it:
+ * the UTR is filled in on only 1 of the 88 settled redemptions, so the data
+ * cannot tell you afterwards whether the money moved.
  *
- * The rule is per REDEMPTION, not per route, and the bulk sheet honours it too.
- * Locking only the row button would have been decorative: the same payment line
- * was one click away on the bulk sheet. Super Admin is the way back in, and
- * every re-issue is audited with who and when.
+ * 1. ONLY WHILE IT IS PAYABLE. The sheet is produced for an 'Approved'
+ *    redemption and nothing else ("for the ones which are redeemed make the
+ *    neft sheet download button not to work as the redemption is already
+ *    made"). 'Paid' is the case asked for; 'Requested' is refused by the same
+ *    rule, which also closes a real hole — a sheet could previously be pulled
+ *    for a redemption nobody had approved yet, straight past maker/checker.
+ *    Rejected and Cancelled are refused for the obvious reason.
+ *
+ * 2. ONCE. "keep it as downloaded only once. only super admin will have the
+ *    access to download it again." Super Admin is the way back in when a file
+ *    is lost before payment, and every re-issue is audited. That escape hatch
+ *    does NOT extend to rule 1: once a redemption is Paid there is no payment
+ *    left to make, so nobody gets a bank instruction for it — the redemption
+ *    report is the route to a record copy.
+ *
+ * The bulk sheet this function also used to build is gone (owner: "remove that
+ * button"). Releasing every payable line at once is the opposite of releasing
+ * an instruction deliberately, one customer at a time.
  *
  * Marking happens only once the workbook has actually been built. A sheet that
  * failed to generate was never handed over, and must not burn the one copy.
  */
-export async function redemptionNeft(db: Db, actor: AuthUser, redemptionId?: number): Promise<Buffer> {
+export async function redemptionNeft(db: Db, actor: AuthUser, redemptionId: number): Promise<Buffer> {
   const superAdmin = actor.role === 'super_admin';
   const debit = (await db.query<{ account_number: string }>("SELECT account_number FROM banks WHERE is_disbursement_account = TRUE AND is_active = TRUE ORDER BY id LIMIT 1")).rows[0];
   const neftSettings = await getSettingsMap(db);
@@ -398,36 +407,41 @@ export async function redemptionNeft(db: Db, actor: AuthUser, redemptionId?: num
   };
   const debitSetting = asText(neftSettings['payouts.neft_debit_account']);
   const fallbackEmail = asText(neftSettings['payouts.neft_beneficiary_email']);
-  // Anyone but Super Admin sees only lines that have never been issued.
-  const unissued = superAdmin ? '' : ' AND r.neft_downloaded_at IS NULL';
   const rows = (await db.query<Record<string, unknown>>(
-    `SELECT r.id, r.redemption_no, r.net_payment, r.redemption_date, r.neft_download_count, c.full_name AS name, c.email,
+    `SELECT r.id, r.redemption_no, r.net_payment, r.redemption_date, r.status, r.neft_download_count,
+            r.neft_downloaded_at, nu.full_name AS downloaded_by, c.full_name AS name, c.email,
             cba.account_number AS payee_account, cba.ifsc AS payee_ifsc,
             cba.holder_name AS beneficiary_name, s.name AS series_name
      FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
      LEFT JOIN customer_bank_accounts cba ON cba.customer_id = c.id AND cba.is_active = TRUE
      LEFT JOIN series s ON s.id = a.series_id
-     WHERE ${redemptionId ? 'r.id = $1' : `r.status = 'Approved' AND r.utr IS NULL${unissued}`}
-     ORDER BY c.full_name`, redemptionId ? [redemptionId] : [])).rows;
+     LEFT JOIN users nu ON nu.id = r.neft_downloaded_by_user_id
+     WHERE r.id = $1`, [redemptionId])).rows;
+  if (rows.length === 0) throw errors.notFound('Redemption not found');
+  const red = rows[0]!;
 
-  if (redemptionId) {
-    if (rows.length === 0) throw errors.notFound('Redemption not found');
-    // Refuse by NAME and DATE, not a bare "already downloaded" — the next thing
-    // the person does is go and ask someone, and they need to know who.
-    const prev = (await db.query<{ neft_downloaded_at: string | null; who: string | null; n: number }>(
-      `SELECT r.neft_downloaded_at, u.full_name AS who, r.neft_download_count AS n
-         FROM redemptions r LEFT JOIN users u ON u.id = r.neft_downloaded_by_user_id
-        WHERE r.id = $1`, [redemptionId])).rows[0];
-    if (prev?.neft_downloaded_at && !superAdmin) {
-      throw errors.conflict(
-        `This NEFT sheet was already downloaded on ${String(prev.neft_downloaded_at).slice(0, 10)}`
-        + `${prev.who ? ` by ${prev.who}` : ''}. Paying from a second copy would pay the customer twice.`
-        + ' A Super Admin can release it again if the first file was lost.');
-    }
-  } else if (rows.length === 0) {
-    throw errors.conflict(superAdmin
-      ? 'Nothing to pay: every approved redemption already has a UTR.'
-      : 'Nothing new to pay: every approved redemption has already been downloaded. A Super Admin can release one again if a file was lost.');
+  // Rule 1 — payable, or no sheet. Named statuses rather than a catch-all, so
+  // the refusal tells the person which case they are in.
+  if (String(red.status) !== 'Approved') {
+    const why: Record<string, string> = {
+      Paid: 'This redemption has already been paid, so there is no payment left to make.'
+        + ' Use the redemption report if you need a record of it.',
+      Requested: 'This redemption has not been approved yet. The NEFT sheet is released only after approval.',
+      Rejected: 'This redemption was rejected, so it must not be paid.',
+      Cancelled: 'This redemption was cancelled, so it must not be paid.',
+    };
+    throw errors.conflict(why[String(red.status)]
+      ?? `A NEFT sheet is only produced for an approved redemption; this one is ${String(red.status)}.`);
+  }
+
+  // Rule 2 — once. Refuse by NAME and DATE, not a bare "already downloaded":
+  // the next thing the person does is go and ask someone, and they need to
+  // know who.
+  if (red.neft_downloaded_at && !superAdmin) {
+    throw errors.conflict(
+      `This NEFT sheet was already downloaded on ${String(red.neft_downloaded_at).slice(0, 10)}`
+      + `${red.downloaded_by ? ` by ${red.downloaded_by}` : ''}. Paying from a second copy would pay the customer twice.`
+      + ' A Super Admin can release it again if the first file was lost.');
   }
   const { buildNeftSheet } = await import('../../lib/neft.js');
   const sheet = await buildNeftSheet(

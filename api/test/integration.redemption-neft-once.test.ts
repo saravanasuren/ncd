@@ -103,34 +103,69 @@ describe('a redemption NEFT sheet can be taken once', () => {
     expect(audit).toHaveLength(1);
   });
 
-  it('drops an already-released line from the BULK sheet', async () => {
-    // Otherwise the row lock is decorative — the same payment is one click away.
-    const id = await approvedRedemption('Neft Bulk One', '9711000004');
+  it('has no bulk sheet to fall back on', async () => {
+    // Removed outright (owner: "remove that button"). The route goes with the
+    // button — a link that still answers is a link someone will still use, and
+    // it handed out every payable line at once.
     const ncd = await as('ncd@demo.local');
-    const before = await ncd.raw('/api/redemptions/neft.xlsx');
-    expect(before.status).toBe(200);
-    const countBefore = await rowsIn(before.buffer);
-    expect(countBefore).toBeGreaterThan(0);
-
-    // That bulk download released everything it contained, this one included.
-    const second = await ncd.req('GET', `/api/redemptions/${id}/neft.xlsx`);
-    expect(second.status).toBe(409);
-    // …and the bulk sheet now has nothing new to give.
-    const after = await ncd.req('GET', '/api/redemptions/neft.xlsx');
-    expect(after.status).toBe(409);
-    expect(after.json.error.message).toMatch(/already been downloaded/i);
-  });
-
-  it('still gives a Super Admin the whole payable set', async () => {
-    const sa = await superAdmin();
-    const all = await sa.raw('/api/redemptions/neft.xlsx');
-    expect(all.status).toBe(200);
-    // Everything approved-and-unpaid, including the lines already released above.
-    expect(await rowsIn(all.buffer)).toBeGreaterThan(0);
+    expect((await ncd.req('GET', '/api/redemptions/neft.xlsx')).status).toBe(404);
   });
 
   it('an unknown id still 404s and burns nobody’s copy', async () => {
     const ncd = await as('ncd@demo.local');
     expect((await ncd.raw('/api/redemptions/999999/neft.xlsx')).status).toBe(404);
+  });
+});
+
+describe('a NEFT sheet exists only while there is a payment to make', () => {
+  /** Force a redemption into a terminal state the way the lifecycle would. */
+  const setStatus = (id: number, status: string) =>
+    ctx.db.query('UPDATE redemptions SET status = $2 WHERE id = $1', [id, status]);
+
+  it('refuses once the redemption is Paid — for everyone, Super Admin included', async () => {
+    const id = await approvedRedemption('Neft Paid One', '9711000011');
+    await setStatus(id, 'Paid');
+
+    const ncd = await as('ncd@demo.local');
+    const r = await ncd.req('GET', `/api/redemptions/${id}/neft.xlsx`);
+    expect(r.status).toBe(409);
+    expect(r.json.error.message).toMatch(/already been paid/i);
+
+    // The Super Admin escape hatch is for a file lost BEFORE payment. Once the
+    // money has gone there is no payment left to make, so it does not apply —
+    // handing out a bank instruction for a settled redemption is the hazard.
+    const sa = await superAdmin();
+    const asSuper = await sa.req('GET', `/api/redemptions/${id}/neft.xlsx`);
+    expect(asSuper.status).toBe(409);
+    expect(asSuper.json.error.message).toMatch(/already been paid/i);
+  });
+
+  it('refuses before approval, which also closes the maker/checker hole', async () => {
+    // A sheet could previously be pulled for a redemption nobody had approved.
+    const id = await approvedRedemption('Neft Pending One', '9711000012');
+    await setStatus(id, 'Requested');
+    const ncd = await as('ncd@demo.local');
+    const r = await ncd.req('GET', `/api/redemptions/${id}/neft.xlsx`);
+    expect(r.status).toBe(409);
+    expect(r.json.error.message).toMatch(/not been approved/i);
+  });
+
+  it('refuses a rejected or cancelled redemption', async () => {
+    const ncd = await as('ncd@demo.local');
+    const rejected = await approvedRedemption('Neft Rejected One', '9711000013');
+    await setStatus(rejected, 'Rejected');
+    expect((await ncd.req('GET', `/api/redemptions/${rejected}/neft.xlsx`)).json.error.message).toMatch(/rejected/i);
+
+    const cancelled = await approvedRedemption('Neft Cancelled One', '9711000014');
+    await setStatus(cancelled, 'Cancelled');
+    expect((await ncd.req('GET', `/api/redemptions/${cancelled}/neft.xlsx`)).json.error.message).toMatch(/cancelled/i);
+  });
+
+  it('still releases an Approved one — the gate is not just "always no"', async () => {
+    const id = await approvedRedemption('Neft Still Works', '9711000015');
+    const ncd = await as('ncd@demo.local');
+    const ok = await ncd.raw(`/api/redemptions/${id}/neft.xlsx`);
+    expect(ok.status).toBe(200);
+    expect(await rowsIn(ok.buffer)).toBe(1);
   });
 });

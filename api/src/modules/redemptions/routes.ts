@@ -39,13 +39,10 @@ redemptionsRouter.post('/maturity', requirePermission('redemptions:initiate'),
     res.status(201).json(await s.initiateMaturity(getDb(), req.user!, application_id));
   }));
 
-redemptionsRouter.get('/neft.xlsx', requirePermission('redemptions:initiate'),
-  asyncHandler(async (req, res) => {
-    const buf = await s.redemptionNeft(getDb(), req.user!);
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename="redemption-neft.xlsx"');
-    res.end(buf);
-  }));
+// The BULK sheet is gone (owner 2026-10-16: "remove that button"). It handed
+// out every payable line at once, which is the opposite of releasing a payment
+// instruction deliberately, one customer at a time. Removing the route as well
+// as the button: a link that still answers is a link someone will still use.
 
 redemptionsRouter.get('/:id/neft.xlsx', requirePermission('redemptions:initiate'),
   asyncHandler(async (req, res) => {

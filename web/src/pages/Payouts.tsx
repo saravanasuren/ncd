@@ -97,9 +97,12 @@ function BatchComparison({ last, now }: {
           <div className="text-[11px] text-text-muted mt-1.5 max-w-[760px]">
             Outstanding splits on the money-received date. Last batch is the book as it stood on
             {m.since} — everything that had landed by then, including the {m.redeemed.redemptions} since
-            redeemed. Added is the {m.added.investments} investment(s) that landed after it. The three
-            reconcile exactly: Last batch + Added − Redeemed = This batch. Gross / TDS / Net above
-            are what that batch actually paid.
+            redeemed. Added is the {m.added.investments} investment(s) that landed after it. Redeemed
+            counts only redemptions that were approved or paid; one still awaiting its checkers, or
+            refused, has taken nothing off the book. <strong>Outstanding</strong> reconciles exactly:
+            Last batch + Added − Redeemed = This batch. The customer counts do not add up that way and
+            are not meant to — one person can hold an old investment and a new one, so they are counted
+            on both sides. Gross / TDS / Net above are what that batch actually paid.
           </div>
         )}
       </div>

@@ -165,6 +165,42 @@ describe('Added / Redeemed since the last paid batch', () => {
     expect(Number(now.movement.redeemed.amount)).toBe(Number(base.movement.redeemed.amount) + 400000);
   });
 
+  it('ignores a redemption that is not approved — requested, rejected or cancelled', async () => {
+    /**
+     * Owner 2026-10-19: "un redeemption i get to see wrong values."
+     *
+     * Redeemed counted every row on the redemptions table, so a request still
+     * waiting on its two checkers, one that was REFUSED, and one reversed as a
+     * mistake all read as money gone. On the live book that was Rs 57,50,000
+     * shown against Rs 37,00,000 real — and because Added is derived as
+     * `this - snapshot + redeemed`, the same Rs 20,50,000 was pushed into Added
+     * too. Both movement columns wrong, the bottom line right.
+     *
+     * 'Requested' is the one that matters: it is not a stale state but the
+     * normal one for a redemption still going through approval.
+     */
+    const a = await admin();
+    const base = await summary();
+
+    for (const [i, status] of ['Requested', 'Rejected', 'Cancelled'].entries()) {
+      const cust = await a.post('/api/customers', { full_name: `Not Redeemed ${status}`, phone: `97041000${i}0` });
+      const app = await a.post('/api/applications', { ...requiredInvestmentFields(),
+        customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
+        amount: 300000, date_money_received: '2026-06-20' });
+      await approveInvestment(await as('ncd@demo.local'), app);
+      await ctx.db.query(
+        `INSERT INTO redemptions (redemption_no, application_id, type, redemption_date, principal, penalty, net_payment, status)
+         VALUES ($1, $2, 'premature', '2026-07-20', 300000, 0, 300000, $3)`,
+        [`RED-NOPE-${status}-${app.json.id}`, app.json.id, status]);
+    }
+
+    const now = await summary();
+    // Not one rupee, and not one row, of the Rs 9,00,000 reaches Redeemed.
+    expect(now.movement.redeemed.redemptions).toBe(base.movement.redeemed.redemptions);
+    expect(Number(now.movement.redeemed.amount)).toBe(Number(base.movement.redeemed.amount));
+    expect(now.movement.redeemed.customers).toBe(base.movement.redeemed.customers);
+  });
+
   it('counts interest settled OUTSIDE the batch for that same date', async () => {
     /**
      * Owner 2026-09-10: "the payments were given in backend — changing the

@@ -474,12 +474,29 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
   // What LEFT the last batch's book: redeemed after that date, and whose money
   // had landed on or before it — the same population `before_amount` measures,
   // so the two are about one set of investments and the row subtracts cleanly.
+  //
+  // ONLY A REDEMPTION THAT ACTUALLY TOOK MONEY OUT (owner 2026-10-19: "un
+  // redeemption i get to see wrong values"). This counted every row on the
+  // table, so a request nobody approved, one that was REFUSED, and one that was
+  // reversed as a mistake all read as money gone:
+  //
+  //   Approved   5  Rs 37,00,000   <- the real ones
+  //   Requested  2  Rs 10,00,000   <- not approved; nothing has left
+  //   Rejected   2  Rs  5,50,000   <- refused outright
+  //   Cancelled  1  Rs  5,00,000   <- MCR-2026-001144, reversed on 16-10
+  //
+  // Rs 57,50,000 on screen against Rs 37,00,000 real — and because `addedAmount`
+  // is derived as `this - snapshot + redeemed`, the same Rs 20,50,000 was pushed
+  // into Added as well. Both movement columns wrong, the bottom line right, which
+  // is exactly how #462 presented. 'Requested' matters most: it is not a stale
+  // state but the normal one for a redemption still waiting on its two checkers.
   const red = (await db.query<{ redemptions: string; customers: string; amount: string }>(
     `SELECT count(*) AS redemptions, count(DISTINCT a.customer_id) AS customers,
             COALESCE(sum(r.principal), 0) AS amount
        FROM redemptions r JOIN applications a ON a.id = r.application_id
       WHERE r.redemption_date > $1::date
-        AND a.date_money_received <= $1::date`, [since])).rows[0]!;
+        AND a.date_money_received <= $1::date
+        AND r.status IN ('Approved', 'Paid')`, [since])).rows[0]!;
 
   /**
    * THE BOOK AS AT THAT DATE — remembered, not recomputed (owner 2026-09-24:

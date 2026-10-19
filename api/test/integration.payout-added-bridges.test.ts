@@ -148,7 +148,10 @@ describe('the payout comparison explains its own total', () => {
     await ctx.db.query("UPDATE applications SET status = 'Redeemed' WHERE id = $1", [app]);
     await ctx.db.query(
       `INSERT INTO redemptions (redemption_no, application_id, type, principal, net_payment, redemption_date, status)
-       VALUES ($2, $1, 'maturity', 1000000, 1000000, '2026-09-05', 'Completed')`,
+       -- 'Paid': a real terminal status. These fixtures used 'Completed', which
+       -- the app never writes and production has none of, so they were asserting
+       -- against a shape that cannot occur (owner 2026-10-19 fix).
+       VALUES ($2, $1, 'maturity', 1000000, 1000000, '2026-09-05', 'Paid')`,
       [app, `RED-TEST-${app}`]);
 
     const after = (await summary(a, NEXT))!;
@@ -234,7 +237,7 @@ describe('the old batch amount never changes', () => {
     await ctx.db.query("UPDATE applications SET status = 'Redeemed' WHERE id = $1", [app]);
     await ctx.db.query(
       `INSERT INTO redemptions (redemption_no, application_id, type, principal, net_payment, redemption_date, status)
-       VALUES ($2, $1, 'maturity', 2000000, 2000000, '2026-12-05', 'Completed')`, [app, `RED-SNAP-${app}`]);
+       VALUES ($2, $1, 'maturity', 2000000, 2000000, '2026-12-05', 'Paid')`, [app, `RED-SNAP-${app}`]);
     expect((await summary(a, '2026-12-28'))!.outstanding).toBe(frozen);
   });
 
@@ -305,7 +308,7 @@ describe('Redeemed says what was redeemed', () => {
     await ctx.db.query("UPDATE applications SET status = 'Redeemed' WHERE id = $1", [app]);
     await ctx.db.query(
       `INSERT INTO redemptions (redemption_no, application_id, type, principal, net_payment, redemption_date, status)
-       VALUES ($2, $1, 'maturity', 1000000, 1000000, '2027-03-05', 'Completed')`, [app, `RED-HON-${app}`]);
+       VALUES ($2, $1, 'maturity', 1000000, 1000000, '2027-03-05', 'Paid')`, [app, `RED-HON-${app}`]);
 
     const s = (await summary(a, D))!;
     // THE POINT: one redemption of ₹10,00,000, reported as ₹10,00,000 — not

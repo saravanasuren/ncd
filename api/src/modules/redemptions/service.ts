@@ -93,15 +93,32 @@ async function createRequest(
       };
     }
   }
-  // Penalty applies to the amount actually WITHDRAWN, but the accrued interest
-  // is settled on the FULL outstanding up to the redemption date. That matters
-  // for a partial withdrawal: paying the broken-interest row advances the line's
-  // paid-through watermark to this date, so any interest already earned by the
-  // portion that STAYS invested must be paid out now — otherwise it would be
-  // silently lost. The remainder then accrues fresh from the redemption date.
-  // (For a full redemption the two bases are equal, so nothing changes.)
+  // Broken interest accrues on the amount being WITHDRAWN, not on the full
+  // outstanding (owner 2026-10-21: "redemption row should show the redeemed
+  // amount"). For a full redemption the two are identical; for a partial one
+  // this is the difference between a correct sheet and an overpayment.
+  //
+  // It used to run on the full outstanding, on a reading from 2026-07-22: the
+  // broken-interest row advances the line's paid-through watermark, so the
+  // retained portion's interest "must be paid out now or be silently lost, and
+  // the remainder then accrues fresh from the redemption date".
+  //
+  // That premise does not hold. The watermark only moves when a row is PAID
+  // (see the `status = 'Paid'` in the from_date lookups), and BOTH rows settle
+  // in the SAME monthly batch — so at the moment the sheet is built the
+  // retained portion still starts from the last paid date, and its stub days
+  // are billed twice: once inside the redemption row's full-outstanding basis,
+  // once on its own Balance After Redemption row.
+  //
+  // Induja (APP-2026-000514), Rs 40L with Rs 20L withdrawn on 06-10-2026,
+  // last paid 28-09:
+  //        was: 40L x 7d = Rs 9,205  +  20L x 30d = Rs 19,726  = Rs 28,931
+  //        now: 20L x 7d = Rs 4,603  +  20L x 30d = Rs 19,726  = Rs 24,329
+  //       owed: 40L x 7d            +  20L x 23d              = Rs 24,328
+  // The retained half keeps every day it earned — it is simply paid on its own
+  // row, from the last paid date, which is what that row was always for.
   const calc = computeRedemption({ principal, penalty });
-  const accrued = computeRedemption({ principal: outstanding, penalty: { mode: 'flat', value: 0 }, ...brokenArgs });
+  const accrued = computeRedemption({ principal, penalty: { mode: 'flat', value: 0 }, ...brokenArgs });
   // 🔒 Whole rupees, owner-approved 2026-08-16. A redemption's broken interest
   // is paid on the monthly interest sheet as a 'Redemption' row and is taken
   // there AS IS — never recomputed — so if it is not rounded HERE it arrives on
@@ -345,11 +362,12 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
       [Number(lineId), appId, redDate, principalNet]);
     if (brokenGross >= 0) {
       // principal_basis = the principal this interest was actually earned on,
-      // which is what the summary sheet prints as "Invested". Note it is the
-      // outstanding BEFORE the withdrawal, not the withdrawn slice: the accrual
-      // above deliberately runs on the full outstanding (owner 2026-07-22) so
-      // the portion that stays invested doesn't lose the interest it has already
-      // earned. For a full redemption the two are the same number.
+      // which is what the summary sheet prints as "Invested". Since 2026-10-21
+      // that is the WITHDRAWN slice, matching the accrual above — so the
+      // Redemption row reads Rs 20,00,000 for a Rs 20,00,000 withdrawal instead
+      // of the whole Rs 40,00,000 line, and the two rows of a partial
+      // redemption sum to the original investment rather than exceeding it.
+      // For a full redemption it is unchanged.
       // It also marks this row as a REDEMPTION slice rather than a maturity
       // catch-up — the sheet reads it to end the period a day early.
       //
@@ -360,7 +378,7 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
       await tx.query(
         `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status, principal_basis)
          VALUES ($1,$2,$3,'BrokenInterest',$4,$5,$6,'Scheduled',$7) ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,
-        [Number(lineId), appId, redDate, brokenGross, brokenTds, brokenNet, outstandingBefore]);
+        [Number(lineId), appId, redDate, brokenGross, brokenTds, brokenNet, withdrawn]);
     }
   }
   await tx.query("UPDATE redemptions SET status = 'Approved', redemption_date = $1 WHERE id = $2", [redDate, redId]);

@@ -235,7 +235,18 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
             COALESCE((SELECT max(p.due_date) FROM disbursement_schedule p
                        WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
                          AND p.due_type IN ${DUE_TYPES} AND p.status = 'Paid'),
-                     a.interest_start_date) AS from_date
+                     a.interest_start_date) AS from_date,
+            -- The principal actually RETURNED on this slice. principal_basis
+            -- above is what the interest was earned on, which on a PARTIAL
+            -- redemption is the whole line — Induja held Rs 40L until the day
+            -- she withdrew Rs 20L, so the sheet read 40,00,000 and never said
+            -- 20,00,000 anywhere (owner 2026-10-21). On a full redemption the
+            -- two coincide, which is why it surfaced only on a partial.
+            (SELECT r.principal FROM redemptions r
+              WHERE r.application_id = ds.application_id
+                AND r.redemption_date = ds.due_date
+                AND r.status IN ('Approved', 'Paid')
+              ORDER BY r.id DESC LIMIT 1) AS redeemed_amount
        FROM disbursement_schedule ds
        JOIN applications a ON a.id = ds.application_id
        JOIN customers c ON c.id = a.customer_id
@@ -283,6 +294,8 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
       display_to: basis != null ? addDays(due, -1) : due,
       // The principal this interest was earned on, not the line's face amount.
       investment_amount: basis,
+      // …and, beside it, what actually went back to the customer.
+      redeemed_amount: r.redeemed_amount != null ? Number(r.redeemed_amount) : null,
       from_date: from, days: from ? daysBetween(from, basis != null ? addDays(due, -1) : due) : null,
       gross_amount: gross, tds_amount: Number(r.tds_amount), net_amount: Number(r.net_amount),
       addition_amount: 0, deduction_amount: 0, total_amount: Number(r.net_amount),
@@ -1143,6 +1156,14 @@ const SUMMARY_SELECT = `
          -- redemption (a 'Balance After Redemption' row must show the balance,
          -- not the original amount that's no longer all still invested).
          COALESCE(ds.principal_basis, l.outstanding_amount) AS investment_amount,
+         -- …and what actually went BACK to the customer on this row. Carried
+         -- here too, not just on the preview, or a sheet re-downloaded from a
+         -- saved batch would lose the column the preview had (owner 2026-10-21).
+         (SELECT r.principal FROM redemptions r
+           WHERE r.application_id = ds.application_id
+             AND r.redemption_date = ds.due_date
+             AND r.status IN ('Approved', 'Paid')
+           ORDER BY r.id DESC LIMIT 1) AS redeemed_amount,
          l.coupon_rate_pct,
          COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
          COALESCE(ds.payee_account, pb.account_number, cb.account_number) AS account_number,
@@ -1293,6 +1314,7 @@ async function summaryRowsForDate(db: Db, payoutDate: string, productType: Produ
       // previewDue); everything else takes the line's amount and the cut-off.
       // `?? st.investment_amount` — not `||` — so a genuine 0 basis still wins.
       investment_amount: r.investment_amount ?? (st as Record<string, unknown>).investment_amount,
+      redeemed_amount: r.redeemed_amount ?? null,
       period_from: r.from_date,
       period_to: r.display_to ?? r.due_date,
       period_days: r.days,

@@ -105,10 +105,20 @@ describe('cheque / UTR reference on the summary sheet', () => {
   it('sits immediately after Payment Mode, and appends rather than shifting any existing column', async () => {
     const ws = await previewSheet('2026-07-28');
     expect(colOf(ws, 'Cheque / Ref No')).toBe(colOf(ws, 'Payment Mode') + 1);
-    // Appended at the END: the Federal-file reconciliation depends on the
-    // earlier columns keeping their index, so nothing may sit after it.
-    const headers = (ws.getRow(1).values as unknown[]).filter(Boolean);
-    expect(headers[headers.length - 1]).toBe('Cheque / Ref No');
+    // What the Federal-file reconciliation actually needs is that every column
+    // KEEPS ITS INDEX. This used to be enforced as "Cheque / Ref No must be
+    // last", which is stricter than the rule and blocked appending a genuinely
+    // new column ('Redeemed (Rs)', owner 2026-10-21). Pinned as the real
+    // invariant instead: the established columns, in order, with anything new
+    // only ever after them.
+    const headers = (ws.getRow(1).values as unknown[]).filter(Boolean).map(String);
+    const established = [
+      '#', 'Application No', 'Customer Name', 'Referred By', 'Branch', 'DOB', 'Age', 'PAN', 'Gender',
+      'Category', 'Series', 'Type', 'Invested (Rs)', 'Rate %', 'Beneficiary Name', 'Bank A/C', 'IFSC',
+      'Interest From', 'Interest To', 'Days', 'Gross (Rs)', 'TDS (Rs)', 'Net (Rs)',
+      'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)', 'Phone', 'Payment Mode', 'Cheque / Ref No',
+    ];
+    expect(headers.slice(0, established.length)).toEqual(established);
   });
 
   it('an ordinary one-payment investment shows its own cheque number and method', async () => {

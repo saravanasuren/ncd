@@ -44,7 +44,7 @@ const HEADERS = [
   'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)', 'Phone', 'Payment Mode',
   // The tranche's own cheque/UTR (owner 2026-08-26) — APPENDED, so no existing
   // column moved. Its behaviour lives in integration.payout-summary-cheque-ref.
-  'Cheque / Ref No',
+  'Cheque / Ref No', 'Redeemed (Rs)',
 ];
 
 /** Column index BY HEADER NAME. The sheet has had two columns inserted mid-way
@@ -762,5 +762,69 @@ describe('"Invested (Rs)" reflects the outstanding balance after a partial redem
       }
     }
     expect(invested).toBe(600000);
+  });
+
+  /**
+   * Owner 2026-10-19, and again 2026-10-21 after an explanation did not satisfy:
+   * "INDUJA SRINIVASANGAM REDEEMED ONLY 20 LAKHS BUT Y IS IT SHOWING 40 LAKHS ?"
+   *
+   * She held Rs 40L until 6 Oct and withdrew Rs 20L. The Redemption row's
+   * "Invested (Rs)" read Rs 40,00,000 — correct as the INTEREST BASIS, since
+   * Rs 9,205 = 40L x 12% x 7 days — but the row never stated Rs 20,00,000
+   * anywhere, so it read as a Rs 40 lakh redemption.
+   *
+   * On a FULL redemption the two figures coincide, which is why years of
+   * redemptions never showed it. These pin both halves: the basis stays put so
+   * Rate x Days x Invested still ties to Gross, and the new column says what
+   * actually went back.
+   */
+  it('a Redemption row states what was REDEEMED beside what the interest was earned on', async () => {
+    const a = await admin();
+    const cxo = await as('cxo@demo.local');
+    const appId = await mkPartial('Partial Redeemed Column', '9600000063', '2027-05-01');
+    const red = await a.post('/api/redemptions/premature', {
+      application_id: appId, reason: 'part exit', redemption_date: '2027-06-10', amount: 400000,
+    });
+    expect(red.status).toBe(201);
+    await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
+
+    const ws = await sheetOf((await a.raw('/api/payouts/preview.summary.xlsx?date=2027-06-28')).buffer);
+    let slice: { invested: number; redeemed: unknown; gross: number; days: number; rate: number } | null = null;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      if (String(row.getCell(C('Customer Name')).value) !== 'Partial Redeemed Column') continue;
+      if (String(row.getCell(C('Type')).value) !== 'Redemption') continue;
+      slice = {
+        invested: Number(row.getCell(C('Invested (Rs)')).value),
+        redeemed: row.getCell(C('Redeemed (Rs)')).value,
+        gross: Number(row.getCell(C('Gross (Rs)')).value),
+        days: Number(row.getCell(C('Days')).value),
+        rate: Number(row.getCell(C('Rate %')).value),
+      };
+    }
+    expect(slice).not.toBeNull();
+    // What actually went back to the customer — the number that was missing.
+    expect(Number(slice!.redeemed)).toBe(400000);
+    // The basis is NOT overwritten: she had the whole line invested until the
+    // redemption, so the interest was earned on it.
+    expect(slice!.invested).toBe(1000000);
+    // …and that is exactly why it must stay — the row has to tie out. Whole
+    // rupees on the sheet, so allow the rounding.
+    expect(Math.abs(slice!.invested * (slice!.rate / 100) * (slice!.days / 365) - slice!.gross)).toBeLessThan(2);
+  });
+
+  it('an ordinary interest row leaves Redeemed blank, not zero', async () => {
+    // A 0 on every line would bury the rows that actually returned money.
+    const a = await admin();
+    const ws = await sheetOf((await a.raw('/api/payouts/preview.summary.xlsx?date=2027-06-28')).buffer);
+    let checked = 0;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      if (String(row.getCell(C('Type')).value) === 'Redemption') continue;
+      const v = row.getCell(C('Redeemed (Rs)')).value;
+      expect(v === null || v === undefined || v === '').toBe(true);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 });

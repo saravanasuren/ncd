@@ -44,7 +44,26 @@ export interface SummaryRow {
   series_name?: string | null;
   /** Addition = new money paying out first time · Redemption = exiting slice · Live. */
   row_type?: string | null;
+  /**
+   * The principal the interest on THIS row was earned on. On a redemption slice
+   * that is the whole line, because the whole line was invested right up to the
+   * redemption — NOT the amount being taken out. See `redeemed_amount`.
+   */
   investment_amount?: number | string | null;
+  /**
+   * The principal actually returned on this row, when one is.
+   *
+   * Owner 2026-10-19 and again 2026-10-21: "INDUJA SRINIVASANGAM REDEEMED ONLY
+   * 20 LAKHS BUT Y IS IT SHOWING 40 LAKHS ?" — she held Rs 40L until 6 Oct and
+   * withdrew Rs 20L, so Invested read Rs 40,00,000 (correctly, as the interest
+   * base: Rs 9,205 = 40L x 12% x 7 days) while the row never said Rs 20,00,000
+   * anywhere. On a FULL redemption the two coincide, which is why it went
+   * unnoticed until a partial one.
+   *
+   * A separate column rather than overwriting Invested: Rate x Days x Invested
+   * has to keep tying to Gross, which is how ops check the row.
+   */
+  redeemed_amount?: number | string | null;
   coupon_rate_pct?: number | string | null;
   beneficiary_name?: string | null;
   account_number?: string | null;
@@ -74,7 +93,7 @@ const COLUMNS = [
   'Addition (Rs)', 'Deduction (Rs)', 'Total (Rs)',
   // Appended, not inserted — ops reconcile this sheet against the Federal Net
   // file by column position, so every existing column keeps its index.
-  'Phone', 'Payment Mode', 'Cheque / Ref No',
+  'Phone', 'Payment Mode', 'Cheque / Ref No', 'Redeemed (Rs)',
 ];
 
 /** Completed years at the payout date. Blank when either date is unusable. */
@@ -180,6 +199,9 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
       r.phone ?? '',
       r.collection_method ?? '',
       r.collection_reference ?? '',
+      // Blank on an ordinary interest row — a 0 would read as "redeemed nothing"
+      // on every line of the sheet and bury the rows that did.
+      r.redeemed_amount != null ? amt(r.redeemed_amount) : '',
     ]);
     // Application No, PAN, Bank A/C, IFSC and Phone must stay TEXT — otherwise
     // Excel drops leading zeros and renders long numbers in scientific

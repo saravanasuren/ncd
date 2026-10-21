@@ -763,4 +763,53 @@ describe('"Invested (Rs)" reflects the outstanding balance after a partial redem
     }
     expect(invested).toBe(600000);
   });
+
+  /**
+   * Owner 2026-10-21: "redemption row should show the redeemed amount."
+   *
+   * Induja (APP-2026-000514) held Rs 40L and withdrew Rs 20L. The Redemption
+   * row read Rs 40,00,000 and the Balance row Rs 20,00,000 — Rs 60 lakh of rows
+   * for a Rs 40 lakh investment. Broken interest ran on the FULL outstanding on
+   * a 2026-07-22 reading that paying it advances the line's watermark so the
+   * retained half "accrues fresh from the redemption date". The watermark only
+   * moves when a row is PAID, and both rows settle in the SAME batch, so the
+   * retained half's stub days were billed twice.
+   *
+   * No existing test pinned the old basis, which is why it survived.
+   */
+  it('a partial redemption charges interest on the WITHDRAWN amount, and the two rows sum to the investment', async () => {
+    const a = await admin();
+    const cxo = await as('cxo@demo.local');
+    const appId = await mkPartial('Withdrawn Basis Investor', '9600000065', '2027-09-01');
+    const red = await a.post('/api/redemptions/premature', {
+      application_id: appId, reason: 'part exit', redemption_date: '2027-10-10', amount: 400000,
+    });
+    expect(red.status).toBe(201);
+    await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
+
+    const ws = await sheetOf((await a.raw('/api/payouts/preview.summary.xlsx?date=2027-10-28')).buffer);
+    let redemption: { invested: number; gross: number; days: number } | null = null;
+    let balance: number | null = null;
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      if (String(row.getCell(C('Customer Name')).value) !== 'Withdrawn Basis Investor') continue;
+      if (String(row.getCell(C('Type')).value) === 'Redemption') {
+        redemption = {
+          invested: Number(row.getCell(C('Invested (Rs)')).value),
+          gross: Number(row.getCell(C('Gross (Rs)')).value),
+          days: Number(row.getCell(C('Days')).value),
+        };
+      } else {
+        balance = Number(row.getCell(C('Invested (Rs)')).value);
+      }
+    }
+    expect(redemption).not.toBeNull();
+    // The row now states what left: Rs 4,00,000, not the Rs 10,00,000 line.
+    expect(redemption!.invested).toBe(400000);
+    expect(balance).toBe(600000);
+    // …and together they are the investment, not more than it.
+    expect(redemption!.invested + balance!).toBe(1000000);
+    // The interest follows the same basis, so the row still ties out.
+    expect(Math.abs(400000 * 0.12 * (redemption!.days / 365) - redemption!.gross)).toBeLessThan(2);
+  });
 });

@@ -136,6 +136,23 @@ async function startCrons(): Promise<void> {
     void runBackupCheck(getDb()).catch((e) => console.warn('[cron] backup check:', (e as Error).message));
   }, 15 * 60_000).unref();
 
+  // Daily ops digest (owner 2026-10-21) — once per IST day at the configured
+  // time, default 17:00. Enqueue is per-day idempotent, so the 15-minute tick
+  // can fire repeatedly without sending twice.
+  const { runOpsDigest } = await import('./integrations/ops-digest.js');
+  setInterval(() => {
+    void (async () => {
+      const { getSettingsMap } = await import('./modules/settings/service.js');
+      const at = String((await getSettingsMap(getDb()))['reports.digest_time'] ?? '17:00');
+      const m = /^(\d{1,2}):(\d{2})$/.exec(at);
+      const hh = m ? Number(m[1]) : 17;
+      const istNow = new Date(Date.now() + 5.5 * 3600 * 1000);
+      if (istNow.getUTCHours() < (Number.isFinite(hh) && hh >= 0 && hh <= 23 ? hh : 17)) return;
+      const r = await runOpsDigest(getDb());
+      if (r.emails_queued) console.log(`[cron] ops digest: ${r.findings} finding(s) to ${r.emails_queued} recipient(s)`);
+    })().catch((e) => console.warn('[cron] ops digest:', (e as Error).message));
+  }, 15 * 60_000).unref();
+
   // Digio eSign poller — flips an application to eSigned on its own once the
   // customer signs, with no webhook and no manual "Mark eSigned" (owner spec
   // 2026-07-22). ON by default; pollOutstanding() itself no-ops unless DIGIO_*

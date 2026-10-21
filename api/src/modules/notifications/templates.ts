@@ -24,6 +24,15 @@ const TEMPLATES: Record<string, Renderer> = {
       `If you didn't request this, you can ignore this email; your password stays unchanged.`,
     ].join('\n'),
   }),
+  /** The 5 PM ops digest — things needing a decision. The body is composed in
+   *  ops-digest.ts (renderDigest) and passed through whole, so the mail and
+   *  anything else that renders the digest can never drift apart. */
+  ops_digest: (p) => ({
+    subject: Number(p.findings) > 0
+      ? `Dhanam NCD — ${p.findings} thing(s) need a decision, ${p.report_date}`
+      : `Dhanam NCD — all clear, ${p.report_date}`,
+    body: String(p.body ?? ''),
+  }),
   /** Daily transaction register — the sheet rides as an .xlsx attachment. */
   transactions_daily: (p) => ({
     subject: `Dhanam NCD — transaction register, ${p.report_date}`,

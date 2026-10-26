@@ -21,7 +21,10 @@ let seriesId: number, schemeId: number;
 
 const AMOUNT = 100000;   // ₹1L
 const RATE = 12;         // demo scheme coupon
-const START = '2026-07-28';
+// Before the 25th: money received from the 25th waits for next month's batch
+// (owner 2026-10-26, integration.next-batch-after-25th.test.ts), so a same-day
+// payout only exists for money received earlier in the month.
+const START = '2026-07-20';
 const oneDay = (AMOUNT * RATE) / 100 / 365;
 
 beforeAll(async () => {
@@ -65,7 +68,7 @@ describe('an investment paid on the day it was made', () => {
 
   it('and two days by the next day — the day of investment still counts', async () => {
     const appId = await liveInvestment('9720000002');
-    const row = await rowFor(await admin(), appId, '2026-07-29');
+    const row = await rowFor(await admin(), appId, '2026-07-21');
     expect(Number(row.days)).toBe(2);
   });
 
@@ -80,15 +83,15 @@ describe('an investment paid on the day it was made', () => {
     await (await as('ncd@demo.local')).post(`/api/approvals/${b.json.request.id}/approve`);
 
     const later = Number((await rowFor(a, appId, '2026-08-28')).gross_amount);
-    // 28 Jul→28 Aug inclusive = 32 days, however it is split across batches.
+    // 20 Jul→28 Aug inclusive = 40 days, however it is split across batches.
     //
     // Whole-rupee rounding weakens this from an exact identity to a
     // within-a-rupee one, and that is worth stating rather than hiding: each
-    // part is rounded on its own, so round(1 day) + round(31 days) can differ
-    // from round(32 days) by up to ₹1. The owner chose NEAREST rounding for
+    // part is rounded on its own, so round(1 day) + round(39 days) can differ
+    // from round(40 days) by up to ₹1. The owner chose NEAREST rounding for
     // exactly this reason — the error is bounded and unbiased, where
     // always-down would systematically shortchange every split period.
-    const exact = oneDay * 32;
+    const exact = oneDay * 40;
     expect(sameDay + later).toBeGreaterThanOrEqual(Math.floor(exact) - 1);
     expect(sameDay + later).toBeLessThanOrEqual(Math.ceil(exact) + 1);
     // And both parts are themselves whole rupees — no paise sneak back in via

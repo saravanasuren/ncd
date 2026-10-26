@@ -47,6 +47,7 @@ type SettingDef<T> = {
 | Interest engine | `interest.payout_day_of_month` | **28** | owner-confirmed 2026-07-16; holiday-adjusted backward |
 | | `interest.day_count_convention` | **'Actual365'** | actual days/365 every period (29th→28th); enum: Actual365 \| Thirty360 \| Actual360 \| ActualActual. Overridable per-scheme via `schemes.day_count_convention` |
 | | `interest.broken_first_period` | 'actual-days receipt→28th' | first partial period from money-received date to next 28th ÷ 365 |
+| | `interest.next_batch_from_day` | **25** | owner 2026-10-26: money received on or after this day of the month is not paid in that month's batch; its first payment comes next month, counting every day from the money date. 0 = off. Investments booked before the rule keep the payment their schedule already holds |
 | Incentives | `incentive.staff_new_no_referrer` | {pct, 2.0} | matrix cell 1 |
 | | `incentive.referrer_new_with_referrer` | {pct, 2.0} | cell 2 |
 | | `incentive.staff_existing_no_referrer` | {pct, 2.0} | cell 3 |

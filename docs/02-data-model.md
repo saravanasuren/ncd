@@ -78,7 +78,10 @@ shared constants.
    `interest = principal × rate/100 × actual_days / 365 ⚙` for **every** period (full
    months therefore vary — 30, 31 or 28 days, and a leap Feb→Mar span is 29 days,
    captured naturally with the denominator fixed at 365). The **first (broken) period**
-   = actual days from the money-received date to the next 28th, ÷ 365. Maturity =
+   = actual days from the money-received date to the next 28th, ÷ 365 — except that
+   money received **on or after the 25th ⚙** (`interest.next_batch_from_day`, owner
+   2026-10-26) skips that month's 28th, so its first period runs to the **next
+   month's** 28th (same formula, every day from the money date counted). Maturity =
    deemed date + tenure_months; principal returns as a `Redemption` row **on**
    maturity_date; the last part-period (last 28th → maturity) is a separate
    `BrokenInterest` row on the first 28th after maturity. This is the default

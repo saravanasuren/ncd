@@ -72,6 +72,17 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     default: 28,
     editableBy: 'workflow',
   },
+  // Owner 2026-10-26: investments from the 25th are paid in the next month's batch.
+  {
+    key: 'interest.next_batch_from_day',
+    group: 'Interest',
+    label: 'Pay in next month from day',
+    description: "Money received on or after this day of the month is not paid in that month's interest batch; "
+      + 'its first payment comes in the next month, covering every day from the day the money arrived. 0 = off.',
+    type: 'number',
+    default: 25,
+    editableBy: 'workflow',
+  },
   {
     key: 'interest.day_count_convention',
     group: 'Interest',

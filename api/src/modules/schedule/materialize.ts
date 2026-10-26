@@ -86,6 +86,7 @@ export async function materializeForApplication(tx: Db, applicationId: number): 
 
   const settings = await getSettingsMap(tx);
   const payoutDay = Number(settings['interest.payout_day_of_month'] ?? 28);
+  const nextBatchFromDay = Number(settings['interest.next_batch_from_day'] ?? 0) || 0;
 
   const series = (await tx.query<{ deemed_date: string | null }>('SELECT deemed_date FROM series WHERE id = $1', [app.series_id])).rows[0];
   const deemed = toISODate(series?.deemed_date ?? null);
@@ -126,7 +127,7 @@ export async function materializeForApplication(tx: Db, applicationId: number): 
         tenure_months: Number(line.tenure_months),
         day_count_convention: line.day_count_convention as DayCountConvention,
       },
-      { interestStartDate: lineStart, seriesDeemedDate, holidays, payoutDay }
+      { interestStartDate: lineStart, seriesDeemedDate, holidays, payoutDay, nextBatchFromDay }
     );
 
     // Stamp line maturity (last Redemption row date).

@@ -16,7 +16,7 @@
  * old formula charged 26 days when it should have been 25.
  */
 import { describe, it, expect } from 'vitest';
-import { generateSchedule } from '../src/lib/interest.js';
+import { generateSchedule, rollsToNextBatch } from '../src/lib/interest.js';
 import { computeRedemption } from '../src/lib/redemption.js';
 import { payoutDayOfMonth, daysBetween, round2 } from '../src/lib/dates.js';
 
@@ -156,5 +156,68 @@ describe('computeRedemption — broken-period interest stops the day BEFORE rede
     // Stops the day before redemption (28-Jul) — the same day it was last
     // paid through — so zero new days have accrued.
     expect(r.brokenInterest).toBe(0);
+  });
+});
+
+/**
+ * Owner 2026-10-26: money received on or after the 25th is paid from the NEXT
+ * month's batch. The skipped short payment is not lost — the next month's
+ * first period counts every day from the money date.
+ */
+describe('money received from the 25th is paid in the next month', () => {
+  const line = {
+    amount: 100000, coupon_rate_pct: 12, payout_frequency: 'Monthly' as const,
+    tenure_months: 12, day_count_convention: 'Actual365' as const,
+  };
+  const schedule = (start: string, nextBatchFromDay?: number, startIsPriorWatermark = false) =>
+    generateSchedule(line, { interestStartDate: start, seriesDeemedDate: '2026-10-01', nextBatchFromDay, startIsPriorWatermark });
+  const interestRows = (rows: ReturnType<typeof schedule>) => rows.filter((r) => r.due_type !== 'Redemption');
+
+  it('the rule itself: 25th onwards in the same month moves; earlier days and other months do not', () => {
+    expect(rollsToNextBatch('2026-10-25', '2026-10-28', 25)).toBe(true);
+    expect(rollsToNextBatch('2026-10-27', '2026-10-28', 25)).toBe(true);
+    expect(rollsToNextBatch('2026-10-24', '2026-10-28', 25)).toBe(false);
+    expect(rollsToNextBatch('2026-10-26', '2026-11-28', 25)).toBe(false);
+    expect(rollsToNextBatch('2026-10-26', '2026-10-28', 0)).toBe(false);
+    expect(rollsToNextBatch('2026-10-26', '2026-10-28', undefined)).toBe(false);
+  });
+
+  it('money on the 24th is still paid on this month\'s 28th (5 days, the 24th counts)', () => {
+    const first = schedule('2026-10-24', 25)[0]!;
+    expect(first.due_date).toBe('2026-10-28');
+    expect(first.period_days).toBe(5);
+  });
+
+  it('money on the 25th skips 28 Oct; first payout 28 Nov covers 25 Oct → 28 Nov (35 days)', () => {
+    const first = schedule('2026-10-25', 25)[0]!;
+    expect(first.due_date).toBe('2026-11-28');
+    expect(first.period_days).toBe(35);
+    expect(first.is_broken_period).toBe(true);
+    // 1,00,000 × 12% × 35 / 365
+    expect(first.gross_amount).toBeCloseTo(1150.68, 2);
+  });
+
+  it('money on the 26th: first payout 28 Nov, 34 days', () => {
+    const rows = schedule('2026-10-26', 25);
+    expect(rows[0]!.due_date).toBe('2026-11-28');
+    expect(rows[0]!.period_days).toBe(34);
+    expect(rows[1]!.due_date).toBe('2026-12-28');
+    expect(rows[1]!.period_days).toBe(30);
+  });
+
+  it('moves timing only — lifetime interest is the same as before the rule', () => {
+    const sum = (rows: ReturnType<typeof schedule>) => interestRows(rows).reduce((s, r) => s + r.gross_amount, 0);
+    const days = (rows: ReturnType<typeof schedule>) => interestRows(rows).reduce((s, r) => s + r.period_days, 0);
+    expect(days(schedule('2026-10-26', 25))).toBe(days(schedule('2026-10-26')));
+    expect(Math.abs(sum(schedule('2026-10-26', 25)) - sum(schedule('2026-10-26')))).toBeLessThanOrEqual(0.01);
+  });
+
+  it('switched off (0 / not passed) the schedule is exactly as before', () => {
+    expect(schedule('2026-10-26', 0)).toEqual(schedule('2026-10-26'));
+    expect(schedule('2026-10-26')[0]!.due_date).toBe('2026-10-28');
+  });
+
+  it('never applies to a migration watermark (a date already paid through)', () => {
+    expect(schedule('2026-10-25', 25, true)[0]!.due_date).toBe('2026-10-28');
   });
 });

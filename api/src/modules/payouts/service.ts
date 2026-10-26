@@ -8,7 +8,7 @@ import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { round2, roundRupee, toISODate, daysBetween, addDays } from '../../lib/dates.js';
-import { denominatorFor, type DayCountConvention } from '../../lib/interest.js';
+import { denominatorFor, rollsToNextBatch, type DayCountConvention } from '../../lib/interest.js';
 import { computeTds, DEFAULT_TDS_RULE } from '../../lib/tds.js';
 import { OUTSTANDING_APPLICATION_STATUSES, payoutRupees } from '@new-wealth/shared';
 import { nextCode } from '../../lib/sequences.js';
@@ -77,7 +77,13 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
             NOT EXISTS (SELECT 1 FROM disbursement_schedule ds
                          WHERE ds.line_id = l.id AND ds.due_type IN ${DUE_TYPES}
                            AND (ds.status = 'Paid'
-                                OR (ds.status = 'Scheduled' AND ds.batch_id IS NOT NULL))) AS is_first_period
+                                OR (ds.status = 'Scheduled' AND ds.batch_id IS NOT NULL))) AS is_first_period,
+            -- The first interest payout the line's stored schedule was booked
+            -- with. Tells an investment booked before the "from the 25th, next
+            -- month" rule (its schedule has a payout in the money month) from
+            -- one booked after it (owner 2026-10-26: new investments only).
+            (SELECT min(ds.due_date) FROM disbursement_schedule ds
+              WHERE ds.line_id = l.id AND ds.due_type IN ${DUE_TYPES}) AS first_scheduled_due
        FROM application_lines l
        JOIN applications a ON a.id = l.application_id
        JOIN customers c ON c.id = a.customer_id
@@ -92,9 +98,22 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
   // a redemption slice brings its own principal_basis, everything else is the
   // line's outstanding — so the two screens agree by construction.
   const totals = { gross: 0, tds: 0, net: 0, outstanding: 0 };
+  const settings = await getSettingsMap(db);
+  const nextBatchFromDay = Number(settings['interest.next_batch_from_day'] ?? 0) || 0;
   for (const l of lines) {
     const paidThrough = toISODate(l.paid_through as string | null);
     if (!paidThrough || payoutDate < paidThrough) continue;    // nothing accrued yet
+    // Owner 2026-10-26: money received on/after the cut-off day (default the
+    // 25th) is paid from the NEXT month's batch, which then counts every day
+    // from the day it arrived — so nothing is lost, only moved. Only a line's
+    // first period: paidThrough is then its money-received date. An investment
+    // booked BEFORE this rule keeps the short payment its stored schedule
+    // promised for this month ("new investments only").
+    if (l.is_first_period && rollsToNextBatch(paidThrough, payoutDate, nextBatchFromDay)) {
+      const firstDue = toISODate(l.first_scheduled_due as string | null);
+      const bookedForThisMonth = !!firstDue && firstDue.slice(0, 7) === paidThrough.slice(0, 7);
+      if (!bookedForThisMonth) continue;
+    }
     // payoutDate === paidThrough is TWO different situations, and they must not
     // share a rule (owner-approved 2026-07-28):
     //   • an already-paid line — that watermark is a due_date already paid

@@ -9,6 +9,11 @@
  *     (full months vary: 30, 31 or 28 days — NOT flat).
  *   • First (broken) period = actual days from the money-received date to
  *     the next 28th, ÷ 365.
+ *   • Money received ON OR AFTER a cut-off day of the month (setting
+ *     `interest.next_batch_from_day`, default 25 — owner 2026-10-26) is not
+ *     paid in that same month's batch: its first payout is the NEXT payout
+ *     day, covering every day from the day the money arrived. See
+ *     `rollsToNextBatch`.
  *   • Maturity = deemed date + tenure; principal returns as a Redemption row
  *     on maturity_date; the last part-period (last 28th → maturity) is a
  *     separate BrokenInterest row on the first 28th after maturity.
@@ -82,6 +87,14 @@ export interface ScheduleOpts {
    * 2026-07-25 — that day itself accrues.
    */
   startIsPriorWatermark?: boolean;
+  /**
+   * Config-driven (settings `interest.next_batch_from_day`, default 25 — owner
+   * 2026-10-26). Money received on or after this day of the month skips that
+   * month's payout; its first period runs to the next payout day instead.
+   * 0 / undefined = off. Never applied when `startIsPriorWatermark` — a
+   * watermark is a date already paid through, not money arriving.
+   */
+  nextBatchFromDay?: number;
 }
 
 export interface ScheduleRow {
@@ -106,6 +119,23 @@ export function denominatorFor(convention: DayCountConvention, fromDate?: ISODat
   }
 }
 
+/**
+ * True when money received on `moneyReceivedOn` must NOT be paid in the batch
+ * dated `payoutDate`, because it arrived on or after the cut-off day of that
+ * same month (owner 2026-10-26: investments from the 25th are paid in the next
+ * month's batch). No day is lost — the next month's batch pays from the day the
+ * money arrived.
+ *
+ * The ONE rule, used by both the projected schedule (generateSchedule) and the
+ * live payout run (payouts/service.ts previewDue), so the two cannot disagree.
+ */
+export function rollsToNextBatch(moneyReceivedOn: ISODate, payoutDate: ISODate, fromDay: number | undefined): boolean {
+  const cutoff = Number(fromDay);
+  if (!Number.isFinite(cutoff) || cutoff <= 0) return false;
+  if (dayOfMonth(moneyReceivedOn) < cutoff) return false;
+  return moneyReceivedOn.slice(0, 7) === payoutDate.slice(0, 7);
+}
+
 function payoutDatesFor(
   freqMonths: number,
   tenureMonths: number,
@@ -127,7 +157,7 @@ function payoutDatesFor(
 }
 
 export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): ScheduleRow[] {
-  const { interestStartDate, seriesDeemedDate, holidays, payoutDay = 28, startIsPriorWatermark = false } = opts;
+  const { interestStartDate, seriesDeemedDate, holidays, payoutDay = 28, startIsPriorWatermark = false, nextBatchFromDay } = opts;
   const firstDayCounts = !startIsPriorWatermark;
   if (!interestStartDate || !seriesDeemedDate) {
     throw new Error('generateSchedule requires interestStartDate and seriesDeemedDate');
@@ -146,6 +176,14 @@ export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): Schedu
     const m = FREQ_MONTHS[freq]!;
     const periodDaysNormal = m * PERIOD_DAYS_PER_MONTH;
     const payouts = payoutDatesFor(m, tenure, interestStartDate, holidaySet, maturityDate, payoutDay);
+    // Money received on/after the cut-off day: drop that same month's payout so
+    // the first period runs to the next one (see rollsToNextBatch). Only when a
+    // later payout exists — with none, dropping it would leave the days from the
+    // money date to maturity with no row at all.
+    const rolled = !startIsPriorWatermark
+      && payouts.length >= 2
+      && rollsToNextBatch(interestStartDate, payouts[0]!, nextBatchFromDay);
+    if (rolled) payouts.shift();
 
     let prev = interestStartDate;
     let lastRegularPayout: ISODate | null = null;
@@ -168,7 +206,8 @@ export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): Schedu
         // Back-compat opt-in: flat 30-day months, broken first = (30 − invest_day + 1)
         // — same inclusive-of-investment-day rule as the Actual* branch below.
         if (i === 0 && investDay > 1) {
-          periodDays = m * 30 - investDay + (firstDayCounts ? 1 : 0);
+          // A rolled first period also carries the whole period it skipped.
+          periodDays = m * 30 - investDay + (firstDayCounts ? 1 : 0) + (rolled ? m * 30 : 0);
           isBroken = true;
         } else {
           periodDays = m * 30;
@@ -178,7 +217,9 @@ export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): Schedu
         // Actual365 (default) / Actual360 / ActualActual: every period is the
         // ACTUAL calendar days between boundaries (owner-confirmed rule).
         periodDays = actualDays;
-        isBroken = i === 0 && actualDays < periodDaysNormal;
+        // A rolled first period is longer than a normal one but is still a
+        // part-period carried forward, not a regular month.
+        isBroken = i === 0 && (rolled || actualDays < periodDaysNormal);
       }
       const denom = denominatorFor(convention, prev);
       const interest = round2((amount * rate) / 100 * periodDays / denom);

@@ -10,7 +10,7 @@
  *   • First (broken) period = actual days from the money-received date to
  *     the next 28th, ÷ 365.
  *   • Money received ON OR AFTER a cut-off day of the month (setting
- *     `interest.next_batch_from_day`, default 25 — owner 2026-10-26) is not
+ *     `interest.next_batch_from_day`, default 26 — owner 2026-10-26/27) is not
  *     paid in that same month's batch: its first payout is the NEXT payout
  *     day, covering every day from the day the money arrived. See
  *     `rollsToNextBatch`.
@@ -88,7 +88,7 @@ export interface ScheduleOpts {
    */
   startIsPriorWatermark?: boolean;
   /**
-   * Config-driven (settings `interest.next_batch_from_day`, default 25 — owner
+   * Config-driven (settings `interest.next_batch_from_day`, default 26 — owner
    * 2026-10-26). Money received on or after this day of the month skips that
    * month's payout; its first period runs to the next payout day instead.
    * 0 / undefined = off. Never applied when `startIsPriorWatermark` — a
@@ -122,7 +122,7 @@ export function denominatorFor(convention: DayCountConvention, fromDate?: ISODat
 /**
  * True when money received on `moneyReceivedOn` must NOT be paid in the batch
  * dated `payoutDate`, because it arrived on or after the cut-off day of that
- * same month (owner 2026-10-26: investments from the 25th are paid in the next
+ * same month (owner 2026-10-26/27: investments from the 26th are paid in the next
  * month's batch). No day is lost — the next month's batch pays from the day the
  * money arrived.
  *

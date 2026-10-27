@@ -21,8 +21,8 @@ let seriesId: number, schemeId: number;
 
 const AMOUNT = 100000;   // ₹1L
 const RATE = 12;         // demo scheme coupon
-// Before the 25th: money received from the 25th waits for next month's batch
-// (owner 2026-10-26, integration.next-batch-after-25th.test.ts), so a same-day
+// Before the cut-off: money received from the 26th waits for next month's batch
+// (owner 2026-10-26/27, integration.next-batch-after-26th.test.ts), so a same-day
 // payout only exists for money received earlier in the month.
 const START = '2026-07-20';
 const oneDay = (AMOUNT * RATE) / 100 / 365;

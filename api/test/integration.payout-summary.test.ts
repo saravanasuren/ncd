@@ -813,3 +813,44 @@ describe('"Invested (Rs)" reflects the outstanding balance after a partial redem
     expect(Math.abs(400000 * 0.12 * (redemption!.days / 365) - redemption!.gross)).toBeLessThan(2);
   });
 });
+
+/**
+ * Owner 2026-10-27: "for ncd doubling and cumulative - interest should not go in
+ * this month batch right ? - i see they are getting paid interest."
+ *
+ * previewDue had NO payout_frequency filter, so every Active line joined the
+ * monthly cash run. Having no Interest rows in the schedule was no protection —
+ * the run accrues live from the paid-through watermark, so a product with no
+ * schedule at all still showed a full period's accrual.
+ */
+describe('only products that pay periodically are in the monthly run', () => {
+  const mk = async (name: string, phone: string, freq: string) => {
+    const a = await admin();
+    const sid = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const scid = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+    const cust = await a.post('/api/customers', { full_name: name, phone });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: `55${phone}`, ifsc: 'ICIC0001234', holder_name: name });
+    const app = await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: sid, scheme_id: scid,
+      amount: 1000000, date_money_received: '2027-11-01' });
+    await approveInvestment(await as('ncd@demo.local'), app);
+    await ctx.db.query('UPDATE application_lines SET payout_frequency = $2 WHERE application_id = $1',
+      [Number(app.json.id), freq]);
+    return name;
+  };
+
+  it('keeps a Cumulative / AtMaturity line OUT, and a Monthly one IN', async () => {
+    const a = await admin();
+    const monthly = await mk('Periodic Payer', '9680000001', 'Monthly');
+    const cumulative = await mk('Cumulative Holder', '9680000002', 'Cumulative');
+    const atMaturity = await mk('At Maturity Holder', '9680000003', 'AtMaturity');
+
+    const ws = await sheetOf((await a.raw('/api/payouts/preview.summary.xlsx?date=2027-12-28')).buffer);
+    const names: string[] = [];
+    for (let r = 2; r <= ws.rowCount; r++) names.push(String(ws.getRow(r).getCell(C('Customer Name')).value));
+
+    expect(names).toContain(monthly);           // still paid, nothing else moved
+    expect(names).not.toContain(cumulative);    // interest belongs in the maturity value
+    expect(names).not.toContain(atMaturity);    // an unknown frequency stays out too
+  });
+});

@@ -122,6 +122,37 @@ async function looksWrong(db: Db): Promise<DigestSection[]> {
           detail: `${r.days_over} day(s) ago — still earning interest while they sit Active`,
         }))),
 
+    // The other half of the payout allow-list (owner 2026-10-27). Excluding a
+    // product from the monthly cash run is only safe if somebody is told it is
+    // excluded — otherwise "does not pay monthly" quietly becomes "never pays".
+    // These 8 lines had NO schedule rows at all and a NULL maturity date: the
+    // engine does not know the frequency 'AtMaturity', so it generated nothing,
+    // and nothing would ever have paid them.
+    await safe('Products that will never pay',
+      'Live money on a payout frequency the interest engine does not recognise, or with no maturity date. These are out of the monthly run by design — but nothing else pays them either.',
+      async () => (await db.query<Record<string, unknown>>(
+        `SELECT a.application_no, c.full_name, s.code AS series, l.payout_frequency,
+                l.outstanding_amount, a.maturity_date,
+                (SELECT count(*) FROM disbursement_schedule d WHERE d.line_id = l.id) AS schedule_rows
+           FROM application_lines l
+           JOIN applications a ON a.id = l.application_id
+           JOIN customers c ON c.id = a.customer_id
+           LEFT JOIN series s ON s.id = a.series_id
+          WHERE l.status = 'Active' AND a.status = 'Active'
+            AND (l.payout_frequency NOT IN ('Monthly','Quarterly','HalfYearly','Annual','Cumulative','LockIn')
+                 OR a.maturity_date IS NULL
+                 OR NOT EXISTS (SELECT 1 FROM disbursement_schedule d WHERE d.line_id = l.id))
+          ORDER BY l.outstanding_amount DESC`)).rows
+        .map((r) => ({
+          label: `${r.application_no} — ${r.full_name}, ${inr(r.outstanding_amount)} (${r.series}, ${r.payout_frequency})`,
+          detail: [
+            Number(r.schedule_rows) === 0 ? 'no schedule at all' : null,
+            r.maturity_date == null ? 'no maturity date' : null,
+            !['Monthly', 'Quarterly', 'HalfYearly', 'Annual', 'Cumulative', 'LockIn'].includes(String(r.payout_frequency))
+              ? `the engine does not know the frequency '${r.payout_frequency}'` : null,
+          ].filter(Boolean).join(' · '),
+        }))),
+
     await safe('One account number, two records',
       'The same account recorded twice for one customer — they differ only by IFSC, so the duplicate guard does not catch them.',
       async () => (await db.query<Record<string, unknown>>(

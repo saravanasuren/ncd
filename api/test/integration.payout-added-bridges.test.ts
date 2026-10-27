@@ -62,27 +62,26 @@ const summary = async (a: Client, date: string) =>
     payout_date: string; outstanding: number;
     movement: {
       added: { investments: number; customers: number; amount: number };
-      not_in_run: number; backdated: number;
+      this_outstanding: number; recorded_outstanding: number | null; late_entry: number;
+      book: { in_run: number; cumulative: number; rolled: number; other: number };
       redeemed: { redemptions: number; customers: number; amount: number };
     };
   } | null;
 
 /**
- * The identity the screen states, now that Added is MEASURED rather than
- * derived (owner 2026-10-27: "those which was received from 29th sep to oct
- * till date should be in the addition panal"):
+ * The identity the screen states (owner 2026-10-27: "make it look like the
+ * previous look itself. last batch, redemption, addition, this batch"):
  *
- *   Last + Added − not_in_run + backdated − Redeemed = This
+ *   Last + Added − Redeemed = This
  *
- * Added counts money by the day it ARRIVED, over the whole book. This batch
- * counts the principal this interest run earns on. Those are different
- * populations, so two named items bridge them instead of one column silently
- * absorbing the difference.
+ * It closes without bridging terms because BOTH sides are the whole book, split
+ * on the money-received date: this = old money + added, last = old money +
+ * redeemed. `previewDue.totals.outstanding` is NOT this figure — it is the part
+ * the run earns interest on, reported separately as `book.in_run`.
  */
-const bridges = (s: NonNullable<Awaited<ReturnType<typeof summary>>>, previewOutstanding: number) =>
-  expect(s.outstanding + s.movement.added.amount - s.movement.not_in_run
-         + s.movement.backdated - s.movement.redeemed.amount)
-    .toBe(previewOutstanding);
+const bridges = (s: NonNullable<Awaited<ReturnType<typeof summary>>>) =>
+  expect(s.outstanding + s.movement.added.amount - s.movement.redeemed.amount)
+    .toBe(s.movement.this_outstanding);
 
 describe('the payout comparison explains its own total', () => {
   let onBoundary = 0;
@@ -109,47 +108,55 @@ describe('the payout comparison explains its own total', () => {
     await invest(a, 'Day After', '9564000005', 900000, '2026-08-29');
   });
 
-  it('Last batch is FROZEN at what the book was when the batch was cut', async () => {
+  it('Last batch is the book AS IT STOOD, including what was keyed in later', async () => {
+    // OWNER 2026-10-27, reversing the earlier rule: "in the last batch
+    // outstanding alone add - 49 lakhs as it was backdated investments" and
+    // then "compute it automatically".
+    //
+    // The recorded snapshot is 1,500,000 — the two investments that existed
+    // when the batch was cut. But the boundary entry (700,000, money ON the
+    // payout date) and the backdated one (300,000, money 05-Aug) were BOTH on
+    // the book by then; they merely reached the system afterwards. A figure
+    // that leaves them out is not the book as it stood, it is the book as the
+    // paperwork happened to look that morning.
     const s = await summary(await admin(), NEXT);
     expect(s).toBeTruthy();
     expect(s!.payout_date).toBe(PAYOUT);
-    // Only the two investments that existed when the batch was created.
-    // 1,000,000 + 500,000. The boundary and backdated entries were keyed in
-    // afterwards and CANNOT be in a figure that was already written down.
-    expect(s!.outstanding).toBe(1500000);
+    expect(s!.outstanding).toBe(2500000);
+    // The snapshot itself still never moves, and the difference is named — so
+    // a figure that changes can always be explained.
+    expect(s!.movement.recorded_outstanding).toBe(1500000);
+    expect(s!.movement.late_entry).toBe(1000000);
   });
 
-  it('money keyed in after the batch shows as Added, wherever its money date falls', async () => {
-    // THE TRADE-OFF, stated out loud (owner 2026-09-24: "THE OLD BATCH AMOUNT
-    // WHY IS IT CHANGING - IF THERE IS REDEMPTION OR ADDITION ?").
+  it('Added is ONLY money that arrived in the window', async () => {
+    // Three owner rulings in sequence, now finally consistent:
+    //   2026-09-10  money received on/before the payout date belongs in Last
+    //               batch even when keyed in later
+    //   2026-09-24  "THE OLD BATCH AMOUNT WHY IS IT CHANGING - IF THERE IS
+    //               REDEMPTION OR ADDITION ?"
+    //   2026-10-27  "those which was received from 29th sep to oct till date
+    //               should be in the addition panal", and the last-batch figure
+    //               is to absorb the backdated ones, computed automatically.
     //
-    // On 2026-09-10 the owner asked that money received ON or BEFORE the payout
-    // date count in Last batch even when keyed in later. On 2026-09-24 they
-    // asked that Last batch never move. Those two cannot both hold: a number
-    // fixed when the batch was cut cannot later absorb an entry nobody had made
-    // yet. Freezing won, so backdated money is reported as an ADDITION — which
-    // is what it is, to the book, on the day it was keyed in.
-    //
-    // ADDED IS NOW ONLY THE MONEY THAT ARRIVED IN THE WINDOW (owner
-    // 2026-10-27). The genuine 29-Aug one, 900,000 — and nothing else.
+    // The first and second looked irreconcilable while Last batch was a single
+    // frozen number. Measuring it instead settles both: it moves ONLY when
+    // money genuinely was, or ceases to be, on the book as at that date — never
+    // for a redemption or a later investment.
     const s = await summary(await admin(), NEXT);
+    // The genuine 29-Aug one, and nothing else.
     expect(s!.movement.added.amount).toBe(900000);
-    // The boundary (700,000 ON the payout date) and the backdated entry
-    // (300,000 on 05-Aug) are real money that reached the book after the batch
-    // was cut, so they are not lost — they are named as BACKDATED, which is
-    // what they are, rather than presented as this period's new business.
-    expect(s!.movement.backdated).toBe(1000000);
-    // Everything here is an ordinary monthly investment inside this run.
-    expect(s!.movement.not_in_run).toBe(0);
+    // The boundary (700,000 ON the payout date) and the backdated one (300,000
+    // on 05-Aug) are in Last batch, not here: they are not this period's new
+    // business, they are book the snapshot missed.
+    expect(s!.movement.late_entry).toBe(1000000);
   });
 
   it('bridges exactly: last + added − redeemed = this', async () => {
     // The identity the screen states. Asserted against the live preview, not a
     // re-derived figure, so the two cannot drift apart.
     const a = await admin();
-    const s = (await summary(a, NEXT))!;
-    const preview = (await a.get(`/api/payouts/preview?date=${NEXT}`)).json as { totals: { outstanding: number } };
-    bridges(s, preview.totals.outstanding);
+    bridges((await summary(a, NEXT))!);
   });
 
   it('a redemption of money that WAS in the book shows as Redeemed, and Last batch still does not move', async () => {
@@ -185,8 +192,7 @@ describe('the payout comparison explains its own total', () => {
     expect(after.movement.redeemed.amount).toBe(before.movement.redeemed.amount + 1000000);
 
     // The row still explains itself.
-    const preview = (await a.get(`/api/payouts/preview?date=${NEXT}`)).json as { totals: { outstanding: number } };
-    bridges(after, preview.totals.outstanding);
+    bridges(after);
   });
 
   it('a Skipped row does not move an investment between the columns', async () => {
@@ -210,7 +216,7 @@ describe('the payout comparison explains its own total', () => {
  * move it, fired one after another against a single batch, asserting the same
  * remembered figure each time.
  */
-describe('the old batch amount never changes', () => {
+describe('the old batch amount moves only when the BOOK as at that date did', () => {
   const D = '2026-11-28';
   let frozen = 0;
 
@@ -240,20 +246,32 @@ describe('the old batch amount never changes', () => {
 
   it('a NEW investment does not move it', async () => {
     const a = await admin();
+    const before = (await summary(a, '2026-12-28'))!.outstanding;
     await invest(a, 'After The Batch', '9565000003', 5000000, '2026-12-01');
-    expect((await summary(a, '2026-12-28'))!.outstanding).toBe(frozen);
+    expect((await summary(a, '2026-12-28'))!.outstanding).toBe(before);
   });
 
-  it('a BACKDATED investment does not move it', async () => {
-    // Money dated inside the batch's period, keyed in afterwards — the case the
-    // old reconstruction absorbed, silently raising a historical figure.
+  it('a BACKDATED investment DOES move it — and that is the point', async () => {
+    // THE ONE CASE THAT REVERSED (owner 2026-10-27). Money dated inside the
+    // batch's period, keyed in afterwards: it WAS on the book that day, so the
+    // book as it stood that day includes it. The owner found ₹49,00,000 of
+    // exactly this by eye and asked for it to be computed from then on.
+    //
+    // The recorded snapshot still does not move — only the measured figure
+    // does, and the difference is reported as `late_entry`, so a number that
+    // changes can always be accounted for.
     const a = await admin();
+    const before = (await summary(a, '2026-12-28'))!;
     await invest(a, 'Backdated After', '9565000004', 700000, '2026-11-03');
-    expect((await summary(a, '2026-12-28'))!.outstanding).toBe(frozen);
+    const after = (await summary(a, '2026-12-28'))!;
+    expect(after.outstanding).toBe(before.outstanding + 700000);
+    expect(after.movement.recorded_outstanding).toBe(frozen);
+    expect(after.movement.late_entry).toBe(before.movement.late_entry + 700000);
   });
 
   it('a REDEMPTION does not move it', async () => {
     const a = await admin();
+    const before = (await summary(a, '2026-12-28'))!.outstanding;
     const app = Number((await ctx.db.query(
       `SELECT a.id FROM applications a JOIN customers c ON c.id = a.customer_id WHERE c.full_name = 'Snap Two'`)).rows[0]!.id);
     await ctx.db.query("UPDATE application_lines SET outstanding_amount = 0, status = 'Redeemed' WHERE application_id = $1", [app]);
@@ -261,7 +279,9 @@ describe('the old batch amount never changes', () => {
     await ctx.db.query(
       `INSERT INTO redemptions (redemption_no, application_id, type, principal, net_payment, redemption_date, status)
        VALUES ($2, $1, 'maturity', 2000000, 2000000, '2026-12-05', 'Paid')`, [app, `RED-SNAP-${app}`]);
-    expect((await summary(a, '2026-12-28'))!.outstanding).toBe(frozen);
+    // Out of old money, into Redeemed — the two move together and the sum is
+    // untouched. This is the 2026-09-24 complaint, and it stays fixed.
+    expect((await summary(a, '2026-12-28'))!.outstanding).toBe(before);
   });
 
   it('a redemption NOT YET settled does not move it either — the ₹20 lakh case', async () => {
@@ -269,6 +289,7 @@ describe('the old batch amount never changes', () => {
     // their full outstanding. The old code added their principal back while the
     // live figure still held it, counting ₹20,00,000 twice.
     const a = await admin();
+    const before = (await summary(a, '2026-12-28'))!.outstanding;
     const app = Number((await ctx.db.query(
       `SELECT a.id FROM applications a JOIN customers c ON c.id = a.customer_id WHERE c.full_name = 'Snap One'`)).rows[0]!.id);
     await ctx.db.query(
@@ -276,10 +297,11 @@ describe('the old batch amount never changes', () => {
        VALUES ($2, $1, 'premature', 1000000, 1000000, '2026-12-06', 'Requested')`, [app, `RED-PEND-${app}`]);
     // Principal deliberately still on the book, exactly as it was in production.
     const s = (await summary(a, '2026-12-28'))!;
-    expect(s.outstanding).toBe(frozen);
+    // Unchanged: the money has not left old-money outstanding, and an
+    // unapproved redemption is not counted as having taken it.
+    expect(s.outstanding).toBe(before);
     // And it is NOT reported as having left, because it has not.
-    const preview = (await a.get('/api/payouts/preview?date=2026-12-28')).json as { totals: { outstanding: number } };
-    bridges(s, preview.totals.outstanding);
+    bridges(s);
   });
 });
 
@@ -343,8 +365,7 @@ describe('Redeemed says what was redeemed', () => {
   it('and the row still adds up', async () => {
     const a = await admin();
     const s = (await summary(a, D))!;
-    const preview = (await a.get(`/api/payouts/preview?date=${D}`)).json as { totals: { outstanding: number } };
-    bridges(s, preview.totals.outstanding);
+    bridges(s);
   });
 });
 
@@ -363,8 +384,8 @@ describe('Redeemed says what was redeemed', () => {
  *      to NEXT month's batch and so is not in this run either — ₹15,00,000.
  *
  * Both now count on the day the money arrived, and the part of Added this run
- * does not carry is reported as `not_in_run` so the Outstanding row still
- * explains itself.
+ * does not carry is broken out underneath the four columns, so the Outstanding
+ * row still explains itself.
  */
 describe('Added counts money the interest run never sees', () => {
   const P = '2027-04-28';
@@ -395,12 +416,18 @@ describe('Added counts money the interest run never sees', () => {
     expect(s.movement.added.amount).toBe(1200000);
     expect(s.movement.added.investments).toBe(3);
     expect(s.movement.added.customers).toBe(3);
-    // Of which the cumulative one and the rolled one are not in this run.
-    expect(s.movement.not_in_run).toBe(700000);
+    // ...and the breakdown says WHICH of it this run pays nothing on — the
+    // separate line the owner asked for (2026-10-27: "show those doublung
+    // scheme in a seperate line in that panel as interest in not paid to them.
+    // so we will ahve a better clarity on the figures").
+    expect(s.movement.book.cumulative).toBe(400000);   // earns into maturity
+    expect(s.movement.book.rolled).toBe(300000);       // paid next month
+    // The parts account for the whole book, with nothing unexplained.
+    const b = s.movement.book;
+    expect(b.in_run + b.cumulative + b.rolled + b.other).toBe(s.movement.this_outstanding);
 
     // And the row still explains itself end to end.
-    const preview = (await a.get(`/api/payouts/preview?date=${D}`)).json as { totals: { outstanding: number } };
-    bridges(s, preview.totals.outstanding);
+    bridges(s);
   });
 
   it('does not count an investment still awaiting approval', async () => {

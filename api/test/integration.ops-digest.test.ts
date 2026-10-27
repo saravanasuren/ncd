@@ -140,3 +140,39 @@ describe('sending', () => {
     await ctx.db.query("UPDATE app_settings SET value = 'true'::jsonb WHERE key = 'reports.digest_enabled'");
   });
 });
+
+describe('products that will never pay', () => {
+  /**
+   * Owner 2026-10-27: "for ncd doubling and cumulative - interest should not go
+   * in this month batch right ? - i see they are getting paid interest."
+   *
+   * They were — 8 lines, Rs 93,00,000 of principal, Rs 1,74,342 about to go out
+   * on 28-10. previewDue had no payout_frequency filter at all, and accrues LIVE
+   * from the watermark, so having no Interest rows protected nothing.
+   *
+   * The allow-list that fixes that is only safe if somebody is TOLD a product
+   * sits outside the cash run. These lines carried the frequency 'AtMaturity',
+   * which the engine's enum does not contain, so they had no schedule rows and
+   * a NULL maturity date: nothing would ever have paid them.
+   */
+  it('flags live money on a frequency the engine does not know', async () => {
+    const a = await admin();
+    const cust = await a.post('/api/customers', { full_name: 'Cumulative Investor', phone: '9690000009' });
+    await a.post(`/api/customers/${cust.json.id}/bank-accounts`, { account_number: '779690000009', ifsc: 'ICIC0001234' });
+    const app = await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cust.json.id, series_id: seriesId, scheme_id: schemeId,
+      amount: 500000, date_money_received: '2026-07-10' });
+    await approveInvestment(await as('ncd@demo.local'), app);
+    // The live shape exactly: a frequency outside the enum, no maturity date.
+    await ctx.db.query(
+      "UPDATE application_lines SET payout_frequency = 'AtMaturity' WHERE application_id = $1", [Number(app.json.id)]);
+    await ctx.db.query('UPDATE applications SET maturity_date = NULL WHERE id = $1', [Number(app.json.id)]);
+
+    const section = (await buildDigest(ctx.db)).sections.find((s) => s.title === 'Products that will never pay');
+    expect(section).toBeDefined();
+    const row = section!.items.find((i) => i.label.includes('Cumulative Investor'));
+    expect(row).toBeDefined();
+    expect(row!.detail).toContain("the engine does not know the frequency 'AtMaturity'");
+    expect(row!.detail).toContain('no maturity date');
+  });
+});

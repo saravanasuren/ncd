@@ -89,6 +89,26 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
        JOIN customers c ON c.id = a.customer_id
       WHERE l.status = 'Active' AND a.status IN (${OUTSTANDING_SQL_LIST})
         AND a.product_type = $1
+        -- ONLY PRODUCTS THAT PAY PERIODICALLY (owner 2026-10-27: "for ncd
+        -- doubling and cumulative - interest should not go in this month batch
+        -- right ? - i see they are getting paid interest").
+        --
+        -- They were. This clause did not exist, so every Active line was swept
+        -- into the monthly cash run whatever its product: 8 lines on NCD
+        -- Doubling (20%) and NCD BOND (15%), Rs 93,00,000 of principal, were
+        -- about to be paid Rs 1,74,342 of interest on 28-10 that belongs in
+        -- their maturity value instead.
+        --
+        -- Having no schedule rows was no protection: this run accrues LIVE from
+        -- the line's paid-through watermark, so a product with no Interest rows
+        -- at all still shows up with a full period's accrual.
+        --
+        -- An ALLOW-list, not a deny-list. The failure modes are not equal: a
+        -- frequency wrongly excluded is money not yet paid, which is noticed and
+        -- recoverable; one wrongly included is money gone. Anything the engine
+        -- does not recognise therefore stays OUT of the cash run — and the daily
+        -- digest now reports it, so "excluded" can never mean "forgotten".
+        AND l.payout_frequency IN ('Monthly', 'Quarterly', 'HalfYearly', 'Annual')
       ORDER BY c.full_name`, [productType]);
 
   const out: Record<string, unknown>[] = [];

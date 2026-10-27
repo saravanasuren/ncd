@@ -458,13 +458,14 @@ export interface LastInterestBatchSummary {
     since: string;
     /** Money RECEIVED since `since`, measured over the whole book. */
     added: { customers: number; investments: number; amount: number };
-    /** Of `added`, the part this interest run does not carry. */
-    not_in_run: number;
-    /** What `Last + Added − not_in_run + backdated − Redeemed` comes to — the
-     *  same principal previewDue prints as "This batch". */
+    /** The whole book: what `Last + Added − Redeemed` comes to. */
     this_outstanding: number;
-    /** In this run, money whose received date predates `since`. */
-    backdated: number;
+    /** `outstanding_at_payout` as written when that batch was cut, or null. */
+    recorded_outstanding: number | null;
+    /** On the book by then, but only reached the system afterwards. */
+    late_entry: number;
+    /** What `this_outstanding` is made of — they sum to it. */
+    book: { in_run: number; cumulative: number; rolled: number; other: number };
     redeemed: { customers: number; redemptions: number; amount: number };
   };
 }
@@ -551,40 +552,6 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
   // was actually paid, and to how many people. Only Outstanding is "the book as
   // at that date", because only Outstanding is the row Added has to bridge.
   const due = await previewDue(db, payoutDate ?? new Date().toISOString().slice(0, 10), batch.product_type ?? 'ncd');
-  // THE RUN'S LINES, not its applications.
-  //
-  // This split has to total the SAME money the screen prints as "This batch",
-  // and that figure is previewDue's `totals.outstanding` — the principal of
-  // every LINE the run pays interest on. Keyed on application_id it summed
-  // every line those applications own, including ones the run does not pay on,
-  // so an investment holding both a monthly line and a Cumulative one counted
-  // principal the batch never earned a rupee against. The identity below then
-  // closed on a number nobody could see, and the comparison panel was left not
-  // adding up on screen while reconciling perfectly in here.
-  //
-  // #486 made that reachable by design (Cumulative / at-maturity lines are now
-  // excluded from the run), so this is keyed on the line ids the run actually
-  // carries. A merged tranche contributes every line it consolidated, which is
-  // exactly what `_principal` already sums into the displayed total.
-  const runLineIds = [...new Set((due.rows as Record<string, unknown>[])
-    .filter((r) => !r.schedule_id)       // a redemption slice is money LEAVING
-    // An info-only row (Cumulative / at-maturity, shown at ₹0 so the sheet
-    // states the whole book) was never IN the run, so its principal must not
-    // enter either side of the split — it would land in `backdated` and the
-    // on-page bridge would print a residual in red for money that never moved.
-    .filter((r) => !r.info_only)
-    .flatMap((r) => (r.merged_line_ids as number[] | undefined) ?? [Number(r.line_id)])
-    .map(Number)
-    .filter((n) => Number.isFinite(n)))];
-  const split = runLineIds.length
-    ? (await db.query<{ before_amount: string; after_amount: string; after_investments: string; after_customers: string }>(
-        `SELECT COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received <= $2::date), 0) AS before_amount,
-                COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received >  $2::date), 0) AS after_amount,
-                count(DISTINCT a.id)          FILTER (WHERE a.date_money_received >  $2::date) AS after_investments,
-                count(DISTINCT a.customer_id) FILTER (WHERE a.date_money_received >  $2::date) AS after_customers
-           FROM applications a JOIN application_lines l ON l.application_id = a.id
-          WHERE l.id = ANY($1::bigint[])`, [runLineIds, since])).rows[0]!
-    : { before_amount: '0', after_amount: '0', after_investments: '0', after_customers: '0' };
   /**
    * ADDED IS THE MONEY THAT CAME IN, MEASURED OVER THE WHOLE BOOK (owner
    * 2026-10-27: "those which was received from 29th sep to oct till date should
@@ -607,13 +574,40 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
    * — PendingApproval excluded), so an investment keyed but not yet approved
    * does not inflate the month: ₹15,00,000 sat there on 27-10.
    */
-  const add = (await db.query<{ amount: string; investments: string; customers: string }>(
-    `SELECT COALESCE(sum(l.outstanding_amount), 0) AS amount,
-            count(DISTINCT a.id)          AS investments,
-            count(DISTINCT a.customer_id) AS customers
+  //
+  // ONE query for the whole book, split every way the panel needs (owner
+  // 2026-10-27). Added, the old-money side and the book total come out of the
+  // same population and the same filters, so the four columns cannot drift
+  // apart the way they did when each was measured separately.
+  const periodic = "('Monthly', 'Quarterly', 'HalfYearly', 'Annual')";
+  const cutoffDay = Number((await getSettingsMap(db))['interest.next_batch_from_day'] ?? 0) || 0;
+  const add = (await db.query<{
+    amount: string; investments: string; customers: string;
+    old_money: string; book_total: string; cumulative: string; rolled: string;
+  }>(
+    `SELECT COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received >  $1::date), 0) AS amount,
+            count(DISTINCT a.id)          FILTER (WHERE a.date_money_received >  $1::date) AS investments,
+            count(DISTINCT a.customer_id) FILTER (WHERE a.date_money_received >  $1::date) AS customers,
+            COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received <= $1::date), 0) AS old_money,
+            COALESCE(sum(l.outstanding_amount), 0) AS book_total,
+            -- Doubling / at-maturity: on the book, earning into its maturity
+            -- value, paid nothing by any monthly run (owner asked for this on
+            -- its own line: "so we will ahve a better clarity on the figures").
+            COALESCE(sum(l.outstanding_amount) FILTER (
+              WHERE l.payout_frequency NOT IN ${periodic}), 0) AS cumulative,
+            -- Money that arrived on or after the cut-off day of the payout
+            -- month: real, on the book, and paid in NEXT month's batch.
+            COALESCE(sum(l.outstanding_amount) FILTER (
+              WHERE l.payout_frequency IN ${periodic}
+                AND $3::int > 0
+                AND EXTRACT(DAY FROM a.date_money_received) >= $3::int
+                AND to_char(a.date_money_received, 'YYYY-MM') = to_char($4::date, 'YYYY-MM')), 0) AS rolled
        FROM applications a JOIN application_lines l ON l.application_id = a.id
-      WHERE a.date_money_received > $1::date
-        AND a.status IN (${OUTSTANDING_SQL_LIST})`, [since])).rows[0]!;
+      WHERE a.status IN (${OUTSTANDING_SQL_LIST})
+        AND a.product_type = $2
+        AND l.status = 'Active'`,
+    [since, batch.product_type ?? 'ncd', cutoffDay,
+     payoutDate ?? new Date().toISOString().slice(0, 10)])).rows[0]!;
 
   // What LEFT the last batch's book: redeemed after that date, and whose money
   // had landed on or before it — the same population `before_amount` measures,
@@ -659,7 +653,35 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
    * ONLY as the fallback for batches cut before the column existed.
    */
   const snapshot = batch.outstanding_at_payout != null ? Number(batch.outstanding_at_payout) : null;
-  const lastOutstanding = round2(snapshot ?? (Number(split.before_amount) + Number(red.amount)));
+
+  /**
+   * LAST BATCH IS THE BOOK AS IT STOOD THAT DAY — MEASURED, NOT READ OFF THE
+   * SNAPSHOT (owner 2026-10-27: "in the last batch outstanding alone add - 49
+   * lakhs as it was backdated investments", then: "compute it automatically").
+   *
+   *     last = what the old money is worth now + what has been redeemed out of it
+   *
+   * `outstanding_at_payout` is a photograph taken the moment the batch was cut,
+   * and it is permanently missing anything that was already on the book then
+   * but reached the SYSTEM later:
+   *   - three at-maturity investments, money dated 29-Aug, keyed 7-Oct: ₹49,00,000
+   *   - a top-up dated 28-Aug, keyed 3-Oct: ₹12,00,000
+   *   - one dated 28-Sep, keyed that morning but APPROVED the next: ₹5,00,000
+   * ₹66,00,000 on 27-10, and the owner spotted ₹49,00,000 of it by eye. A
+   * hard-coded correction would be right today and wrong next month, so it is
+   * measured instead and corrects itself.
+   *
+   * This does NOT reopen the 2026-09-24 complaint ("THE OLD BATCH AMOUNT WHY IS
+   * IT CHANGING - IF THERE IS REDEMPTION OR ADDITION ?"). Approving a
+   * redemption moves ₹X out of `old_money` and ₹X into `red.amount`, so the sum
+   * is unchanged — which is the case that was reported. It moves only when
+   * money genuinely arrives on, or leaves, the book as at that date.
+   *
+   * The recorded snapshot is still returned beside it, with the difference
+   * named, so a figure that moves can always be explained.
+   */
+  const oldMoneyNow = round2(Number(add.old_money));
+  const lastOutstanding = round2(oldMoneyNow + Number(red.amount));
 
   /**
    * What has LEFT that book since, measured against the book itself rather than
@@ -703,28 +725,44 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
    * window ended up presented as this month's business. A column that is a
    * remainder cannot also be a fact, and the owner asked for the fact.
    *
-   * The price is that `Last + Added − Redeemed = This` no longer holds, because
-   * Added and This count different populations. Rather than hide that, the two
-   * reconciling items are measured and returned so the screen can state them:
-   *
-   *   Last + Added − not_in_run + backdated − Redeemed = This
-   *
-   *   not_in_run  window money this run does not pay monthly interest on
-   *               (Cumulative / at-maturity, and money that rolled to the next
-   *               batch under `interest.next_batch_from_day`).
-   *   backdated   money this run DOES carry whose money date predates the
-   *               window — a backdated enrolment, or one approved after the
-   *               last batch was cut. Measured as the remainder, which is the
-   *               only honest place for a remainder to sit.
+   * `Last + Added − Redeemed = This` holds again (owner 2026-10-27: "make it
+   * look like the previous look itself. last batch, redemption, addition, this
+   * batch") — but only because BOTH sides now mean the whole book, and `Last`
+   * is measured as the book as it stood rather than read off a snapshot that
+   * was missing late entries. The bridging columns #490 had to introduce are
+   * gone with the reason for them; what this run does and does not pay
+   * interest on is stated underneath as a breakdown instead.
    */
-  const thisBatch = Number(split.before_amount) + Number(split.after_amount);
   const addedAmount = round2(Number(add.amount));
-  const notInRun = round2(addedAmount - Number(split.after_amount));
-  const backdated = snapshot != null
-    ? round2(thisBatch - snapshot + redeemedAmount - Number(split.after_amount))
-    // No snapshot (a batch cut before the column existed): nothing to bridge
-    // from, so claim no backdated movement rather than invent one.
-    : 0;
+
+  /**
+   * THIS BATCH IS THE WHOLE BOOK (owner 2026-10-27, asked directly and
+   * answered: show everything you hold). Both sides of the comparison then
+   * mean the same thing, which is the only way four columns can balance:
+   *
+   *     last + added − redeemed = this
+   *
+   * It holds because `last` and `this` are built from one population split on
+   * one date: this = old_money + added, last = old_money + redeemed. It is an
+   * identity between measured quantities, not a figure reverse-engineered to
+   * make the row close — if the two queries ever disagree the screen's residual
+   * line says so rather than hiding it.
+   *
+   * NOTE this is deliberately NOT previewDue's `totals.outstanding`, which is
+   * the principal THIS RUN earns interest on and stays exactly as it was. That
+   * figure is still what a new batch stores as its own snapshot, so nothing
+   * about batch creation, the sheet or any payment changes here.
+   */
+  const bookTotal = round2(oldMoneyNow + addedAmount);
+  const inRun = round2(Number(due.totals.outstanding));
+  const cumulative = round2(Number(add.cumulative));
+  const rolled = round2(Number(add.rolled));
+  // Whatever the three named parts do not account for. Normally ₹0; it exists
+  // so an unexpected exclusion shows up as a number instead of quietly making
+  // the breakdown wrong.
+  const otherOffRun = round2(bookTotal - inRun - cumulative - rolled);
+  const recordedOutstanding = snapshot != null ? round2(snapshot) : null;
+  const lateEntry = recordedOutstanding != null ? round2(lastOutstanding - recordedOutstanding) : 0;
 
   return {
     batch_no: batch.batch_no, payout_date: since,
@@ -737,13 +775,14 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
         customers: Number(add.customers), investments: Number(add.investments),
         amount: addedAmount,
       },
-      not_in_run: notInRun,
-      backdated,
-      // The figure the chain above closes on, stated rather than implied. The
-      // screen draws the reconciliation from these numbers and shows a residual
-      // line if it ever fails to land here — a panel that silently stops adding
-      // up is the whole reason this row was reported as a bug.
-      this_outstanding: round2(thisBatch),
+      // The figure the chain closes on, stated rather than implied. The screen
+      // draws the reconciliation from these numbers and shows a residual line
+      // if it ever fails to land here — a panel that silently stops adding up
+      // is the whole reason this row was reported as a bug.
+      this_outstanding: bookTotal,
+      recorded_outstanding: recordedOutstanding,
+      late_entry: lateEntry,
+      book: { in_run: inRun, cumulative, rolled, other: otherOffRun },
       redeemed: {
         customers: Number(red.customers), redemptions: Number(red.redemptions),
         amount: redeemedAmount,

@@ -51,8 +51,10 @@ const summary = async (a: Client, date: string) =>
   (await a.get(`/api/payouts/last-interest-summary?date=${date}`)).json.summary as {
     outstanding: number;
     movement: {
-      added: { amount: number }; not_in_run: number; backdated: number;
+      added: { amount: number };
       redeemed: { amount: number }; this_outstanding: number;
+      recorded_outstanding: number | null; late_entry: number;
+      book: { in_run: number; cumulative: number; rolled: number; other: number };
     };
   } | null;
 
@@ -93,19 +95,75 @@ describe('the Outstanding chain lands on the printed total', () => {
     expect(freqs.has('Cumulative')).toBe(false);
   });
 
-  it('Last + Added − not in run + backdated − Redeemed = the printed This batch', async () => {
+  // THE FOUR-COLUMN IDENTITY (owner 2026-10-27: "make it look like the previous
+  // look itself. last batch, redemption, addition, this batch").
+  //
+  // #490 needed two extra bridging terms because Added counted money RECEIVED
+  // while This batch counted only what the run EARNS INTEREST ON. That is fixed
+  // at the source: both sides are the whole book now, so the plain row closes.
+  it('Last + Added − Redeemed = This batch, with no bridging terms', async () => {
+    const a = await admin();
+    const s = (await summary(a, NEXT))!;
+    expect(s.outstanding + s.movement.added.amount - s.movement.redeemed.amount)
+      .toBe(s.movement.this_outstanding);
+  });
+
+  it('This batch is the whole book, and its parts say which is which', async () => {
     const a = await admin();
     const s = (await summary(a, NEXT))!;
     const printed = await previewOutstanding(a, NEXT);
+    const b = s.movement.book;
 
-    // The service states what it closes on, and it is the screen's number.
-    expect(s.movement.this_outstanding).toBe(printed);
+    // The part the run actually earns on IS the screen's printed total — the
+    // two figures are different on purpose and must each be what they claim.
+    expect(b.in_run).toBe(printed);
+    // The Cumulative line is on the book and in no interest run: ₹4,00,000.
+    expect(b.cumulative).toBe(400000);
+    // And the named parts account for the whole thing, with nothing left over.
+    expect(b.in_run + b.cumulative + b.rolled + b.other).toBe(s.movement.this_outstanding);
+    expect(s.movement.this_outstanding).toBeGreaterThan(printed);
+  });
 
-    // And the chain the panel draws lands exactly there. Before the fix this
-    // over-stated by the Cumulative line's ₹4,00,000 — principal the batch
-    // earns nothing on, inside a total labelled as what it earned on.
-    const chain = s.outstanding + s.movement.added.amount - s.movement.not_in_run
-      + s.movement.backdated - s.movement.redeemed.amount;
-    expect(chain).toBe(printed);
+  // The ₹49,00,000 the owner spotted by eye, generalised: a snapshot taken when
+  // the batch was cut permanently misses anything that was on the book then but
+  // reached the system later, so Last batch is MEASURED instead of read off it.
+  it('Last batch includes money that was on the book then but keyed in later', async () => {
+    const a = await admin();
+    const before = (await summary(a, NEXT))!;
+    // Backdated to BEFORE the last batch, entered now.
+    await invest(a, 'Keyed In Late', '9566000003', 700000, '2026-08-10');
+    const after = (await summary(a, NEXT))!;
+
+    expect(after.outstanding).toBe(before.outstanding + 700000);
+    // The recorded snapshot itself never moves — only the measured figure does,
+    // and the difference is reported so a moving number can be explained.
+    expect(after.movement.recorded_outstanding).toBe(before.movement.recorded_outstanding);
+    expect(after.movement.late_entry).toBe(before.movement.late_entry + 700000);
+    // Still balances.
+    expect(after.outstanding + after.movement.added.amount - after.movement.redeemed.amount)
+      .toBe(after.movement.this_outstanding);
+  });
+
+  // The 2026-09-24 complaint — "THE OLD BATCH AMOUNT WHY IS IT CHANGING - IF
+  // THERE IS REDEMPTION OR ADDITION ?" — must stay fixed under the new formula.
+  it('a redemption of old money does NOT move Last batch', async () => {
+    const a = await admin();
+    const before = (await summary(a, NEXT))!;
+    const app = Number((await ctx.db.query(
+      `SELECT a.id FROM applications a JOIN customers c ON c.id = a.customer_id
+        WHERE c.full_name = 'Monthly Only'`)).rows[0]!.id);
+    await ctx.db.query("UPDATE application_lines SET outstanding_amount = 0, status = 'Redeemed' WHERE application_id = $1", [app]);
+    await ctx.db.query("UPDATE applications SET status = 'Redeemed' WHERE id = $1", [app]);
+    await ctx.db.query(
+      `INSERT INTO redemptions (redemption_no, application_id, type, principal, net_payment, redemption_date, status)
+       VALUES ($2, $1, 'maturity', 1000000, 1000000, '2026-09-05', 'Paid')`,
+      [app, `RED-CMP-${app}`]);
+
+    const after = (await summary(a, NEXT))!;
+    // Out of old money, into Redeemed — the sum is untouched.
+    expect(after.outstanding).toBe(before.outstanding);
+    expect(after.movement.redeemed.amount).toBe(before.movement.redeemed.amount + 1000000);
+    expect(after.outstanding + after.movement.added.amount - after.movement.redeemed.amount)
+      .toBe(after.movement.this_outstanding);
   });
 });

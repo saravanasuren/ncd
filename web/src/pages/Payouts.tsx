@@ -33,19 +33,20 @@ function BatchComparison({ last, now }: {
   now: { customers: number; investments: number; gross: number; tds: number; net: number; outstanding: number };
 }) {
   const m = last.movement;
-  // Added/Redeemed are only meaningful for Customers and Outstanding. Gross, TDS
-  // and Net are interest EARNED, not money in or out — inventing a figure for
-  // them would put a different kind of number in the same column (owner
-  // 2026-08-27: leave them blank).
-  const rows: Array<{ label: string; last: number; now: number; money?: boolean;
-                      added?: number; redeemed?: number }> = [
-    // NO Added/Redeemed on Customers. Those columns read as a sum, and customer
-    // counts are a SET, not a sum: someone already among the 486 who invests
-    // again is counted a second time in Added, so 486 + 71 − 7 could never
-    // equal 530 and the row was arithmetic nobody could make work. Same rule
-    // the money rows below already follow — if a column cannot mean the same
-    // thing, it shows a dash. The counts themselves are not lost; they label
-    // the reconciliation underneath.
+  // THIS TABLE NO LONGER CARRIES Added/Redeemed.
+  //
+  // It had five columns laid out as a reconciliation — Last | Added | Redeemed
+  // | This | Change — while only SOME of the terms between Last and This were
+  // among them. It could not add up, and it was reported as broken every time
+  // somebody checked it (2026-10-27, and the row had been queried before that).
+  // Annotating a half-reconciliation does not fix it; the movement belongs
+  // somewhere it can be shown WHOLE, which is the block underneath, so that is
+  // where it now lives. What is left here is a straight before/after, which is
+  // the one thing these columns could always honestly claim to be.
+  const rows: Array<{ label: string; last: number; now: number; money?: boolean }> = [
+    // Customers was the worst of them: counts are a SET, not a sum, so someone
+    // already on the book who invests again is in both figures and
+    // 486 + 71 − 7 could never equal 530 however the money behaved.
     { label: 'Customers', last: last.customers, now: now.customers },
     // No Investments row (owner 2026-08-19). Outstanding already says how much
     // principal each batch earned on, which is the number that explains gross;
@@ -53,10 +54,7 @@ function BatchComparison({ last, now }: {
     // The principal each batch's interest was earned on (owner 2026-08-16).
     // Placed ABOVE Gross because it is the explanation for it: gross can fall
     // while customers rise, and this is the row that says why.
-    { label: 'Outstanding', last: last.outstanding, now: now.outstanding, money: true,
-      added: m?.added.amount, redeemed: m?.redeemed.amount },
-    // Gross/TDS/Net stay blank in the movement columns (owner 2026-08-27):
-    // interest EARNED is not money in or out.
+    { label: 'Outstanding', last: last.outstanding, now: now.outstanding, money: true },
     { label: 'Gross', last: last.gross, now: now.gross, money: true },
     { label: 'TDS', last: last.tds, now: now.tds, money: true },
     { label: 'Net', last: last.net, now: now.net, money: true },
@@ -73,8 +71,6 @@ function BatchComparison({ last, now }: {
             <tr className="text-text-muted">
               <th className="font-medium py-1 pr-4 text-left"></th>
               <th className="font-medium py-1 pr-4 text-right">Last batch</th>
-              <th className="font-medium py-1 pr-4 text-right">Added</th>
-              <th className="font-medium py-1 pr-4 text-right">Redeemed</th>
               <th className="font-medium py-1 pr-4 text-right">This batch</th>
               <th className="font-medium py-1 text-right">Change</th>
             </tr>
@@ -89,14 +85,6 @@ function BatchComparison({ last, now }: {
                 <tr key={r.label} className="border-t border-border/60">
                   <td className="py-1 pr-4 text-text-label">{r.label}</td>
                   <td className="py-1 pr-4 text-right mono text-text-muted">{fmt(r.last, r.money)}</td>
-                  <td className="py-1 pr-4 text-right mono text-success">
-                    {r.added === undefined ? <span className="text-text-muted">—</span>
-                      : r.added === 0 ? '0' : `+${fmt(r.added, r.money)}`}
-                  </td>
-                  <td className="py-1 pr-4 text-right mono text-danger">
-                    {r.redeemed === undefined ? <span className="text-text-muted">—</span>
-                      : r.redeemed === 0 ? '0' : `−${fmt(r.redeemed, r.money)}`}
-                  </td>
                   <td className="py-1 pr-4 text-right mono font-semibold">{fmt(r.now, r.money)}</td>
                   <td className={`py-1 text-right mono ${color}`}>
                     {arrow}{' '}{d === 0 ? '0' : `${d > 0 ? '+' : '−'}${fmt(Math.abs(d), r.money)}`}

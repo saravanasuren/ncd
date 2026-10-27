@@ -359,6 +359,53 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
     addTotal += Number(a.addition); dedTotal += Number(a.deduction);
   }
 
+  // ── Products that pay nothing this run, shown anyway (owner 2026-10-27) ──
+  // "in the summary sheet - i want u to bring in the doubling series investment
+  // amounts also, but in the interest column alone keep their interest as 0 as
+  // they will not get paid in this batch. and in the neft sheet they should not
+  // appear as no interest is going to them."
+  //
+  // #486 took Cumulative / at-maturity products OUT of the cash run, which was
+  // right — they earn into their maturity value, not a monthly transfer. But it
+  // also took them off the SHEET, so Rs 93,00,000 of real book vanished from the
+  // one page ops reconcile against.
+  //
+  // They come back as INFORMATION ONLY: the invested amount prints, every money
+  // column is 0, and `info_only` keeps them out of the NEFT file, out of the
+  // batch, and out of every total and count.
+  //
+  // Pushed AFTER the adjustment pass ON PURPOSE — an approved adjustment
+  // attaching to one of these would give it a non-zero total and put it
+  // straight back into the bank file, which is the one thing it must never
+  // reach.
+  const { rows: infoRows } = await db.query<Record<string, unknown>>(
+    `SELECT l.id AS line_id, a.id AS application_id, c.id AS customer_id,
+            a.application_no, c.full_name AS customer_name, l.payout_frequency
+       FROM application_lines l
+       JOIN applications a ON a.id = l.application_id
+       JOIN customers c ON c.id = a.customer_id
+      WHERE l.status = 'Active' AND a.status IN (${OUTSTANDING_SQL_LIST})
+        AND a.product_type = $1
+        -- The exact complement of the cash run's allow-list above, so a
+        -- frequency can never fall through both and disappear again.
+        AND l.payout_frequency NOT IN ('Monthly', 'Quarterly', 'HalfYearly', 'Annual')
+        AND COALESCE(l.outstanding_amount, 0) > 0
+      ORDER BY c.full_name`, [productType]);
+  for (const r of infoRows) {
+    out.push({
+      line_id: Number(r.line_id), application_id: Number(r.application_id),
+      customer_id: Number(r.customer_id),
+      application_no: r.application_no, customer_name: r.customer_name,
+      due_date: payoutDate, due_type: 'Interest',
+      // Says WHY it is here at zero rather than looking like a missed payment.
+      row_type: String(r.payout_frequency ?? 'Cumulative'),
+      from_date: null, period_days: 0,
+      gross_amount: 0, tds_amount: 0, net_amount: 0,
+      addition_amount: 0, deduction_amount: 0, total_amount: 0,
+      info_only: true,
+    });
+  }
+
   // Same order as the saved-batch sheet (wealth's): each application's rows
   // together, regular interest first and its redemption slices under it. Built
   // in two passes above, so without this every Redemption row lands in a block
@@ -383,14 +430,16 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
       // in the last-batch-vs-this-batch comparison (owner 2026-08-16).
       outstanding: round2(totals.outstanding),
     },
-    count: out.length,
+    // Information-only rows are not payable, so they gate nothing: a month with
+    // only Cumulative lines must still refuse to cut a batch.
+    count: out.filter((r) => !r.info_only).length,
     // Distinct people/investments behind the CURRENT rows only — a redemption
     // slice (schedule_id set) is a leaving investment, excluded from these
     // "current" counts (owner 2026-08-27) while still counted in `count` so the
     // download/pay gates still see it. A customer with several debentures is one
     // customer but many investments (owner 2026-08-10).
-    customers: new Set(out.filter((r) => !r.schedule_id).map((r) => Number(r.customer_id))).size,
-    investments: new Set(out.filter((r) => !r.schedule_id).map((r) => Number(r.application_id))).size,
+    customers: new Set(out.filter((r) => !r.schedule_id && !r.info_only).map((r) => Number(r.customer_id))).size,
+    investments: new Set(out.filter((r) => !r.schedule_id && !r.info_only).map((r) => Number(r.application_id))).size,
   };
 }
 
@@ -519,6 +568,11 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
   // exactly what `_principal` already sums into the displayed total.
   const runLineIds = [...new Set((due.rows as Record<string, unknown>[])
     .filter((r) => !r.schedule_id)       // a redemption slice is money LEAVING
+    // An info-only row (Cumulative / at-maturity, shown at ₹0 so the sheet
+    // states the whole book) was never IN the run, so its principal must not
+    // enter either side of the split — it would land in `backdated` and the
+    // on-page bridge would print a residual in red for money that never moved.
+    .filter((r) => !r.info_only)
     .flatMap((r) => (r.merged_line_ids as number[] | undefined) ?? [Number(r.line_id)])
     .map(Number)
     .filter((n) => Number.isFinite(n)))];
@@ -758,7 +812,11 @@ export async function createInterestBatch(db: Db, actor: AuthUser, payoutDate: s
          round2(Number(r.total_amount)), sliceAdj]);
     }
 
-    for (const r of (due.rows as Record<string, unknown>[]).filter((x) => !x.schedule_id)) {
+    // `info_only` rows are display: they carry no money and must NEVER become
+    // schedule rows. Materialising one would write an Interest row onto a
+    // product that pays no interest and advance its paid-through watermark,
+    // quietly corrupting the maturity value it is actually accruing into.
+    for (const r of (due.rows as Record<string, unknown>[]).filter((x) => !x.schedule_id && !x.info_only)) {
       const bank = (await tx.query<{ account_number: string; ifsc: string }>(
         `SELECT COALESCE(pb.account_number, cb.account_number) AS account_number,
                 COALESCE(pb.ifsc, cb.ifsc) AS ifsc
@@ -1126,7 +1184,11 @@ export async function neftSheetForDate(db: Db, payoutDate: string, productType: 
     (due.rows as Record<string, unknown>[])
       // A fully-deducted row settles at ₹0 — it can't appear in a bank file.
       // Judged on the DERIVED rupees actually being paid, not the exact paise.
-      .filter((r) => payoutRupees(r).total > 0)
+      // `info_only` is excluded by NAME as well as by amount (owner 2026-10-27:
+      // "in the neft sheet they should not appear"): the ₹0 test would already
+      // drop it today, but that is a coincidence of its amount, and a bank file
+      // is the wrong place to rely on one.
+      .filter((r) => !r.info_only && payoutRupees(r).total > 0)
       .map((r) => {
       const b = bank.get(Number(r.line_id)) ?? {};
       return {
@@ -1327,9 +1389,58 @@ const SUMMARY_SELECT = `
                               AND d2.status <> 'Skipped')
     ) adj ON TRUE`;
 
+/**
+ * Cumulative / at-maturity lines as INFORMATION-ONLY summary rows (owner
+ * 2026-10-27: "let it be in the sheet b also. no issues. the neft sheet is the
+ * one doing the payment and that fine").
+ *
+ * The PREVIEW sheet gets these from previewDue's `info_only` rows. A SAVED
+ * batch's sheet is built from the batch's own schedule rows instead — and these
+ * are deliberately never written into a batch — so they are added here.
+ *
+ * Scoped to money that had arrived by the batch's payout date, so last year's
+ * sheet does not suddenly list an investment that did not exist when it was
+ * cut. Everything money-shaped is 0: this row is a statement of holdings, and
+ * the NEFT file (which is what actually pays) never sees it either way.
+ */
+async function infoOnlySummaryRows(
+  db: Db, payoutDate: string, productType: ProductType
+): Promise<Record<string, unknown>[]> {
+  const { rows } = await db.query<Record<string, unknown>>(
+    `SELECT a.application_no, c.full_name AS customer_name,
+            ${REFERRER} AS referred_by, br.name AS branch,
+            c.phone, c.dob AS date_of_birth, c.pan, c.gender,
+            c.investor_category AS category, s.name AS series_name,
+            l.payout_frequency AS row_type,
+            l.outstanding_amount AS investment_amount, l.coupon_rate_pct,
+            COALESCE(l.collection_method, a.collection_method) AS collection_method,
+            COALESCE(l.collection_reference, a.collection_reference) AS collection_reference,
+            COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
+            COALESCE(pb.account_number, cb.account_number) AS account_number,
+            COALESCE(pb.ifsc, cb.ifsc) AS ifsc,
+            NULL::date AS from_date, NULL::date AS due_date, 0 AS period_days,
+            0 AS gross_amount, 0 AS tds_amount, 0 AS net_amount,
+            0 AS addition_amount, 0 AS deduction_amount, 0 AS total_amount
+       FROM application_lines l
+       JOIN applications a ON a.id = l.application_id
+       JOIN customers c ON c.id = a.customer_id
+       LEFT JOIN series s ON s.id = a.series_id
+       LEFT JOIN customer_bank_accounts pb ON pb.id = a.payout_bank_account_id
+       LEFT JOIN customer_bank_accounts cb ON cb.customer_id = c.id AND cb.is_active = TRUE${REFERRER_LATERAL_JOINS}
+       LEFT JOIN branches br ON br.id = a.branch_id
+      WHERE l.status = 'Active' AND a.status IN (${OUTSTANDING_SQL_LIST})
+        AND a.product_type = $1
+        AND l.payout_frequency NOT IN ('Monthly', 'Quarterly', 'HalfYearly', 'Annual')
+        AND COALESCE(l.outstanding_amount, 0) > 0
+        AND a.date_money_received <= $2::date
+      ORDER BY c.full_name`, [productType, payoutDate]);
+  return rows;
+}
+
 /** Summary sheet for a stored batch. */
 export async function summaryForBatch(db: Db, batchId: number): Promise<{ buffer: Buffer; batchNo: string }> {
-  const batch = (await db.query<{ batch_no: string }>('SELECT batch_no FROM payout_batches WHERE id = $1', [batchId])).rows[0];
+  const batch = (await db.query<{ batch_no: string; payout_date: string; product_type: ProductType }>(
+    'SELECT batch_no, payout_date, product_type FROM payout_batches WHERE id = $1', [batchId])).rows[0];
   if (!batch) throw errors.notFound('Batch not found');
   const { rows } = await db.query<Record<string, unknown>>(
     // Wealth's order: each application's rows sit together, its regular interest
@@ -1346,8 +1457,9 @@ export async function summaryForBatch(db: Db, batchId: number): Promise<{ buffer
                               WHERE p.line_id = ds.line_id AND p.due_date < ds.due_date
                                 AND p.due_type IN ('Interest','BrokenInterest') AND p.status = 'Paid'))
       ORDER BY c.full_name, a.application_no, (ds.due_type = 'BrokenInterest'), ds.due_date`, [batchId]);
+  const info = await infoOnlySummaryRows(db, String(batch.payout_date).slice(0, 10), batch.product_type ?? 'ncd');
   const { buildSummarySheet } = await import('../../lib/payout-summary.js');
-  return { buffer: await buildSummarySheet(rows as never[]), batchNo: batch.batch_no };
+  return { buffer: await buildSummarySheet([...rows, ...info] as never[]), batchNo: batch.batch_no };
 }
 
 /**

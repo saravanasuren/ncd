@@ -839,7 +839,12 @@ describe('only products that pay periodically are in the monthly run', () => {
     return name;
   };
 
-  it('keeps a Cumulative / AtMaturity line OUT, and a Monthly one IN', async () => {
+  // OUT OF THE CASH RUN, BUT ON THE SHEET (owner 2026-10-27). #486 excluded
+  // these products from the monthly run — correct, their interest belongs in
+  // the maturity value — but it also dropped them off the summary, so real book
+  // went missing from the page ops reconcile against. They are listed now, at
+  // ₹0, and the bank file still never sees them.
+  it('lists a Cumulative / AtMaturity line at ZERO, and pays a Monthly one', async () => {
     const a = await admin();
     const monthly = await mk('Periodic Payer', '9680000001', 'Monthly');
     const cumulative = await mk('Cumulative Holder', '9680000002', 'Cumulative');
@@ -847,10 +852,36 @@ describe('only products that pay periodically are in the monthly run', () => {
 
     const ws = await sheetOf((await a.raw('/api/payouts/preview.summary.xlsx?date=2027-12-28')).buffer);
     const names: string[] = [];
-    for (let r = 2; r <= ws.rowCount; r++) names.push(String(ws.getRow(r).getCell(C('Customer Name')).value));
+    const paid = new Map<string, number>();
+    for (let r = 2; r <= ws.rowCount; r++) {
+      const n = String(ws.getRow(r).getCell(C('Customer Name')).value);
+      names.push(n);
+      paid.set(n, Number(ws.getRow(r).getCell(C('Total (Rs)')).value ?? 0));
+    }
 
     expect(names).toContain(monthly);           // still paid, nothing else moved
-    expect(names).not.toContain(cumulative);    // interest belongs in the maturity value
-    expect(names).not.toContain(atMaturity);    // an unknown frequency stays out too
+    expect(paid.get(monthly)).toBeGreaterThan(0);
+    // Present — and worth nothing this run. Both halves matter: the first is
+    // what the owner asked for, the second is what keeps it out of the bank.
+    expect(names).toContain(cumulative);
+    expect(paid.get(cumulative)).toBe(0);
+    expect(names).toContain(atMaturity);        // an unknown frequency is shown too
+    expect(paid.get(atMaturity)).toBe(0);
+  });
+
+  it('and the money totals still count only what is actually paid', async () => {
+    const a = await admin();
+    const due = (await a.get('/api/payouts/preview?date=2027-12-28')).json as {
+      count: number; totals: { gross: number; net: number; total: number; outstanding: number };
+      rows: Record<string, unknown>[] };
+    const info = due.rows.filter((r) => r.info_only);
+    expect(info.length, 'the two non-periodic lines are on the sheet').toBeGreaterThanOrEqual(2);
+    // They add nothing to any figure that represents money.
+    const payable = due.rows.filter((r) => !r.info_only);
+    expect(due.count).toBe(payable.length);
+    expect(due.totals.gross).toBe(payable.reduce((t, r) => t + Number(r.gross_amount), 0));
+    expect(due.totals.total).toBe(payable.reduce((t, r) => t + Number(r.total_amount ?? r.net_amount), 0));
+    // ...including Outstanding, which the comparison panel bridges against.
+    expect(info.every((r) => Number(r.gross_amount) === 0 && Number(r.total_amount) === 0)).toBe(true);
   });
 });

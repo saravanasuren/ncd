@@ -363,7 +363,7 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
   // together, regular interest first and its redemption slices under it. Built
   // in two passes above, so without this every Redemption row lands in a block
   // at the BOTTOM of the sheet, detached from the customer it belongs to.
-  const key = (r: Record<string, unknown>) => String(r.customer_name ?? '') + ' ' + String(r.application_no ?? '');
+  const key = (r: Record<string, unknown>) => String(r.customer_name ?? '') + '\u0000' + String(r.application_no ?? '');
   out.sort((a, b) =>
     key(a).localeCompare(key(b))
     || (a.schedule_id ? 1 : 0) - (b.schedule_id ? 1 : 0)
@@ -411,6 +411,9 @@ export interface LastInterestBatchSummary {
     added: { customers: number; investments: number; amount: number };
     /** Of `added`, the part this interest run does not carry. */
     not_in_run: number;
+    /** What `Last + Added − not_in_run + backdated − Redeemed` comes to — the
+     *  same principal previewDue prints as "This batch". */
+    this_outstanding: number;
     /** In this run, money whose received date predates `since`. */
     backdated: number;
     redeemed: { customers: number; redemptions: number; amount: number };
@@ -499,17 +502,34 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
   // was actually paid, and to how many people. Only Outstanding is "the book as
   // at that date", because only Outstanding is the row Added has to bridge.
   const due = await previewDue(db, payoutDate ?? new Date().toISOString().slice(0, 10), batch.product_type ?? 'ncd');
-  const runIds = [...new Set((due.rows as Record<string, unknown>[])
+  // THE RUN'S LINES, not its applications.
+  //
+  // This split has to total the SAME money the screen prints as "This batch",
+  // and that figure is previewDue's `totals.outstanding` — the principal of
+  // every LINE the run pays interest on. Keyed on application_id it summed
+  // every line those applications own, including ones the run does not pay on,
+  // so an investment holding both a monthly line and a Cumulative one counted
+  // principal the batch never earned a rupee against. The identity below then
+  // closed on a number nobody could see, and the comparison panel was left not
+  // adding up on screen while reconciling perfectly in here.
+  //
+  // #486 made that reachable by design (Cumulative / at-maturity lines are now
+  // excluded from the run), so this is keyed on the line ids the run actually
+  // carries. A merged tranche contributes every line it consolidated, which is
+  // exactly what `_principal` already sums into the displayed total.
+  const runLineIds = [...new Set((due.rows as Record<string, unknown>[])
     .filter((r) => !r.schedule_id)       // a redemption slice is money LEAVING
-    .map((r) => Number(r.application_id)))];
-  const split = runIds.length
+    .flatMap((r) => (r.merged_line_ids as number[] | undefined) ?? [Number(r.line_id)])
+    .map(Number)
+    .filter((n) => Number.isFinite(n)))];
+  const split = runLineIds.length
     ? (await db.query<{ before_amount: string; after_amount: string; after_investments: string; after_customers: string }>(
         `SELECT COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received <= $2::date), 0) AS before_amount,
                 COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received >  $2::date), 0) AS after_amount,
                 count(DISTINCT a.id)          FILTER (WHERE a.date_money_received >  $2::date) AS after_investments,
                 count(DISTINCT a.customer_id) FILTER (WHERE a.date_money_received >  $2::date) AS after_customers
            FROM applications a JOIN application_lines l ON l.application_id = a.id
-          WHERE a.id = ANY($1::bigint[])`, [runIds, since])).rows[0]!
+          WHERE l.id = ANY($1::bigint[])`, [runLineIds, since])).rows[0]!
     : { before_amount: '0', after_amount: '0', after_investments: '0', after_customers: '0' };
   /**
    * ADDED IS THE MONEY THAT CAME IN, MEASURED OVER THE WHOLE BOOK (owner
@@ -665,6 +685,11 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
       },
       not_in_run: notInRun,
       backdated,
+      // The figure the chain above closes on, stated rather than implied. The
+      // screen draws the reconciliation from these numbers and shows a residual
+      // line if it ever fails to land here — a panel that silently stops adding
+      // up is the whole reason this row was reported as a bug.
+      this_outstanding: round2(thisBatch),
       redeemed: {
         customers: Number(red.customers), redemptions: Number(red.redemptions),
         amount: redeemedAmount,

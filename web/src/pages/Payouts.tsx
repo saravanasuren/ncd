@@ -18,6 +18,8 @@ interface LastInterestSummary {
     added: { customers: number; investments: number; amount: number };
     /** Of `added`, the part this interest run does not carry. */
     not_in_run: number;
+    /** What the chain closes on — the same principal shown as "This batch". */
+    this_outstanding: number;
     /** In this run, money whose received date predates the window. */
     backdated: number;
     redeemed: { customers: number; redemptions: number; amount: number };
@@ -31,22 +33,28 @@ function BatchComparison({ last, now }: {
   now: { customers: number; investments: number; gross: number; tds: number; net: number; outstanding: number };
 }) {
   const m = last.movement;
-  // Added/Redeemed are only meaningful for Customers and Outstanding. Gross, TDS
-  // and Net are interest EARNED, not money in or out — inventing a figure for
-  // them would put a different kind of number in the same column (owner
-  // 2026-08-27: leave them blank).
-  const rows: Array<{ label: string; last: number; now: number; money?: boolean;
-                      added?: number; redeemed?: number }> = [
-    { label: 'Customers', last: last.customers, now: now.customers,
-      added: m?.added.customers, redeemed: m?.redeemed.customers },
+  // THIS TABLE NO LONGER CARRIES Added/Redeemed.
+  //
+  // It had five columns laid out as a reconciliation — Last | Added | Redeemed
+  // | This | Change — while only SOME of the terms between Last and This were
+  // among them. It could not add up, and it was reported as broken every time
+  // somebody checked it (2026-10-27, and the row had been queried before that).
+  // Annotating a half-reconciliation does not fix it; the movement belongs
+  // somewhere it can be shown WHOLE, which is the block underneath, so that is
+  // where it now lives. What is left here is a straight before/after, which is
+  // the one thing these columns could always honestly claim to be.
+  const rows: Array<{ label: string; last: number; now: number; money?: boolean }> = [
+    // Customers was the worst of them: counts are a SET, not a sum, so someone
+    // already on the book who invests again is in both figures and
+    // 486 + 71 − 7 could never equal 530 however the money behaved.
+    { label: 'Customers', last: last.customers, now: now.customers },
     // No Investments row (owner 2026-08-19). Outstanding already says how much
     // principal each batch earned on, which is the number that explains gross;
     // a count of investments moved with it and added nothing.
     // The principal each batch's interest was earned on (owner 2026-08-16).
     // Placed ABOVE Gross because it is the explanation for it: gross can fall
     // while customers rise, and this is the row that says why.
-    { label: 'Outstanding', last: last.outstanding, now: now.outstanding, money: true,
-      added: m?.added.amount, redeemed: m?.redeemed.amount },
+    { label: 'Outstanding', last: last.outstanding, now: now.outstanding, money: true },
     { label: 'Gross', last: last.gross, now: now.gross, money: true },
     { label: 'TDS', last: last.tds, now: now.tds, money: true },
     { label: 'Net', last: last.net, now: now.net, money: true },
@@ -63,8 +71,6 @@ function BatchComparison({ last, now }: {
             <tr className="text-text-muted">
               <th className="font-medium py-1 pr-4 text-left"></th>
               <th className="font-medium py-1 pr-4 text-right">Last batch</th>
-              <th className="font-medium py-1 pr-4 text-right">Added</th>
-              <th className="font-medium py-1 pr-4 text-right">Redeemed</th>
               <th className="font-medium py-1 pr-4 text-right">This batch</th>
               <th className="font-medium py-1 text-right">Change</th>
             </tr>
@@ -79,14 +85,6 @@ function BatchComparison({ last, now }: {
                 <tr key={r.label} className="border-t border-border/60">
                   <td className="py-1 pr-4 text-text-label">{r.label}</td>
                   <td className="py-1 pr-4 text-right mono text-text-muted">{fmt(r.last, r.money)}</td>
-                  <td className="py-1 pr-4 text-right mono text-success">
-                    {r.added === undefined ? <span className="text-text-muted">—</span>
-                      : r.added === 0 ? '0' : `+${fmt(r.added, r.money)}`}
-                  </td>
-                  <td className="py-1 pr-4 text-right mono text-danger">
-                    {r.redeemed === undefined ? <span className="text-text-muted">—</span>
-                      : r.redeemed === 0 ? '0' : `−${fmt(r.redeemed, r.money)}`}
-                  </td>
                   <td className="py-1 pr-4 text-right mono font-semibold">{fmt(r.now, r.money)}</td>
                   <td className={`py-1 text-right mono ${color}`}>
                     {arrow}{' '}{d === 0 ? '0' : `${d > 0 ? '+' : '−'}${fmt(Math.abs(d), r.money)}`}
@@ -98,38 +96,75 @@ function BatchComparison({ last, now }: {
           </tbody>
         </table>
         {m && (
-          <div className="text-[11px] text-text-muted mt-1.5 max-w-[760px]">
-            Outstanding splits on the money-received date. Last batch is the book as it stood on
-            {m.since} — everything that had landed by then, including the {m.redeemed.redemptions} since
-            redeemed. <strong>Added is every rupee received after {m.since}</strong> — the{' '}
-            {m.added.investments} investment(s) that landed since, measured over the whole book
-            (owner 2026-10-27). Redeemed counts only redemptions that were approved or paid; one
-            still awaiting its checkers, or refused, has taken nothing off the book.
-            {(m.not_in_run !== 0 || m.backdated !== 0) && (
-              <>
-                {' '}Added and <strong>This batch</strong> count different things, so the row does
-                not add up on its own. Two items bridge it:{' '}
-                {m.not_in_run !== 0 && (
-                  <>
-                    <strong>{formatINR(m.not_in_run)}</strong> of that new money earns no interest in
-                    this run (a cumulative / at-maturity product, or money that rolled to next
-                    month&apos;s batch){m.backdated !== 0 ? ', and ' : '. '}
-                  </>
-                )}
-                {m.backdated !== 0 && (
-                  <>
-                    <strong>{formatINR(m.backdated)}</strong> in this run was received before{' '}
-                    {m.since} but only reached the book afterwards — backdated, or approved after the
-                    last batch was cut.{' '}
-                  </>
-                )}
-                Last batch + Added − {formatINR(m.not_in_run)} + {formatINR(m.backdated)} − Redeemed
-                = This batch.
-              </>
-            )}{' '}
-            The customer counts do not add up that way and are not meant to — one person can hold an
-            old investment and a new one, so they are counted on both sides. Gross / TDS / Net above
-            are what that batch actually paid.
+          <div className="mt-3 max-w-[760px]">
+            {/* THE ROW HAS TO ADD UP.
+                Added and "This batch" count different populations, so
+                Last + Added − Redeemed never equalled This — the panel was
+                reported as broken every time somebody checked it with a
+                calculator, which is the correct instinct and the right thing
+                to serve. The two bridging terms the service already measures
+                are now ON the page as entries in the sum instead of prose
+                underneath it, so the chain can be followed line by line. */}
+            <div className="text-[11px] font-semibold text-text-label uppercase tracking-wide mb-1.5">
+              How Outstanding moved
+            </div>
+            <table className="text-xs w-full">
+              <tbody>
+                {([
+                  { label: `Last batch · ${last.payout_date}`, value: last.outstanding, sign: 0,
+                    note: `${last.customers} customer(s)` },
+                  { label: 'Money received since', value: m.added.amount, sign: 1,
+                    note: `${m.added.investments} investment(s), ${m.added.customers} customer(s)` },
+                  { label: 'Not in this run', value: m.not_in_run, sign: -1,
+                    note: 'cumulative / at-maturity, or rolled to next month’s batch' },
+                  { label: 'Backdated into the period', value: m.backdated, sign: 1,
+                    note: 'money dated before this window, keyed in later' },
+                  { label: 'Redeemed', value: m.redeemed.amount, sign: -1,
+                    note: `${m.redeemed.redemptions} redemption(s), ${m.redeemed.customers} customer(s)` },
+                ] as Array<{ label: string; value: number; sign: number; note: string }>)
+                  // A zero bridge is noise; the opening line always shows.
+                  .filter((r) => r.sign === 0 || r.value !== 0)
+                  .map((r) => (
+                    <tr key={r.label} className="border-t border-border/40 first:border-0">
+                      <td className="py-1 pr-2 text-text-muted w-4 text-right mono">
+                        {r.sign === 0 ? '' : r.sign > 0 ? '+' : '−'}
+                      </td>
+                      <td className="py-1 pr-4 text-text-label">{r.label}</td>
+                      <td className={`py-1 pr-4 text-right mono ${r.sign > 0 ? 'text-success' : r.sign < 0 ? 'text-danger' : ''}`}>
+                        {formatINR(Math.abs(r.value))}
+                      </td>
+                      <td className="py-1 text-text-muted">{r.note}</td>
+                    </tr>
+                  ))}
+                <tr className="border-t border-border">
+                  <td className="py-1 pr-2 text-text-muted w-4 text-right mono">=</td>
+                  <td className="py-1 pr-4 font-semibold">This batch</td>
+                  <td className="py-1 pr-4 text-right mono font-semibold">{formatINR(now.outstanding)}</td>
+                  <td className="py-1 text-text-muted">{now.customers} customer(s)</td>
+                </tr>
+              </tbody>
+            </table>
+            {/* Never claim it balances without checking. If the chain stops
+                landing on This batch — a new movement nobody has measured yet —
+                say so plainly rather than letting the table quietly lie again. */}
+            {(() => {
+              const chain = last.outstanding + m.added.amount - m.not_in_run + m.backdated - m.redeemed.amount;
+              const residual = Math.round((chain - now.outstanding) * 100) / 100;
+              return residual === 0 ? null : (
+                <div className="text-[11px] text-danger mt-1.5">
+                  ⚠ {formatINR(Math.abs(residual))} of this movement is unaccounted for — the lines above
+                  come to {formatINR(chain)}, not {formatINR(now.outstanding)}. Please report this before
+                  cutting the batch.
+                </div>
+              );
+            })()}
+            <div className="text-[11px] text-text-muted mt-1.5">
+              Outstanding splits on the money-received date. Last batch is the book as it stood on {m.since} —
+              everything that had landed by then, including the {m.redeemed.redemptions} since redeemed.
+              Redeemed counts only redemptions approved or paid; one still awaiting its checkers, or refused,
+              has taken nothing off the book. Customer counts are a set, not a sum — someone who was already
+              on the book and invested again appears in both lines.
+            </div>
           </div>
         )}
       </div>

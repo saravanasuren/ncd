@@ -79,7 +79,7 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
                            AND (ds.status = 'Paid'
                                 OR (ds.status = 'Scheduled' AND ds.batch_id IS NOT NULL))) AS is_first_period,
             -- The first interest payout the line's stored schedule was booked
-            -- with. Tells an investment booked before the "from the 25th, next
+            -- with. Tells an investment booked before the "from the cut-off day, next
             -- month" rule (its schedule has a payout in the money month) from
             -- one booked after it (owner 2026-10-26: new investments only).
             (SELECT min(ds.due_date) FROM disbursement_schedule ds
@@ -124,7 +124,7 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
     const paidThrough = toISODate(l.paid_through as string | null);
     if (!paidThrough || payoutDate < paidThrough) continue;    // nothing accrued yet
     // Owner 2026-10-26: money received on/after the cut-off day (default the
-    // 25th) is paid from the NEXT month's batch, which then counts every day
+    // 26th) is paid from the NEXT month's batch, which then counts every day
     // from the day it arrived — so nothing is lost, only moved. Only a line's
     // first period: paidThrough is then its money-received date. An investment
     // booked BEFORE this rule keeps the short payment its stored schedule

@@ -407,7 +407,12 @@ export interface LastInterestBatchSummary {
   movement: {
     /** Exclusive lower bound: the last batch's payout date. */
     since: string;
+    /** Money RECEIVED since `since`, measured over the whole book. */
     added: { customers: number; investments: number; amount: number };
+    /** Of `added`, the part this interest run does not carry. */
+    not_in_run: number;
+    /** In this run, money whose received date predates `since`. */
+    backdated: number;
     redeemed: { customers: number; redemptions: number; amount: number };
   };
 }
@@ -506,9 +511,35 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
            FROM applications a JOIN application_lines l ON l.application_id = a.id
           WHERE a.id = ANY($1::bigint[])`, [runIds, since])).rows[0]!
     : { before_amount: '0', after_amount: '0', after_investments: '0', after_customers: '0' };
-  const add = {
-    investments: split.after_investments, customers: split.after_customers, amount: split.after_amount,
-  };
+  /**
+   * ADDED IS THE MONEY THAT CAME IN, MEASURED OVER THE WHOLE BOOK (owner
+   * 2026-10-27: "those which was received from 29th sep to oct till date should
+   * be in the addition panel").
+   *
+   * Not `split.after_amount`, which only sees investments IN THIS RUN. Two
+   * kinds of real money are on the book but outside the run, and both used to
+   * vanish from this column:
+   *   - a Cumulative / at-maturity product. It pays nothing monthly, so #486
+   *     rightly keeps it out of the interest run — but the money still arrived.
+   *     ₹44,00,000 of October money on 27-10.
+   *   - money received on or after `interest.next_batch_from_day`, which rolls
+   *     to NEXT month's batch and so is not in this run either. ₹15,00,000 on
+   *     27-10.
+   * Counting the whole book also makes the COUNT and the AMOUNT describe one
+   * population at last; they used to disagree, because the amount was derived
+   * and the count was measured.
+   *
+   * Same statuses as the outstanding book itself (OUTSTANDING_APPLICATION_STATUSES
+   * — PendingApproval excluded), so an investment keyed but not yet approved
+   * does not inflate the month: ₹15,00,000 sat there on 27-10.
+   */
+  const add = (await db.query<{ amount: string; investments: string; customers: string }>(
+    `SELECT COALESCE(sum(l.outstanding_amount), 0) AS amount,
+            count(DISTINCT a.id)          AS investments,
+            count(DISTINCT a.customer_id) AS customers
+       FROM applications a JOIN application_lines l ON l.application_id = a.id
+      WHERE a.date_money_received > $1::date
+        AND a.status IN (${OUTSTANDING_SQL_LIST})`, [since])).rows[0]!;
 
   // What LEFT the last batch's book: redeemed after that date, and whose money
   // had landed on or before it — the same population `before_amount` measures,
@@ -589,19 +620,37 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
   const redeemedAmount = round2(Number(red.amount));
 
   /**
-   * ADDED is everything else: the money in, whenever it was keyed. Derived
-   * rather than measured, so the row always reconciles —
-   *   Last + Added − Redeemed = This
-   * — whatever else has moved on the book since. Its investment and customer
-   * COUNTS still describe money that landed after the payout date, which is
-   * the question a reader asks of them; the amount is the whole inflow.
+   * ADDED is now MEASURED, not derived (owner 2026-10-27) — see the `add` query.
+   * It answers one question only: how much money came in since the last batch.
+   *
+   * Derived-and-always-reconciling was the old contract, and it is gone on
+   * purpose. It made the Outstanding row add up by quietly sweeping anything
+   * unexplained into Added, which is how ₹17,00,000 of money dated BEFORE the
+   * window ended up presented as this month's business. A column that is a
+   * remainder cannot also be a fact, and the owner asked for the fact.
+   *
+   * The price is that `Last + Added − Redeemed = This` no longer holds, because
+   * Added and This count different populations. Rather than hide that, the two
+   * reconciling items are measured and returned so the screen can state them:
+   *
+   *   Last + Added − not_in_run + backdated − Redeemed = This
+   *
+   *   not_in_run  window money this run does not pay monthly interest on
+   *               (Cumulative / at-maturity, and money that rolled to the next
+   *               batch under `interest.next_batch_from_day`).
+   *   backdated   money this run DOES carry whose money date predates the
+   *               window — a backdated enrolment, or one approved after the
+   *               last batch was cut. Measured as the remainder, which is the
+   *               only honest place for a remainder to sit.
    */
   const thisBatch = Number(split.before_amount) + Number(split.after_amount);
-  const addedAmount = snapshot != null
-    ? round2(thisBatch - snapshot + redeemedAmount)
+  const addedAmount = round2(Number(add.amount));
+  const notInRun = round2(addedAmount - Number(split.after_amount));
+  const backdated = snapshot != null
+    ? round2(thisBatch - snapshot + redeemedAmount - Number(split.after_amount))
     // No snapshot (a batch cut before the column existed): nothing to bridge
-    // from, so report what was actually measured.
-    : round2(Number(split.after_amount));
+    // from, so claim no backdated movement rather than invent one.
+    : 0;
 
   return {
     batch_no: batch.batch_no, payout_date: since,
@@ -614,6 +663,8 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
         customers: Number(add.customers), investments: Number(add.investments),
         amount: addedAmount,
       },
+      not_in_run: notInRun,
+      backdated,
       redeemed: {
         customers: Number(red.customers), redemptions: Number(red.redemptions),
         amount: redeemedAmount,

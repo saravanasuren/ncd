@@ -16,6 +16,10 @@ interface LastInterestSummary {
   movement: {
     since: string;
     added: { customers: number; investments: number; amount: number };
+    /** Of `added`, the part this interest run does not carry. */
+    not_in_run: number;
+    /** In this run, money whose received date predates the window. */
+    backdated: number;
     redeemed: { customers: number; redemptions: number; amount: number };
   };
 }
@@ -97,12 +101,35 @@ function BatchComparison({ last, now }: {
           <div className="text-[11px] text-text-muted mt-1.5 max-w-[760px]">
             Outstanding splits on the money-received date. Last batch is the book as it stood on
             {m.since} — everything that had landed by then, including the {m.redeemed.redemptions} since
-            redeemed. Added is the {m.added.investments} investment(s) that landed after it. Redeemed
-            counts only redemptions that were approved or paid; one still awaiting its checkers, or
-            refused, has taken nothing off the book. <strong>Outstanding</strong> reconciles exactly:
-            Last batch + Added − Redeemed = This batch. The customer counts do not add up that way and
-            are not meant to — one person can hold an old investment and a new one, so they are counted
-            on both sides. Gross / TDS / Net above are what that batch actually paid.
+            redeemed. <strong>Added is every rupee received after {m.since}</strong> — the{' '}
+            {m.added.investments} investment(s) that landed since, measured over the whole book
+            (owner 2026-10-27). Redeemed counts only redemptions that were approved or paid; one
+            still awaiting its checkers, or refused, has taken nothing off the book.
+            {(m.not_in_run !== 0 || m.backdated !== 0) && (
+              <>
+                {' '}Added and <strong>This batch</strong> count different things, so the row does
+                not add up on its own. Two items bridge it:{' '}
+                {m.not_in_run !== 0 && (
+                  <>
+                    <strong>{formatINR(m.not_in_run)}</strong> of that new money earns no interest in
+                    this run (a cumulative / at-maturity product, or money that rolled to next
+                    month&apos;s batch){m.backdated !== 0 ? ', and ' : '. '}
+                  </>
+                )}
+                {m.backdated !== 0 && (
+                  <>
+                    <strong>{formatINR(m.backdated)}</strong> in this run was received before{' '}
+                    {m.since} but only reached the book afterwards — backdated, or approved after the
+                    last batch was cut.{' '}
+                  </>
+                )}
+                Last batch + Added − {formatINR(m.not_in_run)} + {formatINR(m.backdated)} − Redeemed
+                = This batch.
+              </>
+            )}{' '}
+            The customer counts do not add up that way and are not meant to — one person can hold an
+            old investment and a new one, so they are counted on both sides. Gross / TDS / Net above
+            are what that batch actually paid.
           </div>
         )}
       </div>

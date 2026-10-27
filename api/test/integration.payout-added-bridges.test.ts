@@ -62,9 +62,27 @@ const summary = async (a: Client, date: string) =>
     payout_date: string; outstanding: number;
     movement: {
       added: { investments: number; customers: number; amount: number };
+      not_in_run: number; backdated: number;
       redeemed: { redemptions: number; customers: number; amount: number };
     };
   } | null;
+
+/**
+ * The identity the screen states, now that Added is MEASURED rather than
+ * derived (owner 2026-10-27: "those which was received from 29th sep to oct
+ * till date should be in the addition panal"):
+ *
+ *   Last + Added − not_in_run + backdated − Redeemed = This
+ *
+ * Added counts money by the day it ARRIVED, over the whole book. This batch
+ * counts the principal this interest run earns on. Those are different
+ * populations, so two named items bridge them instead of one column silently
+ * absorbing the difference.
+ */
+const bridges = (s: NonNullable<Awaited<ReturnType<typeof summary>>>, previewOutstanding: number) =>
+  expect(s.outstanding + s.movement.added.amount - s.movement.not_in_run
+         + s.movement.backdated - s.movement.redeemed.amount)
+    .toBe(previewOutstanding);
 
 describe('the payout comparison explains its own total', () => {
   let onBoundary = 0;
@@ -112,10 +130,17 @@ describe('the payout comparison explains its own total', () => {
     // yet. Freezing won, so backdated money is reported as an ADDITION — which
     // is what it is, to the book, on the day it was keyed in.
     //
-    // The boundary (700,000 on the payout date) + backdated (300,000 on 05-Aug)
-    // + the genuine 29-Aug one (900,000).
+    // ADDED IS NOW ONLY THE MONEY THAT ARRIVED IN THE WINDOW (owner
+    // 2026-10-27). The genuine 29-Aug one, 900,000 — and nothing else.
     const s = await summary(await admin(), NEXT);
-    expect(s!.movement.added.amount).toBe(1900000);
+    expect(s!.movement.added.amount).toBe(900000);
+    // The boundary (700,000 ON the payout date) and the backdated entry
+    // (300,000 on 05-Aug) are real money that reached the book after the batch
+    // was cut, so they are not lost — they are named as BACKDATED, which is
+    // what they are, rather than presented as this period's new business.
+    expect(s!.movement.backdated).toBe(1000000);
+    // Everything here is an ordinary monthly investment inside this run.
+    expect(s!.movement.not_in_run).toBe(0);
   });
 
   it('bridges exactly: last + added − redeemed = this', async () => {
@@ -124,8 +149,7 @@ describe('the payout comparison explains its own total', () => {
     const a = await admin();
     const s = (await summary(a, NEXT))!;
     const preview = (await a.get(`/api/payouts/preview?date=${NEXT}`)).json as { totals: { outstanding: number } };
-    expect(s.outstanding + s.movement.added.amount - s.movement.redeemed.amount)
-      .toBe(preview.totals.outstanding);
+    bridges(s, preview.totals.outstanding);
   });
 
   it('a redemption of money that WAS in the book shows as Redeemed, and Last batch still does not move', async () => {
@@ -162,8 +186,7 @@ describe('the payout comparison explains its own total', () => {
 
     // The row still explains itself.
     const preview = (await a.get(`/api/payouts/preview?date=${NEXT}`)).json as { totals: { outstanding: number } };
-    expect(after.outstanding + after.movement.added.amount - after.movement.redeemed.amount)
-      .toBe(preview.totals.outstanding);
+    bridges(after, preview.totals.outstanding);
   });
 
   it('a Skipped row does not move an investment between the columns', async () => {
@@ -256,7 +279,7 @@ describe('the old batch amount never changes', () => {
     expect(s.outstanding).toBe(frozen);
     // And it is NOT reported as having left, because it has not.
     const preview = (await a.get('/api/payouts/preview?date=2026-12-28')).json as { totals: { outstanding: number } };
-    expect(s.outstanding + s.movement.added.amount - s.movement.redeemed.amount).toBe(preview.totals.outstanding);
+    bridges(s, preview.totals.outstanding);
   });
 });
 
@@ -321,6 +344,80 @@ describe('Redeemed says what was redeemed', () => {
     const a = await admin();
     const s = (await summary(a, D))!;
     const preview = (await a.get(`/api/payouts/preview?date=${D}`)).json as { totals: { outstanding: number } };
-    expect(s.outstanding + s.movement.added.amount - s.movement.redeemed.amount).toBe(preview.totals.outstanding);
+    bridges(s, preview.totals.outstanding);
+  });
+});
+
+/**
+ * ADDED IS MONEY RECEIVED, NOT MONEY THIS RUN PAYS INTEREST ON
+ * (owner 2026-10-27: "those which was received from 29th sep to oct till date
+ * should be in the addoition panal").
+ *
+ * Added used to be measured only over investments IN THE INTEREST RUN, so two
+ * kinds of perfectly real money were invisible in the month they arrived:
+ *
+ *   1. a Cumulative / at-maturity product. It pays nothing monthly, so #486
+ *      correctly keeps it out of the run — but ₹44,00,000 of October money
+ *      disappeared from Added with it.
+ *   2. money received on or after `interest.next_batch_from_day`, which rolls
+ *      to NEXT month's batch and so is not in this run either — ₹15,00,000.
+ *
+ * Both now count on the day the money arrived, and the part of Added this run
+ * does not carry is reported as `not_in_run` so the Outstanding row still
+ * explains itself.
+ */
+describe('Added counts money the interest run never sees', () => {
+  const P = '2027-04-28';
+  const D = '2027-05-28';
+
+  it('counts a cumulative product and money that rolled to next month', async () => {
+    const a = await admin();
+    // On the book before the batch, so it lands in the frozen snapshot.
+    await invest(a, 'Run Before', '9567000001', 1000000, '2027-04-05');
+    const batch = await a.post('/api/payouts', { payout_date: P });
+    const id = Number(batch.json.id ?? batch.json.batch_id);
+    await ctx.db.query("UPDATE payout_batches SET status = 'Paid' WHERE id = $1", [id]);
+    await ctx.db.query("UPDATE disbursement_schedule SET status = 'Paid', paid_at = $2::date WHERE batch_id = $1", [id, P]);
+
+    // (a) an ordinary monthly investment — in the run.
+    await invest(a, 'Plain Monthly', '9567000002', 500000, '2027-05-01');
+    // (b) a cumulative one — real money, but it earns nothing monthly, so the
+    //     run excludes it. Set on the line directly: what matters here is the
+    //     frequency previewDue filters on, not how it got there.
+    const cum = await invest(a, 'Cumulative One', '9567000003', 400000, '2027-05-02');
+    await ctx.db.query("UPDATE application_lines SET payout_frequency = 'Cumulative' WHERE application_id = $1", [cum]);
+    // (c) money on the 26th — rolls to the NEXT batch under the cut-off rule.
+    await invest(a, 'Rolled Late', '9567000004', 300000, '2027-05-26');
+
+    const s = (await summary(a, D))!;
+    expect(s.payout_date).toBe(P);
+    // ALL THREE count as money received, whatever this run does with them.
+    expect(s.movement.added.amount).toBe(1200000);
+    expect(s.movement.added.investments).toBe(3);
+    expect(s.movement.added.customers).toBe(3);
+    // Of which the cumulative one and the rolled one are not in this run.
+    expect(s.movement.not_in_run).toBe(700000);
+
+    // And the row still explains itself end to end.
+    const preview = (await a.get(`/api/payouts/preview?date=${D}`)).json as { totals: { outstanding: number } };
+    bridges(s, preview.totals.outstanding);
+  });
+
+  it('does not count an investment still awaiting approval', async () => {
+    // PendingApproval is money nobody has confirmed. It must not inflate the
+    // month — ₹15,00,000 was sitting in that state on production on 27-10.
+    const a = await admin();
+    const before = (await summary(a, D))!.movement.added.amount;
+    const cust = await a.post('/api/customers', { full_name: 'Not Yet Approved', phone: '9567000005' });
+    const cid = Number(cust.json.id);
+    await a.post(`/api/customers/${cid}/bank-accounts`, { account_number: '91919567000005', ifsc: 'ICIC0001111' });
+    const series = (await a.get('/api/series')).json.rows[0];
+    const scheme = (await a.get('/api/schemes')).json.rows[0];
+    // Created, NOT approved.
+    await a.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: cid,
+      series_id: series.id, scheme_id: scheme.id, amount: 800000, date_money_received: '2027-05-10',
+    });
+    expect((await summary(a, D))!.movement.added.amount).toBe(before);
   });
 });

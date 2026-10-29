@@ -54,6 +54,7 @@ const summary = async (a: Client, date: string) =>
       added: { amount: number };
       redeemed: { amount: number }; this_outstanding: number;
       recorded_outstanding: number | null; late_entry: number;
+      awaiting_first_interest: { amount: number; investments: number };
       book: { in_run: number; cumulative: number; rolled: number; other: number };
     };
   } | null;
@@ -165,5 +166,81 @@ describe('the Outstanding chain lands on the printed total', () => {
     expect(after.movement.redeemed.amount).toBe(before.movement.redeemed.amount + 1000000);
     expect(after.outstanding + after.movement.added.amount - after.movement.redeemed.amount)
       .toBe(after.movement.this_outstanding);
+  });
+});
+
+
+/**
+ * THE EXPLANATION HAS TO BE TRUE TOO, not just the arithmetic.
+ *
+ * Reported 2026-10-29, the morning after the first batch cut under the new
+ * model: the panel said ₹1,14,00,000 "was already on the book then but only
+ * reached the system afterwards". ₹6,00,000 of it was. The rest was
+ * ₹93,00,000 of doubling and ₹21,00,000 that had rolled to the next batch —
+ * money that was never late at all.
+ *
+ * `late_entry` had been derived as `last batch − outstanding_at_payout`, and
+ * those are different populations: the snapshot is the principal the RUN earns
+ * on, Last batch is the WHOLE book. The difference therefore swallowed every
+ * holding the run does not pay interest on, for ever. Outstanding still
+ * reconciled — which is the point: a row can add up perfectly and still say
+ * something false about itself.
+ */
+describe('the panel explains itself truthfully, not just correctly', () => {
+  const P = '2027-06-28';
+  const D = '2027-07-28';
+
+  it('a doubling holding is NOT reported as a late entry', async () => {
+    const a = await admin();
+    await invest(a, 'Run Member', '9569000001', 1000000, '2027-06-01');
+    // On the book BEFORE the batch, and never in a run — the exact shape that
+    // used to be mislabelled.
+    const cum = await invest(a, 'Doubling Holder Two', '9569000002', 800000, '2027-06-02');
+    await ctx.db.query("UPDATE application_lines SET payout_frequency = 'Cumulative' WHERE application_id = $1", [cum]);
+
+    const batch = await a.post('/api/payouts', { payout_date: P });
+    const id = Number(batch.json.id ?? batch.json.batch_id);
+    await ctx.db.query("UPDATE payout_batches SET status = 'Paid' WHERE id = $1", [id]);
+    await ctx.db.query("UPDATE disbursement_schedule SET status = 'Paid', paid_at = $2::date WHERE batch_id = $1", [id, P]);
+
+    const s = (await summary(a, D))!;
+    // Nothing was keyed after this batch was cut, so nothing is late. Derived
+    // from the snapshot this read ₹8,00,000 — the doubling line, called late.
+    expect(s.movement.late_entry).toBe(0);
+    // It is on the book, and it is named where it belongs.
+    expect(s.movement.book.cumulative).toBeGreaterThanOrEqual(800000);
+    // The money still reconciles — it always did; that was never the problem.
+    expect(s.outstanding + s.movement.added.amount - s.movement.redeemed.amount)
+      .toBe(s.movement.this_outstanding);
+  });
+
+  it('money that rolled stays visible after the batch is cut', async () => {
+    // The owner's other half: "in the addition im not seeing the credits whicvh
+    // came on 26 onwards". Once the batch settles, Added has moved past that
+    // money and `rolled` is recomputed against the NEXT payout month, so it
+    // showed nowhere — although nobody had been paid it.
+    const a = await admin();
+    const before = (await summary(a, D))!.movement.awaiting_first_interest;
+    // Received on the cut-off day of the payout month: waits for the next batch.
+    await invest(a, 'Waiting For Next', '9569000003', 600000, '2027-07-26');
+    const after = (await summary(a, D))!.movement.awaiting_first_interest;
+
+    expect(after.amount).toBe(before.amount + 600000);
+    expect(after.investments).toBe(before.investments + 1);
+  });
+
+  it('a doubling holding never sits in that line — it is never paid interest', async () => {
+    // Otherwise it would wait there for ever, which is not what "waiting"
+    // means. Asserted by adding one and watching the figure NOT move.
+    const a = await admin();
+    const before = (await summary(a, D))!.movement.awaiting_first_interest;
+    const cum = await invest(a, 'Doubling Holder Three', '9569000004', 900000, '2027-07-02');
+    await ctx.db.query("UPDATE application_lines SET payout_frequency = 'Cumulative' WHERE application_id = $1", [cum]);
+    const after = (await summary(a, D))!.movement.awaiting_first_interest;
+
+    expect(after.amount).toBe(before.amount);
+    expect(after.investments).toBe(before.investments);
+    // It is on the book, just counted somewhere it can honestly stay.
+    expect((await summary(a, D))!.movement.book.cumulative).toBeGreaterThanOrEqual(1700000);
   });
 });

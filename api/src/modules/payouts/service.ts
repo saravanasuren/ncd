@@ -462,8 +462,10 @@ export interface LastInterestBatchSummary {
     this_outstanding: number;
     /** `outstanding_at_payout` as written when that batch was cut, or null. */
     recorded_outstanding: number | null;
-    /** On the book by then, but only reached the system afterwards. */
+    /** On the book by then, but only reached the system afterwards. Measured. */
     late_entry: number;
+    /** On the book and never yet paid interest — it waits for the next batch. */
+    awaiting_first_interest: { amount: number; investments: number };
     /** What `this_outstanding` is made of — they sum to it. */
     book: { in_run: number; cumulative: number; rolled: number; other: number };
     redeemed: { customers: number; redemptions: number; amount: number };
@@ -762,7 +764,64 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
   // the breakdown wrong.
   const otherOffRun = round2(bookTotal - inRun - cumulative - rolled);
   const recordedOutstanding = snapshot != null ? round2(snapshot) : null;
-  const lateEntry = recordedOutstanding != null ? round2(lastOutstanding - recordedOutstanding) : 0;
+
+  /**
+   * LATE ENTRIES ARE MEASURED, NOT DERIVED FROM THE SNAPSHOT.
+   *
+   * This was `lastOutstanding - snapshot`, and that was wrong in a way that
+   * only showed once a batch had been cut under the new model (owner
+   * 2026-10-29, reading Rs 1,14,00,000 on the 28-10 batch): `snapshot` is
+   * `outstanding_at_payout`, the principal the RUN earns interest on, while
+   * `lastOutstanding` is the WHOLE BOOK. Two different populations, so the
+   * difference permanently swallowed the doubling (Rs 93,00,000) and the money
+   * that had rolled to the next batch (Rs 21,00,000) and reported all of it as
+   * "entered late". Only Rs 6,00,000 of it was. The Outstanding row still
+   * reconciled, so nothing was wrong with the money -- but a mislabelled
+   * explanation is exactly what makes a panel untrustworthy.
+   *
+   * Measured directly instead: on the book by `since`, entered afterwards.
+   * Nothing else is folded in, and nothing is claimed about the remainder.
+   */
+  const lateEntry = round2(Number((await db.query<{ amt: string }>(
+    `SELECT COALESCE(sum(l.outstanding_amount), 0) AS amt
+       FROM applications a JOIN application_lines l ON l.application_id = a.id
+      WHERE a.date_money_received <= $1::date
+        AND a.created_at > $2::timestamptz
+        AND a.status IN (${OUTSTANDING_SQL_LIST})
+        AND a.product_type = $3
+        AND l.status = 'Active'`,
+    [since, batch.created_at, batch.product_type ?? 'ncd'])).rows[0]!.amt));
+
+  /**
+   * ON THE BOOK, BUT NOT YET PAID A RUPEE OF INTEREST (owner 2026-10-29: "in
+   * the addition im not seeing the credits whicvh came on 26 onwards").
+   *
+   * Money received on or after the cut-off day waits for the NEXT batch. While
+   * that batch is still ahead of us the breakdown's `rolled` line says so --
+   * but the moment it is cut, `rolled` is computed against the NEW payout
+   * month and drops to zero, and Added has already moved past it too. The
+   * money was then visible nowhere, though nobody had been paid it yet.
+   *
+   * This is deliberately NOT a fourth part of the breakdown: for the batch now
+   * being previewed this money IS in `in_run`, so adding it there would
+   * double-count. It is an annotation on the book, and it clears itself the
+   * moment that interest is actually paid.
+   *
+   * Cumulative / at-maturity lines are excluded -- they are never paid interest
+   * at all, so they would sit here for ever; they have their own line already.
+   */
+  const awaiting = (await db.query<{ amt: string; investments: string }>(
+    `SELECT COALESCE(sum(l.outstanding_amount), 0) AS amt,
+            count(DISTINCT a.id) AS investments
+       FROM applications a JOIN application_lines l ON l.application_id = a.id
+      WHERE a.status IN (${OUTSTANDING_SQL_LIST})
+        AND a.product_type = $1
+        AND l.status = 'Active'
+        AND l.payout_frequency IN ${periodic}
+        AND NOT EXISTS (SELECT 1 FROM disbursement_schedule d
+                         WHERE d.line_id = l.id AND d.status = 'Paid'
+                           AND d.due_type IN ${DUE_TYPES})`,
+    [batch.product_type ?? 'ncd'])).rows[0]!;
 
   return {
     batch_no: batch.batch_no, payout_date: since,
@@ -783,6 +842,9 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
       recorded_outstanding: recordedOutstanding,
       late_entry: lateEntry,
       book: { in_run: inRun, cumulative, rolled, other: otherOffRun },
+      awaiting_first_interest: {
+        amount: round2(Number(awaiting.amt)), investments: Number(awaiting.investments),
+      },
       redeemed: {
         customers: Number(red.customers), redemptions: Number(red.redemptions),
         amount: redeemedAmount,

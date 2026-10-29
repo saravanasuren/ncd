@@ -20,8 +20,10 @@ interface LastInterestSummary {
     this_outstanding: number;
     /** The snapshot written when that batch was cut, before late entries. */
     recorded_outstanding: number | null;
-    /** On the book by then, but only reached the system afterwards. */
+    /** On the book by then, but only reached the system afterwards. Measured. */
     late_entry: number;
+    /** On the book and never yet paid interest — it waits for the next batch. */
+    awaiting_first_interest: { amount: number; investments: number };
     /** What `this_outstanding` is made of — these sum to it. */
     book: { in_run: number; cumulative: number; rolled: number; other: number };
     redeemed: { customers: number; redemptions: number; amount: number };
@@ -153,6 +155,18 @@ function BatchComparison({ last, now }: {
                       ))}
                     </tbody>
                   </table>
+                  {/* NOT a part of the sum above — for the batch being previewed
+                      this money is inside `in_run`, so listing it there would
+                      double-count. It is an annotation, and it clears itself
+                      the moment that interest is actually paid. */}
+                  {m.awaiting_first_interest.amount > 0 && (
+                    <div className="text-[11px] text-text-muted mt-1.5">
+                      Of that, <strong>{formatINR(m.awaiting_first_interest.amount)}</strong>{' '}
+                      ({m.awaiting_first_interest.investments} investment(s)) has not been paid a
+                      rupee of interest yet — it arrived on or after the cut-off, so its first
+                      payout is the next batch, covering every day from the day the money arrived.
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -186,12 +200,18 @@ function BatchComparison({ last, now }: {
               sides are the whole book, split on the money-received date. Last batch is the book as it
               stood on {m.since} — everything that had landed by then, including the{' '}
               {m.redeemed.redemptions} since redeemed.
-              {m.recorded_outstanding !== null && m.late_entry !== 0 && (
+              {m.late_entry !== 0 && (
                 <>
-                  {' '}That is {formatINR(m.recorded_outstanding)} as recorded when the batch was cut,
-                  plus {formatINR(m.late_entry)} that was already on the book then but only reached the
-                  system afterwards — backdated, or approved the next day. Measured each time, so it
-                  corrects itself.
+                  {' '}Of it, {formatINR(m.late_entry)} was already on the book then but only reached
+                  the system afterwards — backdated, or approved the next day. Measured each time, so
+                  it corrects itself.
+                </>
+              )}
+              {m.recorded_outstanding !== null && (
+                <>
+                  {' '}That batch itself earned interest on {formatINR(m.recorded_outstanding)}, which
+                  is a smaller figure on purpose: it leaves out doubling / at-maturity holdings and
+                  anything that had rolled to the following batch.
                 </>
               )}
               {' '}Redeemed counts only redemptions approved or paid; one still awaiting its checkers, or

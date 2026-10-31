@@ -937,6 +937,7 @@ const appPill: Record<string, string> = {
  * application page. LIVE statuses total into the header line. */
 function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, onError }: { rows: any[]; customerId: number; customerName: string; canDelete: boolean; onChange: () => void; onError: (m: string) => void }) {
   const { promptText } = useConfirm();
+  const { can } = useAuth();
   const nav = useNavigate();
   const DEAD = ['Rejected', 'Cancelled', 'Redeemed', 'Matured', 'RolledOver', 'PrematureWithdrawn', 'Transferred'];
   const live = rows.filter((r) => !DEAD.includes(r.status) && !r.archived_at);
@@ -1063,7 +1064,7 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
                     <span className="font-semibold text-sm">{prettySeries(g.code)}</span>
                     <span className="text-xs text-text-muted">{g.rows.length} investment{g.rows.length === 1 ? '' : 's'}</span>
                     <span className="ml-auto text-xs text-text-muted">invested <span className="font-medium text-text mono">{formatINR(gInvested)}</span> · outstanding <span className="font-semibold text-text mono">{formatINR(gOut)}</span></span>
-                    {hasIssuable && g.series_id && (
+                    {hasIssuable && g.series_id && can('bonds:download') && (
                       <a href={`/api/reports/consolidated-bond/${customerId}/${g.series_id}.pdf`} target="_blank" rel="noreferrer"
                         onClick={(e) => e.stopPropagation()} className="text-xs text-primary hover:underline whitespace-nowrap ml-1"
                         title="One filing bond covering all this customer's investments in this series (total value + units)">Consolidated bond ↗</a>

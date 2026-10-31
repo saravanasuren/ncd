@@ -94,6 +94,11 @@ export const PERMISSIONS = [
   'dashboard:view', // scoped
   'dashboard:drilldown',
   'reports:download', // scoped
+  // The bond / subordinate debt certificate. Split out of customers:read
+  // (owner 2026-10-31): that permission is held by everyone who works with a
+  // customer, so branch staff could print a signed certificate of indebtedness
+  // bearing three directors' signatures. Admin, CXO and NCD Manager only.
+  'bonds:download',
   // admin
   'users:manage',
   'users:delete',
@@ -163,6 +168,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'customers:read',
     'dashboard:view',
     'dashboard:drilldown',
+    'bonds:download',
     'reports:download',
     'approvals:check-premature', // the one CXO action (docs/03 §4)
     'approvals:check-handover', // repeat-customer handover (any one of Admin/CXO/BM)
@@ -210,6 +216,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'earnings:read-own',
     'dashboard:view',
     'dashboard:drilldown',
+    'bonds:download',
     'reports:download',
     'settings:workflow-config',
     'imports:run',

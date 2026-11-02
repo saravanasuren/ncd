@@ -39,6 +39,12 @@ export const DEFAULT_NUMBER_FORMATS = {
   // the APP- one (owner 2026-08-10). Same shape as `application` so the two
   // read alike; the leading token is what tells them apart at a glance.
   subordinate_bond: 'SOB-{yyyy}-{seq:6}',
+  // Subordinate DEBT certificate number (owner 2026-11-02: "the certificate
+  // number should start with SD-2026-xxxx", four digits as written). A separate
+  // counter from `bond`, so the BC- numbers already issued are never reused and
+  // the two runs cannot collide. Note this is NOT `subordinate_bond` above —
+  // that is the SOB product, which has no series.
+  subordinate_debt: 'SD-{yyyy}-{seq:4}',
   // Locker agreement number, printed on the Schedule. The owner's template
   // reads "Agreement No :- DIF0000", so it is DIF + a running number and NOT
   // year-scoped: a locker hire renews indefinitely, so a number that restarts

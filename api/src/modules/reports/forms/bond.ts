@@ -36,11 +36,17 @@ const ISSUABLE = new Set(['Active', 'Matured', 'Redeemed', 'RolledOver']);
  * relabelling them would make the certificate say something untrue about where
  * the holder ranks if the company fails.
  *
- * Matched on the series CODE, which is stable; `name` is editable in Settings.
+ * Read from `series.is_subordinate`, NOT from the code or the name. It used to
+ * match a hardcoded set of three codes, which meant any series added later — and
+ * the owner is now adding one per month — fell through to the Debenture
+ * Certificate and told the holder something untrue about where they rank.
  */
-const SUBORDINATE_SERIES = new Set(['NCD_29', 'NCD BOND', 'NCD Doubling']);
-export const isSubordinate = (code: unknown, name: unknown): boolean =>
-  SUBORDINATE_SERIES.has(String(code ?? '')) || SUBORDINATE_SERIES.has(String(name ?? ''));
+export const isSubordinate = (series: { is_subordinate?: unknown } | null | undefined): boolean =>
+  series?.is_subordinate === true;
+
+/** Subordinate-debt certificate number: SD-2026-0001 (owner 2026-11-02), on its
+ *  own counter so it can never collide with the BC- numbers already issued. */
+const SUBORDINATE_SERIAL_KEY = 'subordinate_debt';
 
 /** Consolidated certificate number. Its own run, so it can never collide with
  * the per-investment `BC-` series even though both count from 1. */
@@ -109,12 +115,17 @@ async function allocateSerial(
  * transaction, so opening one here would nest. If a concurrent generation wins
  * the race we simply adopt the number it assigned.
  */
-async function ensureBondSerial(db: Db, applicationId: number, a: Record<string, unknown>): Promise<string | null> {
+async function ensureBondSerial(db: Db, applicationId: number, a: Record<string, unknown>, subordinate = false): Promise<string | null> {
   if (a.bond_serial_no) return String(a.bond_serial_no);
   if (!ISSUABLE.has(String(a.status))) return null; // not issued yet → prints "—"
   const year = new Date(String(a.allotment_date ?? new Date().toISOString())).getUTCFullYear();
+  // A number already issued is never re-minted (the guard above), so the 8 BC-
+  // numbers already on subordinate investments keep the number on the paper.
+  const [key, format] = subordinate
+    ? [SUBORDINATE_SERIAL_KEY, DEFAULT_NUMBER_FORMATS.subordinate_debt]
+    : ['bond', DEFAULT_NUMBER_FORMATS.bond];
   return allocateSerial(
-    db, 'bond', DEFAULT_NUMBER_FORMATS.bond, year,
+    db, key, format, year,
     async (candidate) => (await db.query<{ bond_serial_no: string }>(
       'UPDATE applications SET bond_serial_no = $1 WHERE id = $2 AND bond_serial_no IS NULL RETURNING bond_serial_no',
       [candidate, applicationId])).rows[0]?.bond_serial_no ?? null,
@@ -280,11 +291,15 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
     `SELECT a.id, a.customer_id, a.application_no, a.total_amount, a.allotment_date, a.maturity_date,
             a.status, a.bond_serial_no, a.date_money_received, a.interest_start_date,
             c.full_name, ${addressColumns('c.')},
-            s.code AS series_code, s.name AS series_name, s.deemed_date, s.isin
+            s.code AS series_code, s.name AS series_name, s.deemed_date, s.isin,
+            s.is_subordinate, s.close_date AS series_close_date
        FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
       WHERE a.id = $1`, [applicationId])).rows[0];
   if (!a) throw errors.notFound('Application not found');
-  const certificateNo = await ensureBondSerial(db, applicationId, a);
+  // Decided BEFORE the number is minted: the two must agree, or a subordinate
+  // bond would be stamped with a BC- number from the wrong run.
+  const subSeries = isSubordinate(a);
+  const certificateNo = await ensureBondSerial(db, applicationId, a, subSeries);
   const nominee = (await db.query<Record<string, unknown>>('SELECT full_name, relationship FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [a.customer_id])).rows[0];
   const line = (await db.query<Record<string, unknown>>(
     `SELECT al.amount, COALESCE(al.coupon_rate_pct, sch.coupon_rate_pct) AS coupon_rate_pct, al.tenure_months,
@@ -307,7 +322,7 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
   doc.on('data', (c: Buffer) => chunks.push(c));
   const done = new Promise<Buffer>((res) => doc.on('end', () => res(Buffer.concat(chunks))));
 
-  const sub = isSubordinate(a.series_code, a.series_name);
+  const sub = subSeries;
 
   _drawBorder(doc);
   let y = _drawHeader(doc, co);
@@ -328,9 +343,19 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
   const schemeLabel = line.scheme_name
     ? `${String(line.scheme_name)} (${tenureMonths} MONTH ${line.coupon_rate_pct != null ? Number(line.coupon_rate_pct).toFixed(2) : '—'}%)`
     : '—';
-  // Date of Application = when the money was received, which is when the term
-  // starts and what the Investment date on screen shows.
-  const applicationDate = a.date_money_received || a.interest_start_date || null;
+  // Effective Date = the series' own closing date, the SAME for every bond in the
+  // series (owner 2026-11-02: "i decide to have the series close date to be the
+  // months last date and accordingly it is to be the date of application. or we
+  // can also rename it as effective date").
+  //
+  // Renamed rather than left as "Date of Application" because it is no longer
+  // that: the holder applied on the day their money landed, which is earlier.
+  // Interest still accrues from that earlier day — the line's own
+  // date_money_received drives the schedule and is untouched by this.
+  //
+  // Falls back to the money-received date for a subordinate series with no close
+  // date set, so the row can never print blank.
+  const applicationDate = a.series_close_date || a.date_money_received || a.interest_start_date || null;
 
   const rows: Array<[string, string, number?]> = sub
     ? [
@@ -345,7 +370,7 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
       ['Investment Value (Rs.)', _fmtINR(invested)],
       [`Number of ${unit}s`, numNcds != null ? String(numNcds) : '—'],
       ['Coupon Rate', rateLabel],
-      ['Date of Application', _fmtDate(applicationDate as string | null)],
+      ['Effective Date', _fmtDate(applicationDate as string | null)],
       ['Date of Redemption', _fmtDate(redemptionDate)],
       [`Face Value per ${unit} (Rs.)`, _fmtINR(faceValue)],
       // The asterisk anchors the TDS footnote below, which pointed at nothing
@@ -431,10 +456,29 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
   if (!apps.length) throw errors.notFound('No issued investments for this customer in this series');
 
   const cust = (await db.query<Record<string, unknown>>(`SELECT full_name, ${addressColumns()} FROM customers WHERE id = $1`, [customerId])).rows[0];
-  const series = (await db.query<Record<string, unknown>>('SELECT code, name, deemed_date FROM series WHERE id = $1', [seriesId])).rows[0];
+  const series = (await db.query<Record<string, unknown>>('SELECT code, name, deemed_date, is_subordinate, close_date FROM series WHERE id = $1', [seriesId])).rows[0];
   if (!cust || !series) throw errors.notFound('Customer or series not found');
   const nominee = (await db.query<Record<string, unknown>>('SELECT full_name, relationship FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [customerId])).rows[0];
   const co = companyHeader(await getCompanyProfile(db));
+
+  // A subordinate series does not do consolidated certificates any more (owner
+  // 2026-11-02: "each application will get it own bonds. so consolidated bonds
+  // will not be done in here"). Checked HERE, before anything can mint a number:
+  // ensureConsolidatedBondSerial below allocates one on first call, so a late
+  // check would refuse the download only after permanently burning a CB number.
+  //
+  // The 32 already issued on these series stay printable — a reprint of
+  // something a customer was handed must keep working. Only a NEW one is refused.
+  const subordinateSeries = isSubordinate(series);
+  if (subordinateSeries) {
+    const already = (await db.query<{ bond_serial_no: string }>(
+      'SELECT bond_serial_no FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2',
+      [customerId, seriesId])).rows[0];
+    if (!already) {
+      throw errors.badRequest(
+        'This series issues one bond certificate per investment, so it has no consolidated certificate. Print each investment\'s bond instead.');
+    }
+  }
 
   const totalInvested = apps.reduce((s, a) => s + Number(a.total_amount || 0), 0);
   const faceValue = Number(apps[0]!.face_value || 100000);
@@ -457,7 +501,7 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
   const certificateNo = await ensureConsolidatedBondSerial(db, customerId, seriesId, year);
   const fullAddress = customerAddress(cust) || '—';
 
-  const sub = isSubordinate(series.code, series.name);
+  const sub = subordinateSeries;
 
   _drawBorder(doc);
   let y = _drawHeader(doc, co);

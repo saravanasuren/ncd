@@ -10,6 +10,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '../auth/AuthContext.js';
 import { formatINR } from '@new-wealth/shared';
 import { api } from '../api/client.js';
 import { useConfirm } from '../components/Confirm.js';
@@ -36,6 +37,9 @@ interface Payload {
 export default function SeriesCustomers() {
   const { seriesId } = useParams();
   const { confirm } = useConfirm();
+  // Only Admin / CXO / NCD Manager may print a certificate of indebtedness.
+  const { can } = useAuth();
+  const mayDownloadBond = can('bonds:download');
   const [open, setOpen] = useState<Set<number>>(new Set());
   const [msg, setMsg] = useState('');
 
@@ -154,12 +158,12 @@ export default function SeriesCustomers() {
                       : <span className="text-xs text-text-muted">not issued</span>}
                   </td>
                   <td className="py-2 px-3 text-right whitespace-nowrap">
-                    <a href={`/api/reports/consolidated-bond/${r.customer_id}/${series.id}.pdf`}
+                    {mayDownloadBond && <a href={`/api/reports/consolidated-bond/${r.customer_id}/${series.id}.pdf`}
                       target="_blank" rel="noreferrer"
                       className="text-xs border border-border rounded px-2 py-1 hover:bg-bg"
                       title={r.has_bond ? `Download ${r.bond_serial_no}` : 'Downloading issues a certificate number'}>
                       ⬇ Bond
-                    </a>
+                    </a>}
                   </td>
                 </tr>
               );

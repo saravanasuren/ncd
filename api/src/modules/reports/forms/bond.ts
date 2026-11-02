@@ -28,6 +28,20 @@ import { companyHeader, COMPANY, LOGO_PATH, HAS_LOGO, customerAddress, addressCo
  * never burn a certificate number (mirrors wealth's gate). */
 const ISSUABLE = new Set(['Active', 'Matured', 'Redeemed', 'RolledOver']);
 
+/**
+ * The subordinate-debt series (owner 2026-10-31). These three are unsecured
+ * subordinated bonds and take ICL-style wording: "Subordinate Debt Certificate",
+ * "Bond Holder", "Number of Bonds". Every OTHER series keeps the Debenture
+ * Certificate it has always had, because those are secured debentures and
+ * relabelling them would make the certificate say something untrue about where
+ * the holder ranks if the company fails.
+ *
+ * Matched on the series CODE, which is stable; `name` is editable in Settings.
+ */
+const SUBORDINATE_SERIES = new Set(['NCD_29', 'NCD BOND', 'NCD Doubling']);
+export const isSubordinate = (code: unknown, name: unknown): boolean =>
+  SUBORDINATE_SERIES.has(String(code ?? '')) || SUBORDINATE_SERIES.has(String(name ?? ''));
+
 /** Consolidated certificate number. Its own run, so it can never collide with
  * the per-investment `BC-` series even though both count from 1. */
 const CONSOLIDATED_BOND_FORMAT = 'CB-{yyyy}-{seq:6}';
@@ -159,20 +173,26 @@ function _drawHeader(doc: Doc, co: ReturnType<typeof companyHeader>): number {
   return Math.max(doc.y + 14, logoY + logoSize + 8);
 }
 
-function _drawTitle(doc: Doc, y: number): number {
-  doc.fillColor(C.TEXT).font('Helvetica-Bold').fontSize(24).text('Debenture Certificate', 0, y, { align: 'center', width: doc.page.width });
+function _drawTitle(doc: Doc, y: number, subordinate = false, faceValue?: number): number {
+  const title = subordinate ? 'Subordinate Debt Certificate' : 'Debenture Certificate';
+  doc.fillColor(C.TEXT).font('Helvetica-Bold').fontSize(24).text(title, 0, y, { align: 'center', width: doc.page.width });
   y = doc.y + 8;
-  const subtitle = '(Secured, Redeemable, Non-Convertible Debentures)';
-  doc.fontSize(11).font('Helvetica-Bold');
+  // The subordinate subtitle carries the denomination, as ICL's does. Note it
+  // does NOT say "Unsecured" — owner's wording, 2026-10-29.
+  const subtitle = subordinate
+    ? `(Non-Convertible, Redeemable, Subordinate Bonds of face value ${faceValue != null ? _fmtINR(faceValue) : 'Rs. 1,00,000'}/- each)`
+    : '(Secured, Redeemable, Non-Convertible Debentures)';
+  // 10pt for the longer subordinate wording, which overruns the pill at 11.
+  doc.fontSize(subordinate ? 10 : 11).font('Helvetica-Bold');
   const pillW = doc.widthOfString(subtitle) + 36, pillX = (doc.page.width - pillW) / 2, pillH = 22;
   doc.save();
   doc.roundedRect(pillX, y, pillW, pillH, 11).fillAndStroke(C.TINT, C.GOLD);
-  doc.fillColor(C.NAVY).font('Helvetica-Bold').fontSize(11).text(subtitle, pillX, y + 6, { width: pillW, align: 'center' });
+  doc.fillColor(C.NAVY).font('Helvetica-Bold').fontSize(subordinate ? 10 : 11).text(subtitle, pillX, y + 6, { width: pillW, align: 'center' });
   doc.restore();
   return y + pillH + 18;
 }
 
-function _drawDetailTable(doc: Doc, y: number, rows: Array<[string, string, number?]>): number {
+function _drawDetailTable(doc: Doc, y: number, rows: Array<[string, string, number?]>, upper = false): number {
   const x = 50, w = doc.page.width - 100, labelW = 180, valueW = w - labelW, defaultRowH = 24;
   const heights = rows.map((r) => (r[2] && r[2] > defaultRowH ? r[2] : defaultRowH));
   const totalH = heights.reduce((a, b) => a + b, 0);
@@ -184,7 +204,11 @@ function _drawDetailTable(doc: Doc, y: number, rows: Array<[string, string, numb
     if (i > 0) doc.moveTo(x, rowY).lineTo(x + w, rowY).strokeColor(C.GOLD).stroke();
     doc.moveTo(x + labelW, rowY).lineTo(x + labelW, rowY + rowH).strokeColor(C.GOLD).stroke();
     doc.fillColor(C.TEXT).font('Helvetica').fontSize(10).text(rows[i]![0], x + 12, rowY + 7, { width: labelW - 24 });
-    doc.font('Helvetica-Bold').text(String(rows[i]![1] || '—'), x + labelW + 12, rowY + 7, { width: valueW - 24 });
+    // Owner 2026-10-29: on the SUBORDINATE form the filled-in details print in
+    // capitals; labels keep their normal case. Scoped to that form so the
+    // Debenture Certificate the other series get is left exactly as it was.
+    const value = String(rows[i]![1] || '—');
+    doc.font('Helvetica-Bold').text(upper ? value.toUpperCase() : value, x + labelW + 12, rowY + 7, { width: valueW - 24 });
     rowY += rowH;
   }
   doc.restore();
@@ -219,20 +243,20 @@ function _drawDetailTable(doc: Doc, y: number, rows: Array<[string, string, numb
  * or under any of them.") was REMOVED at their instruction. The paragraph now
  * ends with the TDS undertaking. Nothing else in the wording changed.
  */
-export function bondLegalParagraph(legalName: string, corporateOffice: string, totalAmount: number): string {
+export function bondLegalParagraph(legalName: string, corporateOffice: string, totalAmount: number, subordinate = false): string {
   return `For Value Received, ${legalName}, having its Corporate Office at ${corporateOffice}, `
     + `promises to pay to the person(s) named herein as the holder(s), or their order, the sum of `
     + `Rs. ${Number(totalAmount).toLocaleString('en-IN')} (${amountInWords(totalAmount)}) upon presentation `
-    + `and discharge of this NCD Certificate on the date of redemption as mentioned above. `
+    + `and discharge of this ${subordinate ? 'Bond' : 'NCD'} Certificate on the date of redemption as mentioned above. `
     + `The principal amount shall be payable on redemption, while interest shall be paid separately at the `
     + `rate specified above, subject to deduction of tax at source at the rate prevailing from time to time `
     + `under the provisions of the Income-tax Act, 1961, or any statutory modification or re-enactment thereof.`;
 }
 
-function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHeader>, totalAmount: number, signatures: Array<Buffer | null>) {
+function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHeader>, totalAmount: number, signatures: Array<Buffer | null>, subordinate = false) {
   const x = 50, w = doc.page.width - 100;
   doc.fillColor(C.TEXT).font('Helvetica').fontSize(9.5).text(
-    bondLegalParagraph(co.legal_name, co.corporate_office_address, totalAmount),
+    bondLegalParagraph(co.legal_name, co.corporate_office_address, totalAmount, subordinate),
     x, y, { width: w, align: 'justify' });
   y = doc.y + 10;
   doc.font('Helvetica-Oblique').fontSize(9).text('*Will be subject to deduction of TDS on interest and applicable Government levies', x, y, { width: w });
@@ -254,17 +278,17 @@ function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHea
 export async function bondCertificatePdf(db: Db, applicationId: number): Promise<Buffer> {
   const a = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.customer_id, a.application_no, a.total_amount, a.allotment_date, a.maturity_date,
-            a.status, a.bond_serial_no,
+            a.status, a.bond_serial_no, a.date_money_received, a.interest_start_date,
             c.full_name, ${addressColumns('c.')},
             s.code AS series_code, s.name AS series_name, s.deemed_date, s.isin
        FROM applications a JOIN customers c ON c.id = a.customer_id JOIN series s ON s.id = a.series_id
       WHERE a.id = $1`, [applicationId])).rows[0];
   if (!a) throw errors.notFound('Application not found');
   const certificateNo = await ensureBondSerial(db, applicationId, a);
-  const nominee = (await db.query<Record<string, unknown>>('SELECT full_name FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [a.customer_id])).rows[0];
+  const nominee = (await db.query<Record<string, unknown>>('SELECT full_name, relationship FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [a.customer_id])).rows[0];
   const line = (await db.query<Record<string, unknown>>(
     `SELECT al.amount, COALESCE(al.coupon_rate_pct, sch.coupon_rate_pct) AS coupon_rate_pct, al.tenure_months,
-            COALESCE(sch.face_value, 100000) AS face_value
+            COALESCE(sch.face_value, 100000) AS face_value, sch.name AS scheme_name
        FROM application_lines al LEFT JOIN schemes sch ON sch.id = al.scheme_id
       WHERE al.application_id = $1 ORDER BY al.id LIMIT 1`, [applicationId])).rows[0] ?? {};
   const co = companyHeader(await getCompanyProfile(db));
@@ -283,31 +307,68 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
   doc.on('data', (c: Buffer) => chunks.push(c));
   const done = new Promise<Buffer>((res) => doc.on('end', () => res(Buffer.concat(chunks))));
 
+  const sub = isSubordinate(a.series_code, a.series_name);
+
   _drawBorder(doc);
   let y = _drawHeader(doc, co);
-  y = _drawTitle(doc, y);
+  y = _drawTitle(doc, y, sub, faceValue);
 
   const addrColW = doc.page.width - 100 - 180 - 24;
   doc.font('Helvetica-Bold').fontSize(10);
   const addrRowH = Math.max(24, Math.ceil(doc.heightOfString(fullAddress, { width: addrColW })) + 14);
 
-  const rows: Array<[string, string, number?]> = [
-    ['Category', `${a.series_code || a.series_name || '—'} Series`],
-    ['Certificate No', certificateNo || '—'], // assigned on first generation once the investment is live
-    ['Name of NCD Holder', (a.full_name as string) || '—'],
-    ['Address of NCD Holder', fullAddress, addrRowH],
-    ['Nominee', (nominee?.full_name as string) || '—'],
-    ['Investment Value (Rs.)', _fmtINR(invested)],
-    ['Number of NCDs', numNcds != null ? String(numNcds) : '—'],
-    ['Coupon Rate', rateLabel],
-    ['Date of Allotment', _fmtDate(allotmentDate)],
-    ['Date of Redemption', _fmtDate(redemptionDate)],
-    ['Face Value per NCD (Rs.)', _fmtINR(faceValue)],
-    ['Redemption Value (Rs.)', _fmtINR(invested)], // equals principal, per spec
-  ];
-  y = _drawDetailTable(doc, y, rows);
+  const holder = sub ? 'Bond Holder' : 'NCD Holder';
+  const unit = sub ? 'Bond' : 'NCD';
+  // Nominee reads "NAME (RELATIONSHIP)" on the subordinate form, as ICL's does.
+  const nomineeLabel = nominee?.full_name
+    ? `${nominee.full_name as string}${sub && nominee.relationship ? ` (${nominee.relationship as string})` : ''}`
+    : '—';
+  // Scheme: the scheme's own name plus its terms, so the holder can see what
+  // they bought without decoding a series code.
+  const schemeLabel = line.scheme_name
+    ? `${String(line.scheme_name)} (${tenureMonths} MONTH ${line.coupon_rate_pct != null ? Number(line.coupon_rate_pct).toFixed(2) : '—'}%)`
+    : '—';
+  // Date of Application = when the money was received, which is when the term
+  // starts and what the Investment date on screen shows.
+  const applicationDate = a.date_money_received || a.interest_start_date || null;
+
+  const rows: Array<[string, string, number?]> = sub
+    ? [
+      // Subordinate debt: no Category, no Bond Id, no Date of Allotment
+      // (owner 2026-10-29/30 — it prints as "—" until the series is allotted
+      // and Date of Application now covers the question it was there to answer).
+      ['Certificate No', certificateNo || '—'],
+      [`Name of ${holder}`, (a.full_name as string) || '—'],
+      [`Address of ${holder}`, fullAddress, addrRowH],
+      ['Nominee', nomineeLabel],
+      ['Scheme', schemeLabel],
+      ['Investment Value (Rs.)', _fmtINR(invested)],
+      [`Number of ${unit}s`, numNcds != null ? String(numNcds) : '—'],
+      ['Coupon Rate', rateLabel],
+      ['Date of Application', _fmtDate(applicationDate as string | null)],
+      ['Date of Redemption', _fmtDate(redemptionDate)],
+      [`Face Value per ${unit} (Rs.)`, _fmtINR(faceValue)],
+      // The asterisk anchors the TDS footnote below, which pointed at nothing
+      // before (ICL anchors theirs on "Maturity Value*").
+      ['Redemption Value* (Rs.)', _fmtINR(invested)],
+    ]
+    : [
+      ['Category', `${a.series_code || a.series_name || '—'} Series`],
+      ['Certificate No', certificateNo || '—'], // assigned on first generation once the investment is live
+      ['Name of NCD Holder', (a.full_name as string) || '—'],
+      ['Address of NCD Holder', fullAddress, addrRowH],
+      ['Nominee', nomineeLabel],
+      ['Investment Value (Rs.)', _fmtINR(invested)],
+      ['Number of NCDs', numNcds != null ? String(numNcds) : '—'],
+      ['Coupon Rate', rateLabel],
+      ['Date of Allotment', _fmtDate(allotmentDate)],
+      ['Date of Redemption', _fmtDate(redemptionDate)],
+      ['Face Value per NCD (Rs.)', _fmtINR(faceValue)],
+      ['Redemption Value (Rs.)', _fmtINR(invested)], // equals principal, per spec
+    ];
+  y = _drawDetailTable(doc, y, rows, sub);
   const signatures = await Promise.all([0, 1, 2].map((i) => getBondSignature(db, i).then((s) => s?.buffer ?? null)));
-  _drawLegalAndSign(doc, y, co, invested, signatures);
+  _drawLegalAndSign(doc, y, co, invested, signatures, sub);
 
   doc.end();
   return done;
@@ -372,7 +433,7 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
   const cust = (await db.query<Record<string, unknown>>(`SELECT full_name, ${addressColumns()} FROM customers WHERE id = $1`, [customerId])).rows[0];
   const series = (await db.query<Record<string, unknown>>('SELECT code, name, deemed_date FROM series WHERE id = $1', [seriesId])).rows[0];
   if (!cust || !series) throw errors.notFound('Customer or series not found');
-  const nominee = (await db.query<Record<string, unknown>>('SELECT full_name FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [customerId])).rows[0];
+  const nominee = (await db.query<Record<string, unknown>>('SELECT full_name, relationship FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [customerId])).rows[0];
   const co = companyHeader(await getCompanyProfile(db));
 
   const totalInvested = apps.reduce((s, a) => s + Number(a.total_amount || 0), 0);
@@ -396,30 +457,54 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
   const certificateNo = await ensureConsolidatedBondSerial(db, customerId, seriesId, year);
   const fullAddress = customerAddress(cust) || '—';
 
+  const sub = isSubordinate(series.code, series.name);
+
   _drawBorder(doc);
   let y = _drawHeader(doc, co);
-  y = _drawTitle(doc, y);
+  y = _drawTitle(doc, y, sub, faceValue);
   const addrColW = doc.page.width - 100 - 180 - 24;
   doc.font('Helvetica-Bold').fontSize(10);
   const addrRowH = Math.max(24, Math.ceil(doc.heightOfString(fullAddress, { width: addrColW })) + 14);
 
-  const rows: Array<[string, string, number?]> = [
-    ['Category', `${series.code || series.name || '—'} Series`],
-    ['Certificate No', certificateNo],
-    ['Name of NCD Holder', (cust.full_name as string) || '—'],
-    ['Address of NCD Holder', fullAddress, addrRowH],
-    ['Nominee', (nominee?.full_name as string) || '—'],
-    ['Investment Value (Rs.)', _fmtINR(totalInvested)],
-    ['Number of NCDs', numNcds != null ? String(numNcds) : '—'],
-    ['Coupon Rate', rateLabel],
-    ['Date of Allotment', allotLabel],
-    ['Date of Redemption', redLabel],
-    ['Face Value per NCD (Rs.)', _fmtINR(faceValue)],
-    ['Redemption Value (Rs.)', _fmtINR(totalInvested)],
-  ];
-  y = _drawDetailTable(doc, y, rows);
+  const cHolder = sub ? 'Bond Holder' : 'NCD Holder';
+  const cUnit = sub ? 'Bond' : 'NCD';
+  const cNominee = nominee?.full_name
+    ? `${nominee.full_name as string}${sub && nominee.relationship ? ` (${nominee.relationship as string})` : ''}`
+    : '—';
+
+  const rows: Array<[string, string, number?]> = sub
+    ? [
+      // A consolidated certificate covers several investments, so there is no
+      // single application date to print — the per-investment certificates
+      // carry those. Everything else matches the subordinate form.
+      ['Certificate No', certificateNo],
+      [`Name of ${cHolder}`, (cust.full_name as string) || '—'],
+      [`Address of ${cHolder}`, fullAddress, addrRowH],
+      ['Nominee', cNominee],
+      ['Investment Value (Rs.)', _fmtINR(totalInvested)],
+      [`Number of ${cUnit}s`, numNcds != null ? String(numNcds) : '—'],
+      ['Coupon Rate', rateLabel],
+      ['Date of Redemption', redLabel],
+      [`Face Value per ${cUnit} (Rs.)`, _fmtINR(faceValue)],
+      ['Redemption Value* (Rs.)', _fmtINR(totalInvested)],
+    ]
+    : [
+      ['Category', `${series.code || series.name || '—'} Series`],
+      ['Certificate No', certificateNo],
+      ['Name of NCD Holder', (cust.full_name as string) || '—'],
+      ['Address of NCD Holder', fullAddress, addrRowH],
+      ['Nominee', cNominee],
+      ['Investment Value (Rs.)', _fmtINR(totalInvested)],
+      ['Number of NCDs', numNcds != null ? String(numNcds) : '—'],
+      ['Coupon Rate', rateLabel],
+      ['Date of Allotment', allotLabel],
+      ['Date of Redemption', redLabel],
+      ['Face Value per NCD (Rs.)', _fmtINR(faceValue)],
+      ['Redemption Value (Rs.)', _fmtINR(totalInvested)],
+    ];
+  y = _drawDetailTable(doc, y, rows, sub);
   const signatures = await Promise.all([0, 1, 2].map((i) => getBondSignature(db, i).then((s) => s?.buffer ?? null)));
-  _drawLegalAndSign(doc, y, co, totalInvested, signatures);
+  _drawLegalAndSign(doc, y, co, totalInvested, signatures, sub);
 }
 
 /** One customer's consolidated bond for a series. */

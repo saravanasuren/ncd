@@ -1306,7 +1306,16 @@ function NewInvestment({ customerId, custNoTds, isSenior }: { customerId: number
             </select>
             <select className={sel} value={schemeId} onChange={(e) => setSchemeId(e.target.value)}>
               <option value="">Scheme…</option>
-              {(schemes.data?.rows ?? []).map((s) => <option key={s.id} value={s.id}>{s.code} ({s.coupon_rate_pct}%)</option>)}
+              {/* Rate AND term: this showed only the code and the rate, so a 36-month
+                   and a 60-month scheme at the same rate looked identical, and the code
+                   itself can be stale (13_M36_13 is 60 months as of 2026-11-02 — the code
+                   is matched by the integration and the importer, so it cannot be renamed).
+                   Whoever enrols has to be able to see what they are selling. */}
+              {(schemes.data?.rows ?? []).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} — {s.coupon_rate_pct}% · {s.tenure_months} months · {s.payout_frequency === 'AtMaturity' ? 'at maturity' : 'monthly'}
+                </option>
+              ))}
             </select>
           </>
         )}

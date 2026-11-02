@@ -215,6 +215,82 @@ function _drawDetailTable(doc: Doc, y: number, rows: Array<[string, string, numb
   return y + totalH + 18;
 }
 
+/** One line of the consolidated certificate's breakup. */
+interface BreakupRow { date: string; amount: number; rate: string; redemption: string }
+const BREAKUP_ROW_H = 18;
+
+/**
+ * How much room the closing block needs: the promise-to-pay paragraph, the TDS
+ * footnote, and the signature band with its images and names.
+ *
+ * Measured rather than estimated — the paragraph's length depends on the amount
+ * spelled out in words, so a guess is wrong for exactly the large holdings that
+ * need the room most.
+ */
+function _legalBlockHeight(doc: Doc, co: ReturnType<typeof companyHeader>, totalAmount: number, subordinate: boolean): number {
+  const w = doc.page.width - 100;
+  const para = doc.font('Helvetica').fontSize(9.5)
+    .heightOfString(bondLegalParagraph(co.legal_name, co.corporate_office_address, totalAmount, subordinate), { width: w, align: 'justify' });
+  const tds = doc.font('Helvetica-Oblique').fontSize(9)
+    .heightOfString('*Will be subject to deduction of TDS on interest and applicable Government levies', { width: w });
+  // para + 10 + tds + 36 before the signature rule, then the names beneath it.
+  return para + 10 + tds + 36 + 34;
+}
+
+/**
+ * The breakup a consolidated certificate's "As per breakup below" rows point at.
+ *
+ * Those three labels (Coupon Rate, Date of Application, Date of Redemption) have
+ * existed for a while and pointed at NOTHING: no breakup was ever drawn, so a
+ * holder whose holding spans several dates got a certificate that referred them
+ * to a table that was not on the page. 20% of the holdings in the subordinate
+ * series are built over more than one date, so this was not a rare corner.
+ *
+ * Only drawn when at least one row actually punts to it, which keeps the common
+ * single-date certificate exactly as it was.
+ */
+function _drawBreakup(doc: Doc, y: number, rows: BreakupRow[]): number {
+  const x = 50, w = doc.page.width - 100;
+  const cols = [
+    { label: 'Date of Application', w: 0.22 },
+    { label: 'Investment Value (Rs.)', w: 0.28 },
+    { label: 'Coupon Rate', w: 0.22 },
+    { label: 'Date of Redemption', w: 0.28 },
+  ];
+  const headH = 20, rowH = BREAKUP_ROW_H;
+  doc.save();
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(C.TEXT)
+    .text('Breakup of the investments this certificate comprises', x, y, { width: w });
+  y = doc.y + 5;
+  const tableH = headH + rows.length * rowH;
+  doc.lineWidth(0.8).strokeColor(C.GOLD).rect(x, y, w, tableH).stroke();
+  // Header band, then one line per investment.
+  doc.moveTo(x, y + headH).lineTo(x + w, y + headH).strokeColor(C.GOLD).stroke();
+  let cx = x;
+  for (let i = 0; i < cols.length; i++) {
+    const cw = cols[i]!.w * w;
+    if (i > 0) doc.moveTo(cx, y).lineTo(cx, y + tableH).strokeColor(C.GOLD).stroke();
+    doc.font('Helvetica').fontSize(8).fillColor(C.MUTED)
+      .text(cols[i]!.label, cx + 6, y + 6, { width: cw - 12 });
+    cx += cw;
+  }
+  for (let r = 0; r < rows.length; r++) {
+    const ry = y + headH + r * rowH;
+    if (r > 0) doc.moveTo(x, ry).lineTo(x + w, ry).strokeColor(C.GOLD).stroke();
+    const cells = [rows[r]!.date, _fmtINR(rows[r]!.amount), rows[r]!.rate, rows[r]!.redemption];
+    let bx = x;
+    for (let i = 0; i < cols.length; i++) {
+      const cw = cols[i]!.w * w;
+      // Capitals, matching the subordinate form's filled-in values.
+      doc.font('Helvetica-Bold').fontSize(9).fillColor(C.TEXT)
+        .text(String(cells[i]).toUpperCase(), bx + 6, ry + 6, { width: cw - 12 });
+      bx += cw;
+    }
+  }
+  doc.restore();
+  return y + tableH + 12;
+}
+
 /**
  * The promise-to-pay paragraph printed on every bond certificate — the
  * operative legal text of the instrument.
@@ -417,6 +493,7 @@ async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId
 async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, seriesId: number): Promise<void> {
   const apps = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.application_no, a.total_amount, a.allotment_date, a.maturity_date, a.status,
+            a.date_money_received, a.interest_start_date,
             l.coupon_rate_pct, l.tenure_months, l.face_value
        FROM applications a
        JOIN LATERAL (
@@ -451,6 +528,15 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
     return rd ? _fmtDate(rd) : null;
   }));
   const redLabel = redDates.length === 1 ? redDates[0]! : redDates.length ? 'As per breakup below' : '—';
+  // Date of Application = the date the money was received, which is when the
+  // term starts (owner 2026-11-02: "application date ... will be the investment
+  // start date"). Same source as the per-investment certificate, so the two can
+  // never state a different start date for the same money.
+  const appDates = uniq(apps.map((a) => {
+    const d = a.date_money_received || a.interest_start_date;
+    return d ? _fmtDate(d) : null;
+  }));
+  const appLabel = appDates.length === 1 ? appDates[0]! : appDates.length ? 'As per breakup below' : '—';
 
   const anyAllot = apps.map((a) => a.allotment_date).find(Boolean) ?? series.deemed_date ?? null;
   const year = new Date(String(anyAllot ?? new Date().toISOString())).getUTCFullYear();
@@ -474,9 +560,10 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
 
   const rows: Array<[string, string, number?]> = sub
     ? [
-      // A consolidated certificate covers several investments, so there is no
-      // single application date to print — the per-investment certificates
-      // carry those. Everything else matches the subordinate form.
+      // A holding built over several dates has no single application date,
+      // coupon or redemption date; those rows then say "As per breakup below"
+      // and the breakup is drawn underneath. Everything else matches the
+      // per-investment subordinate form.
       ['Certificate No', certificateNo],
       [`Name of ${cHolder}`, (cust.full_name as string) || '—'],
       [`Address of ${cHolder}`, fullAddress, addrRowH],
@@ -484,6 +571,7 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
       ['Investment Value (Rs.)', _fmtINR(totalInvested)],
       [`Number of ${cUnit}s`, numNcds != null ? String(numNcds) : '—'],
       ['Coupon Rate', rateLabel],
+      ['Date of Application', appLabel],
       ['Date of Redemption', redLabel],
       [`Face Value per ${cUnit} (Rs.)`, _fmtINR(faceValue)],
       ['Redemption Value* (Rs.)', _fmtINR(totalInvested)],
@@ -503,6 +591,37 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
       ['Redemption Value (Rs.)', _fmtINR(totalInvested)],
     ];
   y = _drawDetailTable(doc, y, rows, sub);
+
+  // If any row punted to the breakup, draw it. Gated on `sub` so the Debenture
+  // Certificate the earlier series get is left exactly as it was.
+  const PUNT = 'As per breakup below';
+  if (sub && [rateLabel, appLabel, redLabel].includes(PUNT)) {
+    const breakup: BreakupRow[] = apps.map((a) => {
+      const d = a.date_money_received || a.interest_start_date;
+      const rd = a.maturity_date || (a.allotment_date ? _addMonths(a.allotment_date, Number(a.tenure_months) || tenureMonths) : null);
+      return {
+        date: d ? _fmtDate(d) : '—',
+        amount: Number(a.total_amount || 0),
+        rate: a.coupon_rate_pct != null ? `${Number(a.coupon_rate_pct).toFixed(2)}%` : '—',
+        redemption: rd ? _fmtDate(rd) : '—',
+      };
+    });
+    // The breakup belongs WITH the detail table, so it stays on this page unless
+    // it genuinely cannot fit (it would take ~30 tranches, where the real book's
+    // worst holding has five).
+    const breakupH = 16 + 20 + breakup.length * BREAKUP_ROW_H + 12;
+    if (y + breakupH > doc.page.height - 60) { doc.addPage(); _drawBorder(doc); y = 60; }
+    y = _drawBreakup(doc, y, breakup);
+
+    // Only once a breakup has pushed things down do we need to worry about the
+    // signature band falling off the page — which is exactly how this document
+    // broke once before. The height is MEASURED, not guessed, and the check is
+    // confined to this branch so a certificate without a breakup renders byte
+    // for byte as it did before.
+    const legalH = _legalBlockHeight(doc, co, totalInvested, sub);
+    if (y + legalH > doc.page.height - 40) { doc.addPage(); _drawBorder(doc); y = 60; }
+  }
+
   const signatures = await Promise.all([0, 1, 2].map((i) => getBondSignature(db, i).then((s) => s?.buffer ?? null)));
   _drawLegalAndSign(doc, y, co, totalInvested, signatures, sub);
 }

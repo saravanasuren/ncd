@@ -20,7 +20,7 @@
 import { describe, it, expect } from 'vitest';
 import { bondLegalParagraph } from '../src/modules/reports/forms/bond.js';
 
-const LEGAL = 'Dhanam Investment and Finance Private Limited';
+const LEGAL = 'Dhanam Investment and Finance Limited';
 const OFFICE = '2/191B, 2nd Floor, Darshini Business Centre, Mylampatty Road, Karayampalayam, '
   + 'Chinniyampalayam, Coimbatore, TN - 641 062';
 

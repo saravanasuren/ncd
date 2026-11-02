@@ -77,7 +77,7 @@ const _fieldLabel = (doc: Doc, x: number, y: number, label: string, w = 200) => 
 function _drawHeader(doc: Doc, co: ReturnType<typeof companyHeader>): number {
   if (HAS_LOGO) { try { doc.image(LOGO_PATH, (595.28 - 60) / 2, 18, { width: 60, height: 60 }); } catch { /* optional */ } }
   const ty = HAS_LOGO ? 80 : 26;
-  doc.font('Helvetica-Bold').fontSize(14).fillColor(NAVY).text('DHANAM INVESTMENT AND FINANCE PRIVATE LIMITED', LX, ty, { width: CW, align: 'center' });
+  doc.font('Helvetica-Bold').fontSize(14).fillColor(NAVY).text(co.legal_name.toUpperCase(), LX, ty, { width: CW, align: 'center' });
   doc.font('Helvetica').fontSize(8).fillColor(TXT).text(COMPANY.registered_office_address, LX, ty + 18, { width: CW, align: 'center' });
   doc.font('Helvetica').fontSize(7.5).fillColor(MUT).text(`CIN: ${co.cin}  |  RBI Reg. No.: ${COMPANY.rbi_registration_no}`, LX, ty + 30, { width: CW, align: 'center' });
   _hr(doc, ty + 42, LX, RX, GOLD, 1);
@@ -343,7 +343,7 @@ export async function applicationFormPdf(db: Db, applicationId: number): Promise
 
   // ── PAGE 2 ──
   doc.addPage();
-  doc.font('Helvetica-Bold').fontSize(14).fillColor(NAVY).text('DHANAM INVESTMENT AND FINANCE PRIVATE LIMITED', LX, 24, { width: CW, align: 'center' });
+  doc.font('Helvetica-Bold').fontSize(14).fillColor(NAVY).text(co.legal_name.toUpperCase(), LX, 24, { width: CW, align: 'center' });
   let y2 = 44;
   y2 = _navyBar(doc, y2, "APPLICANT'S UNDERTAKING  —  I/We hereby agree and confirm that:") + 2;
   const undertakings = [

@@ -48,7 +48,7 @@ export class SyntheticLegacySource implements LegacySource {
   }
   async holidays(): Promise<Row[]> { return []; }
   async companyProfile(): Promise<Row[]> {
-    return [{ id: 1, legal_name: 'Dhanam Investment and Finance Private Limited', legal_name_short: 'Dhanam', tan: 'CMBK00000K', tan_holder_name: 'Kiara Microcredit Private Limited', tan_amendment_pending: true, signatory_name: 'Test Signatory', signatory_designation: 'CEO' }];
+    return [{ id: 1, legal_name: 'Dhanam Investment and Finance Limited', legal_name_short: 'Dhanam', tan: 'CMBK00000K', tan_holder_name: 'Kiara Microcredit Private Limited', tan_amendment_pending: true, signatory_name: 'Test Signatory', signatory_designation: 'CEO' }];
   }
   async schemes(): Promise<Row[]> {
     return [{ id: 1, code: 'NCD-36M', name: '36 Month Monthly 12%', tenure_months: 36, payout_frequency: 'Monthly', coupon_rate_pct: 12, face_value: 100000, min_ticket_amount: 100000, multiple_of: 100000, day_count_convention: 'Actual365', commission_type: 'OneTime', tds_rule_id: 1, is_active: true }];

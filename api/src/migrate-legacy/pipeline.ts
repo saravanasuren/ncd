@@ -319,7 +319,7 @@ export async function runMigration(
         await withSavepoint(tx, async () => {
           await tx.query('DELETE FROM company_profile WHERE id = 1');
           await insertRow(tx, 'company_profile', {
-            id: 1, legal_name: c.legal_name ?? 'Dhanam Investment and Finance Private Limited',
+            id: 1, legal_name: c.legal_name ?? 'Dhanam Investment and Finance Limited',
             former_legal_name: c.former_legal_name ?? null, short_name: c.legal_name_short ?? 'Dhanam',
             tan: c.tan ?? null, tan_holder_name: c.tan_holder_name ?? null,
             tan_amendment_pending: c.tan_amendment_pending ?? false,

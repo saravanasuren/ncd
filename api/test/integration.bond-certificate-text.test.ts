@@ -80,7 +80,7 @@ describe('the bond certificate prints the promise to pay', () => {
     text = await certificate(2000000);
     // The POSITIVE assertions come first and deliberately cover the whole
     // paragraph. Without them the absence check below proves nothing.
-    expect(text).toContain(squash('For Value Received, Dhanam Investment and Finance Private Limited'));
+    expect(text).toContain(squash('For Value Received, Dhanam Investment and Finance Limited'));
     expect(text).toContain(squash('promises to pay to the person(s) named herein as the holder(s), or their order'));
     expect(text).toContain(squash('Rs. 20,00,000 (Rupees Twenty Lakh Only)'));
     expect(text).toContain(squash('The principal amount shall be payable on redemption, while interest shall be paid separately'));
@@ -94,6 +94,18 @@ describe('the bond certificate prints the promise to pay', () => {
     expect(text).not.toContain(squash('Private Placement Offer Letter'));
     expect(text).not.toContain(squash('The NCD is issued subject to and with the benefit of the conditions'));
     expect(text).not.toContain(squash('persons claiming by, through, or under any of them'));
+  });
+
+  it('names the company correctly in the header, with the PLC CIN', async () => {
+    // Owner 2026-11-02. Both facts were wrong on every certificate ever issued,
+    // and they arrive by DIFFERENT routes — the name from company_profile (the
+    // stored row overrides the constant) and the CIN from the constant alone —
+    // so each is checked on the rendered page rather than at its source.
+    expect(text).toContain(squash('DHANAM INVESTMENT AND FINANCE LIMITED'));
+    expect(text).toContain(squash('CIN : U64920TZ2016PLC031308'));
+    // The negatives only mean something because of the positives above.
+    expect(text).not.toContain(squash('PRIVATE LIMITED'));
+    expect(text).not.toContain('PTC031308');
   });
 
   it('still carries the TDS footnote and the three directors', async () => {

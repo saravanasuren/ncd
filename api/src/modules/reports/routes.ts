@@ -87,7 +87,7 @@ reportsRouter.get('/esigned/:applicationId.pdf', requirePermission('customers:re
   }));
 
 // Staff-facing bond certificate / allotment letter for one application.
-reportsRouter.get('/bond/:applicationId.pdf', requirePermission('customers:read'),
+reportsRouter.get('/bond/:applicationId.pdf', requirePermission('bonds:download'),
   asyncHandler(async (req, res) => {
     const { assertApplicationVisible } = await import('../../lib/visibility.js');
     await assertApplicationVisible(getDb(), req.user!, Number(req.params.applicationId));
@@ -99,7 +99,7 @@ reportsRouter.get('/bond/:applicationId.pdf', requirePermission('customers:read'
   }));
 // The consolidated "filing bond" — one certificate covering all of a customer's
 // issued investments in a series (total value, total units, + the breakup).
-reportsRouter.get('/consolidated-bond/:customerId/:seriesId.pdf', requirePermission('customers:read'),
+reportsRouter.get('/consolidated-bond/:customerId/:seriesId.pdf', requirePermission('bonds:download'),
   asyncHandler(async (req, res) => {
     const { assertCustomerVisible } = await import('../../lib/visibility.js');
     await assertCustomerVisible(getDb(), req.user!, Number(req.params.customerId));

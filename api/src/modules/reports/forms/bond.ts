@@ -299,6 +299,19 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
   // Decided BEFORE the number is minted: the two must agree, or a subordinate
   // bond would be stamped with a BC- number from the wrong run.
   const subSeries = isSubordinate(a);
+
+  // A subordinate series issues ONE bond per customer per series, so there is no
+  // per-investment certificate to issue here (owner 2026-11-03). Refused before
+  // anything can mint a number.
+  //
+  // One already issued still prints: 8 of these were handed out under the older
+  // rule and a reprint of a document a customer holds must keep working. Only a
+  // NEW one is refused, and the message points at the document that replaces it.
+  if (subSeries && !a.bond_serial_no) {
+    throw errors.badRequest(
+      'This series issues one bond covering all of a customer\'s investments in it. Print the series bond for this customer instead.');
+  }
+
   const certificateNo = await ensureBondSerial(db, applicationId, a, subSeries);
   const nominee = (await db.query<Record<string, unknown>>('SELECT full_name, relationship FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [a.customer_id])).rows[0];
   const line = (await db.query<Record<string, unknown>>(
@@ -404,7 +417,7 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
  * number, assigned LAZILY on first generation (mirrors ensureBondSerial). Own
  * sequence + `CB-{yyyy}-{seq}` so it never collides with the per-app `BC-` run.
  */
-async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId: number, year: number): Promise<string> {
+async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId: number, year: number, subordinate = false): Promise<string> {
   const readExisting = async () => (await db.query<{ bond_serial_no: string }>(
     'SELECT bond_serial_no FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2',
     [customerId, seriesId])).rows[0]?.bond_serial_no ?? null;
@@ -413,8 +426,15 @@ async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId
   // ON CONFLICT names the (customer, series) pair only, so a clash on the
   // SERIAL's own unique index (067) still raises — which is what allocateSerial
   // catches to step to the next number rather than reuse one.
+  // On a subordinate series this document IS the bond, so it carries the SD-
+  // run the owner asked for rather than the CB- one. Separate counters, so the
+  // two can never collide; an existing number is returned above and never
+  // re-minted, so nothing already issued changes.
+  const [key, format] = subordinate
+    ? [SUBORDINATE_SERIAL_KEY, DEFAULT_NUMBER_FORMATS.subordinate_debt]
+    : ['consolidated_bond', CONSOLIDATED_BOND_FORMAT];
   return allocateSerial(
-    db, 'consolidated_bond', CONSOLIDATED_BOND_FORMAT, year,
+    db, key, format, year,
     async (candidate) => (await db.query<{ bond_serial_no: string }>(
       `INSERT INTO consolidated_bonds (customer_id, series_id, bond_serial_no) VALUES ($1, $2, $3)
        ON CONFLICT (customer_id, series_id) DO NOTHING RETURNING bond_serial_no`,
@@ -461,24 +481,17 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
   const nominee = (await db.query<Record<string, unknown>>('SELECT full_name, relationship FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [customerId])).rows[0];
   const co = companyHeader(await getCompanyProfile(db));
 
-  // A subordinate series does not do consolidated certificates any more (owner
-  // 2026-11-02: "each application will get it own bonds. so consolidated bonds
-  // will not be done in here"). Checked HERE, before anything can mint a number:
-  // ensureConsolidatedBondSerial below allocates one on first call, so a late
-  // check would refuse the download only after permanently burning a CB number.
+  // A subordinate series issues exactly ONE bond per customer per series — the
+  // consolidated certificate IS its bond (owner 2026-11-03: "consolidate at the
+  // Customer ID plus Series level ... generate only one bond document per
+  // series"). The transactions stay recorded separately underneath; only the
+  // document is merged.
   //
-  // The 32 already issued on these series stay printable — a reprint of
-  // something a customer was handed must keep working. Only a NEW one is refused.
+  // This can state ONE coupon rate and ONE redemption date truthfully because
+  // the series makes it so: no customer's own investments inside a series
+  // disagree on rate or term (checked against production), and since migration
+  // 108 every investment in a series matures on the series close date + tenure.
   const subordinateSeries = isSubordinate(series);
-  if (subordinateSeries) {
-    const already = (await db.query<{ bond_serial_no: string }>(
-      'SELECT bond_serial_no FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2',
-      [customerId, seriesId])).rows[0];
-    if (!already) {
-      throw errors.badRequest(
-        'This series issues one bond certificate per investment, so it has no consolidated certificate. Print each investment\'s bond instead.');
-    }
-  }
 
   const totalInvested = apps.reduce((s, a) => s + Number(a.total_amount || 0), 0);
   const faceValue = Number(apps[0]!.face_value || 100000);
@@ -498,7 +511,7 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
 
   const anyAllot = apps.map((a) => a.allotment_date).find(Boolean) ?? series.deemed_date ?? null;
   const year = new Date(String(anyAllot ?? new Date().toISOString())).getUTCFullYear();
-  const certificateNo = await ensureConsolidatedBondSerial(db, customerId, seriesId, year);
+  const certificateNo = await ensureConsolidatedBondSerial(db, customerId, seriesId, year, subordinateSeries);
   const fullAddress = customerAddress(cust) || '—';
 
   const sub = subordinateSeries;
@@ -528,6 +541,11 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
       ['Investment Value (Rs.)', _fmtINR(totalInvested)],
       [`Number of ${cUnit}s`, numNcds != null ? String(numNcds) : '—'],
       ['Coupon Rate', rateLabel],
+      // The series' own close date, identical for every bond in the series —
+      // the same row the per-investment form carries. It is the allotment date
+      // (owner 2026-11-03), and every investment here matures on it + tenure,
+      // which is what lets a single document state one redemption date.
+      ['Effective Date', _fmtDate(series.close_date as string | null)],
       ['Date of Redemption', redLabel],
       [`Face Value per ${cUnit} (Rs.)`, _fmtINR(faceValue)],
       ['Redemption Value* (Rs.)', _fmtINR(totalInvested)],

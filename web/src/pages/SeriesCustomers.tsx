@@ -58,10 +58,6 @@ export default function SeriesCustomers() {
   if (q.isLoading) return <div className="text-text-muted">Loading…</div>;
   if (q.error || !q.data) return <div className="text-danger">Failed to load the series.</div>;
   const { series, rows, without_bond } = q.data;
-  // A subordinate series issues ONE BOND PER INVESTMENT and has no consolidated
-  // certificate, so every consolidated affordance on this page would send the
-  // operator to a raw error. They are replaced by per-investment links.
-  const subordinate = series.is_subordinate === true;
   const total = rows.reduce((sum, r) => sum + Number(r.total_amount), 0);
   const investments = rows.reduce((sum, r) => sum + r.investment_count, 0);
 
@@ -92,25 +88,14 @@ export default function SeriesCustomers() {
       </p>
 
       <div className="flex items-center gap-2 mb-3">
-        {/* The bulk download produces ONE consolidated certificate per customer,
-            which a subordinate series does not have. Each investment's own bond
-            is on its row instead. */}
-        {subordinate ? (
+        <button onClick={downloadAll} disabled={!rows.length}
+          className="text-xs bg-primary hover:bg-primary-hover text-white rounded px-3 py-1.5 disabled:opacity-40">
+          ⬇ Download all bonds
+        </button>
+        {without_bond > 0 && (
           <span className="text-xs text-text-muted">
-            This series issues one bond per investment — download them from the rows below.
+            {without_bond} of {rows.length} would be issued a new certificate number
           </span>
-        ) : (
-          <>
-            <button onClick={downloadAll} disabled={!rows.length}
-              className="text-xs bg-primary hover:bg-primary-hover text-white rounded px-3 py-1.5 disabled:opacity-40">
-              ⬇ Download all bonds
-            </button>
-            {without_bond > 0 && (
-              <span className="text-xs text-text-muted">
-                {without_bond} of {rows.length} would be issued a new certificate number
-              </span>
-            )}
-          </>
         )}
       </div>
       {msg && <div className="text-xs text-danger mb-2">{msg}</div>}
@@ -174,23 +159,12 @@ export default function SeriesCustomers() {
                       : <span className="text-xs text-text-muted">not issued</span>}
                   </td>
                   <td className="py-2 px-3 text-right whitespace-nowrap">
-                    {mayDownloadBond && (subordinate
-                      ? <span className="flex flex-wrap gap-1 justify-end">
-                          {r.investments.map((inv) => (
-                            <a key={inv.application_id} href={`/api/reports/bond/${inv.application_id}.pdf`}
-                              target="_blank" rel="noreferrer"
-                              className="text-xs border border-border rounded px-2 py-1 hover:bg-bg whitespace-nowrap"
-                              title={`${inv.application_no} — downloading issues a certificate number if it has none`}>
-                              ⬇ {inv.application_no.replace(/^APP-\d{4}-/, '')}
-                            </a>
-                          ))}
-                        </span>
-                      : <a href={`/api/reports/consolidated-bond/${r.customer_id}/${series.id}.pdf`}
-                          target="_blank" rel="noreferrer"
-                          className="text-xs border border-border rounded px-2 py-1 hover:bg-bg"
-                          title={r.has_bond ? `Download ${r.bond_serial_no}` : 'Downloading issues a certificate number'}>
-                          ⬇ Bond
-                        </a>)}
+                    {mayDownloadBond && <a href={`/api/reports/consolidated-bond/${r.customer_id}/${series.id}.pdf`}
+                      target="_blank" rel="noreferrer"
+                      className="text-xs border border-border rounded px-2 py-1 hover:bg-bg"
+                      title={r.has_bond ? `Download ${r.bond_serial_no}` : 'Downloading issues a certificate number'}>
+                      ⬇ Bond
+                    </a>}
                   </td>
                 </tr>
               );

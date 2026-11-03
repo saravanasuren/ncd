@@ -1,14 +1,18 @@
 /**
- * The three things that change for a subordinate series (owner 2026-11-02):
- *   · its certificate number is SD-2026-0001, on its own counter;
- *   · it prints the series' CLOSE DATE as the Effective Date, the same for every
- *     bond in the series, not each holder's own application date;
- *   · it has no consolidated certificate — one bond per investment — and asking
- *     for one must NOT burn a CB number on the way to refusing.
+ * The bond a subordinate series issues: ONE per customer per series.
  *
- * All asserted on rendered PDFs and on what actually lands in the database,
- * because the failure that matters here is silent: minting a number is
- * permanent, and a certificate number issued in error cannot be taken back.
+ * Owner 2026-11-03: "consolidate at the Customer ID plus Series level, keep
+ * transactions recorded separately in the background, and generate only one bond
+ * document per series." Three investments of 5 lakh in the same series are one
+ * bond for 15 lakh, not three bonds.
+ *
+ * This can state one coupon rate and one redemption date truthfully only because
+ * the series makes it so: no customer's own investments inside a series disagree
+ * on rate or term, and since migration 108 every investment in a series matures
+ * on the series close date + tenure. Both are asserted here rather than assumed.
+ *
+ * The per-investment certificate is therefore NOT issued for such a series —
+ * except as a reprint of one already handed out under the older rule.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { inflateSync } from 'node:zlib';
@@ -16,16 +20,24 @@ import { startTestServer, Client, approveInvestment, type TestCtx, requiredInves
 
 let ctx: TestCtx;
 let subSeriesId: number, plainSeriesId: number, schemeId: number;
+let admin: Client, checker: Client;
+
+const CLOSE = '2026-09-30';
 
 beforeAll(async () => {
   ctx = await startTestServer();
   plainSeriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
   schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
-  // A monthly subordinate series, exactly as the split creates them.
+  // The subordinate series run 60 months; the demo scheme defaults to 36.
+  await ctx.db.query('UPDATE schemes SET tenure_months = 60 WHERE id = $1', [schemeId]);
   subSeriesId = Number((await ctx.db.query(
-    `INSERT INTO series (code, name, status, face_value, is_subordinate, close_date)
-     VALUES ('SD3', 'Subordinate Debt 3', 'Closed', 100000, TRUE, DATE '2026-09-30') RETURNING id`)).rows[0]!.id);
+    `INSERT INTO series (code, name, status, face_value, is_subordinate, close_date, deemed_date)
+     VALUES ('SD3', 'Subordinate Debt 3', 'Open', 100000, TRUE, DATE '${CLOSE}', DATE '${CLOSE}') RETURNING id`)).rows[0]!.id);
   await ctx.db.query('INSERT INTO series_schemes (series_id, scheme_id) VALUES ($1, $2)', [subSeriesId, schemeId]);
+  admin = new Client(ctx.base);
+  await admin.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' });
+  checker = new Client(ctx.base);
+  await checker.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
 });
 afterAll(async () => { await ctx.close(); });
 
@@ -49,104 +61,114 @@ function pdfText(buf: Buffer): string {
   return out.join('');
 }
 const squash = (s: string) => s.replace(/\s+/g, '');
+const caps = (s: string) => squash(s).toUpperCase();
 
-async function investment(seriesId: number, name: string, phone: string, received: string) {
-  const c = new Client(ctx.base);
-  await c.post('/api/auth/login', { email: 'admin@dhanam.finance', password: 'ChangeMe_Dev_123' });
-  const cust = await c.post('/api/customers', { full_name: name, phone });
-  const app = await c.post('/api/applications', {
-    ...requiredInvestmentFields(), customer_id: cust.json.id,
-    series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: received,
-  });
-  const checker = new Client(ctx.base);
-  await checker.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
-  await approveInvestment(checker, app);
-  return { customerId: Number(cust.json.id), appId: Number(app.json.id) };
+/** A customer with `amounts.length` separate investments in one series. */
+async function holding(seriesId: number, name: string, phone: string, tranches: Array<[string, number]>) {
+  const cust = await admin.post('/api/customers', { full_name: name, phone });
+  const customerId = Number(cust.json.id);
+  const appIds: number[] = [];
+  for (const [received, amount] of tranches) {
+    const app = await admin.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: customerId,
+      series_id: seriesId, scheme_id: schemeId, amount, date_money_received: received,
+    });
+    await approveInvestment(checker, app);
+    appIds.push(Number(app.json.id));
+  }
+  return { customerId, appIds };
 }
 
-const serialOf = async (appId: number) =>
-  (await ctx.db.query<{ bond_serial_no: string | null }>(
-    'SELECT bond_serial_no FROM applications WHERE id = $1', [appId])).rows[0]!.bond_serial_no;
-
-describe('a subordinate series bond', () => {
-  it('is numbered SD-2026-0001 and prints the series close date as the Effective Date', async () => {
-    const { appId } = await investment(subSeriesId, 'Sub Series One', '9552440001', '2026-09-17');
-    const { bondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
-    const text = squash(pdfText(await bondCertificatePdf(ctx.db, appId)));
-
-    // The number, in the database and on the page.
-    const serial = await serialOf(appId);
-    expect(serial).toMatch(/^SD-2026-\d{4}$/);
-    expect(serial).toBe('SD-2026-0001');
-    expect(text).toContain(squash(serial!));
-
-    // The date is the SERIES' close date (30-09-2026), not the day this holder's
-    // money arrived (17-09-2026).
-    expect(text).toContain(squash('Effective Date'));
-    expect(text).toContain(squash('30-09-2026'));
-    expect(text).not.toContain(squash('17-09-2026'));
-    expect(text).not.toContain(squash('Date of Application'));
-    expect(text).toContain(squash('Subordinate Debt Certificate'));
-  });
-
-  it('gives every bond in the series the SAME effective date but its own number', async () => {
-    const a = await investment(subSeriesId, 'Sub Series Two', '9552440002', '2026-09-02');
-    const b = await investment(subSeriesId, 'Sub Series Three', '9552440003', '2026-09-28');
-    const { bondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
-    const ta = squash(pdfText(await bondCertificatePdf(ctx.db, a.appId)));
-    const tb = squash(pdfText(await bondCertificatePdf(ctx.db, b.appId)));
-
-    for (const t of [ta, tb]) expect(t).toContain(squash('30-09-2026'));
-    const [sa, sb] = [await serialOf(a.appId), await serialOf(b.appId)];
-    expect(sa).not.toBe(sb);
-    expect([sa, sb].every((x) => x!.startsWith('SD-2026-'))).toBe(true);
-  });
-
-  it('still numbers an ordinary series BC-, on its own untouched counter', async () => {
-    const { appId } = await investment(plainSeriesId, 'Plain Series', '9552440004', '2026-09-17');
-    const { bondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
-    const text = squash(pdfText(await bondCertificatePdf(ctx.db, appId)));
-    expect(await serialOf(appId)).toMatch(/^BC-2026-\d{6}$/);
-    // ...and keeps the Debenture Certificate, with Date of Allotment, untouched.
-    expect(text).toContain(squash('Debenture Certificate'));
-    expect(text).toContain(squash('Date of Allotment'));
-    expect(text).not.toContain(squash('Effective Date'));
-  });
-});
-
-describe('a subordinate series has no consolidated certificate', () => {
-  it('refuses to issue one, and burns no number doing so', async () => {
-    const { customerId } = await investment(subSeriesId, 'No Consolidated', '9552440005', '2026-09-10');
-    const before = Number((await ctx.db.query<{ n: number }>(
-      'SELECT count(*)::int AS n FROM consolidated_bonds')).rows[0]!.n);
-
-    const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
-    await expect(consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId)).rejects.toThrow(/one bond certificate per investment/i);
-
-    // The refusal must come BEFORE the number is allocated — otherwise every
-    // rejected click would permanently consume a CB number.
-    const after = Number((await ctx.db.query<{ n: number }>(
-      'SELECT count(*)::int AS n FROM consolidated_bonds')).rows[0]!.n);
-    expect(after).toBe(before);
-  });
-
-  it('still reprints one that was already issued', async () => {
-    // 32 consolidated certificates were already issued on these series before the
-    // rule changed. A customer holding one must still be able to get a copy.
-    const { customerId } = await investment(subSeriesId, 'Already Issued', '9552440006', '2026-09-11');
-    await ctx.db.query(
-      'INSERT INTO consolidated_bonds (customer_id, series_id, bond_serial_no) VALUES ($1, $2, $3)',
-      [customerId, subSeriesId, 'CB-2026-000999']);
+describe('one bond per customer per series', () => {
+  it('three investments of 5 lakh become ONE bond for 15 lakh', async () => {
+    // The owner's own example.
+    const { customerId } = await holding(subSeriesId, 'Three Tranches', '9552110001',
+      [['2026-09-02', 500000], ['2026-09-15', 500000], ['2026-09-28', 500000]]);
 
     const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
     const text = squash(pdfText(await consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId)));
-    expect(text).toContain(squash('CB-2026-000999'));
+
+    expect(text).toContain(caps('Rs. 15,00,000'));
+    expect(text).toContain(squash('Subordinate Debt Certificate'));
+    // 15 bonds of Rs 1,00,000, not 3 documents.
+    expect(text).toContain(squash('Number of Bonds'));
+
+    // Exactly ONE certificate row exists for this customer in this series.
+    const n = Number((await ctx.db.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2',
+      [customerId, subSeriesId])).rows[0]!.n);
+    expect(n).toBe(1);
   });
 
-  it('leaves the consolidated certificate working for an ordinary series', async () => {
-    const { customerId } = await investment(plainSeriesId, 'Plain Consolidated', '9552440007', '2026-09-12');
+  it('is numbered SD-2026-0001, not CB-', async () => {
+    const { customerId } = await holding(subSeriesId, 'Numbered Sub', '9552110002', [['2026-09-10', 400000]]);
     const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
-    const text = squash(pdfText(await consolidatedBondCertificatePdf(ctx.db, customerId, plainSeriesId)));
+    await consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId);
+    const serial = String((await ctx.db.query<{ s: string }>(
+      'SELECT bond_serial_no AS s FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2',
+      [customerId, subSeriesId])).rows[0]!.s);
+    expect(serial).toMatch(/^SD-2026-\d{4}$/);
+    expect(serial).not.toMatch(/^CB-/);
+  });
+
+  it('states ONE effective date and ONE redemption date for the whole holding', async () => {
+    // Only possible because every investment in the series matures on the series
+    // close date + tenure. Without that these rows would read "As per breakup
+    // below" and point at a table that is not on the page.
+    const { customerId } = await holding(subSeriesId, 'One Date', '9552110003',
+      [['2026-09-03', 300000], ['2026-09-29', 700000]]);
+    const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    const text = squash(pdfText(await consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId)));
+
+    expect(text).toContain(squash('Effective Date'));
+    expect(text).toContain(squash('30-09-2026'));
+    expect(text).toContain(squash('30-09-2031'));
+    expect(text.toUpperCase()).not.toContain(caps('As per breakup below'));
+    expect(text).toContain(caps('Rs. 10,00,000'));
+  });
+
+  it('keeps each investment recorded separately underneath', async () => {
+    // "keep transactions recorded separately in the background" — merging the
+    // DOCUMENT must not merge the money.
+    const { customerId, appIds } = await holding(subSeriesId, 'Still Separate', '9552110004',
+      [['2026-09-05', 200000], ['2026-09-20', 300000]]);
+    expect(appIds.length).toBe(2);
+    const rows = (await ctx.db.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM applications WHERE customer_id = $1 AND series_id = $2',
+      [customerId, subSeriesId])).rows[0]!.n;
+    expect(Number(rows)).toBe(2);
+  });
+});
+
+describe('the per-investment certificate is not issued for such a series', () => {
+  it('refuses, and points at the bond that replaces it', async () => {
+    const { appIds } = await holding(subSeriesId, 'No Per Investment', '9552110005', [['2026-09-08', 500000]]);
+    const { bondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    await expect(bondCertificatePdf(ctx.db, appIds[0]!)).rejects.toThrow(/one bond covering all/i);
+
+    // ...and refusing must not have minted a number on the way.
+    const serial = (await ctx.db.query<{ s: string | null }>(
+      'SELECT bond_serial_no AS s FROM applications WHERE id = $1', [appIds[0]])).rows[0]!.s;
+    expect(serial).toBeNull();
+  });
+
+  it('still reprints one issued under the older rule', async () => {
+    // 8 investments were given their own BC- numbers before the rule changed. A
+    // reprint of a document a customer holds has to keep working.
+    const { appIds } = await holding(subSeriesId, 'Already Printed', '9552110006', [['2026-09-09', 500000]]);
+    await ctx.db.query("UPDATE applications SET bond_serial_no = 'BC-2026-000017' WHERE id = $1", [appIds[0]]);
+    const { bondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    const text = squash(pdfText(await bondCertificatePdf(ctx.db, appIds[0]!)));
+    expect(text).toContain(squash('BC-2026-000017'));
+  });
+
+  it('leaves an ordinary series issuing per-investment bonds as before', async () => {
+    const { appIds } = await holding(plainSeriesId, 'Plain Per Investment', '9552110007', [['2026-09-11', 500000]]);
+    const { bondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    const text = squash(pdfText(await bondCertificatePdf(ctx.db, appIds[0]!)));
     expect(text).toContain(squash('Debenture Certificate'));
+    const serial = (await ctx.db.query<{ s: string }>(
+      'SELECT bond_serial_no AS s FROM applications WHERE id = $1', [appIds[0]])).rows[0]!.s;
+    expect(serial).toMatch(/^BC-2026-\d{6}$/);
   });
 });

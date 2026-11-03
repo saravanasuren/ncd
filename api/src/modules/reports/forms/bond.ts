@@ -22,7 +22,7 @@ import { errors } from '../../../lib/errors.js';
 import { nextSeq, isUniqueViolation } from '../../../lib/sequences.js';
 import { formatNumber, DEFAULT_NUMBER_FORMATS } from '../../../lib/numbering.js';
 import { getCompanyProfile, getBondSignature } from '../../products/service.js';
-import { companyHeader, COMPANY, LOGO_PATH, HAS_LOGO, customerAddress, addressColumns, amountInWords } from './shared.js';
+import { companyHeader, companyAsAt, COMPANY, LOGO_PATH, HAS_LOGO, customerAddress, addressColumns, amountInWords } from './shared.js';
 
 /** Only an issued investment carries a certificate — a pending application must
  * never burn a certificate number (mirrors wealth's gate). */
@@ -319,7 +319,13 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
             COALESCE(sch.face_value, 100000) AS face_value, sch.name AS scheme_name
        FROM application_lines al LEFT JOIN schemes sch ON sch.id = al.scheme_id
       WHERE al.application_id = $1 ORDER BY al.id LIMIT 1`, [applicationId])).rows[0] ?? {};
-  const co = companyHeader(await getCompanyProfile(db));
+  // The company as it was when THIS SERIES was allotted, not as it is today —
+  // but only on the subordinate form. The Debenture Certificate keeps whatever
+  // the profile says, untouched (owner: "dont ever touch ncd 27 or 28").
+  const coNow = companyHeader(await getCompanyProfile(db));
+  const co = isSubordinate(a)
+    ? companyAsAt(coNow, (a.series_close_date ?? a.deemed_date) as string | null)
+    : coNow;
 
   const invested = Number(a.total_amount || 0);
   const faceValue = Number(line.face_value || 100000);
@@ -462,6 +468,7 @@ async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId
 async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, seriesId: number): Promise<void> {
   const apps = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.application_no, a.total_amount, a.allotment_date, a.maturity_date, a.status,
+            a.date_money_received,
             l.coupon_rate_pct, l.tenure_months, l.face_value, l.scheme_name
        FROM applications a
        JOIN LATERAL (
@@ -479,7 +486,14 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
   const series = (await db.query<Record<string, unknown>>('SELECT code, name, deemed_date, is_subordinate, close_date FROM series WHERE id = $1', [seriesId])).rows[0];
   if (!cust || !series) throw errors.notFound('Customer or series not found');
   const nominee = (await db.query<Record<string, unknown>>('SELECT full_name, relationship FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [customerId])).rows[0];
-  const co = companyHeader(await getCompanyProfile(db));
+  // As above: the name as at the SERIES' date, subordinate form only. Falling
+  // back to the deemed date covers a subordinate series with no close date, and
+  // to the earliest money in the holding if it has neither.
+  const coNow = companyHeader(await getCompanyProfile(db));
+  const co = isSubordinate(series)
+    ? companyAsAt(coNow, (series.close_date ?? series.deemed_date
+        ?? apps.map((a) => a.date_money_received).filter(Boolean).sort()[0]) as string | null)
+    : coNow;
 
   // A subordinate series issues exactly ONE bond per customer per series — the
   // consolidated certificate IS its bond (owner 2026-11-03: "consolidate at the

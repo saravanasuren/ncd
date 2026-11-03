@@ -49,6 +49,41 @@ export const COMPANY = {
   signatory_designation: 'Authorised Signatory',
 } as const;
 
+/**
+ * The company became "Dhanam Investment and Finance Limited" on 29 September
+ * 2026 (owner 2026-11-03). Before that it was a PRIVATE limited company and its
+ * CIN carried the PTC class code instead of PLC.
+ *
+ * A bond must name the company as it was when the series was ALLOTTED, not as
+ * it is today: SD1 closed 31 July and SD2 closed 31 August, both before the
+ * change, so their holders' bonds say "Private Limited". SD3 closed on the
+ * 30th — the day after — so it and everything since says "Limited".
+ *
+ * Scoped to the SUBORDINATE certificate only. The Debenture Certificate that
+ * NCD 27, NCD 28 and the twenty-odd older series print is deliberately left
+ * exactly as it is (owner: "dont ever touch ncd 27 or 28").
+ */
+export const COMPANY_RENAMED_ON = '2026-09-29';
+export const COMPANY_BEFORE_RENAME = {
+  legal_name: 'Dhanam Investment and Finance Private Limited',
+  cin: 'U64920TZ2016PTC031308',
+} as const;
+
+/**
+ * The company's name and CIN as they stood on `asAt`.
+ *
+ * `asAt` is the SERIES' own date, not today and not the customer's payment
+ * date: every holder in a series receives the same instrument, so they must all
+ * read the same. A missing date returns the present-day values rather than
+ * guessing backwards — printing a superseded name on a current bond is the
+ * worse of the two errors.
+ */
+export function companyAsAt<T extends { legal_name: string; cin: string }>(co: T, asAt: string | null | undefined): T {
+  const d = asAt ? String(asAt).slice(0, 10) : null;
+  if (!d || d >= COMPANY_RENAMED_ON) return co;
+  return { ...co, legal_name: COMPANY_BEFORE_RENAME.legal_name, cin: COMPANY_BEFORE_RENAME.cin };
+}
+
 export interface CompanyHeader {
   legal_name: string; cin: string; corporate_office_address: string;
   general_phone: string; general_email: string; website: string; signatory_designation: string;

@@ -58,16 +58,26 @@ BEGIN
   -- ── The five monthly series ───────────────────────────────────────────────
   -- Closed = closed to new money, records intact. November stays Open because it
   -- is the current month and must keep accepting enrolment.
+  -- visible_in_app decides which series the customer app OFFERS FOR SALE
+  -- (/integration/series/active filters on status='Open' AND visible_in_app),
+  -- not what a customer sees of holdings they already own. Only the current
+  -- month is on offer; the closed tranches never are (owner 2026-11-02: "hide
+  -- everything and just keep subdebt - 5 visible to others"). Belt and braces,
+  -- since a Closed series is filtered out by status anyway.
+  --
+  -- face_value is carried from NCD_29 (NULL today). The certificate reads face
+  -- value from the SCHEME, so this column is not load-bearing; copying keeps the
+  -- new series identical to the ones they replace rather than inventing a value.
   INSERT INTO series (code, name, status, face_value, close_date, is_subordinate, visible_in_app)
-  SELECT v.code, v.name, v.status, src.face_value, v.close_date, TRUE, src.visible_in_app
+  SELECT v.code, v.name, v.status, src.face_value, v.close_date, TRUE, v.visible
     FROM (VALUES
-      ('SD1', 'Subordinate Debt 1', 'Closed', DATE '2026-07-31'),
-      ('SD2', 'Subordinate Debt 2', 'Closed', DATE '2026-08-31'),
-      ('SD3', 'Subordinate Debt 3', 'Closed', DATE '2026-09-30'),
-      ('SD4', 'Subordinate Debt 4', 'Closed', DATE '2026-10-31'),
-      ('SD5', 'Subordinate Debt 5', 'Open',   DATE '2026-11-30')
-    ) AS v(code, name, status, close_date)
-    CROSS JOIN LATERAL (SELECT face_value, visible_in_app FROM series WHERE code = 'NCD_29') AS src;
+      ('SD1', 'Subordinate Debt 1', 'Closed', DATE '2026-07-31', FALSE),
+      ('SD2', 'Subordinate Debt 2', 'Closed', DATE '2026-08-31', FALSE),
+      ('SD3', 'Subordinate Debt 3', 'Closed', DATE '2026-09-30', FALSE),
+      ('SD4', 'Subordinate Debt 4', 'Closed', DATE '2026-10-31', FALSE),
+      ('SD5', 'Subordinate Debt 5', 'Open',   DATE '2026-11-30', TRUE)
+    ) AS v(code, name, status, close_date, visible)
+    CROSS JOIN LATERAL (SELECT face_value FROM series WHERE code = 'NCD_29') AS src;
 
   -- ── Which investments move, and where ─────────────────────────────────────
   CREATE TEMPORARY TABLE _move ON COMMIT DROP AS

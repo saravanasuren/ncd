@@ -130,7 +130,7 @@ describe('migration 107 splits the subordinate book by month', () => {
 
   it('gives every new series the flag, the close date and the right status', async () => {
     const rows = (await ctx.db.query<Record<string, unknown>>(
-      `SELECT code, status, is_subordinate, close_date::text AS close_date FROM series
+      `SELECT code, status, is_subordinate, visible_in_app, close_date::text AS close_date FROM series
         WHERE code IN ('SD1','SD2','SD3','SD4','SD5') ORDER BY code`)).rows;
     expect(rows.length).toBe(5);
     for (const r of rows) expect(r.is_subordinate).toBe(true);
@@ -138,6 +138,8 @@ describe('migration 107 splits the subordinate book by month', () => {
       ['2026-07-31', '2026-08-31', '2026-09-30', '2026-10-31', '2026-11-30']);
     // Past months closed to new money; the current month still open for enrolment.
     expect(rows.map((r) => r.status)).toEqual(['Closed', 'Closed', 'Closed', 'Closed', 'Open']);
+    // Only the current month is OFFERED in the customer app (owner 2026-11-02).
+    expect(rows.map((r) => r.visible_in_app)).toEqual([false, false, false, false, true]);
   });
 
   it('closes the emptied series but not the one still holding money', async () => {

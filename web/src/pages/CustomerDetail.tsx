@@ -1325,7 +1325,12 @@ function NewInvestment({ customerId, custNoTds, isSenior }: { customerId: number
                    itself can be stale (13_M36_13 is 60 months as of 2026-11-02 — the code
                    is matched by the integration and the importer, so it cannot be renamed).
                    Whoever enrols has to be able to see what they are selling. */}
-              {(schemes.data?.rows ?? []).map((s) => (
+              {/* Retired schemes must not be selectable (owner 2026-11-03: "hide all
+                   other schemes"). /api/schemes serves the Masters screen too, which
+                   has to list every scheme to manage it, so the filter belongs here
+                   and not in the endpoint. A scheme with no flag at all still shows,
+                   so an older row cannot vanish from enrolment by accident. */}
+              {(schemes.data?.rows ?? []).filter((s) => s.is_active !== false).map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name} — {s.coupon_rate_pct}% · {s.tenure_months} months · {s.payout_frequency === 'AtMaturity' ? 'at maturity' : 'monthly'}
                 </option>

@@ -53,7 +53,7 @@ export async function seed(db: Db): Promise<void> {
   // Company profile singleton
   await db.query(
     `INSERT INTO company_profile (id, legal_name, former_legal_name, short_name, tan, tan_holder_name, tan_amendment_pending, signatory_name, signatory_designation)
-     VALUES (1, 'Dhanam Investment and Finance Private Limited', 'Kiara Microcredit Private Limited', 'Dhanam', NULL, 'Kiara Microcredit Private Limited', TRUE, 'Saravana Suren S', 'CEO')
+     VALUES (1, 'Dhanam Investment and Finance Limited', 'Kiara Microcredit Private Limited', 'Dhanam', NULL, 'Kiara Microcredit Private Limited', TRUE, 'Saravana Suren S', 'CEO')
      ON CONFLICT (id) DO NOTHING`
   );
 

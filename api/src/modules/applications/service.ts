@@ -333,11 +333,44 @@ registerOnFinalApprove('subscription', async (tx, req) => {
   await activateApplication(tx, appId, { confirmedByUserId: req.maker_user_id });
 });
 
-// A rejected subscription approval = the intent was cancelled. Emit-only (the
-// app lifecycle is unchanged here); no-op unless the event webhook is configured.
+/**
+ * A rejected subscription approval = the intent was refused, so the investment
+ * leaves the book.
+ *
+ * This used to be emit-only, with a comment saying "the app lifecycle is
+ * unchanged here". The consequence was that a rejected investment kept the
+ * status `PendingApproval` for ever: no Pending request remained, so it showed
+ * in NOBODY's approval queue, yet every count of PendingApproval still included
+ * it. Three investments sat in that limbo for up to six weeks before the owner
+ * noticed one was missing from the queue (owner 2026-11-02: "rejecting should
+ * vanish it and pending approval shall remain pending").
+ *
+ * `Rejected` is a terminal application status that already existed, that
+ * `PendingApproval` may legally transition to, and that OUTSTANDING_APPLICATION_
+ * STATUSES deliberately excludes — so the record stays auditable while the money
+ * stops counting. Nothing is deleted.
+ *
+ * Guarded on the current status: an approval rejected after the investment has
+ * somehow gone live must NOT pull an Active NCD off the book.
+ */
 registerOnReject('subscription', async (tx, req) => {
   if (!req.entity_id) return;
-  await emitForApplication(tx, 'subscription.cancelled', Number(req.entity_id));
+  const appId = Number(req.entity_id);
+  const { rowCount } = await tx.query(
+    "UPDATE applications SET status = 'Rejected', updated_at = now() WHERE id = $1 AND status = 'PendingApproval'",
+    [appId]
+  );
+  if (rowCount) {
+    await writeAudit(tx, {
+      actorId: null,
+      action: 'application.rejected',
+      entityType: 'applications',
+      entityId: appId,
+      before: { status: 'PendingApproval' },
+      after: { status: 'Rejected', via: 'subscription approval rejected', request_no: req.request_no },
+    });
+  }
+  await emitForApplication(tx, 'subscription.cancelled', appId);
 });
 
 // Club a held tranche into a LIVE investment (owner 2026-08-24). The maker

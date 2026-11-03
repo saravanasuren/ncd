@@ -83,8 +83,8 @@ const BOND_ISSUABLE = ['Active', 'Matured', 'Redeemed', 'RolledOver'];
  * operator should know how many new ones a click will create.
  */
 export async function seriesCustomers(db: Db, seriesId: number) {
-  const series = (await db.query<{ code: string; name: string }>(
-    'SELECT code, name FROM series WHERE id = $1', [seriesId])).rows[0];
+  const series = (await db.query<{ code: string; name: string; is_subordinate: boolean }>(
+    'SELECT code, name, is_subordinate FROM series WHERE id = $1', [seriesId])).rows[0];
   if (!series) throw errors.notFound('Series not found');
 
   const { rows } = await db.query(
@@ -107,7 +107,11 @@ export async function seriesCustomers(db: Db, seriesId: number) {
       ORDER BY c.full_name`, [seriesId, BOND_ISSUABLE]);
 
   return {
-    series: { id: seriesId, code: series.code, name: series.name },
+    // is_subordinate drives what the drill-down may offer: such a series has no
+    // consolidated certificate, so both its bond buttons would 404 the operator
+    // into a raw error. Omitting it here reads as `undefined` on the page, which
+    // silently takes the wrong branch.
+    series: { id: seriesId, code: series.code, name: series.name, is_subordinate: series.is_subordinate === true },
     rows,
     without_bond: rows.filter((r) => !(r as Record<string, unknown>).has_bond).length,
   };

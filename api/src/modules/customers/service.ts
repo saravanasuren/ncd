@@ -281,7 +281,10 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
   // The customer's investments — every application with its live outstanding
   // (partial withdrawals reduce it), newest first.
   const applications = (await db.query(
-    `SELECT a.id, a.application_no, s.id AS series_id, s.code AS series_code, a.total_amount AS amount,
+    `SELECT a.id, a.application_no, s.id AS series_id, s.code AS series_code,
+            -- A subordinate series issues ONE BOND PER INVESTMENT and has no
+            -- consolidated certificate, so the page must offer a different link.
+            s.is_subordinate, a.bond_serial_no, a.total_amount AS amount,
             -- Outstanding is 0 once the investment has exited (Redeemed/Matured/…);
             -- the COALESCE fallback to total_amount is only for a live app whose
             -- lines were never materialised. Without the status guard a redeemed

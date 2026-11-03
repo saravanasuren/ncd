@@ -936,7 +936,7 @@ const appPill: Record<string, string> = {
 /** The customer's investments — every application, newest first, linking to the
  * application page. LIVE statuses total into the header line. */
 function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, onError }: { rows: any[]; customerId: number; customerName: string; canDelete: boolean; onChange: () => void; onError: (m: string) => void }) {
-  const { promptText } = useConfirm();
+  const { promptText, confirm } = useConfirm();
   const { can } = useAuth();
   const nav = useNavigate();
   const DEAD = ['Rejected', 'Cancelled', 'Redeemed', 'Matured', 'RolledOver', 'PrematureWithdrawn', 'Transferred'];
@@ -961,7 +961,9 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
   const groups = (() => {
     const m = new Map<string, any[]>();
     for (const r of rows) { const k = r.series_code ?? '—'; if (!m.has(k)) m.set(k, []); m.get(k)!.push(r); }
-    return [...m.entries()].map(([code, rs]) => ({ code, series_id: rs[0]?.series_id, rows: rs })).sort((a, b) => numOf(b.code) - numOf(a.code));
+    return [...m.entries()].map(([code, rs]) => ({
+      code, series_id: rs[0]?.series_id, subordinate: rs[0]?.is_subordinate === true, rows: rs,
+    })).sort((a, b) => numOf(b.code) - numOf(a.code));
   })();
   const liveOf = (rs: any[]) => rs.filter((r) => !DEAD.includes(r.status) && !r.archived_at);
   // Statuses that count as "issued" — a consolidated (filing) bond covers these.
@@ -997,7 +999,27 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
     );
   };
 
-  const investmentRow = (r: any) => (
+  /** One investment's own bond certificate.
+   *
+   *  A subordinate series issues ONE BOND PER INVESTMENT and has no consolidated
+   *  certificate, so this is the only way to print one there. Rendering it MINTS
+   *  a certificate number when the investment has none, and numbers are never
+   *  reused — so an un-issued one asks first.
+   */
+  const openBond = async (e: React.MouseEvent, r: any) => {
+    e.stopPropagation();
+    if (!r.bond_serial_no) {
+      const ok = await confirm({
+        title: `Issue a bond certificate for ${r.application_no}?`,
+        body: 'This investment has no certificate number yet. Downloading issues one permanently - numbers are never reused.',
+        confirmLabel: 'Issue and download',
+      });
+      if (!ok) return;
+    }
+    window.open(`/api/reports/bond/${r.id}.pdf`, '_blank');
+  };
+
+  const investmentRow = (r: any, subordinate = false) => (
     <tr key={r.id} className={`border-b border-border last:border-0 hover:bg-bg cursor-pointer ${r.archived_at ? 'opacity-50' : ''}`}
       onClick={() => nav(`/app/applications/${r.id}`, { state: { from: { path: `/app/customers/${customerId}`, label: customerName } } })}>
       <td className={`${td} font-mono text-xs whitespace-nowrap`}>
@@ -1026,6 +1048,16 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
       <td className={`${td} text-xs whitespace-nowrap`}>{receivedDates(r)}</td>
       <td className={`${td} text-right mono`}>{formatINR(r.amount)}</td>
       <td className={`${td} text-right mono font-medium`}>{formatINR(r.outstanding ?? 0)}</td>
+      {subordinate && (
+        <td className={`${td} whitespace-nowrap`} onClick={(e) => e.stopPropagation()}>
+          {can('bonds:download') && ISSUABLE.has(r.status)
+            ? <button onClick={(e) => openBond(e, r)} className="text-xs text-primary hover:underline"
+                title={r.bond_serial_no ? `Download ${r.bond_serial_no}` : 'Downloading issues a certificate number'}>
+                {r.bond_serial_no ?? 'Bond \u2197'}
+              </button>
+            : <span className="text-xs text-text-muted">{r.bond_serial_no ?? '\u2014'}</span>}
+        </td>
+      )}
       {canDelete && (
         <td className={`${td} text-right whitespace-nowrap`} onClick={(e) => e.stopPropagation()}>
           {r.archived_at
@@ -1064,7 +1096,11 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
                     <span className="font-semibold text-sm">{prettySeries(g.code)}</span>
                     <span className="text-xs text-text-muted">{g.rows.length} investment{g.rows.length === 1 ? '' : 's'}</span>
                     <span className="ml-auto text-xs text-text-muted">invested <span className="font-medium text-text mono">{formatINR(gInvested)}</span> · outstanding <span className="font-semibold text-text mono">{formatINR(gOut)}</span></span>
-                    {hasIssuable && g.series_id && can('bonds:download') && (
+                    {/* A subordinate series has NO consolidated certificate (one bond
+                        per investment), so offering the link here would send the
+                        operator to a raw error. Each investment's own bond sits in
+                        the Bond column when the group is expanded. */}
+                    {!g.subordinate && hasIssuable && g.series_id && can('bonds:download') && (
                       <a href={`/api/reports/consolidated-bond/${customerId}/${g.series_id}.pdf`} target="_blank" rel="noreferrer"
                         onClick={(e) => e.stopPropagation()} className="text-xs text-primary hover:underline whitespace-nowrap ml-1"
                         title="One filing bond covering all this customer's investments in this series (total value + units)">Consolidated bond ↗</a>
@@ -1077,10 +1113,11 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
                           <tr className="border-b border-border">
                             <th className={th}>App no</th><th className={th}>Status</th><th className={th}>eSign</th><th className={th}>Received</th>
                             <th className={`${th} text-right`}>Invested</th><th className={`${th} text-right`}>Outstanding</th>
+                            {g.subordinate && <th className={th}>Bond</th>}
                             {canDelete && <th className={`${th} text-right`}></th>}
                           </tr>
                         </thead>
-                        <tbody>{g.rows.map(investmentRow)}</tbody>
+                        <tbody>{g.rows.map((r) => investmentRow(r, g.subordinate))}</tbody>
                       </table>
                     </div>
                   )}

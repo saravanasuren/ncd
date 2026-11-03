@@ -6,6 +6,8 @@ import { renderPdf, letterhead } from '../../lib/pdf.js';
 import { round2 } from '../../lib/dates.js';
 import { formatINR } from '@new-wealth/shared';
 import { getSettingsMap } from '../settings/service.js';
+import { companyHeader } from './forms/shared.js';
+import { getCompanyProfile } from '../products/service.js';
 import { errors } from '../../lib/errors.js';
 
 /** Statement of account for one customer. `customerFacing` filters the row
@@ -53,6 +55,9 @@ async function loadAppForDoc(db: Db, applicationId: number) {
 export async function allotmentLetterPdf(db: Db, applicationId: number): Promise<Buffer> {
   const { a, lines } = await loadAppForDoc(db, applicationId);
   const totalCoupon = lines[0]?.coupon_rate_pct;
+  // The signing line used to hardcode the name (and carried the wrong "Private");
+  // read the profile so it tracks the certificate and the agreement.
+  const co = companyHeader(await getCompanyProfile(db));
   return renderPdf((doc) => {
     letterhead(doc, 'Letter of Allotment', `${a.full_name} · ${a.customer_code}`);
     doc.fontSize(10).font('Helvetica');
@@ -66,7 +71,7 @@ export async function allotmentLetterPdf(db: Db, applicationId: number): Promise
     if (a.maturity_date) doc.text(`Maturity date: ${a.maturity_date}`);
     if (a.isin) doc.text(`ISIN: ${a.isin}`);
     doc.moveDown(1).fontSize(10).text('The corresponding debenture certificate is available in your account. Interest will be paid as per the payout schedule.', { width: 480 });
-    doc.moveDown(1.5).fillColor('#6b7380').fontSize(9).text('For Dhanam Investment and Finance Private Limited');
+    doc.moveDown(1.5).fillColor('#6b7380').fontSize(9).text(`For ${co.legal_name}`);
   });
 }
 

@@ -15,7 +15,8 @@ app (see `docs/00-feature-inventory.md`); the look and feel is redesigned to be 
 professional and uncluttered, following the visual language of
 `reports.dhanamfinance.com`.
 
-**Brand rule (unchanged):** legal name *Dhanam Investment and Finance Private Limited*,
+**Brand rule:** legal name *Dhanam Investment and Finance Limited* (a PUBLIC
+limited company — "Private" is not part of the name; CIN `U64920TZ2016PLC031308`),
 short form *Dhanam*. Never "Dhanam Finance".
 
 ## Locked decisions (confirmed by owner, 2026-07-16)

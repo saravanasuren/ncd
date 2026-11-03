@@ -26,8 +26,13 @@ export const COLORS = {
 /** Stable company facts (wealth COMPANY_DEFAULTS). NCD's company_profile lacks
  *  CIN/address/contact, so these back the header; DB values override where set. */
 export const COMPANY = {
-  legal_name: 'Dhanam Investment and Finance Private Limited',
-  cin: 'U64920TZ2016PTC031308',
+  // The company is a PUBLIC limited company: "Private" is not part of its name
+  // and the CIN's 6th-8th characters are PLC, not PTC (owner 2026-11-02). The
+  // name here is only a fallback — company_profile.legal_name is NOT NULL and
+  // always wins (migration 104 corrects the stored row); the CIN has no column,
+  // so this constant is the ONLY source for it on every document.
+  legal_name: 'Dhanam Investment and Finance Limited',
+  cin: 'U64920TZ2016PLC031308',
   rbi_registration_no: 'N-07.00831',
   // Printed in the locker agreement's page footer, which reproduces the
   // owner's supplied document line for line.

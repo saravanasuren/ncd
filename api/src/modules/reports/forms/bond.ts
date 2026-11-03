@@ -466,7 +466,7 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
        FROM applications a
        JOIN LATERAL (
          SELECT COALESCE(al.coupon_rate_pct, sch.coupon_rate_pct) AS coupon_rate_pct, al.tenure_months,
-                COALESCE(sch.face_value, 100000) AS face_value
+                COALESCE(sch.face_value, 100000) AS face_value, sch.name AS scheme_name
            FROM application_lines al LEFT JOIN schemes sch ON sch.id = al.scheme_id
           WHERE al.application_id = a.id ORDER BY al.id LIMIT 1
        ) l ON TRUE
@@ -508,6 +508,8 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
     return rd ? _fmtDate(rd) : null;
   }));
   const redLabel = redDates.length === 1 ? redDates[0]! : redDates.length ? 'As per breakup below' : '—';
+  const schemeNames = uniq(apps.map((a) => a.scheme_name ?? null));
+  const cSchemeLabel = schemeNames.length === 1 ? schemeNames[0]! : schemeNames.length ? schemeNames.join(' / ') : '—';
 
   const anyAllot = apps.map((a) => a.allotment_date).find(Boolean) ?? series.deemed_date ?? null;
   const year = new Date(String(anyAllot ?? new Date().toISOString())).getUTCFullYear();
@@ -538,6 +540,10 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
       [`Name of ${cHolder}`, (cust.full_name as string) || '—'],
       [`Address of ${cHolder}`, fullAddress, addrRowH],
       ['Nominee', cNominee],
+      // The scheme the holding is on (owner 2026-11-03). Every investment a
+      // customer holds in one series shares a rate and a term, so this is a
+      // single value; the uniq() guard only shows if that ever stops being true.
+      ['Scheme', cSchemeLabel],
       ['Investment Value (Rs.)', _fmtINR(totalInvested)],
       [`Number of ${cUnit}s`, numNcds != null ? String(numNcds) : '—'],
       ['Coupon Rate', rateLabel],

@@ -462,7 +462,7 @@ async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId
 async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, seriesId: number): Promise<void> {
   const apps = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.application_no, a.total_amount, a.allotment_date, a.maturity_date, a.status,
-            l.coupon_rate_pct, l.tenure_months, l.face_value
+            l.coupon_rate_pct, l.tenure_months, l.face_value, l.scheme_name
        FROM applications a
        JOIN LATERAL (
          SELECT COALESCE(al.coupon_rate_pct, sch.coupon_rate_pct) AS coupon_rate_pct, al.tenure_months,

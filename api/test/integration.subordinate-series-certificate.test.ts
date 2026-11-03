@@ -29,7 +29,7 @@ beforeAll(async () => {
   plainSeriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
   schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
   // The subordinate series run 60 months; the demo scheme defaults to 36.
-  await ctx.db.query('UPDATE schemes SET tenure_months = 60 WHERE id = $1', [schemeId]);
+  await ctx.db.query("UPDATE schemes SET tenure_months = 60, name = '13% - 60 Months - Monthly' WHERE id = $1", [schemeId]);
   subSeriesId = Number((await ctx.db.query(
     `INSERT INTO series (code, name, status, face_value, is_subordinate, close_date, deemed_date)
      VALUES ('SD3', 'Subordinate Debt 3', 'Open', 100000, TRUE, DATE '${CLOSE}', DATE '${CLOSE}') RETURNING id`)).rows[0]!.id);
@@ -125,6 +125,20 @@ describe('one bond per customer per series', () => {
     expect(text).toContain(squash('30-09-2031'));
     expect(text.toUpperCase()).not.toContain(caps('As per breakup below'));
     expect(text).toContain(caps('Rs. 10,00,000'));
+  });
+
+  it('prints the scheme NAME, not a dash', async () => {
+    // This shipped broken once: scheme_name was computed inside the query's
+    // LATERAL join but never listed in the OUTER select, so it never reached the
+    // renderer and the row printed "—" on a live certificate. Asserting the
+    // query is not enough — only the rendered page shows it.
+    const { customerId } = await holding(subSeriesId, 'Scheme Printed', '9552110008', [['2026-09-14', 500000]]);
+    const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    const text = squash(pdfText(await consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId)));
+    expect(text).toContain(squash('Scheme'));
+    expect(text).toContain(caps('13% - 60 Months - Monthly'));
+    // The label and a dash in the same cell is exactly what the bug looked like.
+    expect(text).not.toContain(squash('Scheme—'));
   });
 
   it('keeps each investment recorded separately underneath', async () => {

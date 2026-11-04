@@ -44,8 +44,9 @@ export async function nextSeq(tx: Db, key: string): Promise<number> {
  */
 /**
  * How many numbers we will step past before giving up. Only ever consumed when
- * a candidate is already held by a member of staff; 50 is far more than the
- * 15 staff codes currently sitting above the customer counter.
+ * a candidate is already held by a member of staff or another customer; 50 is
+ * far more than the 15 staff codes currently sitting above the customer
+ * counter, and more than any run of codes a repair has moved forward.
  */
 const MAX_CODE_SKIPS = 50;
 
@@ -74,13 +75,23 @@ export async function nextCode(
   // with a staff". Customer codes are safe to skip — nothing keys on them, the
   // real identity is the row id — whereas staff codes cannot move, because 142
   // customers name a staff code as their referrer.
+  // A code already worn by another CUSTOMER is skipped too. customer_code is
+  // uniquely indexed and nothing retries a duplicate on the enrolment path, so
+  // a counter sitting behind the codes in use would 500 the next enrolment —
+  // which is exactly what happened when migration 110 moved seven customers
+  // forward to clear staff codes and left the counter where it was. Asking the
+  // table rather than trusting the counter removes the whole class of drift,
+  // however it arises: a repair, a restored backup, a hand-typed code.
   let candidate = code;
   for (let skipped = 0; skipped < MAX_CODE_SKIPS; skipped++) {
     const clash = (await tx.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM users u JOIN roles r ON r.id = u.role_id
-        WHERE r.name <> 'customer' AND upper(COALESCE(u.code,'')) = upper($1)`, [candidate])).rows[0];
+      `SELECT (
+         (SELECT count(*) FROM users u JOIN roles r ON r.id = u.role_id
+           WHERE r.name <> 'customer' AND upper(COALESCE(u.code,'')) = upper($1))
+       + (SELECT count(*) FROM customers c WHERE upper(c.customer_code) = upper($1))
+       )::int AS n`, [candidate])).rows[0];
     if (!Number(clash?.n ?? 0)) return candidate;
     candidate = formatNumber(template, { seq: await nextSeq(tx, key), year });
   }
-  throw new Error(`could not find a customer code free of staff codes after ${MAX_CODE_SKIPS} attempts`);
+  throw new Error(`could not find an unused customer code after ${MAX_CODE_SKIPS} attempts`);
 }

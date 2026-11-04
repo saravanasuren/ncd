@@ -1,21 +1,23 @@
 /**
- * A customer cannot be referred by someone who did not exist yet.
+ * Staff and customers share the DHN#### code space.
  *
- * `customers.referred_by_text` is free text, and for imported customers it
- * usually holds the OLD system's customer code — a code that means nothing in
- * this book. As this book's own counter climbs it eventually MINTS that same
- * code for an unrelated person, and every old customer carrying it as text
- * suddenly appears to have been referred by whoever just got it.
+ * Staff carry codes like DHN1056 in users.code, and customers carry them in
+ * customers.customer_code. The two sequences run independently, so one code can
+ * name two different people.
  *
- * That is not hypothetical. The counter reached DHN1056 on 2026-11-03 and 26
- * customers going back to July immediately began showing a man enrolled that
- * morning, with no investments, as their referrer. Across the whole book every
- * code-based match was of this kind: 26 impossible, 0 genuine. 11 more codes
- * are held by 116 customers and will break one by one as the counter passes
- * each of them.
+ * Every DHN code actually used as a referrer in this book belongs to a STAFF
+ * member — all twelve of them, held by 142 customers. Staff refer customers,
+ * and whoever enrolled them wrote the referring colleague's code down. The data
+ * was never wrong.
  *
- * Same class as the application-number collision with the old system: two
- * systems minting into one code space.
+ * The resolver asked the customers table first. For months that was harmless,
+ * because no customer held any of those codes: the lookup missed and fell
+ * through to the staff match, which was right. Then the customer counter
+ * reached DHN1056 and handed it to a new customer, and 26 customers going back
+ * to July stopped showing the staff member who referred them and started
+ * showing a stranger enrolled that morning.
+ *
+ * So the order is the fix, and these tests pin it.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { startTestServer, type TestCtx } from './helpers/server.js';
@@ -23,69 +25,77 @@ import { resolveReferredBy } from '../src/modules/customers/service.js';
 
 let ctx: TestCtx;
 
-/** A customer with an explicit creation time, so the ordering is the test. */
-async function customer(code: string, name: string, createdAt: string, referredBy?: string) {
+async function customer(code: string, name: string, referredBy?: string) {
   const id = Number((await ctx.db.query<{ id: string }>(
-    `INSERT INTO customers (full_name, customer_code, phone, created_at, referred_by_text)
-     VALUES ($1,$2,$3,$4::timestamptz,$5) RETURNING id`,
-    [name, code, '95500' + Math.floor(Math.random() * 100000), createdAt, referredBy ?? null])).rows[0]!.id);
-  return { id, createdAt };
+    `INSERT INTO customers (full_name, customer_code, phone, referred_by_text)
+     VALUES ($1,$2,$3,$4) RETURNING id`,
+    [name, code, '95500' + Math.floor(Math.random() * 100000), referredBy ?? null])).rows[0]!.id);
+  return id;
+}
+
+async function staff(code: string, name: string) {
+  await ctx.db.query(
+    `INSERT INTO users (full_name, email, password_hash, role_id, code, is_active)
+     VALUES ($1, $2, 'x', (SELECT id FROM roles WHERE name = 'branch_staff'), $3, TRUE)`,
+    [name, `${code.toLowerCase()}@dhanam.finance`, code]);
 }
 
 beforeAll(async () => { ctx = await startTestServer(); });
 afterAll(async () => { await ctx.close(); });
 
-describe('a referrer code that this book later minted for someone else', () => {
-  it('is NOT shown as the referrer — the person did not exist yet', async () => {
-    // The old customer, carrying a code inherited from the previous system.
-    const old = await customer('DHN0634', 'Indira', '2026-07-18T10:00:00Z', 'DHN1056');
-    // ...and the unrelated person this book handed that code to, months later.
-    await customer('DHN1056', 'Someone Else Entirely', '2026-11-03T11:43:00Z');
+describe('a DHN code on "referred by" means the STAFF member who holds it', () => {
+  it('resolves to the staff member even when a customer has the same code', async () => {
+    // The exact collision: staff DHN1056 is the real referrer; a customer was
+    // later handed the same code by the independent customer counter.
+    await staff('DHN1056', 'S Ashokkumar');
+    await customer('DHN1056', 'Unrelated Customer');
 
-    const r = await resolveReferredBy(ctx.db, 'DHN1056', old.createdAt);
-    expect(r?.kind, 'a referrer born after the referee must not be claimed').toBe('text');
-    expect(r?.name).toBeNull();
-    // The raw code still shows, because that is genuinely all we know.
-    expect(r?.text).toBe('DHN1056');
+    const r = await resolveReferredBy(ctx.db, 'DHN1056');
+    expect(r?.kind, 'staff hold these codes; the customer must not win').toBe('staff');
+    expect(r?.name).toBe('S Ashokkumar');
   });
 
-  it('still resolves a genuine referral by an existing customer', async () => {
-    // The feature must keep working: an older customer referring a newer one.
-    await customer('DHN0100', 'The Real Referrer', '2026-01-10T09:00:00Z');
-    const later = await customer('DHN0900', 'Referred Later', '2026-06-01T09:00:00Z', 'DHN0100');
-
-    const r = await resolveReferredBy(ctx.db, 'DHN0100', later.createdAt);
-    expect(r?.kind).toBe('customer');
-    expect(r?.name).toBe('The Real Referrer');
-    expect(r?.code).toBe('DHN0100');
+  it('resolved correctly BEFORE the collision too, and still does', async () => {
+    // No customer holds this one yet — the state the other 11 codes are in.
+    await staff('DHN1084', 'Bindhu R');
+    const r = await resolveReferredBy(ctx.db, 'DHN1084');
+    expect(r?.kind).toBe('staff');
+    expect(r?.name).toBe('Bindhu R');
   });
 
-  it('accepts a referrer created on the same day', async () => {
-    // Two people enrolled in one sitting, one referring the other. The guard is
-    // about impossibility, not about being strict for its own sake.
-    await customer('DHN0200', 'Same Day Referrer', '2026-03-05T09:00:00Z');
-    const same = await customer('DHN0201', 'Same Day Referee', '2026-03-05T17:00:00Z', 'DHN0200');
-    const r = await resolveReferredBy(ctx.db, 'DHN0200', same.createdAt);
+  it('still resolves a genuine customer-referred-a-customer', async () => {
+    // No staff member holds this code, so the customer is the only candidate.
+    await customer('DHN0100', 'A Real Customer Referrer');
+    const r = await resolveReferredBy(ctx.db, 'DHN0100');
     expect(r?.kind).toBe('customer');
+    expect(r?.name).toBe('A Real Customer Referrer');
   });
 
   it('reaches the customer page, not just the helper', async () => {
-    const old = await customer('DHN0330', 'Yasotha', '2026-07-20T10:00:00Z', 'DHN1057');
-    await customer('DHN1057', 'Minted Yesterday', '2026-11-03T12:00:00Z');
+    await staff('DHN1204', 'Venkateswari S');
+    await customer('DHN1204', 'Collided Customer');
+    const id = await customer('DHN0330', 'Yasotha', 'DHN1204');
+
     const { getCustomerDetail } = await import('../src/modules/customers/service.js');
     const actor = { id: 1, permissions: ['*'], role: 'super_admin' } as never;
-    const page = await getCustomerDetail(ctx.db, actor, old.id) as { referredBy: { kind: string; name: string | null } | null };
-    expect(page.referredBy?.kind).toBe('text');
-    expect(page.referredBy?.name).toBeNull();
+    const page = await getCustomerDetail(ctx.db, actor, id) as { referredBy: { kind: string; name: string | null } | null };
+    expect(page.referredBy?.kind).toBe('staff');
+    expect(page.referredBy?.name).toBe('Venkateswari S');
   });
 
-  it('leaves a referrer that is not a code alone', async () => {
+  it('leaves a name-based referrer alone', async () => {
     // 504 customers carry a NAME rather than a code; none of this touches them.
     await ctx.db.query(
       `INSERT INTO agents (agent_code, full_name, source, commission_status)
        VALUES ('AG-9001','Viswanath','manual','Approved')`);
-    const r = await resolveReferredBy(ctx.db, 'Viswanath', '2026-01-01T00:00:00Z');
+    const r = await resolveReferredBy(ctx.db, 'Viswanath');
     expect(r?.kind).toBe('agent');
     expect(r?.name).toBe('Viswanath');
+  });
+
+  it('prints the raw text when nobody holds the code', async () => {
+    const r = await resolveReferredBy(ctx.db, 'DHN9999');
+    expect(r?.kind).toBe('text');
+    expect(r?.text).toBe('DHN9999');
   });
 });

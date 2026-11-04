@@ -225,39 +225,57 @@ async function assertVisible(db: Db, actor: AuthUser, customerId: number): Promi
 /**
  * Resolve a free-text "referred by" to a real person.
  *
- * `refereeCreatedAt` is the customer being looked at, and it is load-bearing:
- * a DHN code here is usually the OLD system's customer code, which means
- * nothing in this book. As this book's own counter climbs it eventually MINTS
- * those same codes for completely unrelated people, and the old customer who
- * carried the code as text suddenly appears to have been referred by whoever
- * just got it.
+ * STAFF AND CUSTOMERS SHARE THE DHN#### CODE SPACE. Staff carry codes like
+ * DHN1056 (users.code) and so do customers (customers.customer_code), and the
+ * two sequences are independent — so one code can name two different people.
  *
- * That happened: the counter reached DHN1056 on 2026-11-03, and 26 customers
- * going back to July immediately began showing a man enrolled that morning,
- * with no investments, as their referrer. Every single code-based match in the
- * book was of this kind — 26 impossible, 0 genuine.
+ * Every DHN code actually used as a referrer in this book belongs to a STAFF
+ * member: all twelve of them, held by 142 customers. That is the real meaning
+ * of the field — staff refer customers, and whoever enrolled them wrote the
+ * referring colleague's code down.
  *
- * So a customer match is only accepted when the referrer already existed. You
- * cannot be referred by someone who did not exist yet. A legitimate referral
- * by an existing customer still resolves; an inherited code falls through and
- * prints as plain text, which is what it is.
+ * Staff are therefore resolved FIRST. This used to check customers first, and
+ * for months that was harmless because no customer held any of those codes: the
+ * lookup missed and fell through to the staff match, which was right. Then on
+ * 2026-11-03 the customer counter reached DHN1056 and handed it to a new
+ * customer — and 26 customers going back to July instantly stopped showing the
+ * staff member who referred them and started showing a stranger enrolled that
+ * morning. Eleven more codes, held by 116 customers, were queued to break the
+ * same way as the counter passed each of them.
  *
- * Same class as [[appno-collision-with-wealth]]: two systems minting into one
- * code space. The lesson there was never to key cross-system identity on a
- * number the other system also issues, and this is that lesson again.
+ * Nothing about those 142 records was ever wrong. The resolver simply asked the
+ * wrong table first, and the collision made the wrong answer available.
+ *
+ * A customer referring a customer still resolves — it is just no longer allowed
+ * to win a code that a member of staff already holds.
  */
-export async function resolveReferredBy(db: Db, raw: string | null, refereeCreatedAt?: string | Date | null) {
+export async function resolveReferredBy(db: Db, raw: string | null) {
   const t = (raw ?? '').trim();
   if (!t) return null;
+
+  const staffByCode = async () => (await db.query<{ id: string; full_name: string; code: string | null }>(
+    `SELECT u.id, u.full_name, u.code FROM users u JOIN roles r ON r.id = u.role_id
+      WHERE r.name <> 'customer' AND upper(COALESCE(u.code,'')) = upper($1) LIMIT 1`, [t])).rows[0];
+  const customerByCode = async () => (await db.query<{ id: string; full_name: string; customer_code: string }>(
+    'SELECT id, full_name, customer_code FROM customers WHERE upper(customer_code) = upper($1) LIMIT 1', [t])).rows[0];
+
+  // A DHN code is a CODE, so it is only ever matched against codes — staff
+  // first, because every one of these in the book belongs to staff, then a
+  // customer for the genuine customer-referred-a-customer case.
+  //
+  // Deliberately NOT matched against an agent's NAME here. An unmatched
+  // referrer creates a placeholder agent named after the raw text, so an agent
+  // literally called "DHN1056" can exist; letting a name match win would hand
+  // the referral to a placeholder instead of the real person.
   if (/^DHN\d+$/i.test(t)) {
-    const cust = (await db.query<{ id: string; full_name: string; customer_code: string; created_at: string }>(
-      'SELECT id, full_name, customer_code, created_at FROM customers WHERE upper(customer_code) = upper($1) LIMIT 1', [t])).rows[0];
-    const bornAfterReferee = cust && refereeCreatedAt
-      && new Date(String(cust.created_at)).getTime() > new Date(String(refereeCreatedAt)).getTime();
-    if (cust && !bornAfterReferee) {
-      return { kind: 'customer' as const, id: Number(cust.id), name: cust.full_name, code: cust.customer_code, text: t };
-    }
+    const u = await staffByCode();
+    if (u) return { kind: 'staff' as const, id: Number(u.id), name: u.full_name, code: u.code, text: t };
+    const cust = await customerByCode();
+    if (cust) return { kind: 'customer' as const, id: Number(cust.id), name: cust.full_name, code: cust.customer_code, text: t };
+    return { kind: 'text' as const, id: null, name: null, code: null, text: t };
   }
+
+  // Anything else — a name, or an AG- code — resolves as it always has.
   const ag = (await db.query<{ id: string; full_name: string; agent_code: string }>(
     `SELECT id, full_name, agent_code FROM agents
       WHERE deleted_at IS NULL AND (upper(agent_code) = upper($1) OR lower(btrim(full_name)) = lower(btrim($1))) LIMIT 1`, [t])).rows[0];
@@ -302,8 +320,7 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
   // it. It's free text — 357 are names, 41 a customer code, 4 an agent code —
   // so resolve it to a real person where we can, and print the raw text where
   // we can't (some codes, e.g. DHN1084, point at records not in this book).
-  const referredBy = await resolveReferredBy(db, (c?.referred_by_text as string | null) ?? null,
-    (c?.created_at as string | null) ?? null);
+  const referredBy = await resolveReferredBy(db, (c?.referred_by_text as string | null) ?? null);
   const bankAccounts = (await db.query('SELECT * FROM customer_bank_accounts WHERE customer_id = $1 ORDER BY is_active DESC, id', [id])).rows;
   const nominees = (await db.query('SELECT * FROM nominees WHERE customer_id = $1', [id])).rows;
   const documents = (await db.query('SELECT id, doc_type, original_filename, origin, uploaded_at FROM customer_documents WHERE customer_id = $1', [id])).rows;

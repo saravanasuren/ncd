@@ -29,6 +29,18 @@ redemptionsRouter.post('/:id/waive-penalty', requirePermission('approvals:check-
     res.json(await s.adjustPrematurePenalty(getDb(), req.user!, Number(req.params.id), input));
   }));
 
+// The approver corrects the redemption date before approving. PENDING ONLY
+// (owner 2026-11-04: "once its approved means the money is gone out") — and the
+// date drives the broken-period interest, which is recomputed with it.
+redemptionsRouter.post('/:id/redemption-date', requirePermission('approvals:check-premature'),
+  asyncHandler(async (req, res) => {
+    const input = z.object({
+      redemption_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
+      reason: z.string().min(3),
+    }).parse(req.body);
+    res.json(await s.changePrematureRedemptionDate(getDb(), req.user!, Number(req.params.id), input));
+  }));
+
 // Staff picks up a customer/app request and starts the 2-level approval.
 redemptionsRouter.post('/:id/submit-for-approval', requirePermission('redemptions:initiate'),
   asyncHandler(async (req, res) => res.status(201).json({ request: await s.submitForApproval(getDb(), req.user!, Number(req.params.id)) })));

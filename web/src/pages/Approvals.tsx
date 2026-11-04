@@ -208,6 +208,63 @@ function PrematureWaive({ redemptionId, penalty, netPayment, waived, onDone }: {
   );
 }
 
+/**
+ * The approver corrects the redemption date before approving (owner
+ * 2026-11-04). Pending only — once approved the money has gone out — which is
+ * why this lives on the approval card and nowhere else.
+ *
+ * The date is the end of the interest accrual, so the broken-period interest
+ * moves with it. The new figure is shown back rather than left to be
+ * discovered on next month's sheet.
+ */
+function PrematureRedemptionDate({ redemptionId, current, onDone }: {
+  redemptionId: number; current: string | null; onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState(current ?? '');
+  const [reason, setReason] = useState('');
+  const [err, setErr] = useState('');
+  const [done, setDone] = useState<{ from: string; to: string; was: number; now: number } | null>(null);
+  const apply = useMutation({
+    mutationFn: () => api.post<{ redemption_date: string; previous_date: string; broken_interest: number; broken_interest_previous: number }>(
+      `/api/redemptions/${redemptionId}/redemption-date`, { redemption_date: date, reason: reason.trim() }),
+    onSuccess: (r) => {
+      setDone({ from: r.previous_date, to: r.redemption_date, was: r.broken_interest_previous, now: r.broken_interest });
+      setOpen(false); setReason(''); setErr(''); onDone();
+    },
+    onError: (e) => setErr(e instanceof ApiError ? e.message : 'Failed'),
+  });
+  return (
+    <div className="px-4 pb-3 -mt-1">
+      <div className="text-xs text-text-muted">
+        Redemption date <span className="font-semibold text-text mono">{current ?? '—'}</span>
+        {' '}<button onClick={() => setOpen((s) => !s)} className="text-primary hover:underline">{open ? 'Cancel' : 'Change date'}</button>
+        {done && (
+          <span className="ml-2 text-success">
+            · moved {done.from} → {done.to}, broken interest {formatINR(done.was)} → {formatINR(done.now)}
+          </span>
+        )}
+      </div>
+      {open && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 bg-bg rounded p-2.5">
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+            className="px-2 py-1 text-xs border border-border-strong rounded" />
+          <input className="flex-1 min-w-[10rem] px-2 py-1 text-xs border border-border-strong rounded"
+            placeholder="Reason (required)" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <button disabled={apply.isPending || !date || date === current || reason.trim().length < 3}
+            onClick={() => apply.mutate()}
+            className="text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover">Change date</button>
+          <span className="text-[11px] text-text-muted w-full">
+            The date ends the interest period, so the broken-period interest is recomputed with it. The
+            principal and any penalty do not change.
+          </span>
+          {err && <span className="text-xs text-danger w-full">{err}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** App/LockerHub investment notice: already live — lets the admin assign a
  * staff/agent when the customer gave no referral code. */
 function AppInvestmentNotice({ appId, amount, needsAttribution, referredBy, onDone }: {
@@ -438,6 +495,15 @@ export function ApprovalsPage() {
                 penalty={Number(r.metadata.penalty ?? 0)}
                 netPayment={Number(r.metadata.net_payment ?? 0)}
                 waived={r.metadata.penalty_waived === true}
+                onDone={() => qc.invalidateQueries({ queryKey: ['approvals'] })}
+              />
+            )}
+            {/* Not gated on the penalty-waiver setting: a wrong DATE is a
+                correction, not a concession. */}
+            {r.canAct && r.request_type === 'premature_redemption' && (
+              <PrematureRedemptionDate
+                redemptionId={Number(r.metadata.redemption_id)}
+                current={r.metadata.redemption_date ? String(r.metadata.redemption_date).slice(0, 10) : null}
                 onDone={() => qc.invalidateQueries({ queryKey: ['approvals'] })}
               />
             )}

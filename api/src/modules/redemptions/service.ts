@@ -70,79 +70,24 @@ async function createRequest(
   // "paid separately next cycle" never fired — the line closes, so the interest
   // run (Active lines only) could never pay it. Single-Active-line apps compute
   // exactly; multi-line uses the first line's rate on the total.
-  let brokenArgs: Partial<Parameters<typeof computeRedemption>[0]> = {};
-  let brokenLine: Record<string, unknown> | undefined;
-  if (input.type === 'premature') {
-    brokenLine = (await tx.query<Record<string, unknown>>(
-      `SELECT l.id AS line_id, l.coupon_rate_pct, l.day_count_convention, l.payout_frequency,
-              l.amount AS line_amount, l.scheme_id,
-              c.is_nri, c.tds_applicable AS cust_tds, c.tax_form, c.tax_form_expires_on,
-              COALESCE((SELECT max(ds.due_date) FROM disbursement_schedule ds
-                         WHERE ds.line_id = l.id AND ds.due_type IN ('Interest','BrokenInterest') AND ds.status = 'Paid'),
-                       a.interest_start_date) AS paid_through
-         FROM application_lines l JOIN applications a ON a.id = l.application_id
-         JOIN customers c ON c.id = a.customer_id
-        WHERE l.application_id = $1 AND l.status = 'Active' ORDER BY l.id LIMIT 1`, [input.applicationId])).rows[0];
-    const paidThrough = toISODate((brokenLine?.paid_through as string | null) ?? null);
-    if (brokenLine && paidThrough) {
-      brokenArgs = {
-        couponRatePct: Number(brokenLine.coupon_rate_pct),
-        lastRegularPayoutDate: paidThrough,
-        redemptionDate: redDate,
-        convention: brokenLine.day_count_convention as never,
-      };
-    }
-  }
-  // Broken interest accrues on the amount being WITHDRAWN, not on the full
-  // outstanding (owner 2026-10-21: "redemption row should show the redeemed
-  // amount"). For a full redemption the two are identical; for a partial one
-  // this is the difference between a correct sheet and an overpayment.
+  const calc = computeRedemption({ principal, penalty });
+  // The broken-period accrual, and its TDS, from the ONE helper the approval
+  // card's date change also uses — see accrueBrokenInterest for why the two
+  // must not be able to drift.
   //
-  // It used to run on the full outstanding, on a reading from 2026-07-22: the
-  // broken-interest row advances the line's paid-through watermark, so the
-  // retained portion's interest "must be paid out now or be silently lost, and
-  // the remainder then accrues fresh from the redemption date".
-  //
-  // That premise does not hold. The watermark only moves when a row is PAID
-  // (see the `status = 'Paid'` in the from_date lookups), and BOTH rows settle
-  // in the SAME monthly batch — so at the moment the sheet is built the
-  // retained portion still starts from the last paid date, and its stub days
-  // are billed twice: once inside the redemption row's full-outstanding basis,
-  // once on its own Balance After Redemption row.
-  //
-  // Induja (APP-2026-000514), Rs 40L with Rs 20L withdrawn on 06-10-2026,
-  // last paid 28-09:
+  // It accrues on the amount being WITHDRAWN, not the full outstanding (owner
+  // 2026-10-21). Induja, Rs 40L with Rs 20L withdrawn on 06-10-2026, last paid
+  // 28-09:
   //        was: 40L x 7d = Rs 9,205  +  20L x 30d = Rs 19,726  = Rs 28,931
   //        now: 20L x 7d = Rs 4,603  +  20L x 30d = Rs 19,726  = Rs 24,329
   //       owed: 40L x 7d            +  20L x 23d              = Rs 24,328
   // The retained half keeps every day it earned — it is simply paid on its own
   // row, from the last paid date, which is what that row was always for.
-  const calc = computeRedemption({ principal, penalty });
-  const accrued = computeRedemption({ principal, penalty: { mode: 'flat', value: 0 }, ...brokenArgs });
-  // 🔒 Whole rupees, owner-approved 2026-08-16. A redemption's broken interest
-  // is paid on the monthly interest sheet as a 'Redemption' row and is taken
-  // there AS IS — never recomputed — so if it is not rounded HERE it arrives on
-  // an otherwise whole-rupee NEFT file carrying paise.
-  calc.brokenInterest = roundRupee(accrued.brokenInterest);
-  // TDS on the broken interest (same rule the interest run uses), then fold the
-  // net into the settlement. net_payment = (principal − penalty) + brokenNet.
-  let brokenNet = 0;
-  let brokenTds = 0;
-  if (calc.brokenInterest > 0 && brokenLine) {
-    const tdsRule = brokenLine.scheme_id
-      ? (await tx.query<{ rate_pct: number }>('SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [brokenLine.scheme_id])).rows[0] ?? DEFAULT_TDS_RULE
-      : DEFAULT_TDS_RULE;
-    brokenTds = roundRupee(computeTds(
-      tdsRule,
-      { is_nri: brokenLine.is_nri as boolean, tds_applicable: brokenLine.cust_tds as boolean,
-        tax_form: brokenLine.tax_form as string | null, tax_form_expires_on: toISODate(brokenLine.tax_form_expires_on as string | null) },
-      { payout_frequency: brokenLine.payout_frequency as string, amount: Number(brokenLine.line_amount) },
-      { due_type: 'BrokenInterest', gross_amount: calc.brokenInterest, due_date: redDate },
-    ));
-    // Both inputs whole ⇒ whole, and NOT re-rounded — same rule as the
-    // interest run: net = gross − tds, nothing more.
-    brokenNet = calc.brokenInterest - brokenTds;
-  }
+  const broken = input.type === 'premature'
+    ? await accrueBrokenInterest(tx, input.applicationId, principal, redDate)
+    : { gross: 0, tds: 0, paidThrough: null };
+  calc.brokenInterest = broken.gross;
+  const brokenTds = broken.tds;
   // Owner 2026-07-24: the broken interest is NOT bundled into the redemption
   // transfer any more — it is paid in that month's interest batch as a
   // 'Redemption' row. So the redemption pays principal less penalty only.
@@ -155,6 +100,56 @@ async function createRequest(
     [redNo, input.applicationId, input.type, calc.principal, calc.penalty, netPayment, calc.brokenInterest, brokenTds, redDate, redDate, input.reason, input.source, input.byCustomer, input.createdBy]
   );
   return { id: Number(rows[0]!.id), redemption_no: redNo, principal: calc.principal, penalty: calc.penalty, netPayment, brokenInterest: calc.brokenInterest };
+}
+
+/**
+ * The broken-period accrual for a premature redemption: last PAID interest
+ * date → the redemption date, on the amount being withdrawn, plus its TDS.
+ *
+ * Extracted so `createRequest` and `changePrematureRedemptionDate` cannot
+ * drift: a date changed on the approval card must produce exactly the figure
+ * the request would have carried had it been raised on that date in the first
+ * place. A test pins that equivalence.
+ */
+async function accrueBrokenInterest(
+  tx: Db, applicationId: number, withdrawn: number, redDate: string
+): Promise<{ gross: number; tds: number; paidThrough: string | null }> {
+  const line = (await tx.query<Record<string, unknown>>(
+    `SELECT l.id AS line_id, l.coupon_rate_pct, l.day_count_convention, l.payout_frequency,
+            l.amount AS line_amount, l.scheme_id,
+            c.is_nri, c.tds_applicable AS cust_tds, c.tax_form, c.tax_form_expires_on,
+            COALESCE((SELECT max(ds.due_date) FROM disbursement_schedule ds
+                       WHERE ds.line_id = l.id AND ds.due_type IN ('Interest','BrokenInterest') AND ds.status = 'Paid'),
+                     a.interest_start_date) AS paid_through
+       FROM application_lines l JOIN applications a ON a.id = l.application_id
+       JOIN customers c ON c.id = a.customer_id
+      WHERE l.application_id = $1 AND l.status = 'Active' ORDER BY l.id LIMIT 1`, [applicationId])).rows[0];
+  const paidThrough = toISODate((line?.paid_through as string | null) ?? null);
+  if (!line || !paidThrough) return { gross: 0, tds: 0, paidThrough: null };
+
+  const accrued = computeRedemption({
+    principal: withdrawn, penalty: { mode: 'flat', value: 0 },
+    couponRatePct: Number(line.coupon_rate_pct),
+    lastRegularPayoutDate: paidThrough,
+    redemptionDate: redDate,
+    convention: line.day_count_convention as never,
+  });
+  // 🔒 Whole rupees, owner-approved 2026-08-16 — the interest sheet takes this
+  // AS IS and never recomputes it, so paise here reach the NEFT file.
+  const gross = roundRupee(accrued.brokenInterest);
+  if (gross <= 0) return { gross: 0, tds: 0, paidThrough };
+
+  const tdsRule = line.scheme_id
+    ? (await tx.query<{ rate_pct: number }>('SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [line.scheme_id])).rows[0] ?? DEFAULT_TDS_RULE
+    : DEFAULT_TDS_RULE;
+  const tds = roundRupee(computeTds(
+    tdsRule,
+    { is_nri: line.is_nri as boolean, tds_applicable: line.cust_tds as boolean,
+      tax_form: line.tax_form as string | null, tax_form_expires_on: toISODate(line.tax_form_expires_on as string | null) },
+    { payout_frequency: line.payout_frequency as string, amount: Number(line.line_amount) },
+    { due_type: 'BrokenInterest', gross_amount: gross, due_date: redDate },
+  ));
+  return { gross, tds, paidThrough };
 }
 
 /** Customer / app requests a redemption (no approval yet — lands in the staff queue). */
@@ -264,6 +259,98 @@ export async function adjustPrematurePenalty(db: Db, actor: AuthUser, redemption
     }
     await writeAudit(tx, { actorId: actor.id, action: 'redemption.penalty-waive', entityType: 'redemptions', entityId: redemptionId, before: { penalty: current }, after: { penalty: newPenalty, net_payment: newNet, reason: input.reason.trim() } });
     return { redemption_id: redemptionId, penalty: newPenalty, penalty_original: original, net_payment: newNet };
+  });
+}
+
+/**
+ * THE APPROVER CORRECTS THE REDEMPTION DATE BEFORE APPROVING (owner 2026-11-04:
+ * "i need date change for for the approver to change if there is any changes
+ * for redemption dates" — and, asked when: "only while approveing, once its
+ * approved means the money is gone out").
+ *
+ * The date is not a label. It is the END OF THE INTEREST ACCRUAL, so moving it
+ * moves the broken-period interest and its TDS with it. Before this there was
+ * no edit path at all and a wrong date was a hand-written database change —
+ * done twice in October, each time with a five-step runbook.
+ *
+ * PENDING ONLY, by the owner's rule above. That keeps this far simpler than
+ * those manual fixes were: the `Premature` and `BrokenInterest` schedule rows
+ * are not written until FINAL APPROVAL, so at this stage there are none to
+ * move and no paid row can be disturbed. What there IS to keep in step is the
+ * approval request's metadata — the final-approve handler reads
+ * `metadata.redemption_date` to date both rows it creates, so changing the
+ * redemption alone would approve on the stale date.
+ *
+ * `net_payment` is deliberately untouched: it is principal − penalty, and the
+ * broken interest is paid separately on the monthly sheet (owner 2026-07-24).
+ */
+export async function changePrematureRedemptionDate(
+  db: Db, actor: AuthUser, redemptionId: number, input: { redemption_date: string; reason: string }
+) {
+  const newDate = toISODate(input.redemption_date);
+  if (!newDate) throw errors.badRequest('A valid redemption date is required');
+  if (!input.reason?.trim() || input.reason.trim().length < 3) throw errors.badRequest('A reason is required');
+
+  return db.withTx(async (tx) => {
+    const red = (await tx.query<{ application_id: string; type: string; status: string; principal: string;
+                                 penalty: string; redemption_date: string; broken_interest: string;
+                                 broken_tds: string; approval_request_id: string | null }>(
+      `SELECT application_id, type, status, principal, penalty, redemption_date,
+              broken_interest, broken_tds, approval_request_id
+         FROM redemptions WHERE id = $1 FOR UPDATE`, [redemptionId])).rows[0];
+    if (!red) throw errors.notFound('Redemption not found');
+    if (red.type !== 'premature') throw errors.unprocessable('Only a premature redemption carries a date that can be changed here');
+    if (red.status !== 'Requested') {
+      throw errors.unprocessable('This redemption has already been approved — the money has gone out, so its date can no longer be changed here.');
+    }
+    const oldDate = toISODate(red.redemption_date)!;
+    if (newDate === oldDate) throw errors.badRequest('That is already the redemption date');
+
+    const withdrawn = Number(red.principal);
+    const probe = await accrueBrokenInterest(tx, Number(red.application_id), withdrawn, oldDate);
+    // The date cannot move back behind interest the customer has already been
+    // paid — that period is settled, and accruing across it again would either
+    // pay it twice or silently come out at zero.
+    if (probe.paidThrough && newDate <= probe.paidThrough) {
+      throw errors.unprocessable(
+        `Interest is already paid up to ${probe.paidThrough}, so the redemption cannot be dated on or before it.`);
+    }
+    // VALIDATE THE ENGINE AGAINST THE STORED FIGURE FIRST. If recomputing at
+    // the CURRENT date does not reproduce what is on the row, something about
+    // this redemption is not what we think it is, and the new number would be
+    // no more trustworthy. Refuse rather than quietly write a different figure.
+    if (Math.abs(probe.gross - Number(red.broken_interest)) > 0.51) {
+      throw errors.unprocessable(
+        `Cannot safely recompute: this redemption records ₹${Number(red.broken_interest).toLocaleString('en-IN')} of broken interest but the engine makes it ₹${probe.gross.toLocaleString('en-IN')} at the same date. Please report this instead of changing the date.`);
+    }
+
+    const next = await accrueBrokenInterest(tx, Number(red.application_id), withdrawn, newDate);
+
+    await tx.query(
+      `UPDATE redemptions SET redemption_date = $1::date, broken_interest = $2, broken_tds = $3 WHERE id = $4`,
+      [newDate, next.gross, next.tds, redemptionId]);
+
+    // The final-approve handler dates both schedule rows off this. Without it
+    // the approval would still use the old date.
+    if (red.approval_request_id) {
+      await tx.query(
+        `UPDATE approval_requests
+            SET metadata = metadata || jsonb_build_object('redemption_date', $1::text, 'broken_interest', $2::numeric, 'date_changed', true)
+          WHERE id = $3`,
+        [newDate, next.gross, Number(red.approval_request_id)]);
+    }
+
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'redemption.date-changed', entityType: 'redemptions', entityId: redemptionId,
+      before: { redemption_date: oldDate, broken_interest: Number(red.broken_interest), broken_tds: Number(red.broken_tds) },
+      after: { redemption_date: newDate, broken_interest: next.gross, broken_tds: next.tds, reason: input.reason.trim() },
+    });
+    return {
+      redemption_id: redemptionId, redemption_date: newDate, previous_date: oldDate,
+      broken_interest: next.gross, broken_tds: next.tds,
+      broken_interest_previous: Number(red.broken_interest),
+      accrues_from: next.paidThrough,
+    };
   });
 }
 

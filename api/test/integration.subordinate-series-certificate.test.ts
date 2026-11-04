@@ -88,7 +88,7 @@ describe('one bond per customer per series', () => {
     const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
     const text = squash(pdfText(await consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId)));
 
-    expect(text).toContain(caps('Rs. 15,00,000'));
+    expect(text).toContain(squash('Rs. 15,00,000'));
     expect(text).toContain(squash('Subordinate Debt Certificate'));
     // 15 bonds of Rs 1,00,000, not 3 documents.
     expect(text).toContain(squash('Number of Bonds'));
@@ -124,7 +124,7 @@ describe('one bond per customer per series', () => {
     expect(text).toContain(squash('30-09-2026'));
     expect(text).toContain(squash('30-09-2031'));
     expect(text.toUpperCase()).not.toContain(caps('As per breakup below'));
-    expect(text).toContain(caps('Rs. 10,00,000'));
+    expect(text).toContain(squash('Rs. 10,00,000'));
   });
 
   it('prints the scheme NAME, not a dash', async () => {
@@ -184,5 +184,97 @@ describe('the per-investment certificate is not issued for such a series', () =>
     const serial = (await ctx.db.query<{ s: string }>(
       'SELECT bond_serial_no AS s FROM applications WHERE id = $1', [appIds[0]])).rows[0]!.s;
     expect(serial).toMatch(/^BC-2026-\d{6}$/);
+  });
+});
+
+/** Pages in a rendered PDF. pdfkit writes one `/Type /Page` object per page and
+ *  a single `/Type /Pages` tree, which the negative lookahead excludes. */
+function pageCount(buf: Buffer): number {
+  return (buf.toString('latin1').match(/\/Type\s*\/Page(?!s)/g) || []).length;
+}
+
+describe('what the bond names, and how it spells money', () => {
+  it('names the series, directly under the certificate number', async () => {
+    // The SD- number does not say which tranche the bond belongs to — those run
+    // in one sequence across every subordinate series — so the certificate said
+    // nothing about it at all (owner 2026-11-04).
+    const { customerId } = await holding(subSeriesId, 'Series Named', '9552110009', [['2026-09-18', 500000]]);
+    const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    const text = squash(pdfText(await consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId)));
+
+    // The NAME, in the capitals the subordinate form prints its details in.
+    expect(text).toContain('Series' + caps('Subordinate Debt 3'));
+    // Between the certificate number and the holder, not appended at the end.
+    expect(text.indexOf('CertificateNo')).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('Series' + caps('Subordinate Debt 3')))
+      .toBeGreaterThan(text.indexOf('CertificateNo'));
+    expect(text.indexOf('Series' + caps('Subordinate Debt 3')))
+      .toBeLessThan(text.indexOf(squash('Name of Bond Holder')));
+  });
+
+  it('spells the rupee prefix Rs., not RS.', async () => {
+    // The subordinate form prints its filled-in details in capitals, which
+    // turned _fmtINR's "Rs." into "RS." on every money row while the same
+    // abbreviation on the pill and in the legal paragraph stayed "Rs.".
+    const { customerId } = await holding(subSeriesId, 'Rupee Spelling', '9552110010', [['2026-09-19', 700000]]);
+    const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    const text = squash(pdfText(await consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId)));
+
+    expect(text).toContain(squash('Rs. 7,00,000'));   // investment + redemption value
+    expect(text).toContain(squash('Rs. 1,00,000'));   // face value per bond
+    expect(text).not.toContain(squash('RS. 7,00,000'));
+    // No money row anywhere on the page carries the shouted form.
+    expect(text).not.toMatch(/RS\.\d/);
+  });
+
+  it('still prints on a single page with the extra row', async () => {
+    // Thirteen rows instead of twelve. A long address is the case with the
+    // least room left — its row grows to fit.
+    const cust = await admin.post('/api/customers', {
+      full_name: 'Long Address Holder', phone: '9552110011',
+      address: 'DOOR NO 136-A, OTTANTHOTTAM, ENNAMANGALAM, SECOND STREET EXTENSION',
+      city: 'BHAVANI', district: 'ERODE', state: 'TAMIL NADU', pincode: '638501',
+    });
+    const customerId = Number(cust.json.id);
+    const app = await admin.post('/api/applications', {
+      ...requiredInvestmentFields(), customer_id: customerId, series_id: subSeriesId,
+      scheme_id: schemeId, amount: 1500000, date_money_received: '2026-09-21',
+    });
+    await approveInvestment(checker, app);
+
+    const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    const buf = await consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId);
+    expect(pageCount(buf)).toBe(1);
+    expect(squash(pdfText(buf))).toContain('Series' + caps('Subordinate Debt 3'));
+  });
+
+  it('carries the series on a reprint of a per-investment bond too', async () => {
+    const { appIds } = await holding(subSeriesId, 'Reprint Series', '9552110012', [['2026-09-22', 500000]]);
+    await ctx.db.query("UPDATE applications SET bond_serial_no = 'BC-2026-000018' WHERE id = $1", [appIds[0]]);
+    const { bondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    const buf = await bondCertificatePdf(ctx.db, appIds[0]!);
+    const text = squash(pdfText(buf));
+    expect(text).toContain('Series' + caps('Subordinate Debt 3'));
+    expect(text).toContain(squash('Rs. 5,00,000'));
+    expect(text).not.toMatch(/RS\.\d/);
+    expect(pageCount(buf)).toBe(1);
+  });
+
+  it('leaves the Debenture Certificate exactly as it was', async () => {
+    // Neither change touches the form NCD 27/28 print on: no Series row (it has
+    // carried Category all along) and its values were never capitalised, so its
+    // "Rs." was always correct.
+    const { appIds } = await holding(plainSeriesId, 'Untouched Debenture', '9552110013', [['2026-09-23', 500000]]);
+    const { bondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    const buf = await bondCertificatePdf(ctx.db, appIds[0]!);
+    const text = squash(pdfText(buf));
+    expect(text).toContain(squash('Debenture Certificate'));
+    expect(text).toContain(squash('Category'));
+    expect(text).toContain(squash('Date of Allotment'));
+    expect(text).toContain(squash('Rs. 5,00,000'));
+    // The Series row is the subordinate form's; "...Series" here is Category's
+    // own value, which is why this checks for the label-plus-value run.
+    expect(text).not.toContain('Series' + caps('NCD DEMO'));
+    expect(pageCount(buf)).toBe(1);
   });
 });

@@ -219,7 +219,14 @@ function _drawDetailTable(doc: Doc, y: number, rows: Array<[string, string, numb
     // capitals; labels keep their normal case. Scoped to that form so the
     // Debenture Certificate the other series get is left exactly as it was.
     const value = String(rows[i]![1] || '—');
-    doc.font('Helvetica-Bold').text(upper ? value.toUpperCase() : value, x + labelW + 12, rowY + 7, { width: valueW - 24 });
+    // ...except the rupee prefix, which is an abbreviation and not part of the
+    // filled-in detail: it reads "Rs." here as it does everywhere else on the
+    // page — the pill, the legal paragraph and the labels (owner 2026-11-04,
+    // "its RS both in capital - we need it like Rs."). Anchored to the start and
+    // to a following figure so it can only ever catch the prefix _fmtINR puts
+    // there, never an address that opens "RS PURAM" or "RS. NO 45".
+    const shown = upper ? value.toUpperCase().replace(/^RS\.(?= [\d—])/, 'Rs.') : value;
+    doc.font('Helvetica-Bold').text(shown, x + labelW + 12, rowY + 7, { width: valueW - 24 });
     rowY += rowH;
   }
   doc.restore();
@@ -382,6 +389,12 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
       // (owner 2026-10-29/30 — it prints as "—" until the series is allotted
       // and Date of Application now covers the question it was there to answer).
       ['Certificate No', certificateNo || '—'],
+      // Which tranche of the subordinate book this bond belongs to (owner
+      // 2026-11-04). The certificate number alone does not say: SD- numbers run
+      // in one sequence across every subordinate series. The series NAME, since
+      // that is what reads on a document a holder keeps ("Subordinate Debt 3",
+      // not "SD3"); the code is only a fallback for a series left unnamed.
+      ['Series', String(a.series_name || a.series_code || '—')],
       [`Name of ${holder}`, (a.full_name as string) || '—'],
       [`Address of ${holder}`, fullAddress, addrRowH],
       ['Nominee', nomineeLabel],
@@ -551,6 +564,8 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
       // single application date to print — the per-investment certificates
       // carry those. Everything else matches the subordinate form.
       ['Certificate No', certificateNo],
+      // As above — the tranche this bond belongs to.
+      ['Series', String(series.name || series.code || '—')],
       [`Name of ${cHolder}`, (cust.full_name as string) || '—'],
       [`Address of ${cHolder}`, fullAddress, addrRowH],
       ['Nominee', cNominee],

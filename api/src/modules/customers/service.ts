@@ -222,13 +222,41 @@ async function assertVisible(db: Db, actor: AuthUser, customerId: number): Promi
  * unambiguous, then an agent (code or name), then staff. Returns the raw text
  * with kind 'text' when nothing matches, so the UI still shows what was typed.
  */
-export async function resolveReferredBy(db: Db, raw: string | null) {
+/**
+ * Resolve a free-text "referred by" to a real person.
+ *
+ * `refereeCreatedAt` is the customer being looked at, and it is load-bearing:
+ * a DHN code here is usually the OLD system's customer code, which means
+ * nothing in this book. As this book's own counter climbs it eventually MINTS
+ * those same codes for completely unrelated people, and the old customer who
+ * carried the code as text suddenly appears to have been referred by whoever
+ * just got it.
+ *
+ * That happened: the counter reached DHN1056 on 2026-11-03, and 26 customers
+ * going back to July immediately began showing a man enrolled that morning,
+ * with no investments, as their referrer. Every single code-based match in the
+ * book was of this kind — 26 impossible, 0 genuine.
+ *
+ * So a customer match is only accepted when the referrer already existed. You
+ * cannot be referred by someone who did not exist yet. A legitimate referral
+ * by an existing customer still resolves; an inherited code falls through and
+ * prints as plain text, which is what it is.
+ *
+ * Same class as [[appno-collision-with-wealth]]: two systems minting into one
+ * code space. The lesson there was never to key cross-system identity on a
+ * number the other system also issues, and this is that lesson again.
+ */
+export async function resolveReferredBy(db: Db, raw: string | null, refereeCreatedAt?: string | Date | null) {
   const t = (raw ?? '').trim();
   if (!t) return null;
   if (/^DHN\d+$/i.test(t)) {
-    const cust = (await db.query<{ id: string; full_name: string; customer_code: string }>(
-      'SELECT id, full_name, customer_code FROM customers WHERE upper(customer_code) = upper($1) LIMIT 1', [t])).rows[0];
-    if (cust) return { kind: 'customer' as const, id: Number(cust.id), name: cust.full_name, code: cust.customer_code, text: t };
+    const cust = (await db.query<{ id: string; full_name: string; customer_code: string; created_at: string }>(
+      'SELECT id, full_name, customer_code, created_at FROM customers WHERE upper(customer_code) = upper($1) LIMIT 1', [t])).rows[0];
+    const bornAfterReferee = cust && refereeCreatedAt
+      && new Date(String(cust.created_at)).getTime() > new Date(String(refereeCreatedAt)).getTime();
+    if (cust && !bornAfterReferee) {
+      return { kind: 'customer' as const, id: Number(cust.id), name: cust.full_name, code: cust.customer_code, text: t };
+    }
   }
   const ag = (await db.query<{ id: string; full_name: string; agent_code: string }>(
     `SELECT id, full_name, agent_code FROM agents
@@ -274,7 +302,8 @@ export async function getCustomerDetail(db: Db, actor: AuthUser, id: number) {
   // it. It's free text — 357 are names, 41 a customer code, 4 an agent code —
   // so resolve it to a real person where we can, and print the raw text where
   // we can't (some codes, e.g. DHN1084, point at records not in this book).
-  const referredBy = await resolveReferredBy(db, (c?.referred_by_text as string | null) ?? null);
+  const referredBy = await resolveReferredBy(db, (c?.referred_by_text as string | null) ?? null,
+    (c?.created_at as string | null) ?? null);
   const bankAccounts = (await db.query('SELECT * FROM customer_bank_accounts WHERE customer_id = $1 ORDER BY is_active DESC, id', [id])).rows;
   const nominees = (await db.query('SELECT * FROM nominees WHERE customer_id = $1', [id])).rows;
   const documents = (await db.query('SELECT id, doc_type, original_filename, origin, uploaded_at FROM customer_documents WHERE customer_id = $1', [id])).rows;

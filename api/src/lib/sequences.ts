@@ -42,6 +42,13 @@ export async function nextSeq(tx: Db, key: string): Promise<number> {
  * The template comes from settings (`numbering.*`); the default is passed as
  * a fallback so a missing setting can't hardcode a format silently.
  */
+/**
+ * How many numbers we will step past before giving up. Only ever consumed when
+ * a candidate is already held by a member of staff; 50 is far more than the
+ * 15 staff codes currently sitting above the customer counter.
+ */
+const MAX_CODE_SKIPS = 50;
+
 export async function nextCode(
   tx: Db,
   key: SequenceKey,
@@ -49,5 +56,31 @@ export async function nextCode(
   year = new Date().getUTCFullYear()
 ): Promise<string> {
   const seq = await nextSeq(tx, key);
-  return formatNumber(template, { seq, year });
+  const code = formatNumber(template, { seq, year });
+  if (key !== 'customer') return code;
+
+  // STAFF AND CUSTOMERS SHARE THE DHN#### SPACE. Staff carry codes in
+  // users.code and customers in customers.customer_code, and the two sequences
+  // count independently — so the customer counter will, left alone, eventually
+  // hand a new customer a code a colleague already holds.
+  //
+  // It did. On 2026-11-03 it reached a staff member's code and 26 customers who
+  // name that colleague as their referrer began displaying an unrelated person
+  // enrolled that morning. Seven codes were already doubly held before anyone
+  // noticed, and 15 more staff codes sit above the counter waiting their turn.
+  //
+  // So the customer run steps PAST anything staff already hold. Owner's call
+  // (2026-11-03): "u should not assign a customer code whose code is already
+  // with a staff". Customer codes are safe to skip — nothing keys on them, the
+  // real identity is the row id — whereas staff codes cannot move, because 142
+  // customers name a staff code as their referrer.
+  let candidate = code;
+  for (let skipped = 0; skipped < MAX_CODE_SKIPS; skipped++) {
+    const clash = (await tx.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM users u JOIN roles r ON r.id = u.role_id
+        WHERE r.name <> 'customer' AND upper(COALESCE(u.code,'')) = upper($1)`, [candidate])).rows[0];
+    if (!Number(clash?.n ?? 0)) return candidate;
+    candidate = formatNumber(template, { seq: await nextSeq(tx, key), year });
+  }
+  throw new Error(`could not find a customer code free of staff codes after ${MAX_CODE_SKIPS} attempts`);
 }

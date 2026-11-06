@@ -135,6 +135,9 @@ async function ensureBondSerial(db: Db, applicationId: number, a: Record<string,
 }
 
 const C = { GOLD: '#c9a227', GOLD_DEEP: '#a8851f', NAVY: '#1a2540', TEXT: '#1a1a1a', MUTED: '#666666', TINT: '#fcf6e3' };
+// The NCD's own term: three years. It is the fallback term for a line that
+// carries none, and — since 2026-11-06 — the term the NCD form states when it
+// is drawn for a subordinate holding (see _consolidatedBondPage).
 const BOND_REDEMPTION_MONTHS = 36;
 // Directors named on the certificate (as in wealth's production bond).
 const DIRECTORS = [
@@ -563,6 +566,31 @@ async function _consolidatedBondPage(
   const schemeNames = uniq(apps.map((a) => a.scheme_name ?? null));
   const cSchemeLabel = schemeNames.length === 1 ? schemeNames[0]! : schemeNames.length ? schemeNames.join(' / ') : '—';
 
+  // ── THE NCD FORM ON A SUBORDINATE HOLDING STATES THE NCD'S OWN TERM ──────
+  //
+  // Owner 2026-11-06, on the first certificate printed from the new button:
+  // "NCD is 3 years tenure, so redemption date will be 3 years from" the
+  // allotment date — plain calendar months, no working-day shift ("not last
+  // working day").
+  //
+  // NOTHING BELOW TOUCHES THE MONEY. The holding is 60-month subordinated debt:
+  // application_lines carry tenure_months = 60, the interest schedule is
+  // materialised for 60 months and the redemption row sits at close + 60. Only
+  // the DRAWING of the parallel NCD form changes, which is why the two buttons
+  // print different redemption dates for one holding. That is the owner's
+  // decision and is recorded here so it is not "corrected" back by the next
+  // reader — and it is the reason this is a pro-forma rendering, not a second
+  // instrument: there is still one certificate number and one schedule.
+  //
+  // Allotment is read off the SERIES, for the same reason the subordinate form
+  // already reads series.close_date: since migration 108 the series close date
+  // IS the date of allotment. applications.allotment_date is stamped only by
+  // the separate batch-allotment step (modules/allotments), which has not been
+  // run for the SD series, so reading it printed a blank row.
+  const ncdForm = subordinateSeries && drawDebenture;
+  const ncdAllotLabel = _fmtDate(series.close_date as string | null);
+  const ncdRedLabel = _fmtDate(_addMonths(series.close_date, BOND_REDEMPTION_MONTHS));
+
   const anyAllot = apps.map((a) => a.allotment_date).find(Boolean) ?? series.deemed_date ?? null;
   const year = new Date(String(anyAllot ?? new Date().toISOString())).getUTCFullYear();
   const certificateNo = await ensureConsolidatedBondSerial(db, customerId, seriesId, year, subordinateSeries);
@@ -619,8 +647,8 @@ async function _consolidatedBondPage(
       ['Investment Value (Rs.)', _fmtINR(totalInvested)],
       ['Number of NCDs', numNcds != null ? String(numNcds) : '—'],
       ['Coupon Rate', rateLabel],
-      ['Date of Allotment', allotLabel],
-      ['Date of Redemption', redLabel],
+      ['Date of Allotment', ncdForm ? ncdAllotLabel : allotLabel],
+      ['Date of Redemption', ncdForm ? ncdRedLabel : redLabel],
       ['Face Value per NCD (Rs.)', _fmtINR(faceValue)],
       ['Redemption Value (Rs.)', _fmtINR(totalInvested)],
     ];

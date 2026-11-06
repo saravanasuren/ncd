@@ -99,14 +99,33 @@ reportsRouter.get('/bond/:applicationId.pdf', requirePermission('bonds:download'
   }));
 // The consolidated "filing bond" — one certificate covering all of a customer's
 // issued investments in a series (total value, total units, + the breakup).
+// `?format=ncd` draws the NCD / Debenture form instead of the series' own
+// (owner 2026-11-06: two buttons — the subordinate certificate and an
+// NCD-format one — on a subordinate holding). The certificate NUMBER is
+// unchanged either way: it belongs to the (customer, series) pair, not to the
+// form, so the two downloads cannot produce two numbers for one holding.
+//
+// Which form was printed, for whom, by whom, is written to the audit log —
+// these are debt certificates and "who printed this" has to be answerable.
 reportsRouter.get('/consolidated-bond/:customerId/:seriesId.pdf', requirePermission('bonds:download'),
   asyncHandler(async (req, res) => {
     const { assertCustomerVisible } = await import('../../lib/visibility.js');
     await assertCustomerVisible(getDb(), req.user!, Number(req.params.customerId));
+    const customerId = Number(req.params.customerId);
+    const seriesId = Number(req.params.seriesId);
+    const ncdForm = String(req.query.format ?? '') === 'ncd';
     const { consolidatedBondCertificatePdf } = await import('./forms/bond.js');
-    const buf = await consolidatedBondCertificatePdf(getDb(), Number(req.params.customerId), Number(req.params.seriesId));
+    const buf = await consolidatedBondCertificatePdf(getDb(), customerId, seriesId, ncdForm ? 'debenture' : 'auto');
+    // AFTER the document is produced, so a failed render leaves no record of an
+    // issue that never happened.
+    const { writeAudit } = await import('../../lib/audit.js');
+    await writeAudit(getDb(), {
+      actorId: req.user!.id, action: 'bond.consolidated.downloaded',
+      entityType: 'consolidated_bonds', entityId: customerId,
+      after: { customer_id: customerId, series_id: seriesId, form: ncdForm ? 'ncd-debenture' : 'series-default' },
+    });
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="consolidated-bond-${req.params.customerId}-${req.params.seriesId}.pdf"`);
+    res.setHeader('Content-Disposition', `inline; filename="${ncdForm ? 'ncd-certificate' : 'consolidated-bond'}-${customerId}-${seriesId}.pdf"`);
     res.end(buf);
   }));
 // EVERY customer's consolidated bond for a series, as one printable file (owner

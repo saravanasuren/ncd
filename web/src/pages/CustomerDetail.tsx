@@ -1079,7 +1079,22 @@ function InvestmentsCard({ rows, customerId, customerName, canDelete, onChange, 
                     {hasIssuable && g.series_id && can('bonds:download') && (
                       <a href={`/api/reports/consolidated-bond/${customerId}/${g.series_id}.pdf`} target="_blank" rel="noreferrer"
                         onClick={(e) => e.stopPropagation()} className="text-xs text-primary hover:underline whitespace-nowrap ml-1"
-                        title="One filing bond covering all this customer's investments in this series (total value + units)">Consolidated bond ↗</a>
+                        title={g.subordinate
+                          ? "The subordinate debt certificate for this customer's whole holding in this series"
+                          : "One filing bond covering all this customer's investments in this series (total value + units)"}>
+                        {g.subordinate ? 'Subordinate debt certificate ↗' : 'Consolidated bond ↗'}
+                      </a>
+                    )}
+                    {/* The SAME holding drawn in the NCD / Debenture form (owner
+                        2026-11-06). Offered on subordinate series only — every
+                        other series already prints this form from the link
+                        beside it, so a second button there would be the same
+                        document twice. Same certificate number: the number
+                        belongs to the holding, not to the form. */}
+                    {hasIssuable && g.series_id && g.subordinate && can('bonds:download') && (
+                      <a href={`/api/reports/consolidated-bond/${customerId}/${g.series_id}.pdf?format=ncd`} target="_blank" rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()} className="text-xs text-primary hover:underline whitespace-nowrap ml-1"
+                        title="The same holding printed in the NCD / Debenture form, carrying the same certificate number">NCD certificate ↗</a>
                     )}
                   </div>
                   {isOpen && (

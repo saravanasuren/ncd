@@ -478,7 +478,21 @@ async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId
  *
  * NB: this MINTS a certificate number for a customer who has none.
  */
-async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, seriesId: number): Promise<void> {
+/**
+ * Which of the two forms to DRAW. Only the drawing changes — the certificate
+ * NUMBER always follows the series itself (see below), so a series cannot end
+ * up with two numbers or a number from the wrong run.
+ *
+ *   'auto'      — the series decides, as it always has.
+ *   'debenture' — draw the NCD / Debenture form even on a subordinate series
+ *                 (owner 2026-11-06: a subordinate holding is to be printable
+ *                 in both forms, from two buttons on the customer's page).
+ */
+export type BondTemplate = 'auto' | 'debenture';
+
+async function _consolidatedBondPage(
+  db: Db, doc: Doc, customerId: number, seriesId: number, template: BondTemplate = 'auto',
+): Promise<void> {
   const apps = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.application_no, a.total_amount, a.allotment_date, a.maturity_date, a.status,
             a.date_money_received,
@@ -519,6 +533,17 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
   // disagree on rate or term (checked against production), and since migration
   // 108 every investment in a series matures on the series close date + tenure.
   const subordinateSeries = isSubordinate(series);
+  // WHAT IS DRAWN vs WHAT IS MINTED.
+  //
+  // `sub` below drives the wording only. The certificate NUMBER is minted from
+  // `subordinateSeries` — the series' own standing — whichever form was asked
+  // for, and ensureConsolidatedBondSerial returns the number already on the
+  // (customer, series) pair before it ever mints. So the two forms print the
+  // SAME certificate number: one holding, one number, two renderings. Minting
+  // off the requested form instead would have let whoever downloaded first
+  // decide which run the number came from, and a subordinate bond would wear a
+  // CB- number because somebody pressed the other button.
+  const drawDebenture = template === 'debenture';
 
   const totalInvested = apps.reduce((s, a) => s + Number(a.total_amount || 0), 0);
   const faceValue = Number(apps[0]!.face_value || 100000);
@@ -543,7 +568,7 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
   const certificateNo = await ensureConsolidatedBondSerial(db, customerId, seriesId, year, subordinateSeries);
   const fullAddress = customerAddress(cust) || '—';
 
-  const sub = subordinateSeries;
+  const sub = subordinateSeries && !drawDebenture;
 
   _drawBorder(doc);
   let y = _drawHeader(doc, co);
@@ -605,12 +630,14 @@ async function _consolidatedBondPage(db: Db, doc: Doc, customerId: number, serie
 }
 
 /** One customer's consolidated bond for a series. */
-export async function consolidatedBondCertificatePdf(db: Db, customerId: number, seriesId: number): Promise<Buffer> {
+export async function consolidatedBondCertificatePdf(
+  db: Db, customerId: number, seriesId: number, template: BondTemplate = 'auto',
+): Promise<Buffer> {
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
   const chunks: Buffer[] = [];
   doc.on('data', (c: Buffer) => chunks.push(c));
   const done = new Promise<Buffer>((res) => doc.on('end', () => res(Buffer.concat(chunks))));
-  await _consolidatedBondPage(db, doc, customerId, seriesId);
+  await _consolidatedBondPage(db, doc, customerId, seriesId, template);
   doc.end();
   return done;
 }

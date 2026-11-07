@@ -18,12 +18,14 @@ export async function acknowledgmentPdf(db: Db, applicationId: number): Promise<
   const a = (await db.query<Record<string, unknown>>(
     `SELECT a.application_no, a.total_amount, a.amount_received, a.date_money_received,
             a.collection_method, a.collection_reference,
-            c.full_name AS customer_name, c.customer_code, c.address, c.city, c.state, c.email, c.pan,
-            s.code AS series_code, s.name AS series_name
-       -- LEFT: a subordinate bond has no series. With an inner join this
-       -- returned no row and the ack failed with "Application not found" —
+            c.full_name AS customer_name, c.customer_code, c.address, c.city, c.state, c.email, c.pan
+       -- The series is deliberately not read. It used to be printed and was
+       -- joined LEFT because a subordinate bond has no series — an inner join
+       -- returned no row and the ack failed with "Application not found",
        -- silently, because activation catches and logs it rather than failing.
-       FROM applications a JOIN customers c ON c.id = a.customer_id LEFT JOIN series s ON s.id = a.series_id
+       -- Now that nothing here names the series, that whole failure cannot
+       -- happen: there is no join left to drop a row.
+       FROM applications a JOIN customers c ON c.id = a.customer_id
       WHERE a.id = $1`, [applicationId])).rows[0];
   if (!a) throw errors.notFound('Application not found');
 
@@ -65,7 +67,16 @@ export async function acknowledgmentPdf(db: Db, applicationId: number): Promise<
 
     y = section(doc, y, '2. INVESTMENT DETAILS');
     y = kv(doc, y, 'Application No', a.application_no, { bold: true });
-    y = kv(doc, y, 'NCD Series', `${a.series_code ?? ''} — ${a.series_name ?? ''}`);
+    // The customer's document does not name the series (owner 2026-11-07: "i
+  // dont want the series name to come as - SD4 or what ever it is. just
+  // mention - Non convirtable Debenture thats it"). SD1–SD5 are internal
+  // monthly tranches of the subordinate book — a bookkeeping division of our
+  // own, meaningless to the holder and liable to be read as a product they
+  // did not buy. What they hold is the instrument, and that is what it says.
+  //
+  // The label moved with it: "NCD Series" expands to "Non-Convertible
+  // Debenture Series", so keeping it would have printed the same words twice.
+  y = kv(doc, y, 'Investment Type', 'Non-Convertible Debenture');
     // total_amount is the true (possibly clubbed) value; fall back to amount_received.
     const amt = Number(a.total_amount) > 0 ? a.total_amount : a.amount_received;
     y = kv(doc, y, 'Investment Amount', fmtINR(amt), { bold: true });

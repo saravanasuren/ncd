@@ -513,7 +513,11 @@ async function _consolidatedBondPage(
   if (!apps.length) throw errors.notFound('No issued investments for this customer in this series');
 
   const cust = (await db.query<Record<string, unknown>>(`SELECT full_name, ${addressColumns()} FROM customers WHERE id = $1`, [customerId])).rows[0];
-  const series = (await db.query<Record<string, unknown>>('SELECT code, name, deemed_date, is_subordinate, close_date FROM series WHERE id = $1', [seriesId])).rows[0];
+  const series = (await db.query<Record<string, unknown>>(
+    `SELECT s.code, s.name, s.deemed_date, s.is_subordinate, s.close_date,
+            n.code AS ncd_series_code, n.name AS ncd_series_name
+       FROM series s LEFT JOIN series n ON n.id = s.ncd_series_id
+      WHERE s.id = $1`, [seriesId])).rows[0];
   if (!cust || !series) throw errors.notFound('Customer or series not found');
   const nominee = (await db.query<Record<string, unknown>>('SELECT full_name, relationship FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [customerId])).rows[0];
   // As above: the name as at the SERIES' date, subordinate form only. Falling
@@ -591,6 +595,17 @@ async function _consolidatedBondPage(
   const ncdAllotLabel = _fmtDate(series.close_date as string | null);
   const ncdRedLabel = _fmtDate(_addMonths(series.close_date, BOND_REDEMPTION_MONTHS));
 
+  // Category names the NCD series the money was raised under, not the monthly
+  // tranche it is filed in (owner 2026-11-06: "category should show the NCD
+  // series, in vasanthamani case, it should be NCD_29"). SD1-SD5 are a re-filing
+  // of the NCD 29 book by month of money received, so "SD5" reads as nothing to
+  // a holder. It comes off series.ncd_series_id, set by migration 112 — see the
+  // migration for why this is a stored label and not derived per investment.
+  // Unset, or the subordinate form, and the series prints its own code exactly
+  // as before.
+  const categoryLabel = (ncdForm && (series.ncd_series_code || series.ncd_series_name))
+    || series.code || series.name || '—';
+
   const anyAllot = apps.map((a) => a.allotment_date).find(Boolean) ?? series.deemed_date ?? null;
   const year = new Date(String(anyAllot ?? new Date().toISOString())).getUTCFullYear();
   const certificateNo = await ensureConsolidatedBondSerial(db, customerId, seriesId, year, subordinateSeries);
@@ -639,7 +654,7 @@ async function _consolidatedBondPage(
       ['Redemption Value* (Rs.)', _fmtINR(totalInvested)],
     ]
     : [
-      ['Category', `${series.code || series.name || '—'} Series`],
+      ['Category', `${categoryLabel} Series`],
       ['Certificate No', certificateNo],
       ['Name of NCD Holder', (cust.full_name as string) || '—'],
       ['Address of NCD Holder', fullAddress, addrRowH],

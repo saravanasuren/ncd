@@ -187,6 +187,36 @@ describe('the NCD form of a subordinate holding', () => {
     expect(await snap()).toEqual(before);
   });
 
+  it('the Category row names the NCD series, not the monthly tranche', async () => {
+    // Owner 2026-11-06: "category should show the NCD series, in vasanthamani
+    // case, it should be NCD_29". SD1-SD5 are a re-filing of the NCD 29 book by
+    // month of money received, so the tranche code reads as nothing to a holder.
+    const ncd = await ctx.db.query<{ id: string }>(
+      `INSERT INTO series (code, name, status) VALUES ('NCDTEST-29', 'NCD 29 Test', 'Closed') RETURNING id`);
+    const tranche = await ctx.db.query<{ id: string }>(
+      `INSERT INTO series (code, name, deemed_date, is_subordinate, close_date, status, ncd_series_id)
+       VALUES ('SUBTEST-2', 'Subordinate Debt Test 2', '2026-08-01', TRUE, '2026-08-31', 'Open', $1)
+       RETURNING id`, [Number(ncd.rows[0]!.id)]);
+    const tid = Number(tranche.rows[0]!.id);
+    const cid = await invest(await admin(), 'Category Ncd', '9612000009', tid);
+    const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+
+    const ncdText = pdfText(await consolidatedBondCertificatePdf(ctx.db, cid, tid, 'debenture'));
+    expect(ncdText).toContain(squash('Category NCDTEST-29 Series'));
+    expect(ncdText).not.toContain(squash('SUBTEST-2'));
+
+    // The subordinate form is untouched: it names the TRANCHE, by its name
+    // (owner 2026-11-04), and never the NCD series.
+    const subText = pdfText(await consolidatedBondCertificatePdf(ctx.db, cid, tid));
+    expect(subText).toContain(squash('SUBORDINATE DEBT TEST 2'));
+    expect(subText).not.toContain(squash('NCDTEST-29'));
+
+    // A tranche with no NCD series set prints its own code, exactly as before.
+    const unset = await invest(await admin(), 'Category Unset', '9612000010', subSeries);
+    const unsetText = pdfText(await consolidatedBondCertificatePdf(ctx.db, unset, subSeries, 'debenture'));
+    expect(unsetText).toContain(squash('Category SUBTEST-1 Series'));
+  });
+
   it('a non-subordinate series is unaffected — both forms are the same document', async () => {
     const cid = await invest(await admin(), 'Plain Series', '9612000005', plainSeries);
     const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');

@@ -177,6 +177,61 @@ describe('shorten-tenure', () => {
     expect(Number((await lineOf(appId)).tenure_months)).toBe(36);
   });
 
+  it('moves the line onto the 36-month scheme, in the same breath as the term', async () => {
+    // The customer app is sent scheme_name, never tenure_months, and the bond
+    // certificate prints the same string. A corrected line left on
+    // "13% - 60 Months - Monthly" still reads as sixty months to the holder
+    // (owner 2026-11-14: "it should show 36 months, it showed 60 months").
+    const appId = await invest('Scheme Relabelled', '9613000007');
+    const target = await ctx.db.query<{ id: string }>(
+      `INSERT INTO schemes (code, name, tenure_months, payout_frequency, coupon_rate_pct, face_value,
+                            min_ticket, multiple_of, day_count_convention, commission_rule, tds_rule_id, is_active)
+       SELECT 'SHORTEN_M36', 'Shorten Test 36 Months', 36, s.payout_frequency, s.coupon_rate_pct, s.face_value,
+              s.min_ticket, s.multiple_of, s.day_count_convention, s.commission_rule, s.tds_rule_id, TRUE
+         FROM schemes s WHERE s.id = $1 RETURNING id`, [scheme60]);
+    const { shortenTenure } = await import('../src/scripts/shorten-tenure.js');
+
+    await shortenTenure(ctx.db, {
+      seriesIds: [series], fromMonths: 60, toMonths: 36, commit: true, quiet: true, schemeCode: 'SHORTEN_M36',
+    });
+
+    const line = (await ctx.db.query<Record<string, unknown>>(
+      `SELECT l.tenure_months, sch.code, sch.name FROM application_lines l
+         JOIN schemes sch ON sch.id = l.scheme_id WHERE l.application_id = $1`, [appId])).rows[0]!;
+    expect(Number(line.tenure_months)).toBe(36);
+    expect(line.code).toBe('SHORTEN_M36');
+    expect(String(line.name)).toMatch(/36 Months/);
+    expect(Number(target.rows[0]!.id)).toBeGreaterThan(0);
+  });
+
+  it('REFUSES to relabel onto a scheme that would change money', async () => {
+    // A scheme move may change the label and nothing else. A different TDS rule
+    // or face value is a money change wearing a rename.
+    const appId = await invest('Scheme Mismatch', '9613000008');
+    await ctx.db.query(
+      `INSERT INTO schemes (code, name, tenure_months, payout_frequency, coupon_rate_pct, face_value,
+                            min_ticket, multiple_of, day_count_convention, commission_rule, tds_rule_id, is_active)
+       SELECT 'SHORTEN_BAD36', 'Shorten Bad 36', 36, s.payout_frequency, s.coupon_rate_pct, s.face_value + 1,
+              s.min_ticket, s.multiple_of, s.day_count_convention, s.commission_rule, s.tds_rule_id, TRUE
+         FROM schemes s WHERE s.id = $1`, [scheme60]);
+    const before = await sched(appId);
+    const { shortenTenure } = await import('../src/scripts/shorten-tenure.js');
+
+    const r = await shortenTenure(ctx.db, {
+      seriesIds: [series], fromMonths: 60, toMonths: 36, commit: true, quiet: true, schemeCode: 'SHORTEN_BAD36',
+    });
+    expect(r.skips.join(' ')).toMatch(/face value/i);
+    expect(await sched(appId)).toEqual(before);
+    expect(Number((await lineOf(appId)).tenure_months)).toBe(60);
+  });
+
+  it('refuses a scheme whose own tenure is not the new term', async () => {
+    const { shortenTenure } = await import('../src/scripts/shorten-tenure.js');
+    await expect(shortenTenure(ctx.db, {
+      seriesIds: [series], fromMonths: 60, toMonths: 36, commit: false, quiet: true, schemeCode: 'SHORTEN_M60',
+    })).rejects.toThrow(/is 60 months, not 36/);
+  });
+
   it('records what it did, per line', async () => {
     const appId = await invest('Shorten Audited', '9613000006');
     const { shortenTenure } = await import('../src/scripts/shorten-tenure.js');

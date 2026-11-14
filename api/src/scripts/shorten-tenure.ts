@@ -51,8 +51,12 @@
  * Usage on the box:
  *   unset DATABASE_URL LEGACY_DATABASE_URL
  *   export SSM_PARAMETERS_PATH=/dhanam/newwealth/ SSM_REGION=ap-south-1
- *   node dist/scripts/shorten-tenure.js --series 39,40,41,42,43 --from 60 --to 36
- *   node dist/scripts/shorten-tenure.js --series 39,40,41,42,43 --from 60 --to 36 --commit
+ *   node dist/scripts/shorten-tenure.js --series 39,40,41,42,43 --from 60 --to 36 --scheme 13_M36_MONTHLY
+ *   node dist/scripts/shorten-tenure.js --series 39,40,41,42,43 --from 60 --to 36 --scheme 13_M36_MONTHLY --commit
+ *
+ * --scheme also moves each line onto that scheme, in the same transaction as
+ * its term. The customer app shows the holder the SCHEME NAME, not the tenure,
+ * so without it a corrected line still reads "13% - 60 Months - Monthly".
  *
  * Dry run is the default and prints the full tally plus every refusal. Take a
  * backup before --commit: this deletes schedule rows.
@@ -83,7 +87,7 @@ export type ShortenReport = {
 
 export async function shortenTenure(
   db: Db,
-  opts: { seriesIds: number[]; fromMonths: number; toMonths: number; commit: boolean; quiet?: boolean },
+  opts: { seriesIds: number[]; fromMonths: number; toMonths: number; commit: boolean; quiet?: boolean; schemeCode?: string },
 ): Promise<ShortenReport> {
   const { seriesIds, fromMonths, toMonths, commit } = opts;
   const log = (...a: unknown[]) => { if (!opts.quiet) console.log(...a); };
@@ -97,6 +101,22 @@ export async function shortenTenure(
   const payoutDay = Number(settings['interest.payout_day_of_month'] ?? 28);
   const nextBatchFromDay = Number(settings['interest.next_batch_from_day'] ?? 0) || 0;
   const holidays = (await db.query<{ d: string }>('SELECT d FROM holidays')).rows.map((h) => h.d);
+
+  // THE LABEL THE HOLDER ACTUALLY SEES. /integration/reads.ts sends the customer
+  // app `scheme_name`, never tenure_months, and the bond certificate prints the
+  // same string in its Scheme row. A line left on "13% - 60 Months - Monthly"
+  // still reads as sixty months however correct its dates are (owner
+  // 2026-11-14: "it should show 36 months, it showed 60 months"). So the scheme
+  // moves in the SAME transaction as the term — never as a separate pass, which
+  // would show a 36-month label against a 2031 maturity in between.
+  let target: Row | null = null;
+  if (opts.schemeCode) {
+    target = (await db.query<Row>('SELECT * FROM schemes WHERE code = $1', [opts.schemeCode])).rows[0] ?? null;
+    if (!target) throw new Error(`no scheme with code ${opts.schemeCode} (migration 113 creates 13_M36_MONTHLY)`);
+    if (Number(target.tenure_months) !== toMonths) {
+      throw new Error(`scheme ${opts.schemeCode} is ${target.tenure_months} months, not ${toMonths}`);
+    }
+  }
 
   const lines = (await db.query<Row>(
     `SELECT l.*, a.series_id, a.application_no, a.interest_start_date, a.customer_id,
@@ -168,6 +188,24 @@ export async function shortenTenure(
     }
     const newMaturity = redemption.due_date;
 
+    // A scheme move may change the LABEL and nothing else. The two fields that
+    // would quietly alter money are checked against the line's OWN current
+    // scheme, per line, not against the one the migration copied from.
+    if (target && Number(line.scheme_id) !== Number(target.id)) {
+      const cur = (await db.query<Row>('SELECT * FROM schemes WHERE id = $1', [line.scheme_id])).rows[0];
+      const differs = !cur
+        || String(cur.tds_rule_id ?? '') !== String(target.tds_rule_id ?? '')
+        || Number(cur.face_value ?? 0) !== Number(target.face_value ?? 0)
+        || String(cur.payout_frequency ?? '') !== String(target.payout_frequency ?? '')
+        || Number(cur.coupon_rate_pct ?? 0) !== Number(target.coupon_rate_pct ?? 0);
+      if (differs) {
+        skips.push(`${line.application_no} line ${lineId}: its scheme ${String(cur?.code ?? line.scheme_id)} differs from `
+          + `${String(target.code)} on TDS rule, face value, frequency or rate — REFUSED rather than relabelled`);
+        skipped++;
+        continue;
+      }
+    }
+
     const have = (await db.query<Row>(
       `SELECT id, due_date, due_type, gross_amount, net_amount, status, batch_id FROM disbursement_schedule
         WHERE line_id = $1 ORDER BY due_date`, [lineId])).rows;
@@ -209,6 +247,7 @@ export async function shortenTenure(
         log(`\n  ${line.application_no} (${line.full_name}) ${line.series_code} Rs ${money(Number(line.amount))}`);
         log(`    keep ${have.length - past.length} existing rows (${frozen.length} paid/batched) · drop ${past.length} past the new maturity · write ${toInsert.length}`);
         log(`    maturity ${iso(line.maturity_date) ?? '—'} -> ${newMaturity}`);
+        if (target) log(`    scheme   ${String(line.scheme_id)} -> ${String(target.code)} ("${String(target.name)}")`);
       }
       moved++; kept += frozen.length; deleted += past.length; inserted += toInsert.length;
       continue;
@@ -235,8 +274,10 @@ export async function shortenTenure(
            VALUES ($1,$2,$3,$4,$5,$6,$7,'Scheduled',$8,$9)`,
           [lineId, appId, r.due_date, r.due_type, r.gross, r.tds, r.net, bank?.account_number ?? null, bank?.ifsc ?? null]);
       }
-      await tx.query('UPDATE application_lines SET tenure_months = $1, maturity_date = $2 WHERE id = $3',
-        [toMonths, newMaturity, lineId]);
+      await tx.query(
+        `UPDATE application_lines SET tenure_months = $1, maturity_date = $2,
+                scheme_id = COALESCE($4, scheme_id) WHERE id = $3`,
+        [toMonths, newMaturity, lineId, target ? Number(target.id) : null]);
       // RECOMPUTED, not assigned: a clubbed investment's other tranche may still
       // run longer, and the application matures when its last line does. The
       // extend script could move this forward unconditionally; coming back in,
@@ -251,8 +292,9 @@ export async function shortenTenure(
          VALUES ((SELECT u.id FROM users u JOIN roles r ON r.id=u.role_id WHERE r.name='super_admin' ORDER BY u.id LIMIT 1),
                  'investment.tenure_shortened','application_lines',$1,$2,$3,now())`,
         [String(lineId),
-         JSON.stringify({ tenure_months: fromMonths, maturity_date: iso(line.maturity_date), schedule_rows_deleted: past.length }),
-         JSON.stringify({ tenure_months: toMonths, maturity_date: newMaturity, schedule_rows_written: toInsert.length,
+         JSON.stringify({ tenure_months: fromMonths, maturity_date: iso(line.maturity_date), scheme_id: Number(line.scheme_id), schedule_rows_deleted: past.length }),
+         JSON.stringify({ tenure_months: toMonths, maturity_date: newMaturity, scheme_id: target ? Number(target.id) : Number(line.scheme_id),
+                          scheme_name: target ? String(target.name) : null, schedule_rows_written: toInsert.length,
                           note: 'Owner 2026-11-14: SD1-SD5 run 36 months, not 60 — reversing the 2026-10-31 five-year decision. Tenure only: rate, frequency, amounts and the money-received date unchanged. Paid and batched rows preserved; any line with settled money past the new maturity was refused.' })]);
     });
     moved++; kept += frozen.length; deleted += past.length; inserted += toInsert.length;
@@ -275,12 +317,13 @@ async function main(): Promise<void> {
   const fromMonths = Number(arg('from', '60'));
   const toMonths = Number(arg('to', '36'));
   if (!seriesIds.length || !fromMonths || !toMonths) {
-    console.error('usage: --series 39,40,41,42,43 --from 60 --to 36 [--commit]');
+    console.error('usage: --series 39,40,41,42,43 --from 60 --to 36 [--scheme 13_M36_MONTHLY] [--commit]');
     process.exit(1);
   }
   await loadSecretsFromSsm();
   await shortenTenure(createDb(), {
     seriesIds, fromMonths, toMonths, commit: process.argv.includes('--commit'),
+    schemeCode: arg('scheme'),
   });
 }
 

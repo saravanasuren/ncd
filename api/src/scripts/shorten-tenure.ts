@@ -58,6 +58,12 @@
  * its term. The customer app shows the holder the SCHEME NAME, not the tenure,
  * so without it a corrected line still reads "13% - 60 Months - Monthly".
  *
+ * --exclude-scheme leaves named schemes alone entirely. Owner 2026-11-14:
+ * "leave the doubling ones out" — 9 lines on "Doubling - 60 Months" (20%
+ * AtMaturity) sit inside SD2/SD4/SD5 and must keep their five-year term, since
+ * 20% simple over three years returns 60% and a shortened Doubling no longer
+ * doubles.
+ *
  * Dry run is the default and prints the full tally plus every refusal. Take a
  * backup before --commit: this deletes schedule rows.
  */
@@ -81,13 +87,16 @@ function arg(name: string, fallback?: string): string | undefined {
 
 /** What a run did, so a caller (and the test) can assert on it. */
 export type ShortenReport = {
-  selected: number; moved: number; skipped: number; notYetLive: number;
-  deleted: number; inserted: number; kept: number; skips: string[];
+  selected: number; moved: number; skipped: number; notYetLive: number; excluded: number;
+  deleted: number; inserted: number; kept: number; skips: string[]; excludedNote: string[];
 };
 
 export async function shortenTenure(
   db: Db,
-  opts: { seriesIds: number[]; fromMonths: number; toMonths: number; commit: boolean; quiet?: boolean; schemeCode?: string },
+  opts: {
+    seriesIds: number[]; fromMonths: number; toMonths: number; commit: boolean;
+    quiet?: boolean; schemeCode?: string; excludeSchemeCodes?: string[];
+  },
 ): Promise<ShortenReport> {
   const { seriesIds, fromMonths, toMonths, commit } = opts;
   const log = (...a: unknown[]) => { if (!opts.quiet) console.log(...a); };
@@ -120,24 +129,43 @@ export async function shortenTenure(
 
   const lines = (await db.query<Row>(
     `SELECT l.*, a.series_id, a.application_no, a.interest_start_date, a.customer_id,
-            a.payout_bank_account_id, c.full_name, s.code AS series_code, s.deemed_date
+            a.payout_bank_account_id, c.full_name, s.code AS series_code, s.deemed_date,
+            sch.code AS scheme_code, sch.name AS scheme_name
        FROM application_lines l
        JOIN applications a ON a.id = l.application_id
        JOIN customers c ON c.id = a.customer_id
        JOIN series s ON s.id = a.series_id
+       LEFT JOIN schemes sch ON sch.id = l.scheme_id
       WHERE a.series_id = ANY($1) AND a.archived_at IS NULL AND l.tenure_months = $2
       ORDER BY a.id, l.id`, [seriesIds, fromMonths])).rows;
 
   log(`${lines.length} line(s) at ${fromMonths} months on series ${seriesIds.join(',')} -> ${toMonths} months`);
-  const empty: ShortenReport = { selected: 0, moved: 0, skipped: 0, notYetLive: 0, deleted: 0, inserted: 0, kept: 0, skips: [] };
+  const empty: ShortenReport = { selected: 0, moved: 0, skipped: 0, notYetLive: 0, excluded: 0, deleted: 0, inserted: 0, kept: 0, skips: [], excludedNote: [] };
   if (!lines.length) return empty;
 
-  let moved = 0, skipped = 0, deleted = 0, inserted = 0, kept = 0, notYetLive = 0;
+  let moved = 0, skipped = 0, deleted = 0, inserted = 0, kept = 0, notYetLive = 0, excluded = 0;
   const skips: string[] = [];
+  const excludedNote: string[] = [];
+  const excludeCodes = new Set((opts.excludeSchemeCodes ?? []).map((c) => c.trim()).filter(Boolean));
 
   for (const line of lines) {
     const appId = Number(line.application_id);
     const lineId = Number(line.id);
+
+    // EXCLUDED BY NAME, not by luck. Owner 2026-11-14: "leave the doubling ones
+    // out." The scheme guard below would refuse them today anyway — Doubling is
+    // 20% AtMaturity and cannot be relabelled as 13% monthly — but that is a
+    // coincidence of the current scheme table, and a 20% 36-month scheme
+    // appearing later would silently let them through. Doubling must stay at 60
+    // months on its own merits: 20% simple over three years returns 60%, not
+    // 100%, so a shortened "Doubling" no longer doubles.
+    if (excludeCodes.has(String(line.scheme_code ?? ''))) {
+      excluded++;
+      if (excludedNote.length < 3) {
+        excludedNote.push(`${line.application_no} line ${lineId} on ${String(line.scheme_name ?? line.scheme_code)} — excluded by --exclude-scheme`);
+      }
+      continue;
+    }
     const deemed = iso(line.deemed_date);
     const interestStart = iso(line.interest_start_date) ?? deemed;
     const seriesDeemed = deemed ?? interestStart;
@@ -303,13 +331,18 @@ export async function shortenTenure(
   log(`\n${commit ? 'COMMITTED' : 'DRY RUN'}: ${moved} line(s) shortened to ${toMonths} months`
     + ` · ${deleted} schedule row(s) dropped · ${inserted} written · ${kept} paid/batched row(s) preserved`
     + (notYetLive ? ` · ${notYetLive} not yet live (term set, schedule builds at ${toMonths} on activation)` : '')
+    + (excluded ? ` · ${excluded} excluded by scheme` : '')
     + (skipped ? ` · ${skipped} REFUSED` : ''));
+  if (excludedNote.length) {
+    log(`\nExcluded (${excluded} line(s), left at ${fromMonths} months):`);
+    for (const e of excludedNote) log(`  · ${e}`);
+  }
   if (skips.length) {
     log('\nRefused:');
     for (const s of skips) log(`  · ${s}`);
   }
   if (!commit) log('\nNothing was changed. Re-run with --commit to apply — take a backup first, this deletes schedule rows.');
-  return { selected: lines.length, moved, skipped, notYetLive, deleted, inserted, kept, skips };
+  return { selected: lines.length, moved, skipped, notYetLive, excluded, deleted, inserted, kept, skips, excludedNote };
 }
 
 async function main(): Promise<void> {
@@ -317,13 +350,14 @@ async function main(): Promise<void> {
   const fromMonths = Number(arg('from', '60'));
   const toMonths = Number(arg('to', '36'));
   if (!seriesIds.length || !fromMonths || !toMonths) {
-    console.error('usage: --series 39,40,41,42,43 --from 60 --to 36 [--scheme 13_M36_MONTHLY] [--commit]');
+    console.error('usage: --series 40,41,42,43,44 --from 60 --to 36 [--scheme 13_M36_MONTHLY] [--exclude-scheme 20%] [--commit]');
     process.exit(1);
   }
   await loadSecretsFromSsm();
   await shortenTenure(createDb(), {
     seriesIds, fromMonths, toMonths, commit: process.argv.includes('--commit'),
     schemeCode: arg('scheme'),
+    excludeSchemeCodes: (arg('exclude-scheme') ?? '').split(',').map((c) => c.trim()).filter(Boolean),
   });
 }
 

@@ -232,6 +232,41 @@ describe('shorten-tenure', () => {
     })).rejects.toThrow(/is 60 months, not 36/);
   });
 
+  it('leaves an excluded scheme entirely alone, by name', async () => {
+    // Owner 2026-11-14: "leave the doubling ones out." Pinned by NAME, because
+    // the scheme guard only happens to refuse them today — Doubling is 20%
+    // AtMaturity against a 13% monthly target — and a 20% 36-month scheme
+    // appearing later would silently let them through. 20% simple over three
+    // years returns 60%, not 100%: a shortened Doubling does not double.
+    const dbl = await ctx.db.query<{ id: string }>(
+      `INSERT INTO schemes (code, name, tenure_months, payout_frequency, coupon_rate_pct, face_value,
+                            min_ticket, multiple_of, day_count_convention, commission_rule, tds_rule_id, is_active)
+       SELECT 'SHORTEN_DBL', 'Shorten Doubling - 60 Months', 60, 'AtMaturity', 20, s.face_value,
+              s.min_ticket, s.multiple_of, s.day_count_convention, s.commission_rule, s.tds_rule_id, TRUE
+         FROM schemes s WHERE s.id = $1 RETURNING id`, [scheme60]);
+    const appId = await invest('Doubling Left Out', '9613000009');
+    await ctx.db.query('UPDATE application_lines SET scheme_id = $1 WHERE application_id = $2',
+      [Number(dbl.rows[0]!.id), appId]);
+
+    const before = await sched(appId);
+    const { shortenTenure } = await import('../src/scripts/shorten-tenure.js');
+    const r = await shortenTenure(ctx.db, {
+      seriesIds: [series], fromMonths: 60, toMonths: 36, commit: true, quiet: true,
+      schemeCode: 'SHORTEN_M36', excludeSchemeCodes: ['SHORTEN_DBL'],
+    });
+
+    expect(r.excluded).toBeGreaterThanOrEqual(1);
+    // Excluded, NOT refused — a different outcome with a different meaning.
+    expect(r.excludedNote.join(' ')).toMatch(/excluded by --exclude-scheme/);
+    // Term, schedule and scheme all untouched.
+    expect(await sched(appId)).toEqual(before);
+    const line = (await ctx.db.query<Record<string, unknown>>(
+      `SELECT l.tenure_months, sch.code FROM application_lines l JOIN schemes sch ON sch.id = l.scheme_id
+        WHERE l.application_id = $1`, [appId])).rows[0]!;
+    expect(Number(line.tenure_months)).toBe(60);
+    expect(line.code).toBe('SHORTEN_DBL');
+  });
+
   it('records what it did, per line', async () => {
     const appId = await invest('Shorten Audited', '9613000006');
     const { shortenTenure } = await import('../src/scripts/shorten-tenure.js');

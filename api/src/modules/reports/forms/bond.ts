@@ -573,14 +573,26 @@ async function _consolidatedBondPage(
   // allotment date — plain calendar months, no working-day shift ("not last
   // working day").
   //
-  // NOTHING BELOW TOUCHES THE MONEY. The holding is 60-month subordinated debt:
-  // application_lines carry tenure_months = 60, the interest schedule is
-  // materialised for 60 months and the redemption row sits at close + 60. Only
-  // the DRAWING of the parallel NCD form changes, which is why the two buttons
-  // print different redemption dates for one holding. That is the owner's
-  // decision and is recorded here so it is not "corrected" back by the next
-  // reader — and it is the reason this is a pro-forma rendering, not a second
-  // instrument: there is still one certificate number and one schedule.
+  // CORRECTED 2026-11-14. This block first said the holding was 60-month
+  // subordinated debt and that printing 36 here was a deliberate pro-forma
+  // divergence. That was wrong. The owner's position is that SD1-SD5 run 36
+  // months — "for all the sd1,2,3,4,5 tenure is 36 months, not 60" — reversing
+  // the 2026-10-31 five-year decision. So three years is simply the term, and
+  // there is no divergence to defend.
+  //
+  // What the DATA says is another matter, and is the reason this override still
+  // exists. Enrolment came in at 60 months from 2026-11-02 (the scheme's tenure
+  // was changed in place), and migration 109 then set maturity_date = series
+  // close date + 60 on those lines. Until that is corrected, the line's own
+  // tenure would print 2031 on an NCD form the owner says matures in 2029.
+  //
+  // scripts/shorten-tenure.ts brings those lines back to 36 and cuts the unpaid
+  // schedule past the new maturity. ONCE IT HAS RUN, this override should go:
+  // both forms can then read the line's own tenure, which is the only version
+  // that stays correct if a genuinely five-year tranche is ever issued. Leaving
+  // it hardcoded past that point is a bug waiting to happen.
+  //
+  // NOTHING HERE TOUCHES THE MONEY either way — this is the drawing only.
   //
   // Allotment is read off the SERIES, for the same reason the subordinate form
   // already reads series.close_date: since migration 108 the series close date

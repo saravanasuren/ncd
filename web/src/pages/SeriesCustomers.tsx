@@ -61,20 +61,24 @@ export default function SeriesCustomers() {
   const total = rows.reduce((sum, r) => sum + Number(r.total_amount), 0);
   const investments = rows.reduce((sum, r) => sum + r.investment_count, 0);
 
-  const downloadAll = async () => {
+  // Both forms of the same holdings (owner 2026-11-16). `ncd` draws every page
+  // in the Debenture form; the certificate NUMBER is the same either way, so
+  // this is two renderings of one set of instruments, not two issues of them.
+  const downloadAll = async (form: 'auto' | 'ncd') => {
     setMsg('');
+    const what = form === 'ncd' ? 'NCD certificates' : 'bonds';
     // Producing a bond MINTS a permanent certificate number. Say how many before
     // the click, not after — the numbers are never reused, so a mis-click on the
     // wrong series consumes a block of them for good.
     const ok = await confirm({
-      title: `Download all ${rows.length} bonds for ${series.code}?`,
+      title: `Download all ${rows.length} ${what} for ${series.code}?`,
       body: without_bond > 0
-        ? `${without_bond} of these customers have no certificate number yet. Downloading issues one to each of them permanently — numbers are never reused. The other ${rows.length - without_bond} keep the number they already have.`
+        ? `${without_bond} of these customers have no certificate number yet. Downloading issues one to each of them permanently — numbers are never reused. The other ${rows.length - without_bond} keep the number they already have. Both forms share one number, so printing the other form later issues nothing further.`
         : 'Every customer here already has a certificate number, so nothing new is issued.',
       confirmLabel: 'Download',
     });
     if (!ok) return;
-    window.open(`/api/reports/consolidated-bonds/series/${series.id}.pdf`, '_blank');
+    window.open(`/api/reports/consolidated-bonds/series/${series.id}.pdf${form === 'ncd' ? '?format=ncd' : ''}`, '_blank');
   };
 
   return (
@@ -88,10 +92,19 @@ export default function SeriesCustomers() {
       </p>
 
       <div className="flex items-center gap-2 mb-3">
-        <button onClick={downloadAll} disabled={!rows.length}
+        <button onClick={() => downloadAll('auto')} disabled={!rows.length}
           className="text-xs bg-primary hover:bg-primary-hover text-white rounded px-3 py-1.5 disabled:opacity-40">
-          ⬇ Download all bonds
+          ⬇ Download all {series.is_subordinate ? 'subordinate bonds' : 'bonds'}
         </button>
+        {/* Offered on a subordinate series only. Every other series already
+            prints the Debenture form from the button beside it, so a second one
+            there would be the same document twice. */}
+        {series.is_subordinate && (
+          <button onClick={() => downloadAll('ncd')} disabled={!rows.length}
+            className="text-xs border border-primary text-primary hover:bg-primary/5 rounded px-3 py-1.5 disabled:opacity-40">
+            ⬇ Download all NCD certificates
+          </button>
+        )}
         {without_bond > 0 && (
           <span className="text-xs text-text-muted">
             {without_bond} of {rows.length} would be issued a new certificate number

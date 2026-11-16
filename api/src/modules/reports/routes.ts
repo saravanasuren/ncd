@@ -140,11 +140,27 @@ reportsRouter.get('/consolidated-bonds/series/:seriesId.pdf', requirePermission(
     const { rows, series } = await seriesCustomers(getDb(), seriesId);
     if (!rows.length) throw errors.notFound('No issued investments in this series');
     const ids = (rows as Array<Record<string, unknown>>).map((r) => Number(r.customer_id));
+    // `?format=ncd` draws every page in the NCD / Debenture form instead of the
+    // series' own, exactly as it does on the single-customer route beside this
+    // one (owner 2026-11-16: "a download all button for both ncd certificates
+    // an subordinate certificates"). It changes what is DRAWN and nothing else
+    // - the certificate number still comes from the series' own standing, so
+    // whichever button is pressed first cannot decide which run it comes from.
+    const ncdForm = String(req.query.format ?? '') === 'ncd';
     const { consolidatedBondsForSeriesPdf } = await import('./forms/bond.js');
-    const buf = await consolidatedBondsForSeriesPdf(getDb(), seriesId, ids);
+    const buf = await consolidatedBondsForSeriesPdf(getDb(), seriesId, ids, ncdForm ? 'debenture' : 'auto');
+    // Audited AFTER the render, so a failure leaves no record of an issue that
+    // never happened. Which form was printed is part of the record: these are
+    // debt certificates and "who printed what" has to be answerable.
+    const { writeAudit } = await import('../../lib/audit.js');
+    await writeAudit(getDb(), {
+      actorId: req.user!.id, action: 'bond.series.downloaded',
+      entityType: 'series', entityId: seriesId,
+      after: { series_id: seriesId, customers: ids.length, form: ncdForm ? 'ncd-debenture' : 'series-default' },
+    });
     const safe = String(series.code || seriesId).replace(/[^A-Za-z0-9_-]+/g, '-');
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${safe}-bonds.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${safe}-${ncdForm ? 'ncd-certificates' : 'bonds'}.pdf"`);
     res.end(buf);
   }));
 

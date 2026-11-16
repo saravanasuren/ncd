@@ -764,7 +764,7 @@ export async function consolidatedBondCertificatePdf(
  * before it is clicked.
  */
 export async function consolidatedBondsForSeriesPdf(
-  db: Db, seriesId: number, customerIds: number[],
+  db: Db, seriesId: number, customerIds: number[], template: BondTemplate = 'auto',
 ): Promise<Buffer> {
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
   const chunks: Buffer[] = [];
@@ -772,7 +772,7 @@ export async function consolidatedBondsForSeriesPdf(
   const done = new Promise<Buffer>((res) => doc.on('end', () => res(Buffer.concat(chunks))));
   for (const [i, customerId] of customerIds.entries()) {
     if (i > 0) doc.addPage();
-    await _consolidatedBondPage(db, doc, customerId, seriesId);
+    await _consolidatedBondPage(db, doc, customerId, seriesId, template);
   }
   doc.end();
   return done;

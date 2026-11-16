@@ -100,14 +100,16 @@ describe('one bond per customer per series', () => {
     expect(n).toBe(1);
   });
 
-  it('is numbered SD-2026-0001, not CB-', async () => {
+  it('is numbered DC/2026/SD/00001, not CB-', async () => {
     const { customerId } = await holding(subSeriesId, 'Numbered Sub', '9552110002', [['2026-09-10', 400000]]);
     const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
     await consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId);
     const serial = String((await ctx.db.query<{ s: string }>(
       'SELECT bond_serial_no AS s FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2',
       [customerId, subSeriesId])).rows[0]!.s);
-    expect(serial).toMatch(/^SD-2026-\d{4}$/);
+    // Was SD-2026-####; migration 115 moved the run to DC/{year}/SD/#####
+    // (owner 2026-11-16). Still its own run, so a CB- number can never appear.
+    expect(serial).toMatch(/^DC\/2026\/SD\/\d{5}$/);
     expect(serial).not.toMatch(/^CB-/);
   });
 

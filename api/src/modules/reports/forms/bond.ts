@@ -44,9 +44,21 @@ const ISSUABLE = new Set(['Active', 'Matured', 'Redeemed', 'RolledOver']);
 export const isSubordinate = (series: { is_subordinate?: unknown } | null | undefined): boolean =>
   series?.is_subordinate === true;
 
-/** Subordinate-debt certificate number: SD-2026-0001 (owner 2026-11-02), on its
- *  own counter so it can never collide with the BC- numbers already issued. */
+/**
+ * Debenture 1-5 certificate number: DC/2026/SD/00001 (owner 2026-11-16), on its
+ * own counter so it can never collide with the BC- numbers already issued.
+ *
+ * ONE PER CALENDAR YEAR. The counter key carries the year, because {yyyy} in
+ * the template only PRINTS a year - on a single counter, January 2027 would
+ * have continued DC/2027/SD/00124 straight on from December's 00123. The owner
+ * asked for the run to restart ("Jan 2027: DC/2027/SD/00001"), and a counter
+ * per year is what restarts it.
+ *
+ * Each year's key is created on first use by nextSeq, so nothing has to be
+ * seeded in December for January to work.
+ */
 const SUBORDINATE_SERIAL_KEY = 'subordinate_debt';
+const subordinateSerialKey = (year: number): string => `${SUBORDINATE_SERIAL_KEY}:${year}`;
 
 /** Consolidated certificate number. Its own run, so it can never collide with
  * the per-investment `BC-` series even though both count from 1. */
@@ -122,7 +134,7 @@ async function ensureBondSerial(db: Db, applicationId: number, a: Record<string,
   // A number already issued is never re-minted (the guard above), so the 8 BC-
   // numbers already on subordinate investments keep the number on the paper.
   const [key, format] = subordinate
-    ? [SUBORDINATE_SERIAL_KEY, DEFAULT_NUMBER_FORMATS.subordinate_debt]
+    ? [subordinateSerialKey(year), DEFAULT_NUMBER_FORMATS.subordinate_debt]
     : ['bond', DEFAULT_NUMBER_FORMATS.bond];
   return allocateSerial(
     db, key, format, year,
@@ -453,7 +465,7 @@ async function ensureConsolidatedBondSerial(db: Db, customerId: number, seriesId
   // two can never collide; an existing number is returned above and never
   // re-minted, so nothing already issued changes.
   const [key, format] = subordinate
-    ? [SUBORDINATE_SERIAL_KEY, DEFAULT_NUMBER_FORMATS.subordinate_debt]
+    ? [subordinateSerialKey(year), DEFAULT_NUMBER_FORMATS.subordinate_debt]
     : ['consolidated_bond', CONSOLIDATED_BOND_FORMAT];
   return allocateSerial(
     db, key, format, year,

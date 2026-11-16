@@ -39,12 +39,21 @@ export const DEFAULT_NUMBER_FORMATS = {
   // the APP- one (owner 2026-08-10). Same shape as `application` so the two
   // read alike; the leading token is what tells them apart at a glance.
   subordinate_bond: 'SOB-{yyyy}-{seq:6}',
-  // Subordinate DEBT certificate number (owner 2026-11-02: "the certificate
-  // number should start with SD-2026-xxxx", four digits as written). A separate
-  // counter from `bond`, so the BC- numbers already issued are never reused and
-  // the two runs cannot collide. Note this is NOT `subordinate_bond` above —
-  // that is the SOB product, which has no series.
-  subordinate_debt: 'SD-{yyyy}-{seq:4}',
+  // The Debenture 1-5 certificate number. Owner 2026-11-16: "DC/2026/SD/00001",
+  // and, asked whether the two forms should carry separate runs: "rename both
+  // as - DC/2026/SD/00001" - ONE number per holding, printed on both the
+  // Subordinate Bond and the Debenture rendering of it.
+  //
+  // Was SD-{yyyy}-{seq:4} (owner 2026-11-02). Migration 115 moves the numbers
+  // already issued onto this format, so no holding carries the old shape.
+  //
+  // THE RUN RESTARTS EACH JANUARY, which the template alone cannot do - {yyyy}
+  // only prints the year. The COUNTER is year-scoped in bond.ts
+  // (`subordinate_debt:2026`), and that is what makes DC/2027/SD/00001 follow
+  // DC/2026/SD/00123. Still a separate counter from `bond`, so the BC- numbers
+  // already issued are never reused. Note this is NOT `subordinate_bond` above
+  // - that is the SOB product, which has no series.
+  subordinate_debt: 'DC/{yyyy}/SD/{seq:5}',
   // Locker agreement number, printed on the Schedule. The owner's template
   // reads "Agreement No :- DIF0000", so it is DIF + a running number and NOT
   // year-scoped: a locker hire renews indefinitely, so a number that restarts

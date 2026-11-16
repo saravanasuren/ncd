@@ -100,7 +100,7 @@ describe('the NCD form of a subordinate holding', () => {
     const rows = (await ctx.db.query<{ bond_serial_no: string }>(
       'SELECT bond_serial_no FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2', [cid, subSeries])).rows;
     expect(rows.length).toBe(1);                      // one holding, one number
-    expect(rows[0]!.bond_serial_no).toMatch(/^SD-/);  // the series' own run
+    expect(rows[0]!.bond_serial_no).toMatch(/^DC\//);  // the series' own run
 
     // And the number actually PRINTS on both documents.
     const serial = squash(rows[0]!.bond_serial_no);
@@ -108,7 +108,7 @@ describe('the NCD form of a subordinate holding', () => {
     expect(pdfText(await consolidatedBondCertificatePdf(ctx.db, cid, subSeries, 'debenture'))).toContain(serial);
   });
 
-  it('still mints the SD- number when the NCD form is downloaded FIRST', async () => {
+  it('still mints the series own number when the NCD form is downloaded FIRST', async () => {
     // The ordering that would have broken it: minting off the requested form
     // would hand a subordinate bond a CB- number because somebody pressed the
     // other button first, and the series' own certificate would print it too.
@@ -118,7 +118,7 @@ describe('the NCD form of a subordinate holding', () => {
     await consolidatedBondCertificatePdf(ctx.db, cid, subSeries, 'debenture');
     const row = (await ctx.db.query<{ bond_serial_no: string }>(
       'SELECT bond_serial_no FROM consolidated_bonds WHERE customer_id = $1 AND series_id = $2', [cid, subSeries])).rows[0];
-    expect(row!.bond_serial_no).toMatch(/^SD-/);
+    expect(row!.bond_serial_no).toMatch(/^DC\//);
   });
 
   it('leaves the investment record exactly as it was — no reclassification', async () => {

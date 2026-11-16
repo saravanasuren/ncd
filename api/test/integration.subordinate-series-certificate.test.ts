@@ -194,22 +194,21 @@ function pageCount(buf: Buffer): number {
 }
 
 describe('what the bond names, and how it spells money', () => {
-  it('names the series, directly under the certificate number', async () => {
-    // The SD- number does not say which tranche the bond belongs to — those run
-    // in one sequence across every subordinate series — so the certificate said
-    // nothing about it at all (owner 2026-11-04).
+  it('does not name the series at all', async () => {
+    // Added 2026-11-04 to name the tranche, removed 2026-11-16: "Remove the
+    // Series column/field from the Subordinate Bond Certificate." The tranche
+    // is our filing device — which month the money arrived in — and naming it
+    // on the instrument invited the holder to read it as a product they chose.
     const { customerId } = await holding(subSeriesId, 'Series Named', '9552110009', [['2026-09-18', 500000]]);
     const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
     const text = squash(pdfText(await consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId)));
 
-    // The NAME, in the capitals the subordinate form prints its details in.
-    expect(text).toContain('Series' + caps('Subordinate Debt 3'));
-    // Between the certificate number and the holder, not appended at the end.
-    expect(text.indexOf('CertificateNo')).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf('Series' + caps('Subordinate Debt 3')))
-      .toBeGreaterThan(text.indexOf('CertificateNo'));
-    expect(text.indexOf('Series' + caps('Subordinate Debt 3')))
-      .toBeLessThan(text.indexOf(squash('Name of Bond Holder')));
+    expect(text).not.toContain('Series' + caps('Subordinate Debt 3'));
+    expect(text).not.toContain(caps('Subordinate Debt 3'));
+    expect(text).not.toContain(squash('SD3'));
+    // The certificate number is still there — only the row below it is gone.
+    expect(text).toContain(squash('Certificate No'));
+    expect(text).toContain(squash('Name of Bond Holder'));
   });
 
   it('spells the rupee prefix Rs., not RS.', async () => {
@@ -227,9 +226,10 @@ describe('what the bond names, and how it spells money', () => {
     expect(text).not.toMatch(/RS\.\d/);
   });
 
-  it('still prints on a single page with the extra row', async () => {
-    // Thirteen rows instead of twelve. A long address is the case with the
-    // least room left — its row grows to fit.
+  it('still prints on a single page', async () => {
+    // A long address is the case with the least room left — its row grows to
+    // fit. (This guarded a thirteenth row when the Series row existed; it now
+    // guards the layout generally, which is what it was really for.)
     const cust = await admin.post('/api/customers', {
       full_name: 'Long Address Holder', phone: '9552110011',
       address: 'DOOR NO 136-A, OTTANTHOTTAM, ENNAMANGALAM, SECOND STREET EXTENSION',
@@ -245,16 +245,17 @@ describe('what the bond names, and how it spells money', () => {
     const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
     const buf = await consolidatedBondCertificatePdf(ctx.db, customerId, subSeriesId);
     expect(pageCount(buf)).toBe(1);
-    expect(squash(pdfText(buf))).toContain('Series' + caps('Subordinate Debt 3'));
+    expect(squash(pdfText(buf))).toContain(squash('Certificate No'));
   });
 
-  it('carries the series on a reprint of a per-investment bond too', async () => {
+  it('a reprint of a per-investment bond names no series either', async () => {
     const { appIds } = await holding(subSeriesId, 'Reprint Series', '9552110012', [['2026-09-22', 500000]]);
     await ctx.db.query("UPDATE applications SET bond_serial_no = 'BC-2026-000018' WHERE id = $1", [appIds[0]]);
     const { bondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
     const buf = await bondCertificatePdf(ctx.db, appIds[0]!);
     const text = squash(pdfText(buf));
-    expect(text).toContain('Series' + caps('Subordinate Debt 3'));
+    expect(text).not.toContain(caps('Subordinate Debt 3'));
+    expect(text).not.toContain(squash('SD3'));
     expect(text).toContain(squash('Rs. 5,00,000'));
     expect(text).not.toMatch(/RS\.\d/);
     expect(pageCount(buf)).toBe(1);

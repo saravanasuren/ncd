@@ -392,12 +392,14 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
       // (owner 2026-10-29/30 — it prints as "—" until the series is allotted
       // and Date of Application now covers the question it was there to answer).
       ['Certificate No', certificateNo || '—'],
-      // Which tranche of the subordinate book this bond belongs to (owner
-      // 2026-11-04). The certificate number alone does not say: SD- numbers run
-      // in one sequence across every subordinate series. The series NAME, since
-      // that is what reads on a document a holder keeps ("Subordinate Debt 3",
-      // not "SD3"); the code is only a fallback for a series left unnamed.
-      ['Series', String(a.series_name || a.series_code || '—')],
+      // NO SERIES ROW. It was added 2026-11-04 to name the tranche, and removed
+      // 2026-11-16 at the owner's instruction: "Remove the Series column/field
+      // from the Subordinate Bond Certificate ... for Debenture 1-5."
+      //
+      // The tranche is a filing device of ours - which month the money arrived
+      // in - and naming it on the instrument invited a holder to read it as a
+      // product they had chosen. The series still decides the dates below; it
+      // is simply not printed. NCD 1-28 keep their own Category row, untouched.
       [`Name of ${holder}`, (a.full_name as string) || '—'],
       [`Address of ${holder}`, fullAddress, addrRowH],
       ['Nominee', nomineeLabel],
@@ -629,8 +631,7 @@ async function _consolidatedBondPage(
       // single application date to print — the per-investment certificates
       // carry those. Everything else matches the subordinate form.
       ['Certificate No', certificateNo],
-      // As above — the tranche this bond belongs to.
-      ['Series', String(series.name || series.code || '—')],
+      // No Series row here either - see the per-investment form above.
       [`Name of ${cHolder}`, (cust.full_name as string) || '—'],
       [`Address of ${cHolder}`, fullAddress, addrRowH],
       ['Nominee', cNominee],
@@ -651,7 +652,15 @@ async function _consolidatedBondPage(
       ['Redemption Value* (Rs.)', _fmtINR(totalInvested)],
     ]
     : [
-      ['Category', `${series.code || series.name || '—'} Series`],
+      // Category names the series, and on a Debenture 1-5 holding drawn in this
+      // form it is not printed at all (owner 2026-11-16: remove the Series
+      // field from BOTH certificates, "exclusively for Debenture 1-5").
+      //
+      // Scoped to ncdForm, which is true only for a subordinate series asked
+      // for in the Debenture form. A real NCD series reaching this branch still
+      // prints its own Category exactly as it always has - "Do not modify NCD
+      // Series 1-28 certificate formats" - and a test holds that.
+      ...(ncdForm ? [] : [['Category', `${series.code || series.name || '—'} Series`] as [string, string]]),
       ['Certificate No', certificateNo],
       ['Name of NCD Holder', (cust.full_name as string) || '—'],
       ['Address of NCD Holder', fullAddress, addrRowH],

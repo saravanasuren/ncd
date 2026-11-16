@@ -203,6 +203,39 @@ describe('the NCD form of a subordinate holding', () => {
     expect(row!.bond_serial_no).toMatch(/^CB-/);
   });
 
+  it('names no series — the Category row is gone from this form', async () => {
+    // Owner 2026-11-16: "Remove the Series column/field from the Normal
+    // Debenture Certificate ... exclusively for Debenture 1-5." On a
+    // subordinate holding the Category row printed the tranche code, which is
+    // a filing device of ours and reads as nothing to a holder.
+    const cid = await invest(await admin(), 'Tranche Unnamed', '9612000011', subSeries);
+    const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    const ncd = pdfText(await consolidatedBondCertificatePdf(ctx.db, cid, subSeries, 'debenture'));
+
+    expect(ncd).not.toContain(squash('Category'));
+    expect(ncd).not.toContain(squash('SUBTEST-1'));
+    expect(ncd).not.toContain(squash('Subordinate Debt Test 1'));
+    // Everything that identifies the document is still on it.
+    expect(ncd).toContain(squash('Debenture Certificate'));
+    expect(ncd).toContain(squash('Certificate No'));
+    expect(ncd).toContain(squash('Name of NCD Holder'));
+  });
+
+  it('a real NCD series keeps its Category row exactly as before', async () => {
+    // The other half of the instruction: "Do not modify NCD Series 1-28
+    // certificate formats." The removal is scoped to a subordinate holding
+    // drawn in this form, not to the form itself — which is the mistake this
+    // test exists to catch.
+    const cid = await invest(await admin(), 'Ncd Series Holder', '9612000012', plainSeries);
+    const { consolidatedBondCertificatePdf } = await import('../src/modules/reports/forms/bond.js');
+    const ncd = pdfText(await consolidatedBondCertificatePdf(ctx.db, cid, plainSeries, 'debenture'));
+
+    expect(ncd).toContain(squash('Category'));
+    const code = String((await ctx.db.query<{ code: string }>(
+      'SELECT code FROM series WHERE id = $1', [plainSeries])).rows[0]!.code);
+    expect(ncd).toContain(squash(`${code} Series`));
+  });
+
   it('the route serves both, and records which form was printed', async () => {
     const cid = await invest(await admin(), 'Route Both', '9612000006', subSeries);
     const a = await admin();

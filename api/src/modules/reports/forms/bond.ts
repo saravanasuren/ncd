@@ -152,6 +152,31 @@ const C = { GOLD: '#c9a227', GOLD_DEEP: '#a8851f', NAVY: '#1a2540', TEXT: '#1a1a
 // carries none, and — since 2026-11-06 — the term the NCD form states when it
 // is drawn for a subordinate holding (see _consolidatedBondPage).
 const BOND_REDEMPTION_MONTHS = 36;
+/**
+ * A SUBORDINATE BOND IS A FIVE-YEAR INSTRUMENT, whatever term the money runs.
+ *
+ * Owner 2026-11-16: "all subordinate bonds should have the maturity dates as 5
+ * years tenure - even if the investment scheme is of 36 months", and, asked
+ * whether that moved the money or only the document: "Only the certificate
+ * says 5 years" — the system keeps paying interest and returning principal on
+ * its own schedule.
+ *
+ * SO THE CERTIFICATE AND THE SCHEDULE DELIBERATELY DISAGREE for a 36-month
+ * holding: the document says 2031, the money comes back in 2029. That is the
+ * owner's instruction, put to them in those words, and it is written here so
+ * that nobody later "fixes" the discrepancy by moving a maturity date.
+ *
+ * It is the safer direction of the two: the holder is repaid EARLIER than the
+ * document promises, not later. The opposite — a certificate promising
+ * repayment before the schedule pays it — was flagged as the open question on
+ * the NCD form in #514, and this is not that.
+ *
+ * Scoped to a tranche WITH a close date, which is exactly Debenture 1-5
+ * ("debenture 1-5 will have the subordinate certificates alone as 5 yrs").
+ * NCD BOND, NCD 29 and NCD Doubling carry no close date and are untouched,
+ * and no code here has to name a series to keep it that way.
+ */
+const SUBORDINATE_TERM_MONTHS = 60;
 // Directors named on the certificate (as in wealth's production bond).
 const DIRECTORS = [
   { name: 'Avinash Gopalakrishnan', title: 'Director' },
@@ -373,6 +398,12 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
   const rateLabel = line.coupon_rate_pct != null ? `${Number(line.coupon_rate_pct).toFixed(2)}% per annum` : '—';
   const allotmentDate = a.allotment_date || a.deemed_date || null; // blank until allotted
   const redemptionDate = a.maturity_date || (allotmentDate ? _addMonths(allotmentDate, tenureMonths) : null);
+  // The subordinate form states the instrument's own five-year term off the
+  // series' close date (see SUBORDINATE_TERM_MONTHS). The record's maturity
+  // date is NOT touched — this is what is printed, not what is owed.
+  const subRedemptionDate = a.series_close_date
+    ? _addMonths(a.series_close_date, SUBORDINATE_TERM_MONTHS)
+    : redemptionDate;
   const fullAddress = customerAddress(a) || '—';
 
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
@@ -437,7 +468,7 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
       [`Number of ${unit}s`, numNcds != null ? String(numNcds) : '—'],
       ['Coupon Rate', rateLabel],
       ['Effective Date', _fmtDate(applicationDate as string | null)],
-      ['Date of Redemption', _fmtDate(redemptionDate)],
+      ['Date of Redemption', _fmtDate(subRedemptionDate)],
       [`Face Value per ${unit} (Rs.)`, _fmtINR(faceValue)],
       // The asterisk anchors the TDS footnote below, which pointed at nothing
       // before (ICL anchors theirs on "Maturity Value*").
@@ -598,6 +629,12 @@ async function _consolidatedBondPage(
     return rd ? _fmtDate(rd) : null;
   }));
   const redLabel = redDates.length === 1 ? redDates[0]! : redDates.length ? 'As per breakup below' : '—';
+  // Five years on the subordinate form, off the series' close date, whatever
+  // the holding's own term. One date for the whole tranche, so it can never
+  // read "As per breakup below" either.
+  const subRedLabel = series.close_date
+    ? _fmtDate(_addMonths(series.close_date, SUBORDINATE_TERM_MONTHS))
+    : redLabel;
   const schemeNames = uniq(apps.map((a) => a.scheme_name ?? null));
   const cSchemeLabel = schemeNames.length === 1 ? schemeNames[0]! : schemeNames.length ? schemeNames.join(' / ') : '—';
 
@@ -710,7 +747,7 @@ async function _consolidatedBondPage(
       // (owner 2026-11-03), and every investment here matures on it + tenure,
       // which is what lets a single document state one redemption date.
       ['Effective Date', _fmtDate(series.close_date as string | null)],
-      ['Date of Redemption', redLabel],
+      ['Date of Redemption', subRedLabel],
       [`Face Value per ${cUnit} (Rs.)`, _fmtINR(faceValue)],
       ['Redemption Value* (Rs.)', _fmtINR(totalInvested)],
     ]

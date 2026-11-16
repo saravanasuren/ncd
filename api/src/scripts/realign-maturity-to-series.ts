@@ -35,8 +35,11 @@
  * Usage on the box:
  *   unset DATABASE_URL LEGACY_DATABASE_URL
  *   export SSM_PARAMETERS_PATH=/dhanam/newwealth/ SSM_REGION=ap-south-1
- *   node dist/scripts/realign-maturity-to-series.js --series-like SD%
- *   node dist/scripts/realign-maturity-to-series.js --series-like SD% --commit
+ *   node dist/scripts/realign-maturity-to-series.js --series-like 'Debenture %'
+ *   node dist/scripts/realign-maturity-to-series.js --series-like 'Debenture %' --commit
+ *
+ * (The subordinate tranches were SD1-SD5 until migration 114 renamed them to
+ *  Debenture 1-5, code and name. Quote the pattern - it contains a space.)
  */
 import { loadSecretsFromSsm } from '../secrets.js';
 import { createDb } from '../db/index.js';
@@ -58,7 +61,7 @@ async function main(): Promise<void> {
   const seriesLike = arg('series-like');
   const commit = process.argv.includes('--commit');
   if (!seriesLike) {
-    console.error('usage: --series-like SD% [--commit]');
+    console.error("usage: --series-like 'Debenture %' [--commit]");
     process.exit(1);
   }
 

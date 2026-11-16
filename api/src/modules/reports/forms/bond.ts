@@ -21,6 +21,7 @@ import type { Db } from '../../../db/types.js';
 import { errors } from '../../../lib/errors.js';
 import { nextSeq, isUniqueViolation } from '../../../lib/sequences.js';
 import { formatNumber, DEFAULT_NUMBER_FORMATS } from '../../../lib/numbering.js';
+import { addMonths } from '../../../lib/dates.js';
 import { getCompanyProfile, getBondSignature } from '../../products/service.js';
 import { companyHeader, companyAsAt, COMPANY, LOGO_PATH, HAS_LOGO, customerAddress, addressColumns, amountInWords } from './shared.js';
 
@@ -154,12 +155,28 @@ const _fmtDate = (d: unknown): string => {
   return `${String(dt.getUTCDate()).padStart(2, '0')}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${dt.getUTCFullYear()}`;
 };
 const _fmtINR = (n: unknown): string => (n == null || !isFinite(Number(n)) ? 'Rs. —' : 'Rs. ' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 }));
+/**
+ * Add months the way the rest of the system does.
+ *
+ * This used to be `dt.setUTCMonth(dt.getUTCMonth() + n)`, which ROLLS OVER:
+ * 31 August plus six months came out as 2 March. lib/dates.ts `addMonths` —
+ * the one the interest engine and every schedule go through — CLAMPS to the
+ * last day of the target month instead, giving 28 February. A certificate
+ * doing its own arithmetic could therefore print a maturity date two or three
+ * days after the day the schedule actually redeems on.
+ *
+ * It never showed, because 36 and 60 months leave the day-of-month untouched.
+ * Owner 2026-11-16 asked for the end-of-month convention to be preserved, and
+ * the only honest way to preserve a convention is to use the thing that
+ * defines it.
+ *
+ * NOTHING IN THE ENGINE CHANGES. This reaches for a function already there.
+ */
 function _addMonths(d: unknown, n: number): Date | null {
   if (!d) return null;
   const dt = d instanceof Date ? new Date(d.getTime()) : new Date(String(d));
   if (isNaN(dt.getTime())) return null;
-  dt.setUTCMonth(dt.getUTCMonth() + n);
-  return dt;
+  return new Date(addMonths(dt.toISOString().slice(0, 10), n) + 'T00:00:00Z');
 }
 
 function _drawBorder(doc: Doc) {
@@ -499,11 +516,15 @@ async function _consolidatedBondPage(
   const apps = (await db.query<Record<string, unknown>>(
     `SELECT a.id, a.application_no, a.total_amount, a.allotment_date, a.maturity_date, a.status,
             a.date_money_received,
-            l.coupon_rate_pct, l.tenure_months, l.face_value, l.scheme_name
+            -- payout_frequency must be listed HERE as well as inside the
+            -- LATERAL. scheme_name once was not, so it never reached the
+            -- renderer and a live certificate printed "—" for the scheme.
+            l.coupon_rate_pct, l.tenure_months, l.face_value, l.scheme_name, l.payout_frequency
        FROM applications a
        JOIN LATERAL (
          SELECT COALESCE(al.coupon_rate_pct, sch.coupon_rate_pct) AS coupon_rate_pct, al.tenure_months,
-                COALESCE(sch.face_value, 100000) AS face_value, sch.name AS scheme_name
+                COALESCE(sch.face_value, 100000) AS face_value, sch.name AS scheme_name,
+                COALESCE(al.payout_frequency, sch.payout_frequency) AS payout_frequency
            FROM application_lines al LEFT JOIN schemes sch ON sch.id = al.scheme_id
           WHERE al.application_id = a.id ORDER BY al.id LIMIT 1
        ) l ON TRUE
@@ -601,7 +622,37 @@ async function _consolidatedBondPage(
   // run for the SD series, so reading it printed a blank row.
   const ncdForm = subordinateSeries && drawDebenture;
   const ncdAllotLabel = _fmtDate(series.close_date as string | null);
-  const ncdRedLabel = _fmtDate(_addMonths(series.close_date, BOND_REDEMPTION_MONTHS));
+  // THREE YEARS, EXCEPT DOUBLING.
+  //
+  // Owner 2026-11-06: "NCD is 3 years tenure, so redemption date will be 3
+  // years from" allotment — so this form states the NCD's own term even where
+  // the holding runs longer, and #514 built that deliberately.
+  //
+  // Owner 2026-11-16, asked whether point 9 ("use the actual tenure
+  // configured") reversed it: "nov 6 stands, except for doubling schemee.
+  // doubling acheme alone will have 5 yrs ternure in both." So the exception
+  // is the PRODUCT, not the number: a 60-month holding that is not Doubling
+  // still prints three years.
+  //
+  // Doubling is told apart the way the payout engine already tells it apart —
+  // by its payout frequency not being a periodic one. Matching on a scheme
+  // name would break the first time one is renamed, and these schemes have
+  // been renamed twice this month.
+  //
+  // For Doubling the term comes from the holding itself rather than a second
+  // hard-coded 60, so a Doubling scheme on any other term follows it.
+  const PERIODIC_FREQ = new Set(['Monthly', 'Quarterly', 'HalfYearly', 'Annual']);
+  const ncdFreqs = uniq(apps.map((a) => a.payout_frequency ?? null));
+  const doublingHolding = ncdFreqs.length === 1 && !PERIODIC_FREQ.has(String(ncdFreqs[0]));
+  const ncdTenures = uniq(apps.map((a) => (a.tenure_months != null ? String(a.tenure_months) : null)));
+  // A holding whose own lines disagree on the term has no single answer to
+  // print, and says so rather than silently taking the first line's.
+  const ncdTermMonths = !doublingHolding
+    ? BOND_REDEMPTION_MONTHS
+    : ncdTenures.length === 1 ? Number(ncdTenures[0]) : null;
+  const ncdRedLabel = ncdTermMonths != null
+    ? _fmtDate(_addMonths(series.close_date, ncdTermMonths))
+    : 'As per breakup below';
 
   const anyAllot = apps.map((a) => a.allotment_date).find(Boolean) ?? series.deemed_date ?? null;
   const year = new Date(String(anyAllot ?? new Date().toISOString())).getUTCFullYear();

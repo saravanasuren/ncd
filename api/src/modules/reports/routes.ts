@@ -51,14 +51,41 @@ reportsRouter.get('/ncd-book.xlsx', requirePermission('reports:download'),
     await buildNcdBook(res, getDb(), req.user!, filtersFromQuery(req.query));
   }));
 
+/**
+ * Resolve what a human typed into a customer id.
+ *
+ * The Reports page asks for a "Customer ID" in a free-text box, but the only
+ * identifier an operator ever SEES in this product is the code - DHN0335 on the
+ * customer's page, on their certificate, in every list. So that is what gets
+ * typed, and `Number('DHN0335')` is NaN, which reached Postgres as a bigint and
+ * returned a raw 500 "INTERNAL" page with no hint of what was wrong (owner
+ * 2026-11-17). Accept either form, and fail as a clean 404 when neither exists.
+ *
+ * A code never starts with a digit and an id is only digits, so the two can
+ * never be confused for one another.
+ */
+async function customerIdFromRef(ref: string): Promise<number> {
+  const raw = String(ref ?? '').trim();
+  if (/^\d+$/.test(raw)) return Number(raw);
+  if (!raw) throw errors.notFound('Not found');
+  const { rows } = await getDb().query<{ id: string }>(
+    'SELECT id FROM customers WHERE upper(btrim(customer_code)) = upper($1) LIMIT 1', [raw]);
+  // 404, never 500: a mistyped code is an operator's slip, not a server fault.
+  if (!rows[0]) throw errors.notFound('No customer with that ID or code');
+  return Number(rows[0].id);
+}
+
 reportsRouter.get('/soa/:customerId.pdf', requirePermission('reports:download', 'customers:read'),
   asyncHandler(async (req, res) => {
+    const customerId = await customerIdFromRef(req.params.customerId!);
+    // Resolution is NOT access: the scope check still runs on the id, so a code
+    // cannot be used to reach a customer the operator may not see.
     const { assertCustomerVisible } = await import('../../lib/visibility.js');
-    await assertCustomerVisible(getDb(), req.user!, Number(req.params.customerId));
+    await assertCustomerVisible(getDb(), req.user!, customerId);
     const { soaPdf } = await import('./documents.js');
-    const buf = await soaPdf(getDb(), Number(req.params.customerId));
+    const buf = await soaPdf(getDb(), customerId);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="soa-${req.params.customerId}.pdf"`);
+    res.setHeader('Content-Disposition', `inline; filename="soa-${customerId}.pdf"`);
     res.end(buf);
   }));
 

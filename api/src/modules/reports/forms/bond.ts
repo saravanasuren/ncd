@@ -768,6 +768,23 @@ async function _consolidatedBondPage(
       ['Investment Value (Rs.)', _fmtINR(totalInvested)],
       ['Number of NCDs', numNcds != null ? String(numNcds) : '—'],
       ['Coupon Rate', rateLabel],
+      // The scheme the holding is on, directly below the rate (owner
+      // 2026-11-17: "IN THE NCD CERTIFICATE I NEED THE SCHEME NAAME TO COME
+      // BELOW COUPON RATE").
+      //
+      // The NAME ALONE - no "(36 MONTH 13.00%)" bracket like the subordinate
+      // form carries. Asked which, the owner chose the plain name, and the
+      // reason it matters is a page above: this form deliberately prints a
+      // THREE-YEAR redemption date even on a holding whose line says 60
+      // months, so a label repeating the line's own term would contradict the
+      // dates beside it. One Debenture 5 holding (13_M60_MONTHLY) is exactly
+      // that case today. The rate is already on the row above.
+      //
+      // Scoped to ncdForm, like the Category row below: true only for a
+      // subordinate series asked for in the Debenture form. NCD 1-28 keep
+      // their format untouched - "Do not disturb NCD Series 1-28 under any
+      // circumstances" - and a test holds that.
+      ...(ncdForm ? [['Scheme', cSchemeLabel] as [string, string]] : []),
       ['Date of Allotment', ncdForm ? ncdAllotLabel : allotLabel],
       ['Date of Redemption', ncdForm ? ncdRedLabel : redLabel],
       ['Face Value per NCD (Rs.)', _fmtINR(faceValue)],

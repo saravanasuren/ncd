@@ -84,6 +84,28 @@ export function companyAsAt<T extends { legal_name: string; cin: string }>(co: T
   return { ...co, legal_name: COMPANY_BEFORE_RENAME.legal_name, cin: COMPANY_BEFORE_RENAME.cin };
 }
 
+/**
+ * The corporate office is DHARSHINI Business Centre, with an H (owner
+ * 2026-11-17: "change the address as dharshini business centre").
+ *
+ * A SPELLING FIX, applied to whatever address is in hand, rather than a second
+ * hard-coded address. If company_profile ever gains an address column, this
+ * still only corrects the spelling of what the DB supplies; on a correctly
+ * spelled address it does nothing at all.
+ *
+ * SCOPED, by the owner's own choice when asked. The one address constant feeds
+ * six documents, and they asked for "bonds and acknowledgments" specifically,
+ * so only those two call this: the Bond / Debenture certificate (its header AND
+ * the legal paragraph) and the acknowledgement. The application form, the
+ * locker agreement footer and the locker authorisation letter keep the old
+ * spelling until the owner says otherwise. They were told this leaves the
+ * company spelled two ways across the paperwork and chose it anyway, so do not
+ * "tidy" it by widening the call sites — that is their decision to reverse.
+ */
+export function withCorrectedOffice<T extends { corporate_office_address: string }>(co: T): T {
+  return { ...co, corporate_office_address: co.corporate_office_address.replace(/\bDarshini\b/g, 'Dharshini') };
+}
+
 export interface CompanyHeader {
   legal_name: string; cin: string; corporate_office_address: string;
   general_phone: string; general_email: string; website: string; signatory_designation: string;

@@ -11,7 +11,7 @@ import type { Db } from '../../../db/types.js';
 import { errors } from '../../../lib/errors.js';
 import { getCompanyProfile, getAckSignature } from '../../products/service.js';
 import {
-  COLORS, companyHeader, drawHeader, section, kv, fmtDate, fmtINR, amountInWords, renderToBuffer,
+  COLORS, companyHeader, withCorrectedOffice, drawHeader, section, kv, fmtDate, fmtINR, amountInWords, renderToBuffer,
 } from './shared.js';
 
 export async function acknowledgmentPdf(db: Db, applicationId: number): Promise<Buffer> {
@@ -36,7 +36,9 @@ export async function acknowledgmentPdf(db: Db, applicationId: number): Promise<
     `SELECT amount, date_money_received, collection_method, collection_reference
        FROM application_lines WHERE application_id = $1 ORDER BY id`, [applicationId])).rows;
 
-  const co = companyHeader(await getCompanyProfile(db));
+  // The acknowledgement carries the corrected office spelling, the other half
+  // of the owner's instruction - see withCorrectedOffice.
+  const co = withCorrectedOffice(companyHeader(await getCompanyProfile(db)));
   // Uploaded from Masters → Company profile (migration 051). Read the bytes here,
   // before the synchronous PDF render below. Null when none is on file — the
   // block then just prints the signatory line, as it did before.

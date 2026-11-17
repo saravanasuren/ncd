@@ -23,7 +23,7 @@ import { nextSeq, isUniqueViolation } from '../../../lib/sequences.js';
 import { formatNumber, DEFAULT_NUMBER_FORMATS } from '../../../lib/numbering.js';
 import { addMonths } from '../../../lib/dates.js';
 import { getCompanyProfile, getBondSignature } from '../../products/service.js';
-import { companyHeader, companyAsAt, COMPANY, LOGO_PATH, HAS_LOGO, customerAddress, addressColumns, amountInWords } from './shared.js';
+import { companyHeader, companyAsAt, withCorrectedOffice, COMPANY, LOGO_PATH, HAS_LOGO, customerAddress, addressColumns, amountInWords } from './shared.js';
 
 /** Only an issued investment carries a certificate — a pending application must
  * never burn a certificate number (mirrors wealth's gate). */
@@ -410,7 +410,8 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
   // The company as it was when THIS SERIES was allotted, not as it is today —
   // but only on the subordinate form. The Debenture Certificate keeps whatever
   // the profile says, untouched (owner: "dont ever touch ncd 27 or 28").
-  const coNow = companyHeader(await getCompanyProfile(db));
+  // Bonds carry the corrected office spelling - see withCorrectedOffice.
+  const coNow = withCorrectedOffice(companyHeader(await getCompanyProfile(db)));
   const co = isSubordinate(a)
     ? companyAsAt(coNow, (a.series_close_date ?? a.deemed_date) as string | null)
     : coNow;
@@ -609,7 +610,8 @@ async function _consolidatedBondPage(
   // As above: the name as at the SERIES' date, subordinate form only. Falling
   // back to the deemed date covers a subordinate series with no close date, and
   // to the earliest money in the holding if it has neither.
-  const coNow = companyHeader(await getCompanyProfile(db));
+  // Bonds carry the corrected office spelling - see withCorrectedOffice.
+  const coNow = withCorrectedOffice(companyHeader(await getCompanyProfile(db)));
   const co = isSubordinate(series)
     ? companyAsAt(coNow, (series.close_date ?? series.deemed_date
         ?? apps.map((a) => a.date_money_received).filter(Boolean).sort()[0]) as string | null)

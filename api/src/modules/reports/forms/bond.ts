@@ -331,20 +331,29 @@ function _drawDetailTable(doc: Doc, y: number, rows: Array<[string, string, numb
  * or under any of them.") was REMOVED at their instruction. The paragraph now
  * ends with the TDS undertaking. Nothing else in the wording changed.
  */
-export function bondLegalParagraph(legalName: string, corporateOffice: string, totalAmount: number, subordinate = false): string {
+export function bondLegalParagraph(
+  legalName: string, corporateOffice: string, totalAmount: number,
+  subordinate = false, debentureForm = false,
+): string {
+  // Owner 2026-11-17: "rename it like - discharge of the debenture
+  // certificate". THE, not THIS - their wording, kept exactly. The other two
+  // readings are untouched, and bond-legal-paragraph.test.ts pins them.
+  const discharge = debentureForm
+    ? 'discharge of the Debenture Certificate'
+    : `discharge of this ${subordinate ? 'Bond' : 'NCD'} Certificate`;
   return `For Value Received, ${legalName}, having its Corporate Office at ${corporateOffice}, `
     + `promises to pay to the person(s) named herein as the holder(s), or their order, the sum of `
     + `Rs. ${Number(totalAmount).toLocaleString('en-IN')} (${amountInWords(totalAmount)}) upon presentation `
-    + `and discharge of this ${subordinate ? 'Bond' : 'NCD'} Certificate on the date of redemption as mentioned above. `
+    + `and ${discharge} on the date of redemption as mentioned above. `
     + `The principal amount shall be payable on redemption, while interest shall be paid separately at the `
     + `rate specified above, subject to deduction of tax at source at the rate prevailing from time to time `
     + `under the provisions of the Income-tax Act, 1961, or any statutory modification or re-enactment thereof.`;
 }
 
-function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHeader>, totalAmount: number, signatures: Array<Buffer | null>, subordinate = false) {
+function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHeader>, totalAmount: number, signatures: Array<Buffer | null>, subordinate = false, debentureForm = false) {
   const x = 50, w = doc.page.width - 100;
   doc.fillColor(C.TEXT).font('Helvetica').fontSize(9.5).text(
-    bondLegalParagraph(co.legal_name, co.corporate_office_address, totalAmount, subordinate),
+    bondLegalParagraph(co.legal_name, co.corporate_office_address, totalAmount, subordinate, debentureForm),
     x, y, { width: w, align: 'justify' });
   y = doc.y + 10;
   doc.font('Helvetica-Oblique').fontSize(9).text('*Will be subject to deduction of TDS on interest and applicable Government levies', x, y, { width: w });
@@ -732,8 +741,13 @@ async function _consolidatedBondPage(
   doc.font('Helvetica-Bold').fontSize(10);
   const addrRowH = Math.max(24, Math.ceil(doc.heightOfString(fullAddress, { width: addrColW })) + 14);
 
-  const cHolder = sub ? 'Bond Holder' : 'NCD Holder';
-  const cUnit = sub ? 'Bond' : 'NCD';
+  // Owner 2026-11-17: "remove all the ncd words ... make sure there is not NCD
+  // words in the certificate. change it only for debenture 1-5." A Debenture
+  // 1-5 holding drawn in this form calls the instrument what the title already
+  // calls it. NCD Series 1-28 keep every one of their labels - a test renders
+  // one and asserts the word NCD is still on it.
+  const cHolder = sub ? 'Bond Holder' : ncdForm ? 'Debenture Holder' : 'NCD Holder';
+  const cUnit = sub ? 'Bond' : ncdForm ? 'Debenture' : 'NCD';
   const cNominee = nominee?.full_name
     ? `${nominee.full_name as string}${sub && nominee.relationship ? ` (${nominee.relationship as string})` : ''}`
     : '—';
@@ -775,11 +789,11 @@ async function _consolidatedBondPage(
       // Series 1-28 certificate formats" - and a test holds that.
       ...(ncdForm ? [] : [['Category', `${series.code || series.name || '—'} Series`] as [string, string]]),
       ['Certificate No', certificateNo],
-      ['Name of NCD Holder', (cust.full_name as string) || '—'],
-      ['Address of NCD Holder', fullAddress, addrRowH],
+      [`Name of ${cHolder}`, (cust.full_name as string) || '—'],
+      [`Address of ${cHolder}`, fullAddress, addrRowH],
       ['Nominee', cNominee],
       ['Investment Value (Rs.)', _fmtINR(totalInvested)],
-      ['Number of NCDs', numNcds != null ? String(numNcds) : '—'],
+      [`Number of ${cUnit}s`, numNcds != null ? String(numNcds) : '—'],
       ['Coupon Rate', rateLabel],
       // The scheme the holding is on, directly below the rate (owner
       // 2026-11-17: "IN THE NCD CERTIFICATE I NEED THE SCHEME NAAME TO COME
@@ -800,12 +814,12 @@ async function _consolidatedBondPage(
       ...(ncdForm ? [['Scheme', cSchemeLabel] as [string, string]] : []),
       ['Date of Allotment', ncdForm ? ncdAllotLabel : allotLabel],
       ['Date of Redemption', ncdForm ? ncdRedLabel : redLabel],
-      ['Face Value per NCD (Rs.)', _fmtINR(faceValue)],
+      [`Face Value per ${cUnit} (Rs.)`, _fmtINR(faceValue)],
       ['Redemption Value (Rs.)', _fmtINR(totalInvested)],
     ];
   y = _drawDetailTable(doc, y, rows, sub);
   const signatures = await Promise.all([0, 1, 2].map((i) => getBondSignature(db, i).then((s) => s?.buffer ?? null)));
-  _drawLegalAndSign(doc, y, co, totalInvested, signatures, sub);
+  _drawLegalAndSign(doc, y, co, totalInvested, signatures, sub, ncdForm);
 }
 
 /** One customer's consolidated bond for a series. */

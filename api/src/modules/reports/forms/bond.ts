@@ -246,7 +246,9 @@ function _drawHeader(doc: Doc, co: ReturnType<typeof companyHeader>): number {
  * the subtitle and nothing else.
  *
  * Owner 2026-11-17: "in the ncd certificate remove the non convertable
- * debentures wordsngs, just keep secured and redeemable". One shared line drew
+ * debentures wordsngs, just keep secured and redeemable", then, on seeing it:
+ * "make it secured , redeemable debenture" - so the pill names the instrument
+ * once, which is the shape it settled on. One shared line drew
  * this pill for BOTH that certificate and a real NCD Series 1-28 one, so the
  * owner was asked which; they chose Debenture 1-5 only, leaving 1-28 exactly as
  * they are ("Do not disturb NCD Series 1-28 under any circumstances"). Same
@@ -261,7 +263,7 @@ function _drawTitle(doc: Doc, y: number, subordinate = false, faceValue?: number
   const subtitle = subordinate
     ? `(Non-Convertible, Redeemable, Subordinate Bonds of face value ${faceValue != null ? _fmtINR(faceValue) : 'Rs. 1,00,000'}/- each)`
     : debentureForm
-      ? '(Secured, Redeemable)'
+      ? '(Secured, Redeemable Debenture)'
       : '(Secured, Redeemable, Non-Convertible Debentures)';
   // 10pt for the longer subordinate wording, which overruns the pill at 11.
   doc.fontSize(subordinate ? 10 : 11).font('Helvetica-Bold');

@@ -28,7 +28,7 @@ beforeAll(async () => {
 afterAll(async () => { await ctx.close(); });
 
 const squash = (s: string) => s.replace(/\s+/g, '');
-const SHORT = '(Secured,Redeemable)';
+const SHORT = '(Secured,RedeemableDebenture)';
 const LONG = '(Secured,Redeemable,Non-ConvertibleDebentures)';
 
 /** A series of the given kind, with one live holding, and its certificate. */
@@ -64,7 +64,7 @@ const certificate = async (cid: number, sid: number, template?: 'debenture') => 
 };
 
 describe('the subtitle on a Debenture 1-5 certificate', () => {
-  it('says Secured, Redeemable — and nothing about non-convertible debentures', async () => {
+  it('says Secured, Redeemable Debenture — and nothing about non-convertible debentures', async () => {
     const { cid, seriesId } = await holdingIn('SUB1', true, '9511100001', 'Holder Alpha');
     const t = await certificate(cid, seriesId, 'debenture');
     expect(t).toContain(SHORT);

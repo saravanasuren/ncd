@@ -77,6 +77,8 @@ const BOND_ISSUABLE = ['Active', 'Matured', 'Redeemed', 'RolledOver'];
  * One row per CUSTOMER, not per investment — several people hold two or three in
  * the same series, and the page offers one consolidated bond per person. Each
  * row carries its own investments so the row can expand without a second call.
+ * That holds even when those investments name DIFFERENT referrers: the referrer
+ * is a column on the row, never part of what defines it.
  *
  * `has_bond` says whether a certificate number already exists. It drives the
  * warning on "Download all": producing a bond MINTS a permanent number, and the
@@ -89,7 +91,19 @@ export async function seriesCustomers(db: Db, seriesId: number) {
 
   const { rows } = await db.query(
     `SELECT c.id AS customer_id, c.customer_code, c.full_name,
-            NULLIF(btrim(${REFERRER}), '') AS referred_by,
+            -- Every referrer behind this person's holdings, de-duplicated and
+            -- AGGREGATED - never grouped on. Grouping by the referrer split one
+            -- customer across two rows the moment their investments carried
+            -- different referrers, which broke the one-row-per-person rule this
+            -- function exists to keep: both rows then showed the SAME
+            -- certificate number (it is stored per customer + series) while each
+            -- showed only part of the money, and "Download all", which builds its
+            -- list from these rows, rendered that person's certificate twice.
+            -- Two customers in Debenture 4 read that way in production.
+            -- Blanks drop out rather than forming a row of their own; string_agg
+            -- skips NULL, so a holding with no referrer at all still reads '-'.
+            NULLIF(string_agg(DISTINCT NULLIF(btrim(${REFERRER}), ''), ', '
+              ORDER BY NULLIF(btrim(${REFERRER}), '')), '') AS referred_by,
             count(a.id)::int AS investment_count,
             COALESCE(sum(a.total_amount), 0) AS total_amount,
             (cb.bond_serial_no IS NOT NULL) AS has_bond,
@@ -103,7 +117,7 @@ export async function seriesCustomers(db: Db, seriesId: number) {
        JOIN customers c ON c.id = a.customer_id${REFERRER_LATERAL_JOINS}
        LEFT JOIN consolidated_bonds cb ON cb.customer_id = c.id AND cb.series_id = a.series_id
       WHERE a.series_id = $1 AND a.status = ANY($2::text[])
-      GROUP BY c.id, c.customer_code, c.full_name, cb.bond_serial_no, ${REFERRER}
+      GROUP BY c.id, c.customer_code, c.full_name, cb.bond_serial_no
       ORDER BY c.full_name`, [seriesId, BOND_ISSUABLE]);
 
   return {

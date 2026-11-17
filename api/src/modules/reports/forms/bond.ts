@@ -241,7 +241,18 @@ function _drawHeader(doc: Doc, co: ReturnType<typeof companyHeader>): number {
   return Math.max(doc.y + 14, logoY + logoSize + 8);
 }
 
-function _drawTitle(doc: Doc, y: number, subordinate = false, faceValue?: number): number {
+/**
+ * `debentureForm` = a Debenture 1-5 holding drawn in the NCD form. It shortens
+ * the subtitle and nothing else.
+ *
+ * Owner 2026-11-17: "in the ncd certificate remove the non convertable
+ * debentures wordsngs, just keep secured and redeemable". One shared line drew
+ * this pill for BOTH that certificate and a real NCD Series 1-28 one, so the
+ * owner was asked which; they chose Debenture 1-5 only, leaving 1-28 exactly as
+ * they are ("Do not disturb NCD Series 1-28 under any circumstances"). Same
+ * scoping as the Category and Scheme rows, and a test holds it.
+ */
+function _drawTitle(doc: Doc, y: number, subordinate = false, faceValue?: number, debentureForm = false): number {
   const title = subordinate ? 'Subordinate Debt Certificate' : 'Debenture Certificate';
   doc.fillColor(C.TEXT).font('Helvetica-Bold').fontSize(24).text(title, 0, y, { align: 'center', width: doc.page.width });
   y = doc.y + 8;
@@ -249,7 +260,9 @@ function _drawTitle(doc: Doc, y: number, subordinate = false, faceValue?: number
   // does NOT say "Unsecured" — owner's wording, 2026-10-29.
   const subtitle = subordinate
     ? `(Non-Convertible, Redeemable, Subordinate Bonds of face value ${faceValue != null ? _fmtINR(faceValue) : 'Rs. 1,00,000'}/- each)`
-    : '(Secured, Redeemable, Non-Convertible Debentures)';
+    : debentureForm
+      ? '(Secured, Redeemable)'
+      : '(Secured, Redeemable, Non-Convertible Debentures)';
   // 10pt for the longer subordinate wording, which overruns the pill at 11.
   doc.fontSize(subordinate ? 10 : 11).font('Helvetica-Bold');
   const pillW = doc.widthOfString(subtitle) + 36, pillX = (doc.page.width - pillW) / 2, pillH = 22;
@@ -714,7 +727,7 @@ async function _consolidatedBondPage(
 
   _drawBorder(doc);
   let y = _drawHeader(doc, co);
-  y = _drawTitle(doc, y, sub, faceValue);
+  y = _drawTitle(doc, y, sub, faceValue, ncdForm);
   const addrColW = doc.page.width - 100 - 180 - 24;
   doc.font('Helvetica-Bold').fontSize(10);
   const addrRowH = Math.max(24, Math.ceil(doc.heightOfString(fullAddress, { width: addrColW })) + 14);

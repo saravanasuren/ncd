@@ -80,8 +80,13 @@ export function ReportsPage() {
         <div className={card}>
           <h2 className="text-sm font-semibold mb-2">Statement of account (PDF)</h2>
           <div className="flex gap-2 items-center">
-            <input className={inp} placeholder="Customer ID" value={cust} onChange={(e) => setCust(e.target.value)} />
-            {cust && <a href={`/api/reports/soa/${cust}.pdf`} target="_blank" rel="noreferrer" className={dl}>↓ SOA</a>}
+            {/* The code is the only identifier shown anywhere in the product, so
+                that is what gets typed here. Say so, and send it trimmed and
+                encoded - the endpoint takes either form. */}
+            <input className={inp} placeholder="Customer ID or code (e.g. DHN0335)" size={28}
+                   value={cust} onChange={(e) => setCust(e.target.value)} />
+            {cust.trim() && <a href={`/api/reports/soa/${encodeURIComponent(cust.trim())}.pdf`}
+                               target="_blank" rel="noreferrer" className={dl}>↓ SOA</a>}
           </div>
         </div>
         {/* Incentives for a month, staff AND agents, in one workbook

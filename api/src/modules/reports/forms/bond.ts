@@ -333,9 +333,53 @@ function _drawDetailTable(doc: Doc, y: number, rows: Array<[string, string, numb
  * or under any of them.") was REMOVED at their instruction. The paragraph now
  * ends with the TDS undertaking. Nothing else in the wording changed.
  */
+/**
+ * Frequencies that pay the interest out AS IT ACCRUES. Anything else - today
+ * only 'AtMaturity' - is a CUMULATIVE product: nothing reaches the holder until
+ * redemption, so what they get back is principal PLUS the whole of the interest.
+ *
+ * This was declared inside the consolidated renderer, which decided the
+ * redemption DATE with it. It is now module scope because the redemption
+ * AMOUNT turns on the same distinction, and the two must never disagree.
+ */
+const PERIODIC_FREQ = new Set(['Monthly', 'Quarterly', 'HalfYearly', 'Annual']);
+
+/**
+ * What the holder actually receives at redemption.
+ *
+ * Owner 2026-11-17: "for investments in doubling scheme - the redemption amount
+ * should be the double of the investment amount in the certificates. check it -
+ * its now showing wrong datas." The row was hard-coded to the principal, so a
+ * Doubling holding read Rs 3,00,000 in and Rs 3,00,000 back.
+ *
+ * PRINCIPAL + RATE x TERM, from the scheme's OWN stored rate and tenure, not a
+ * hard-coded 2x. Asked which, the owner chose this. For Doubling the two are
+ * identical - 20% for 60 months is 100%, exactly double - but the inactive
+ * CUMULATIVE scheme (15%, 36 months) shares this code path and would be
+ * overstated by half a lakh per lakh if everything simply doubled.
+ *
+ * This computes what a CERTIFICATE PRINTS. It is not the interest engine, reads
+ * no schedule and moves no money; the payout run is untouched. Doubling lines
+ * carry zero schedule rows in production, so there is no stored figure to read
+ * and nothing here to contradict.
+ *
+ * A periodic holding returns the principal unchanged, exactly as before: its
+ * interest has already been paid out month by month.
+ */
+export function redemptionValue(
+  principal: number, ratePct: unknown, tenureMonths: unknown, payoutFrequency: unknown,
+): number {
+  if (PERIODIC_FREQ.has(String(payoutFrequency))) return principal;
+  const rate = Number(ratePct), months = Number(tenureMonths);
+  // Anything unreadable falls back to the principal. A certificate that
+  // understates is recoverable; one that invents a number is not.
+  if (!Number.isFinite(rate) || !Number.isFinite(months) || rate <= 0 || months <= 0) return principal;
+  return Math.round(principal + principal * (rate / 100) * (months / 12));
+}
+
 export function bondLegalParagraph(
   legalName: string, corporateOffice: string, totalAmount: number,
-  subordinate = false, debentureForm = false,
+  subordinate = false, debentureForm = false, cumulative = false,
 ): string {
   // Owner 2026-11-17: "rename it like - discharge of the debenture
   // certificate". THE, not THIS - their wording, kept exactly. The other two
@@ -347,15 +391,22 @@ export function bondLegalParagraph(
     + `promises to pay to the person(s) named herein as the holder(s), or their order, the sum of `
     + `Rs. ${Number(totalAmount).toLocaleString('en-IN')} (${amountInWords(totalAmount)}) upon presentation `
     + `and ${discharge} on the date of redemption as mentioned above. `
-    + `The principal amount shall be payable on redemption, while interest shall be paid separately at the `
+    // On a CUMULATIVE holding nothing is paid until redemption, so the stock
+    // sentence ("interest shall be paid separately") is simply untrue - and it
+    // would sit beside a Redemption Value that already includes that interest.
+    // Owner 2026-11-17 chose to reword it rather than leave the certificate
+    // disagreeing with itself. The TDS clause is untouched.
+    + (cumulative
+      ? `The principal amount together with the interest accrued thereon shall be payable on redemption at the `
+      : `The principal amount shall be payable on redemption, while interest shall be paid separately at the `)
     + `rate specified above, subject to deduction of tax at source at the rate prevailing from time to time `
     + `under the provisions of the Income-tax Act, 1961, or any statutory modification or re-enactment thereof.`;
 }
 
-function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHeader>, totalAmount: number, signatures: Array<Buffer | null>, subordinate = false, debentureForm = false) {
+function _drawLegalAndSign(doc: Doc, y: number, co: ReturnType<typeof companyHeader>, totalAmount: number, signatures: Array<Buffer | null>, subordinate = false, debentureForm = false, cumulative = false) {
   const x = 50, w = doc.page.width - 100;
   doc.fillColor(C.TEXT).font('Helvetica').fontSize(9.5).text(
-    bondLegalParagraph(co.legal_name, co.corporate_office_address, totalAmount, subordinate, debentureForm),
+    bondLegalParagraph(co.legal_name, co.corporate_office_address, totalAmount, subordinate, debentureForm, cumulative),
     x, y, { width: w, align: 'justify' });
   y = doc.y + 10;
   doc.font('Helvetica-Oblique').fontSize(9).text('*Will be subject to deduction of TDS on interest and applicable Government levies', x, y, { width: w });
@@ -404,7 +455,8 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
   const nominee = (await db.query<Record<string, unknown>>('SELECT full_name, relationship FROM nominees WHERE customer_id = $1 ORDER BY id LIMIT 1', [a.customer_id])).rows[0];
   const line = (await db.query<Record<string, unknown>>(
     `SELECT al.amount, COALESCE(al.coupon_rate_pct, sch.coupon_rate_pct) AS coupon_rate_pct, al.tenure_months,
-            COALESCE(sch.face_value, 100000) AS face_value, sch.name AS scheme_name
+            COALESCE(sch.face_value, 100000) AS face_value, sch.name AS scheme_name,
+            COALESCE(al.payout_frequency, sch.payout_frequency) AS payout_frequency
        FROM application_lines al LEFT JOIN schemes sch ON sch.id = al.scheme_id
       WHERE al.application_id = $1 ORDER BY al.id LIMIT 1`, [applicationId])).rows[0] ?? {};
   // The company as it was when THIS SERIES was allotted, not as it is today —
@@ -420,6 +472,11 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
   const faceValue = Number(line.face_value || 100000);
   const numNcds = invested > 0 ? Math.round(invested / faceValue) : null;
   const tenureMonths = Number(line.tenure_months) || BOND_REDEMPTION_MONTHS;
+  // What the holder gets back. Equals the principal on a periodic holding, and
+  // principal + the whole accrued interest on a cumulative one - see
+  // redemptionValue.
+  const cumulative = !PERIODIC_FREQ.has(String(line.payout_frequency));
+  const redemptionAmount = redemptionValue(invested, line.coupon_rate_pct, tenureMonths, line.payout_frequency);
   const rateLabel = line.coupon_rate_pct != null ? `${Number(line.coupon_rate_pct).toFixed(2)}% per annum` : '—';
   const allotmentDate = a.allotment_date || a.deemed_date || null; // blank until allotted
   const redemptionDate = a.maturity_date || (allotmentDate ? _addMonths(allotmentDate, tenureMonths) : null);
@@ -497,7 +554,7 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
       [`Face Value per ${unit} (Rs.)`, _fmtINR(faceValue)],
       // The asterisk anchors the TDS footnote below, which pointed at nothing
       // before (ICL anchors theirs on "Maturity Value*").
-      ['Redemption Value* (Rs.)', _fmtINR(invested)],
+      ['Redemption Value* (Rs.)', _fmtINR(redemptionAmount)],
     ]
     : [
       ['Category', `${a.series_code || a.series_name || '—'} Series`],
@@ -511,11 +568,16 @@ export async function bondCertificatePdf(db: Db, applicationId: number): Promise
       ['Date of Allotment', _fmtDate(allotmentDate)],
       ['Date of Redemption', _fmtDate(redemptionDate)],
       ['Face Value per NCD (Rs.)', _fmtINR(faceValue)],
-      ['Redemption Value (Rs.)', _fmtINR(invested)], // equals principal, per spec
+      // Principal on a periodic holding; principal + accrued interest on a
+      // cumulative one. It was hard-coded to the principal, which printed
+      // Rs 3,00,000 back on a Rs 3,00,000 Doubling bond.
+      ['Redemption Value (Rs.)', _fmtINR(redemptionAmount)],
     ];
   y = _drawDetailTable(doc, y, rows, sub);
   const signatures = await Promise.all([0, 1, 2].map((i) => getBondSignature(db, i).then((s) => s?.buffer ?? null)));
-  _drawLegalAndSign(doc, y, co, invested, signatures, sub);
+  // The sum PROMISED is the sum payable at redemption, so the paragraph and
+  // the row above it can never state different money.
+  _drawLegalAndSign(doc, y, co, redemptionAmount, signatures, sub, false, cumulative);
 
   doc.end();
   return done;
@@ -641,6 +703,16 @@ async function _consolidatedBondPage(
   const drawDebenture = template === 'debenture';
 
   const totalInvested = apps.reduce((s, a) => s + Number(a.total_amount || 0), 0);
+  // PER INVESTMENT, then summed - not the total put through one formula. A
+  // holding of two different schemes would otherwise take whichever rate came
+  // first. No customer holds two schemes in one series today; the arithmetic
+  // should not depend on that staying true.
+  const totalRedemption = apps.reduce((s, a) => s + redemptionValue(
+    Number(a.total_amount || 0), a.coupon_rate_pct, a.tenure_months, a.payout_frequency), 0);
+  // Only when EVERY investment here is cumulative: a mixed holding keeps the
+  // standard sentence, which is the one that stays true of part of it.
+  const allCumulative = apps.length > 0
+    && apps.every((a) => !PERIODIC_FREQ.has(String(a.payout_frequency)));
   const faceValue = Number(apps[0]!.face_value || 100000);
   const numNcds = faceValue > 0 ? Math.round(totalInvested / faceValue) : null;
   const tenureMonths = Number(apps[0]!.tenure_months) || BOND_REDEMPTION_MONTHS;
@@ -718,7 +790,6 @@ async function _consolidatedBondPage(
   //
   // For Doubling the term comes from the holding itself rather than a second
   // hard-coded 60, so a Doubling scheme on any other term follows it.
-  const PERIODIC_FREQ = new Set(['Monthly', 'Quarterly', 'HalfYearly', 'Annual']);
   const ncdFreqs = uniq(apps.map((a) => a.payout_frequency ?? null));
   const doublingHolding = ncdFreqs.length === 1 && !PERIODIC_FREQ.has(String(ncdFreqs[0]));
   const ncdTenures = uniq(apps.map((a) => (a.tenure_months != null ? String(a.tenure_months) : null)));
@@ -780,7 +851,7 @@ async function _consolidatedBondPage(
       ['Effective Date', _fmtDate(series.close_date as string | null)],
       ['Date of Redemption', subRedLabel],
       [`Face Value per ${cUnit} (Rs.)`, _fmtINR(faceValue)],
-      ['Redemption Value* (Rs.)', _fmtINR(totalInvested)],
+      ['Redemption Value* (Rs.)', _fmtINR(totalRedemption)],
     ]
     : [
       // Category names the series, and on a Debenture 1-5 holding drawn in this
@@ -819,11 +890,11 @@ async function _consolidatedBondPage(
       ['Date of Allotment', ncdForm ? ncdAllotLabel : allotLabel],
       ['Date of Redemption', ncdForm ? ncdRedLabel : redLabel],
       [`Face Value per ${cUnit} (Rs.)`, _fmtINR(faceValue)],
-      ['Redemption Value (Rs.)', _fmtINR(totalInvested)],
+      ['Redemption Value (Rs.)', _fmtINR(totalRedemption)],
     ];
   y = _drawDetailTable(doc, y, rows, sub);
   const signatures = await Promise.all([0, 1, 2].map((i) => getBondSignature(db, i).then((s) => s?.buffer ?? null)));
-  _drawLegalAndSign(doc, y, co, totalInvested, signatures, sub, ncdForm);
+  _drawLegalAndSign(doc, y, co, totalRedemption, signatures, sub, ncdForm, allCumulative);
 }
 
 /** One customer's consolidated bond for a series. */

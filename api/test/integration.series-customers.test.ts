@@ -151,3 +151,61 @@ describe('downloading the bonds', () => {
     expect((await staff.raw(`/api/reports/consolidated-bonds/series/${seriesId}.pdf`)).status).toBe(403);
   });
 });
+
+/**
+ * Two customers in Debenture 4 appeared TWICE on this page (owner 2026-11-17:
+ * "why is this customer coming twice?"). Neither was a duplicate record: one
+ * person held four investments, three carrying a referrer and one saved with the
+ * referrer box empty, and the query grouped by the referrer as well as by the
+ * customer. The damage was not cosmetic — both rows printed the SAME certificate
+ * number, because a certificate is stored per customer + series, while each row
+ * showed only part of the money; and `Download all`, which builds its customer
+ * list straight from these rows, rendered that person's certificate twice.
+ */
+describe('a customer whose investments name different referrers', () => {
+  it('is still ONE row, carrying every investment and the whole amount', async () => {
+    const a = await admin();
+    await a.post('/api/agents', { full_name: 'Split Referrer', agent_code: 'AG-SPL1' });
+    // The production shape: the CUSTOMER has no referrer, and the referrer lives
+    // on the applications — on three of them, not the fourth.
+    const cid = await customer(a, 'Holds Four Split', '9400012001');
+    const ids: number[] = [];
+    for (const amt of [600000, 600000, 600000, 600000]) ids.push(await invest(a, cid, amt));
+    await ctx.db.query(
+      "UPDATE applications SET referred_by_text = 'AG-SPL1' WHERE id = ANY($1::bigint[])",
+      [[ids[0], ids[1], ids[3]]]);
+
+    const rows = (await list(a)).rows as any[];
+    const mine = rows.filter((r) => Number(r.customer_id) === cid);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].investment_count).toBe(4);
+    expect(Number(mine[0].total_amount)).toBe(2400000);
+    expect(mine[0].investments).toHaveLength(4);
+    // The one real referrer is named; the empty one does not become a row, nor a
+    // stray comma on this one.
+    expect(mine[0].referred_by).toBe('Split Referrer');
+  });
+
+  it('names BOTH when two different people genuinely referred the investments', async () => {
+    const a = await admin();
+    await a.post('/api/agents', { full_name: 'Alpha Referrer', agent_code: 'AG-SPL2' });
+    await a.post('/api/agents', { full_name: 'Beta Referrer', agent_code: 'AG-SPL3' });
+    const cid = await customer(a, 'Holds Two Referrers', '9400012002');
+    const first = await invest(a, cid, 100000);
+    const second = await invest(a, cid, 200000);
+    await ctx.db.query("UPDATE applications SET referred_by_text = 'AG-SPL2' WHERE id = $1", [first]);
+    await ctx.db.query("UPDATE applications SET referred_by_text = 'AG-SPL3' WHERE id = $1", [second]);
+
+    const mine = ((await list(a)).rows as any[]).filter((r) => Number(r.customer_id) === cid);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].referred_by).toBe('Alpha Referrer, Beta Referrer');
+    expect(Number(mine[0].total_amount)).toBe(300000);
+  });
+
+  it('leaves no customer listed twice — this list IS the Download all run', async () => {
+    const a = await admin();
+    const rows = (await list(a)).rows as any[];
+    const seen = rows.map((r) => Number(r.customer_id));
+    expect(new Set(seen).size).toBe(seen.length);
+  });
+});

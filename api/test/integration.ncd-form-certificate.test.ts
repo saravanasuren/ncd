@@ -86,7 +86,11 @@ describe('the NCD form of a subordinate holding', () => {
     const ncdPdf = await consolidatedBondCertificatePdf(ctx.db, cid, subSeries, 'debenture');
     const ncdText = pdfText(ncdPdf);
     expect(ncdText).toContain(squash('Debenture Certificate'));
-    expect(ncdText).toContain(squash('NCD Holder'));
+    // The marker that this is the Debenture form, contrasted with Bond
+    // Holder above. It read "NCD Holder" until 2026-11-17, when the owner
+    // had every NCD word taken off this form; the assertion follows the
+    // label, it is not weakened.
+    expect(ncdText).toContain(squash('Debenture Holder'));
     expect(ncdText).not.toContain(squash('Subordinate Debt Certificate'));
   });
 
@@ -218,7 +222,7 @@ describe('the NCD form of a subordinate holding', () => {
     // Everything that identifies the document is still on it.
     expect(ncd).toContain(squash('Debenture Certificate'));
     expect(ncd).toContain(squash('Certificate No'));
-    expect(ncd).toContain(squash('Name of NCD Holder'));
+    expect(ncd).toContain(squash('Name of Debenture Holder'));
   });
 
   it('a real NCD series keeps its Category row exactly as before', async () => {
@@ -254,7 +258,11 @@ describe('the NCD form of a subordinate holding', () => {
     expect(ncd.buffer.subarray(0, 4).toString()).toBe('%PDF');
     const ncdText = pdfText(ncd.buffer);
     expect(ncdText).toContain(squash('Debenture Certificate'));
-    expect(ncdText).toContain(squash('NCD Holder'));
+    // The marker that this is the Debenture form, contrasted with Bond
+    // Holder above. It read "NCD Holder" until 2026-11-17, when the owner
+    // had every NCD word taken off this form; the assertion follows the
+    // label, it is not weakened.
+    expect(ncdText).toContain(squash('Debenture Holder'));
     expect(ncdText).not.toContain(squash('Subordinate Debt Certificate'));
 
     // The two downloads are genuinely different documents.

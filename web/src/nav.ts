@@ -36,6 +36,10 @@ export const NAV: NavItem[] = [
   { to: '/app/approvals', label: 'Approvals', anyOf: ['approvals:check', 'approvals:check-premature', 'approvals:check-handover'], group: 'Daily' },
   { to: '/app/allotments', label: 'Allotments', anyOf: ['allotments:execute'], group: 'Periodic' },
   { to: '/app/redemptions', label: 'Redemptions', anyOf: ['redemptions:initiate'], group: 'Periodic' },
+  // Standalone document tool (owner 2026-11-18): bulk-prints the holder's own
+  // redemption request letter from a spreadsheet. Nothing it does touches the
+  // redemption workflow above, so it is its own menu entry rather than a tab.
+  { to: '/app/bulk-redemption-letters', label: 'Bulk Redemption Letters', anyOf: ['redemptions:initiate'], group: 'Periodic' },
   { to: '/app/ncd-events', label: 'NCD Events', anyOf: ['redemptions:initiate'], group: 'Periodic' },
   { to: '/app/maturity-alerts', label: 'Maturity Alerts', anyOf: ['dashboard:view'], group: 'Periodic' },
   { to: '/app/payouts', label: 'Payouts', anyOf: ['payouts:generate'], group: 'Periodic' },

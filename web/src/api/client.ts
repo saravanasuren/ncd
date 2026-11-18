@@ -73,8 +73,39 @@ async function requestBlob(path: string, retried = false): Promise<Blob> {
   return res.blob();
 }
 
+/**
+ * A binary POST: send JSON, get a file back.
+ *
+ * Needed where the file to download is produced FROM a body rather than
+ * identified by a URL — Bulk Redemption Letters posts the uploaded sheet and
+ * receives the archive. `headers` of the response come back alongside the blob
+ * because the server reports the generated/failed counts there.
+ */
+async function postBlob(path: string, body: unknown, retried = false)
+: Promise<{ blob: Blob; headers: Headers }> {
+  const res = await fetch(path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { ...BASE_HEADERS, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401 && !retried && !path.startsWith('/api/auth/')) {
+    const ok = await refreshOnce();
+    if (ok) return postBlob(path, body, true);
+    redirectToLogin();
+  }
+  if (!res.ok) {
+    let json: unknown = null;
+    try { json = await res.json(); } catch { /* not JSON */ }
+    const e = (json as { error?: { code: string; message: string; detail?: unknown } })?.error;
+    throw new ApiError(e?.code ?? 'ERROR', res.status, e?.message ?? res.statusText, e?.detail);
+  }
+  return { blob: await res.blob(), headers: res.headers };
+}
+
 export const api = {
   blob: (p: string) => requestBlob(p),
+  postBlob: (p: string, b: unknown) => postBlob(p, b),
   get: <T>(p: string) => request<T>('GET', p),
   post: <T>(p: string, b?: unknown) => request<T>('POST', p, b),
   put: <T>(p: string, b?: unknown) => request<T>('PUT', p, b),

@@ -178,6 +178,18 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     default: true,
     editableBy: 'admin',
   },
+  {
+    key: 'redemption.letter_dhanam_from',
+    group: 'Redemptions',
+    label: 'Redemption letters name Dhanam from',
+    description: 'Bulk Redemption Letters addresses the company by the letter date. On and after this date '
+      + 'the letter is addressed to Dhanam Investment and Finance; before it, to Kiara Microcredit Private '
+      + 'Limited. Letters dated on or after 29-Sep-2026 drop "Private" from the Dhanam name, the same rule '
+      + 'the bond certificates follow.',
+    type: 'date',
+    default: '2025-08-18',
+    editableBy: 'super_admin',
+  },
 
   // ── Numbering ──
   {

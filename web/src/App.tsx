@@ -39,6 +39,7 @@ import { MaturityAlertsPage } from './pages/MaturityAlerts.js';
 import { TdsThresholdPage } from './pages/TdsThreshold.js';
 import { MyEarningsPage } from './pages/MyEarnings.js';
 import { RedemptionsPage } from './pages/Redemptions.js';
+import { BulkRedemptionLettersPage } from './pages/BulkRedemptionLetters.js';
 import { IncentivesPage } from './pages/Incentives.js';
 import { ReportsPage } from './pages/Reports.js';
 import { CustomerWiseReportPage } from './pages/CustomerWiseReport.js';
@@ -143,6 +144,7 @@ export function App() {
           <Route path="allotments" element={<RequirePerm perm="allotments:execute"><AllotmentsPage /></RequirePerm>} />
           <Route path="allotments/:seriesId" element={<RequirePerm perm="allotments:execute"><SeriesCustomers /></RequirePerm>} />
           <Route path="redemptions" element={<RequirePerm perm="redemptions:initiate"><RedemptionsPage /></RequirePerm>} />
+          <Route path="bulk-redemption-letters" element={<RequirePerm perm="redemptions:initiate"><BulkRedemptionLettersPage /></RequirePerm>} />
           <Route path="ncd-events" element={<RequirePerm perm="redemptions:initiate"><EventsPage /></RequirePerm>} />
           <Route path="maturity-alerts" element={<RequirePerm perm="dashboard:view"><MaturityAlertsPage /></RequirePerm>} />
           <Route path="masters" element={<RequirePerm perm="products:manage"><MastersPage /></RequirePerm>} />

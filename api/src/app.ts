@@ -29,6 +29,7 @@ import { allotmentsRouter } from './modules/allotments/routes.js';
 import { payoutsRouter } from './modules/payouts/routes.js';
 import { bgvRouter } from './modules/bgv/routes.js';
 import { redemptionsRouter } from './modules/redemptions/routes.js';
+import { bulkLettersRouter } from './modules/bulk-letters/routes.js';
 import { incentivesRouter } from './modules/incentives/routes.js';
 import { dashboardRouter } from './modules/dashboard/routes.js';
 import { reportsRouter } from './modules/reports/routes.js';
@@ -148,6 +149,7 @@ export function createApp(): Express {
   app.use('/api/escrow', escrowRouter);
   app.use('/api/tds', tdsRouter);
   app.use('/api/redemptions', redemptionsRouter);
+  app.use('/api/bulk-redemption-letters', bulkLettersRouter);
   app.use('/api/lockers', lockersRouter);
   app.use('/api/ncd-events', eventsRouter);
   app.use('/api/incentives', incentivesRouter);

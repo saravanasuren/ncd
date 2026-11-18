@@ -69,6 +69,17 @@ describe('which company the letter is addressed to', () => {
     expect(corp).not.toMatch(/,\S/);
   });
 
+  it('says the city and the pincode once each, and loses no part of the address', () => {
+    // The template repeated both; the owner asked for it trimmed (2026-11-18).
+    const corp = addresseeFor('2026-11-18').corp_office.join(' ');
+    expect(corp.match(/641062/g)).toHaveLength(1);
+    expect(corp.match(/Coimbatore/g)).toHaveLength(1);
+    for (const part of ['2/191 B.', 'Mylampatty Road', 'Karayampalayam',
+      'Mylampatty Post', 'Chinniyampalayam', 'Coimbatore South', 'Tamil Nadu', 'India']) {
+      expect(corp, `should still name ${part}`).toContain(part);
+    }
+  });
+
   it('every era is reachable and they run oldest first', () => {
     const list = eras(DEFAULT_DHANAM_FROM);
     expect(list.map((e) => e.legal_name)).toEqual([KIARA, DHANAM_PVT, DHANAM_LTD]);

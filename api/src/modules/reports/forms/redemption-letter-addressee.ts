@@ -24,8 +24,9 @@
  *   - the Dhanam corp-office block said "Chinntyampalayam" and ran two commas
  *     into the following word — corrected to "Chinniyampalayam" with the
  *     spacing closed up.
- * The block still names Coimbatore and the pincode twice, as the template does;
- * that is the owner's own address formatting, not a misspelling, so it stands.
+ * The template also named Coimbatore and the pincode twice, which read like a
+ * paste rather than a choice; owner 2026-11-18: "trim it". Every part of the
+ * address survives — only the repeat is gone.
  */
 import { COMPANY_RENAMED_ON } from './shared.js';
 
@@ -62,8 +63,8 @@ const DHANAM_ADDRESS = {
   off_address_rest: ['Nehru Nagar, Behind CMS School,', 'Ganapathy, Coimbatore TN 641006.'],
   corp_office: [
     '2/191 B. Mylampatty Road, Karayampalayam.',
-    'Mylampatty Post, Chinniyampalayam, Coimbatore - 641062,',
-    'Coimbatore South, Tamil Nadu, India, 641062',
+    'Mylampatty Post, Chinniyampalayam,',
+    'Coimbatore South, Tamil Nadu, India - 641062',
   ],
 } as const;
 

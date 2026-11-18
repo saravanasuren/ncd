@@ -47,12 +47,26 @@ describe('which company the letter is addressed to', () => {
     const kiara = addresseeFor('2025-01-01');
     expect(kiara.formerly).toBeUndefined();
     expect(kiara.corp_office).toHaveLength(0);
-    expect(kiara.off_address_line1).toContain('22/2');
 
     const dhanam = addresseeFor('2026-01-01');
     expect(dhanam.formerly).toContain('Kiara');
     expect(dhanam.corp_office.length).toBeGreaterThan(0);
-    expect(dhanam.off_address_line1).toContain('22/3');
+  });
+
+  it('both letters give the same street number — the owner settled 22/3', () => {
+    // The supplied templates disagreed: Kiara said 22/2, Dhanam 22/3.
+    for (const date of ['2025-01-01', '2026-01-01', '2026-11-18']) {
+      expect(addresseeFor(date).off_address_line1).toContain('22/3');
+      expect(addresseeFor(date).off_address_line1).not.toContain('22/2');
+    }
+  });
+
+  it('spells the corp office correctly, with the template typos corrected', () => {
+    const corp = addresseeFor('2026-11-18').corp_office.join(' ');
+    expect(corp).toContain('Chinniyampalayam');
+    expect(corp).not.toContain('Chinntyampalayam');
+    // The template ran commas straight into the next word.
+    expect(corp).not.toMatch(/,\S/);
   });
 
   it('every era is reachable and they run oldest first', () => {

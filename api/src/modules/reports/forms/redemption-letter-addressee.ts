@@ -14,20 +14,18 @@
  * shared.ts — the same fact that decides which name a bond certificate carries).
  * A letter dated after that addressed to "Private Limited" would name a company
  * that no longer exists under that name, so there are three eras here, not two.
+ * Confirmed by the owner 2026-11-18: "limited".
  *
- * This is an ASSUMPTION flagged to the owner and not yet confirmed. Collapsing
- * back to the templates' two eras means deleting the third ERAS entry — the
- * lookup needs no other change.
- *
- * ── Address text is reproduced verbatim ──────────────────────────────────────
- * The strings below are exactly as the owner's templates read, including two
- * things that look like slips and are deliberately NOT corrected here, because
- * the brief was to preserve the templates and the owner has not ruled on them:
- *   - the Kiara letter says "No. 22/2 2nd Street" where the Dhanam letter (and
- *     COMPANY.registered_office_address) say "22/3";
- *   - the Dhanam corp-office block reads "Chinntyampalayam" where the company
- *     constant has "Chinniyampalayam", and repeats Coimbatore and the pincode.
- * Both are one-line edits in this file if the owner wants them fixed.
+ * ── Two corrections to the templates, both owner-approved ────────────────────
+ * The address text below is otherwise exactly as the owner's templates read.
+ * The owner ruled on the two slips found in them (2026-11-18):
+ *   - the Kiara letter said "No. 22/2 2nd Street" where the Dhanam letter and
+ *     COMPANY.registered_office_address say "22/3" — corrected to 22/3;
+ *   - the Dhanam corp-office block said "Chinntyampalayam" and ran two commas
+ *     into the following word — corrected to "Chinniyampalayam" with the
+ *     spacing closed up.
+ * The block still names Coimbatore and the pincode twice, as the template does;
+ * that is the owner's own address formatting, not a misspelling, so it stands.
  */
 import { COMPANY_RENAMED_ON } from './shared.js';
 
@@ -50,7 +48,9 @@ export const DEFAULT_DHANAM_FROM = '2025-08-18';
 const KIARA: AddresseeEra = {
   from: null,
   legal_name: 'Kiara Microcredit Private Limited',
-  off_address_line1: 'No. 22/2 2nd Street,',
+  // Template said 22/2; owner confirmed 22/3 (2026-11-18), matching the Dhanam
+  // letter and COMPANY.registered_office_address.
+  off_address_line1: 'No. 22/3 2nd Street,',
   off_address_rest: ['Nehru Nagar, Behind CMS School,', 'Ganapathy, Coimbatore TN 641006.'],
   corp_office: [],
 };
@@ -62,8 +62,8 @@ const DHANAM_ADDRESS = {
   off_address_rest: ['Nehru Nagar, Behind CMS School,', 'Ganapathy, Coimbatore TN 641006.'],
   corp_office: [
     '2/191 B. Mylampatty Road, Karayampalayam.',
-    'Mylampatty Post, Chinntyampalayam,Coimbatore - 641062,',
-    'Coimbatore South, Tamil Nadu,India, 641062',
+    'Mylampatty Post, Chinniyampalayam, Coimbatore - 641062,',
+    'Coimbatore South, Tamil Nadu, India, 641062',
   ],
 } as const;
 

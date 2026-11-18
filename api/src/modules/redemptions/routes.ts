@@ -67,6 +67,21 @@ redemptionsRouter.post('/:id/letter/method', requirePermission('redemptions:init
     res.json(await s.setMethod(getDb(), req.user!, Number(req.params.id), method));
   }));
 
+// Send the generated letter to Digio. The link goes to the customer by SMS.
+redemptionsRouter.post('/:id/letter/esign', requirePermission('redemptions:initiate'),
+  asyncHandler(async (req, res) => {
+    const { initiateRedemptionLetterSigning } = await import('../../integrations/digio/service.js');
+    res.status(201).json(await initiateRedemptionLetterSigning(getDb(), req.user!, Number(req.params.id)));
+  }));
+
+// Ask Digio directly whether a stalled link was ever signed. Only earns its
+// keep outside the poller's window — inside it the cron asked seconds ago.
+redemptionsRouter.post('/:id/letter/esign/check', requirePermission('redemptions:initiate'),
+  asyncHandler(async (req, res) => {
+    const { checkOneRedemptionLetter } = await import('../../integrations/digio/service.js');
+    res.json(await checkOneRedemptionLetter(getDb(), Number(req.params.id)));
+  }));
+
 // The letter we generated, exactly as stored — not re-rendered. The customer
 // signs THIS file, so serving a fresh render could hand back a different one.
 redemptionsRouter.get('/:id/letter.pdf', requirePermission('redemptions:initiate', 'approvals:check-premature'),

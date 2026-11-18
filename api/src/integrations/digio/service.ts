@@ -162,11 +162,12 @@ export async function refetchSignedCopy(db: Db, signingId: number): Promise<{ ok
 /** Mark a session signed (from the webhook or the poller). Idempotent. */
 export async function completeSigning(db: Db, digioRequestId: string, opts: { signedAt?: string; signedDocumentUrl?: string; payload?: unknown }): Promise<{ ok: boolean; applicationId?: number }> {
   const result = await db.withTx(async (tx) => {
-    const sess = (await tx.query<{ id: string; application_id: string | null; status: string; document_type: string; locker_authorised_user_id: string | null; locker_agreement_signing_id: string | null }>(
-      'SELECT id, application_id, status, document_type, locker_authorised_user_id, locker_agreement_signing_id FROM digio_signing_sessions WHERE digio_request_id = $1', [digioRequestId])).rows[0];
+    const sess = (await tx.query<{ id: string; application_id: string | null; status: string; document_type: string; locker_authorised_user_id: string | null; locker_agreement_signing_id: string | null; redemption_signing_id: string | null }>(
+      'SELECT id, application_id, status, document_type, locker_authorised_user_id, locker_agreement_signing_id, redemption_signing_id FROM digio_signing_sessions WHERE digio_request_id = $1', [digioRequestId])).rows[0];
     if (!sess) { console.warn(`[digio] webhook for unknown request_id=${digioRequestId} — ignored`); return { ok: false, fresh: false }; }
     const authorisedUserId = sess.locker_authorised_user_id ? Number(sess.locker_authorised_user_id) : undefined;
     const lockerAgreementSigningId = sess.locker_agreement_signing_id ? Number(sess.locker_agreement_signing_id) : undefined;
+    const redemptionSigningId = sess.redemption_signing_id ? Number(sess.redemption_signing_id) : undefined;
     const applicationId = sess.application_id ? Number(sess.application_id) : undefined;
     if (sess.status === 'signed') return { ok: true, applicationId, authorisedUserId, docType: sess.document_type, fresh: false }; // idempotent
     await tx.query(
@@ -176,6 +177,13 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
     // NOT apply; the authorised user is flipped to active after the commit.
     if (sess.document_type === 'locker_authorised_user_consent') {
       return { ok: true, authorisedUserId, docType: sess.document_type, fresh: true };
+    }
+    // The customer's redemption REQUEST LETTER. None of the application/bond
+    // logic applies — this document does not belong to an investment being
+    // taken out, it is the holder asking for one to be paid back. The signed
+    // copy is pulled and the signing row moved to Signed after the commit.
+    if (sess.document_type === 'redemption_letter') {
+      return { ok: true, redemptionSigningId, docType: sess.document_type, fresh: true };
     }
     // The CUSTOMER's locker-agreement e-sign. The application/bond logic does NOT
     // apply; the customer-signed PDF is stored and the row moved to await the CEO
@@ -224,6 +232,8 @@ export async function completeSigning(db: Db, digioRequestId: string, opts: { si
     }
     const { completeAuthorisedUserConsent } = await import('../../modules/lockers/authorisedUsers.js');
     await completeAuthorisedUserConsent(db, result.authorisedUserId, { signedAt: opts.signedAt, signedPdfPath });
+  } else if (result.ok && result.fresh && result.docType === 'redemption_letter' && result.redemptionSigningId) {
+    await storeRedemptionSignedCopy(db, digioRequestId, result.redemptionSigningId, opts.signedAt);
   } else if (result.ok && result.fresh && result.docType === 'locker_agreement' && result.lockerAgreementSigningId) {
     await storeHirerSignedCopy(db, digioRequestId, result.lockerAgreementSigningId);
   } else if (result.ok && result.fresh && result.docType === 'locker_agreement_ceo' && result.lockerAgreementSigningId) {
@@ -271,6 +281,27 @@ export async function markSessionFailed(db: Db, digioRequestId: string, digioSta
             updated_at = now()
       WHERE digio_request_id = $1 AND status = 'requested'`,
     [digioRequestId, digioStatus ?? 'unknown']);
+
+  // A REDEMPTION LETTER MUST NOT BE LEFT "AWAITING E-SIGN" FOR EVER.
+  //
+  // The session is dead — expired or declined — but the signing row it belongs
+  // to still says the customer is being waited on, and that row is what gates
+  // the redemption. Without this, a dead link shows as "Awaiting E-Sign" and
+  // nobody is told the redemption has quietly stopped moving; 36 locker links
+  // expired exactly this way before anyone noticed. Dropping it back to Draft
+  // puts the choice in front of staff again: resend, or get it signed on paper.
+  // `method` is cleared with it, and that part is load-bearing: the upload
+  // route refuses a scan while the row says e-Sign, so leaving the method
+  // behind would drop the letter back to Draft and STILL block the paper
+  // route — stranding it just as effectively, one step further along. There is
+  // nothing live to switch away from once the session is dead.
+  await db.query(
+    `UPDATE redemption_signings rs
+        SET status = 'Draft', method = NULL, sign_url = NULL, updated_at = now()
+       FROM digio_signing_sessions s
+      WHERE s.digio_request_id = $1 AND s.redemption_signing_id = rs.id
+        AND rs.status = 'AwaitingSignature'`,
+    [digioRequestId]);
 }
 
 /**
@@ -404,4 +435,190 @@ export async function checkOneLockerSigning(db: Db, signingId: number): Promise<
   }
   if (unreadable === rows.length) throw errors.upstream(502, 'Digio could not be reached to check these signatures — try again in a moment.');
   return { ok: true, signed, failed, statuses };
+}
+
+// ── The customer's redemption request letter ────────────────────────────────
+//
+// The fourth document Digio signs for us, after the application form, the
+// locker consent letter and the locker agreement. It follows the established
+// shape exactly: a row in digio_signing_sessions carrying document_type and
+// the one foreign key that belongs to this kind, so the 15-second poller and
+// the webhook keep finding every outstanding signature in a single query
+// without knowing what any of them are.
+
+/**
+ * Send a generated redemption letter to Digio for the customer to sign.
+ *
+ * THE LETTER IS SENT AS STORED, not re-rendered. The whole reason the PDF is
+ * kept on disk is that the customer signs one particular file; handing Digio a
+ * fresh render could put a different document in front of them than the one
+ * staff downloaded and read.
+ *
+ * Unlike the application form — where eSign is explicitly off the critical path
+ * and the session starts even if the PDF cannot be produced — this one REFUSES
+ * without the letter. An eSign request with no document would ask the customer
+ * to sign nothing, and a signature on nothing cannot gate a payment.
+ */
+export async function initiateRedemptionLetterSigning(
+  db: Db, actor: AuthUser, redemptionId: number,
+): Promise<{ sign_url: string | null; digio_request_id: string; stub: boolean }> {
+  const { liveSigning, needsSignature } = await import('../../modules/redemptions/signing.js');
+  const red = (await db.query<{ status: string; type: string; source: string | null; application_id: string; customer_id: string; full_name: string; email: string | null; phone: string | null }>(
+    `SELECT r.status, r.type, r.source, r.application_id, c.id AS customer_id, c.full_name, c.email, c.phone
+       FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
+      WHERE r.id = $1`, [redemptionId])).rows[0];
+  if (!red) throw errors.notFound('Redemption not found');
+  if (!needsSignature(red.type, red.source)) throw errors.badRequest('This redemption does not need a signed request letter.');
+  if (red.status !== 'Requested') throw errors.conflict(`This redemption is ${red.status}; it can no longer be sent for signing.`);
+
+  const signing = await liveSigning(db, redemptionId);
+  if (!signing) throw errors.badRequest('Generate the redemption letter first.');
+  if (signing.status === 'Signed') throw errors.conflict('This letter has already been signed.');
+  if (!signing.letter_pdf_path) throw errors.badRequest('Generate the redemption letter first.');
+
+  const { readStored } = await import('../../lib/storage.js');
+  const letter = readStored(signing.letter_pdf_path);
+  if (!letter) throw errors.conflict('The generated letter is missing from storage. Regenerate it and try again.');
+
+  // Digio's link goes by SMS first (see buildSignCoordinates' identifier note),
+  // which is the right default here: 96% of this book's customers have a phone
+  // on file and only half have an email.
+  const req = await createSignRequest({
+    signerEmail: red.email ?? undefined,
+    signerPhone: red.phone ?? undefined,
+    signerName: red.full_name,
+    document: { fileName: `redemption-letter-${redemptionId}.pdf`, contentBase64: letter.toString('base64') },
+  });
+
+  await db.withTx(async (tx) => {
+    await tx.query(
+      `INSERT INTO digio_signing_sessions
+         (application_id, redemption_signing_id, document_type, digio_request_id, sign_url, signer_email, signer_phone, status, created_by_user_id)
+       VALUES ($1,$2,'redemption_letter',$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (digio_request_id) DO UPDATE SET sign_url = EXCLUDED.sign_url, status = EXCLUDED.status, updated_at = now()`,
+      [Number(red.application_id), signing.id, req.digioRequestId, req.signUrl,
+       red.email ?? null, red.phone ?? null, req.status, actor.id]);
+    await tx.query(
+      `UPDATE redemption_signings
+          SET method = 'esign', status = 'AwaitingSignature',
+              digio_request_id = $1, sign_url = $2, updated_at = now()
+        WHERE id = $3`, [req.digioRequestId, req.signUrl, signing.id]);
+    await writeAudit(tx, {
+      actorId: actor.id, action: 'redemption.letter.esign.initiate',
+      entityType: 'redemptions', entityId: redemptionId, after: { digio_request_id: req.digioRequestId },
+    });
+  });
+  return { sign_url: req.signUrl, digio_request_id: req.digioRequestId, stub: !digioConfigured() };
+}
+
+/**
+ * Store the signed copy Digio holds and mark the letter signed.
+ *
+ * THE SIGNATURE ONLY COUNTS IF THE DOCUMENT ARRIVES. Everywhere else in this
+ * file a failed download is best-effort — the application is esigned either
+ * way and the PDF is a convenience. Here the file IS the evidence an approver
+ * is required to look at, so a download that fails leaves the row in
+ * AwaitingSignature for the poller to retry rather than marking it Signed with
+ * nothing behind it.
+ *
+ * The figures are frozen at this moment, exactly as the physical upload freezes
+ * them, so an approver changing the penalty or date afterwards voids this
+ * signature the same way it voids a paper one.
+ */
+async function storeRedemptionSignedCopy(
+  db: Db, digioRequestId: string, signingId: number, signedAt?: string,
+): Promise<void> {
+  let signedPath: string | null = null;
+  try {
+    const { downloadSignedDocument } = await import('./index.js');
+    const signed = await downloadSignedDocument(digioRequestId);
+    if (signed) {
+      const { saveBuffer } = await import('../../lib/storage.js');
+      signedPath = saveBuffer('redemption-letters', `redemption-letter-signed-${signingId}.pdf`, signed).path;
+    }
+  } catch (e) {
+    console.warn(`[digio] signed redemption letter download failed for signing ${signingId}: ${(e as Error).message}`);
+  }
+  if (!signedPath) {
+    // NOT retried by the 15-second poller, and this is the subtle part: by the
+    // time we get here completeSigning has already set the SESSION to 'signed',
+    // and pollOutstanding only chases sessions still 'requested'. So nothing
+    // automatic will come back for this. The row stays AwaitingSignature — the
+    // screen keeps offering "Check with Digio", which retries the download
+    // (see checkOneRedemptionLetter), and the paper route is still open.
+    // Marking it Signed with no document would be worse: the approver is
+    // required to look at the signed copy and there would be nothing to show.
+    console.warn(`[digio] redemption letter ${signingId} signed at Digio but the copy did not arrive — still awaiting; use Check with Digio to retry the download.`);
+    return;
+  }
+
+  await db.withTx(async (tx) => {
+    const red = (await tx.query<{ id: string; status: string; principal: string; penalty: string; redemption_date: string | null }>(
+      `SELECT r.id, r.status, r.principal, r.penalty, r.redemption_date
+         FROM redemptions r JOIN redemption_signings rs ON rs.redemption_id = r.id
+        WHERE rs.id = $1`, [signingId])).rows[0];
+    if (!red) return;
+    // A redemption that moved on while the customer was signing — rejected,
+    // cancelled, or somehow already approved. Recording a signature against it
+    // now would attach consent to something nobody is going to act on.
+    if (red.status !== 'Requested') {
+      console.warn(`[digio] redemption ${red.id} is ${red.status}; its e-signature is stored but not applied.`);
+      return;
+    }
+    await tx.query(
+      `UPDATE redemption_signings
+          SET status = 'Signed', method = 'esign',
+              signed_doc_path = $1, signed_doc_filename = $2, signed_doc_mime = 'application/pdf',
+              signed_at = COALESCE($3::timestamptz, now()), signed_on = COALESCE($3::timestamptz, now())::date,
+              signed_principal = $4, signed_penalty = $5, signed_redemption_date = $6::date,
+              updated_at = now()
+        WHERE id = $7 AND status <> 'Signed'`,
+      [signedPath, `redemption-letter-signed-${signingId}.pdf`, signedAt ?? null,
+       red.principal, red.penalty, red.redemption_date, signingId]);
+    await writeAudit(tx, {
+      actorId: null, action: 'redemption.letter.signed.esign',
+      entityType: 'redemptions', entityId: Number(red.id),
+      after: { digio_request_id: digioRequestId, principal: red.principal, penalty: red.penalty },
+    });
+  });
+}
+
+/**
+ * Ask Digio about ONE redemption letter's outstanding signature, ignoring the
+ * poller's age cutoff — the same stalled-case escape hatch checkOneApplication
+ * gives an investment, and for the same reason: inside the window the cron
+ * asked seconds ago, so a button would be theatre.
+ */
+export async function checkOneRedemptionLetter(db: Db, redemptionId: number): Promise<
+  { ok: false; reason: 'not-configured' | 'no-session' } | { ok: true; signed: boolean; status: string | null }
+> {
+  if (!digioConfigured()) return { ok: false, reason: 'not-configured' };
+  // 'signed' sessions are included deliberately. A session can be signed at
+  // Digio while the signed PDF never reached us, and nothing automatic comes
+  // back for those — the poller only chases 'requested'. This button is the
+  // only retry, so it has to be able to see them.
+  const { rows } = await db.query<{ digio_request_id: string; session_status: string; signing_status: string; signing_id: string }>(
+    `SELECT s.digio_request_id, s.status AS session_status, rs.status AS signing_status, rs.id AS signing_id
+       FROM digio_signing_sessions s
+       JOIN redemption_signings rs ON rs.id = s.redemption_signing_id
+      WHERE rs.redemption_id = $1 AND s.digio_request_id IS NOT NULL
+        AND s.status IN ('requested', 'signed')
+      ORDER BY s.created_at DESC LIMIT 1`, [redemptionId]);
+  if (!rows[0]) return { ok: false, reason: 'no-session' };
+  const { digio_request_id: id, session_status, signing_status, signing_id } = rows[0];
+
+  // Signed at Digio, but the copy never landed: re-attempt just the download
+  // rather than going round completeSigning again, which is idempotent and
+  // would return 'not fresh' without ever retrying the file.
+  if (session_status === 'signed' && signing_status !== 'Signed') {
+    await storeRedemptionSignedCopy(db, id, Number(signing_id));
+    const now = (await db.query<{ status: string }>(
+      'SELECT status FROM redemption_signings WHERE id = $1', [signing_id])).rows[0];
+    return { ok: true, signed: now?.status === 'Signed', status: 'signed' };
+  }
+
+  const status = await fetchStatus(id);
+  if (isSignedStatus(status)) { await completeSigning(db, id, {}); return { ok: true, signed: true, status }; }
+  if (isFailedStatus(status)) { await markSessionFailed(db, id, status); return { ok: true, signed: false, status }; }
+  return { ok: true, signed: false, status };
 }

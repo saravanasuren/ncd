@@ -101,6 +101,7 @@ interface SigningRow {
   id: number; method: 'esign' | 'physical' | null; status: string;
   letter_generated_at: string | null; signed_doc_filename: string | null;
   signed_on: string | null; superseded_reason: string | null;
+  sign_url: string | null; digio_request_id: string | null;
 }
 interface SigningState {
   redemption_id: number | null; stage?: string; needs_signature?: boolean;
@@ -195,8 +196,43 @@ function RedemptionSigning({ appId, onDone, onError }: { appId: number; onDone: 
         )}
       </div>
 
-      {/* Upload is offered until a signature is on file. The e-Sign route is
-          not built yet, so the panel does not pretend to offer it. */}
+      {/* TWO WAYS TO SIGN (owner 2026-11-18), both on offer until one lands.
+          HOW a letter was signed is recorded on the row and never inferred —
+          the locker agreement's rule, and the reason an upload is refused
+          while an e-Sign is live. So when the customer ignores the SMS and
+          posts the paper back instead, staff switch the row to paper first;
+          'Switch to paper' below is that, one click. A link that DIES on its
+          own needs no switch: the row drops back to Draft with its method
+          cleared, which is what stops a dead link stranding the redemption. */}
+      {s && s.status !== 'Signed' && (
+        <div className="flex gap-2 flex-wrap items-center mt-3">
+          <span className="text-xs text-text-muted">Send for e-Sign?</span>
+          <button className={act} disabled={busy}
+            onClick={() => run(api.post(`/api/redemptions/${rid}/letter/esign`, {}),
+              'Sent for e-Sign — the customer gets the signing link by SMS.')}>
+            {s.method === 'esign' && s.status === 'AwaitingSignature' ? 'Resend e-Sign link' : 'Send for e-Sign'}
+          </button>
+          {s.sign_url && (
+            <a className={act} href={s.sign_url} target="_blank" rel="noreferrer">Open signing link</a>
+          )}
+          {s.method === 'esign' && s.status === 'AwaitingSignature' && (
+            <>
+              <button className={act} disabled={busy}
+                title="Ask Digio directly whether this was signed. Only needed if the link has been out for days."
+                onClick={() => run(api.post(`/api/redemptions/${rid}/letter/esign/check`, {}), 'Checked with Digio.')}>
+                Check with Digio
+              </button>
+              <button className={act} disabled={busy}
+                title="The customer is signing on paper instead — this lets the scan be uploaded"
+                onClick={() => run(api.post(`/api/redemptions/${rid}/letter/method`, { method: 'physical' }),
+                  'Switched to a physical signature — upload the scan when it arrives.')}>
+                Switch to paper
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {s && s.status !== 'Signed' && (
         <div className="flex gap-2 flex-wrap items-center mt-3">
           <span className="text-xs text-text-muted">Signed on paper?</span>
@@ -213,7 +249,7 @@ function RedemptionSigning({ appId, onDone, onError }: { appId: number; onDone: 
 
       {s?.status === 'Signed' && !data.stale && (
         <div className="text-xs text-text-muted mt-2">
-          Signed {s.signed_on ? `on ${s.signed_on}` : ''}{s.signed_doc_filename ? ` · ${s.signed_doc_filename}` : ''}
+          Signed {s.method === 'esign' ? 'by e-Sign' : 'on paper'}{s.signed_on ? ` on ${s.signed_on}` : ''}{s.signed_doc_filename ? ` · ${s.signed_doc_filename}` : ''}
         </div>
       )}
 

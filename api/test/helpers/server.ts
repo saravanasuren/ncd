@@ -128,3 +128,52 @@ export class Client {
     return { status: res.status, buffer, headers: res.headers };
   }
 }
+
+/**
+ * A one-pixel PNG — stands in for the scan of a signed page.
+ * Small enough to inline, and real enough to pass the upload sniffer.
+ */
+export const SIGNED_SCAN_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+/**
+ * Raise a staff premature redemption and carry it to the approval queue.
+ *
+ * WHY THIS EXISTS. Until 2026-11-18 `POST /api/redemptions/premature` created
+ * the redemption AND submitted it for approval in one call, so a test could
+ * read `.json.request.id` straight off the response. The owner then put the
+ * customer's signed request letter between those two steps, and the one-step
+ * response no longer carries a request — which is correct behaviour and broke
+ * 26 assertions across nine suites that only ever used a redemption as a
+ * fixture for something else (payout sheets, locker pledges, UTRs, dates).
+ *
+ * Those suites are not about the signing gate, so they say so by calling this
+ * instead of spelling the gate out nine times. The gate's own behaviour —
+ * every refusal, the voiding, the approve-time re-check — is proved in
+ * integration.redemption-signing.test.ts, where it belongs.
+ *
+ * Returns the initiate response with `request` filled in, exactly the shape
+ * the one-step call used to return, so the call sites needed no other change.
+ */
+export async function redeemPrematurely(
+  client: Client,
+  body: { application_id: number; reason: string; redemption_date?: string; amount?: number },
+): Promise<{ status: number; json: any }> {
+  const created = await client.post('/api/redemptions/premature', body);
+  // Pass refusals straight back: several callers assert on them (a pledged
+  // investment, an over-sized partial), and swallowing one here would turn a
+  // meaningful 4xx into a confusing failure three lines later.
+  if (created.status !== 201) return created;
+
+  const rid = Number(created.json.redemption_id);
+  // The date on the paper, not the redemption date — several callers redeem on
+  // a future date, and a signature cannot be dated after today.
+  const signedOn = new Date().toISOString().slice(0, 10);
+  const up = await client.post(`/api/redemptions/${rid}/signed-letter`, {
+    data_base64: SIGNED_SCAN_PNG, filename: `signed-${rid}.png`, signed_on: signedOn,
+  });
+  if (up.status !== 201) throw new Error(`redeemPrematurely: signed letter rejected — ${JSON.stringify(up.json)}`);
+  const submit = await client.post(`/api/redemptions/${rid}/submit-for-approval`);
+  if (submit.status !== 201) throw new Error(`redeemPrematurely: submit rejected — ${JSON.stringify(submit.json)}`);
+  return { status: created.status, json: { ...created.json, request: submit.json.request } };
+}

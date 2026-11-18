@@ -97,6 +97,141 @@ function ScheduleDownload({ appId, fileStem }: { appId: number; fileStem: string
   );
 }
 
+interface SigningRow {
+  id: number; method: 'esign' | 'physical' | null; status: string;
+  letter_generated_at: string | null; signed_doc_filename: string | null;
+  signed_on: string | null; superseded_reason: string | null;
+}
+interface SigningState {
+  redemption_id: number | null; stage?: string; needs_signature?: boolean;
+  signing?: SigningRow | null; stale?: boolean; can_submit?: boolean;
+}
+
+/**
+ * The redemption request letter: generate, get it signed, send it for approval
+ * (owner 2026-11-18).
+ *
+ * This panel is the whole gate made visible. A premature redemption no longer
+ * walks straight into the approval queue — the customer has to sign their own
+ * request letter first — so the screen has to say which of those steps the
+ * redemption is sitting on and offer exactly the next one. The stage words are
+ * the owner's own.
+ *
+ * It renders only when a redemption is actually in flight, so an investment
+ * nobody is redeeming looks exactly as it did before.
+ */
+function RedemptionSigning({ appId, onDone, onError }: { appId: number; onDone: (m: string) => void; onError: (e: unknown) => void }) {
+  const qc = useQueryClient();
+  const { confirm } = useConfirm();
+  const [signedOn, setSignedOn] = useState(todayLocalISO());
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const key = ['redemption-signing', appId];
+  const { data } = useQuery({
+    queryKey: key,
+    queryFn: () => api.get<SigningState>(`/api/redemptions/for-application/${appId}/signing`),
+  });
+  const refresh = () => { void qc.invalidateQueries({ queryKey: key }); };
+
+  if (!data?.redemption_id) return null;
+  const rid = data.redemption_id;
+  const s = data.signing ?? null;
+
+  const run = async (p: Promise<unknown>, msg: string) => {
+    setBusy(true);
+    try { await p; refresh(); onDone(msg); } catch (e) { onError(e); } finally { setBusy(false); }
+  };
+
+  // A scan may be a PDF or a photograph of the signed page — staff upload
+  // whatever the branch sent them, which is as often a phone picture as a scan.
+  const onFile = async (file: File | null) => {
+    if (!file) return;
+    const b64 = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1] ?? '');
+      r.onerror = () => reject(new Error('Could not read that file'));
+      r.readAsDataURL(file);
+    });
+    await run(api.post(`/api/redemptions/${rid}/signed-letter`, {
+      data_base64: b64, filename: file.name, signed_on: signedOn, note: note || null,
+    }), 'Signed letter uploaded — ready to send for approval.');
+  };
+
+  const act = 'text-xs border border-border rounded px-3 py-1.5 hover:bg-bg disabled:opacity-40';
+  const go = 'text-xs bg-primary text-white rounded px-3 py-1.5 disabled:opacity-40 hover:bg-primary-hover';
+  const inp = 'px-2.5 py-1.5 text-xs border border-border-strong rounded outline-none focus:border-primary';
+
+  return (
+    <div className="bg-surface border border-border rounded-lg shadow-card mt-4 p-4">
+      <div className="flex items-center gap-2 mb-2.5">
+        <span className="text-xs font-semibold text-text-label uppercase tracking-wide">Redemption request</span>
+        <span className="text-xs rounded px-2 py-0.5 bg-bg border border-border">{data.stage}</span>
+      </div>
+
+      {/* A signature that stopped counting because the approver moved the money
+          or the date. Said plainly, because the fix is a new signature and
+          nothing else on this panel will work until it happens. */}
+      {data.stale && (
+        <div className="text-xs text-warn mb-2">
+          The amount or date changed after the customer signed, so that letter no longer matches what would be paid.
+          Generate a fresh letter and have it signed again.
+        </div>
+      )}
+      {s?.status === 'Superseded' && s.superseded_reason && (
+        <div className="text-xs text-text-muted mb-2">Previous letter voided: {s.superseded_reason}</div>
+      )}
+
+      <div className="flex gap-2 flex-wrap items-center">
+        {s?.letter_generated_at && (
+          <a className={act} href={`/api/redemptions/${rid}/letter.pdf`} target="_blank" rel="noreferrer">Download letter</a>
+        )}
+        <button className={act} disabled={busy || s?.status === 'Signed'}
+          onClick={() => run(api.post(`/api/redemptions/${rid}/letter`, {}), 'Redemption letter generated.')}>
+          {s?.letter_generated_at ? 'Regenerate letter' : 'Generate letter'}
+        </button>
+        {s?.signed_doc_filename && (
+          <a className={act} href={`/api/redemptions/${rid}/signed-letter.pdf`} target="_blank" rel="noreferrer">View signed copy</a>
+        )}
+      </div>
+
+      {/* Upload is offered until a signature is on file. The e-Sign route is
+          not built yet, so the panel does not pretend to offer it. */}
+      {s && s.status !== 'Signed' && (
+        <div className="flex gap-2 flex-wrap items-center mt-3">
+          <span className="text-xs text-text-muted">Signed on paper?</span>
+          <input className={inp} type="date" value={signedOn} max={todayLocalISO()}
+            onChange={(e) => setSignedOn(e.target.value)} title="The date written on the paper, not today" />
+          <input className={`${inp} w-44`} placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+          <label className={`${act} cursor-pointer`}>
+            Upload signed copy…
+            <input type="file" className="hidden" accept="application/pdf,image/*" disabled={busy}
+              onChange={(e) => { void onFile(e.target.files?.[0] ?? null); e.target.value = ''; }} />
+          </label>
+        </div>
+      )}
+
+      {s?.status === 'Signed' && !data.stale && (
+        <div className="text-xs text-text-muted mt-2">
+          Signed {s.signed_on ? `on ${s.signed_on}` : ''}{s.signed_doc_filename ? ` · ${s.signed_doc_filename}` : ''}
+        </div>
+      )}
+
+      <div className="mt-3">
+        <button className={go} disabled={busy || !data.can_submit}
+          title={data.can_submit ? '' : 'The signed redemption letter has to be on file first'}
+          onClick={async () => {
+            if (await confirm({
+              title: 'Send this redemption for approval?',
+              body: 'The approver will review the reason, the letter and the signed copy before anything is paid.',
+              confirmLabel: 'Send for approval',
+            })) void run(api.post(`/api/redemptions/${rid}/submit-for-approval`, {}), 'Sent for approval.');
+          }}>Send for approval</button>
+      </div>
+    </div>
+  );
+}
+
 /** Lifecycle actions for an Active investment: premature/maturity redemption,
  * rollover, holder transfer, transformation. Each posts and lands in approvals. */
 // Local (not UTC) YYYY-MM-DD — the redemption date defaults to today so staff
@@ -155,7 +290,7 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
                 application_id: appId, reason,
                 ...(amount ? { amount: Number(amount) } : {}),
                 ...(date ? { redemption_date: date } : {}),
-              }), 'Premature redemption initiated — awaiting approval.')}>Initiate</button>
+              }), 'Redemption initiated and the request letter generated — get it signed below.')}>Initiate</button>
           </div>
           {/* A pledged investment can only redeem its free portion — the rest secures a locker. */}
           {locker && locker.linked_to_lockers > 0 && (
@@ -483,6 +618,14 @@ export function ApplicationDetailPage() {
 
       {can('redemptions:initiate') && a.status === 'Active' && (
         <LifecycleActions appId={Number(id)} locker={data.locker}
+          onDone={(m) => { setMsg(''); setNote(m); invalidate(); }}
+          onError={(e) => { setNote(''); setMsg(e instanceof ApiError ? e.message : 'Failed'); }} />
+      )}
+
+      {/* Only renders while a redemption is actually in flight — see the
+          component. An investment nobody is redeeming looks as it always did. */}
+      {can('redemptions:initiate') && (
+        <RedemptionSigning appId={Number(id)}
           onDone={(m) => { setMsg(''); setNote(m); invalidate(); }}
           onError={(e) => { setNote(''); setMsg(e instanceof ApiError ? e.message : 'Failed'); }} />
       )}

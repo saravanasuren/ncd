@@ -173,6 +173,12 @@ export async function submitForApproval(db: Db, staff: AuthUser, redemptionId: n
       'SELECT status, application_id, redemption_date, net_payment, penalty, approval_request_id FROM redemptions WHERE id = $1', [redemptionId])).rows[0];
     if (!red) throw errors.notFound('Redemption not found');
     if (red.status !== 'Requested' || red.approval_request_id) throw errors.conflict('Redemption is not awaiting submission');
+    // THE GATE (owner 2026-11-18). Nothing reaches an approver until the
+    // customer's signed request letter is on file and still matches the
+    // figures. Inside the transaction, so a signature voided concurrently by
+    // a penalty waiver cannot slip through between the check and the insert.
+    const { assertSigned } = await import('./signing.js');
+    await assertSigned(tx, redemptionId);
     const req = await createApprovalRequest(tx, {
       type: 'premature_redemption', entityType: 'redemptions', entityId: redemptionId, makerUserId: staff.id,
       metadata: { application_id: Number(red.application_id), redemption_id: redemptionId, redemption_date: red.redemption_date, net_payment: Number(red.net_payment), penalty: Number(red.penalty) },
@@ -183,15 +189,40 @@ export async function submitForApproval(db: Db, staff: AuthUser, redemptionId: n
   });
 }
 
-/** Staff initiates + submits a premature redemption in one step. */
+/**
+ * Staff initiates a premature redemption and the customer's request letter is
+ * prepared for signing.
+ *
+ * IT NO LONGER SUBMITS FOR APPROVAL. Until 2026-11-18 this function created the
+ * record and called submitForApproval in the same breath, so a redemption went
+ * from a button press to an approver's queue with nothing the customer had
+ * signed in between. The owner asked for the signed request letter to be that
+ * gate, so the two steps are now separate: this one creates the record and
+ * generates the letter, and submitForApproval refuses until the letter comes
+ * back signed.
+ *
+ * The letter is generated here rather than on a second button press because the
+ * owner asked for it to appear "immediately after the redemption reason is
+ * entered". A failure to render it is logged and swallowed: the redemption is
+ * real and recoverable (staff press Generate letter), whereas throwing would
+ * leave the record created and the caller looking at a 500 — the orphan shape
+ * that cost us a day on the enrolment screen.
+ */
 export async function initiatePremature(db: Db, actor: AuthUser, input: { application_id: number; redemption_date?: string; reason: string; amount?: number }) {
   const app = (await db.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [input.application_id])).rows[0];
   if (!app) throw errors.notFound('Application not found');
   if (app.status !== 'Active') throw errors.unprocessable('Only Active applications can be prematurely redeemed');
   const rec = await db.withTx(async (tx) =>
     createRequest(tx, { applicationId: input.application_id, type: 'premature', reason: input.reason, source: 'staff', byCustomer: false, redemptionDate: input.redemption_date, createdBy: actor.id, amount: input.amount }));
-  const req = await submitForApproval(db, actor, rec.id);
-  return { redemption_id: rec.id, redemption_no: rec.redemption_no, request: req, principal: rec.principal, penalty: rec.penalty, netPayment: rec.netPayment, brokenInterest: rec.brokenInterest };
+  const { generateLetter, signingView } = await import('./signing.js');
+  try { await generateLetter(db, actor, rec.id); } catch (e) {
+    console.warn(`[redemption] request letter could not be generated for ${rec.redemption_no}: ${(e as Error).message}`);
+  }
+  return {
+    redemption_id: rec.id, redemption_no: rec.redemption_no,
+    principal: rec.principal, penalty: rec.penalty, netPayment: rec.netPayment, brokenInterest: rec.brokenInterest,
+    ...(await signingView(db, rec.id)),
+  };
 }
 
 /** Maturity redemption — maker→checker approval gate (old-app parity: it does
@@ -257,8 +288,14 @@ export async function adjustPrematurePenalty(db: Db, actor: AuthUser, redemption
         `UPDATE approval_requests SET metadata = metadata || jsonb_build_object('penalty', $1::numeric, 'net_payment', $2::numeric, 'penalty_waived', true) WHERE id = $3`,
         [newPenalty, newNet, Number(red.approval_request_id)]);
     }
-    await writeAudit(tx, { actorId: actor.id, action: 'redemption.penalty-waive', entityType: 'redemptions', entityId: redemptionId, before: { penalty: current }, after: { penalty: newPenalty, net_payment: newNet, reason: input.reason.trim() } });
-    return { redemption_id: redemptionId, penalty: newPenalty, penalty_original: original, net_payment: newNet };
+    // The customer signed for a figure that has just moved, so their letter
+    // stops counting and a fresh one must be signed (owner 2026-11-18). In
+    // THIS transaction: a waived penalty whose signature survived it is exactly
+    // the mismatch the rule exists to prevent.
+    const { supersede } = await import('./signing.js');
+    const voided = await supersede(tx, redemptionId, `Penalty changed from ${current} to ${newPenalty}`);
+    await writeAudit(tx, { actorId: actor.id, action: 'redemption.penalty-waive', entityType: 'redemptions', entityId: redemptionId, before: { penalty: current }, after: { penalty: newPenalty, net_payment: newNet, reason: input.reason.trim(), signature_voided: voided } });
+    return { redemption_id: redemptionId, penalty: newPenalty, penalty_original: original, net_payment: newNet, signature_voided: voided };
   });
 }
 
@@ -340,13 +377,18 @@ export async function changePrematureRedemptionDate(
         [newDate, next.gross, Number(red.approval_request_id)]);
     }
 
+    // Same rule as the penalty waiver, and for a stronger reason: the date IS
+    // the end of the interest accrual, so moving it moves the money the
+    // customer signed for. The letter voids and must be signed again.
+    const { supersede } = await import('./signing.js');
+    const voided = await supersede(tx, redemptionId, `Redemption date changed from ${oldDate} to ${newDate}`);
     await writeAudit(tx, {
       actorId: actor.id, action: 'redemption.date-changed', entityType: 'redemptions', entityId: redemptionId,
       before: { redemption_date: oldDate, broken_interest: Number(red.broken_interest), broken_tds: Number(red.broken_tds) },
-      after: { redemption_date: newDate, broken_interest: next.gross, broken_tds: next.tds, reason: input.reason.trim() },
+      after: { redemption_date: newDate, broken_interest: next.gross, broken_tds: next.tds, reason: input.reason.trim(), signature_voided: voided },
     });
     return {
-      redemption_id: redemptionId, redemption_date: newDate, previous_date: oldDate,
+      redemption_id: redemptionId, redemption_date: newDate, previous_date: oldDate, signature_voided: voided,
       broken_interest: next.gross, broken_tds: next.tds,
       broken_interest_previous: Number(red.broken_interest),
       accrues_from: next.paidThrough,
@@ -377,6 +419,16 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
   const redDate = String(req.metadata.redemption_date ?? new Date().toISOString().slice(0, 10));
   const app = (await tx.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [appId])).rows[0];
   if (!app) return;
+
+  // THE SECOND GATE (owner 2026-11-18). The first one ran at submit; since
+  // then this very approver may have waived the penalty or moved the date,
+  // which voids the letter the customer signed. Checking only at submit would
+  // let the approver change the figures and then approve their own change
+  // against a signature for the old ones. Throwing here aborts the approval
+  // transaction, so nothing is half-approved — the redemption stays pending
+  // and the message says a fresh letter is needed.
+  const { assertSigned } = await import('./signing.js');
+  await assertSigned(tx, redId);
 
   // How much of the investment is being withdrawn, and what's left after it.
   const withdrawn = Number((await tx.query<{ principal: string }>(
@@ -707,3 +759,12 @@ export async function setRedemptionUtr(db: Db, actor: AuthUser, redemptionId: nu
   });
   return { ok: true, utr, unchanged: false };
 }
+
+// The signed-request-letter surface lives in ./signing.ts — a separate file
+// because this one is already 1,100 lines. Re-exported here so the router goes
+// on importing a single namespace, and so nothing outside has to know the flow
+// is split across two modules.
+export {
+  signingView, generateLetter, setMethod, uploadSignedLetter, redemptionLetterFile,
+  liveSigning, needsSignature, stageLabel, liveRedemptionForApplication,
+} from './signing.js';

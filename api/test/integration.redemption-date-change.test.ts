@@ -17,7 +17,7 @@
  * Change the redemption alone and the approval still uses the old date.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields, redeemPrematurely} from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -44,7 +44,7 @@ async function activeInvestment(name: string, phone: string, amount = 500000) {
 }
 
 const raise = async (a: Client, appId: number, date: string) =>
-  (await a.post('/api/redemptions/premature', { application_id: appId, redemption_date: date, reason: 'Loan Repayment' })).json;
+  (await redeemPrematurely(a, { application_id: appId, redemption_date: date, reason: 'Loan Repayment' })).json;
 
 describe('the approver changes a pending redemption date', () => {
   it('moves the date, and the broken interest moves with it', async () => {

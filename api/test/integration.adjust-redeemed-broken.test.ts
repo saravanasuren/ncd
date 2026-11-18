@@ -7,7 +7,7 @@
  * slice's net at batch time.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, requiredInvestmentFields, type TestCtx } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, requiredInvestmentFields, type TestCtx, redeemPrematurely} from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -29,7 +29,7 @@ async function mkRedeemed(a: Client, phone: string) {
   });
   await approveInvestment(await as('ncd@demo.local'), app);
   const appId = Number(app.json.id);
-  const red = await a.post('/api/redemptions/premature', { application_id: appId, reason: 'test redeem', redemption_date: '2026-07-20' });
+  const red = await redeemPrematurely(a, { application_id: appId, reason: 'test redeem', redemption_date: '2026-07-20' });
   expect(red.status).toBe(201);
   await (await as('cxo@demo.local')).post(`/api/approvals/${red.json.request.id}/approve`);
   return { appId, custId: Number(cust.json.id) };

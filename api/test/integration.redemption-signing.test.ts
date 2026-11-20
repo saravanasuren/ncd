@@ -51,7 +51,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 async function initiate(appId: number, reason = 'Needs the money back early') {
   const ncd = await as('ncd@demo.local');
-  const r = await ncd.post('/api/redemptions/premature', { application_id: appId, reason });
+  const r = await ncd.post('/api/redemptions/premature', { holding_mode: 'Demat', application_id: appId, reason });
   expect(r.status, JSON.stringify(r.json)).toBe(201);
   return { ncd, rid: Number(r.json.redemption_id), body: r.json };
 }

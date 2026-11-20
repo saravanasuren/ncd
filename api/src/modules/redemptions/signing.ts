@@ -69,14 +69,14 @@ export async function liveSigning(db: Db, redemptionId: number): Promise<Signing
 }
 
 interface RedemptionFacts {
-  id: number; status: string; type: string; source: string | null;
+  id: number; status: string; type: string; source: string | null; created_at: string;
   principal: string; penalty: string; redemption_date: string | null;
   approval_request_id: string | null;
 }
 
 async function redemptionFacts(db: Db, redemptionId: number): Promise<RedemptionFacts> {
   const { rows } = await db.query<RedemptionFacts>(
-    `SELECT id, status, type, source, principal, penalty, redemption_date, approval_request_id
+    `SELECT id, status, type, source, created_at, principal, penalty, redemption_date, approval_request_id
        FROM redemptions WHERE id = $1`, [redemptionId]);
   if (!rows[0]) throw errors.notFound('Redemption not found');
   return rows[0];
@@ -103,8 +103,23 @@ async function redemptionFacts(db: Db, redemptionId: number): Promise<Redemption
  * Practical consequence worth knowing: this is why the portal flow's existing
  * tests still pass untouched rather than being rewritten around a new step.
  */
-export function needsSignature(type: string, source: string | null | undefined): boolean {
-  return String(type) === 'premature' && String(source ?? 'staff') === 'staff';
+export function needsSignature(
+  type: string,
+  source: string | null | undefined,
+  createdAt?: string | null,
+  consentFrom?: string | null,
+): boolean {
+  if (String(type) !== 'premature') return false;
+  if (String(source ?? 'staff') !== 'staff') return false;
+  // AND RAISED ON OR AFTER THE CUT-OFF (owner 2026-11-20: "note this is only
+  // for from nov 13th and for the future one which goes hereafter").
+  //
+  // Without a date this returns true, which is the right default: a brand new
+  // redemption has no created_at yet at the moment the rule is first asked,
+  // and the safe answer for something being raised now is that it needs the
+  // letter. The date only ever EXCLUDES older ones.
+  if (!createdAt || !consentFrom) return true;
+  return String(createdAt).slice(0, 10) >= String(consentFrom).slice(0, 10);
 }
 
 const money = (v: unknown) => Math.round(Number(v ?? 0) * 100) / 100;
@@ -136,7 +151,13 @@ export function isStale(signing: SigningRow, r: { principal: unknown; penalty: u
  */
 export async function generateLetter(db: Db, actor: AuthUser, redemptionId: number): Promise<SigningRow> {
   const r = await redemptionFacts(db, redemptionId);
-  if (!needsSignature(r.type, r.source)) throw errors.badRequest('This redemption does not need a signed request letter: only a staff-raised early withdrawal does.');
+  const { consentLetterFrom } = await import('./letter.js');
+  const consentFrom = await consentLetterFrom(db);
+  if (!needsSignature(r.type, r.source, r.created_at, consentFrom)) {
+    throw errors.badRequest(
+      'This redemption does not need a signed consent letter: only a staff-raised early withdrawal '
+      + `raised on or after ${consentFrom} does. The letter can still be downloaded for the record.`);
+  }
   if (r.status !== 'Requested') throw errors.conflict(`This redemption is ${r.status}; a request letter can only be prepared while it is awaiting submission.`);
 
   const existing = await liveSigning(db, redemptionId);
@@ -273,7 +294,8 @@ export async function supersede(tx: Db, redemptionId: number, reason: string): P
  */
 export async function assertSigned(db: Db, redemptionId: number): Promise<void> {
   const r = await redemptionFacts(db, redemptionId);
-  if (!needsSignature(r.type, r.source)) return;
+  const { consentLetterFrom } = await import('./letter.js');
+  if (!needsSignature(r.type, r.source, r.created_at, await consentLetterFrom(db))) return;
   const signing = await liveSigning(db, redemptionId);
   if (!signing || signing.status !== 'Signed') {
     throw errors.conflict(
@@ -295,8 +317,9 @@ export async function assertSigned(db: Db, redemptionId: number): Promise<void> 
  * true. Everything here is read from the redemption and its signature.
  */
 export function stageLabel(
-  r: { status: string; type: string; source?: string | null; approval_request_id: unknown },
+  r: { status: string; type: string; source?: string | null; created_at?: string | null; approval_request_id: unknown },
   signing: SigningRow | null,
+  consentFrom?: string | null,
 ): string {
   if (r.status === 'Rejected') return 'Rejected';
   if (r.status === 'Cancelled') return 'Cancelled';
@@ -305,7 +328,7 @@ export function stageLabel(
   // so the label says what that means rather than repeating the status word.
   if (r.status === 'Approved') return 'Ready for Redemption Processing';
   if (r.approval_request_id) return 'Pending Approval';
-  if (!needsSignature(r.type, r.source)) return 'Redemption Initiated';
+  if (!needsSignature(r.type, r.source, r.created_at, consentFrom)) return 'Redemption Initiated';
   if (!signing) return 'Redemption Initiated';
   if (signing.status === 'Signed') return 'Signature Submitted';
   if (signing.status === 'AwaitingSignature') {
@@ -359,14 +382,36 @@ export async function redemptionLetterFile(
     ?? (await db.query<SigningRow>(
       `SELECT ${COLS} FROM redemption_signings WHERE redemption_id = $1 ORDER BY id DESC LIMIT 1`,
       [redemptionId])).rows[0] ?? null;
-  if (!signing) throw errors.notFound('No redemption letter has been generated yet.');
 
-  const path = which === 'signed' ? signing.signed_doc_path : signing.letter_pdf_path;
+  const path = which === 'signed' ? signing?.signed_doc_path : signing?.letter_pdf_path;
   if (!path) {
-    throw errors.notFound(which === 'signed'
-      ? 'No signed copy has been uploaded for this redemption yet.'
-      : 'No redemption letter has been generated yet.');
+    if (which === 'signed') throw errors.notFound('No signed copy has been uploaded for this redemption yet.');
+
+    // NOTHING STORED, SO RENDER IT NOW — this is the download button for the
+    // redemptions already raised on or after the cut-off (owner 2026-11-20:
+    // "for the old ones just get me a download button"). Nineteen of them are
+    // already Approved and several already paid, so they never went through
+    // the signing flow and have no stored letter. They still want the document
+    // on paper, and refusing because no signing row exists would make the
+    // button useless on exactly the rows it was asked for.
+    //
+    // Rendered fresh rather than stored: nothing here gates anything, so there
+    // is no signature to pin a particular file to.
+    const r = (await db.query<{ type: string; created_at: string }>(
+      'SELECT type, created_at FROM redemptions WHERE id = $1', [redemptionId])).rows[0]!;
+    const { consentLetterFrom, redemptionLetterPdf } = await import('./letter.js');
+    const from = await consentLetterFrom(db);
+    if (r.type !== 'premature' || String(r.created_at).slice(0, 10) < from.slice(0, 10)) {
+      throw errors.notFound(
+        `A consent letter applies to a premature redemption raised on or after ${from}; this one is outside that.`);
+    }
+    return {
+      buffer: await redemptionLetterPdf(db, redemptionId),
+      mime: 'application/pdf',
+      filename: `consent-for-premature-redemption-${redemptionId}.pdf`,
+    };
   }
+  if (!signing) throw errors.notFound('No redemption letter has been generated yet.');
   const { readStored } = await import('../../lib/storage.js');
   const buffer = readStored(path);
   if (!buffer) throw errors.notFound('The stored file is missing.');
@@ -383,6 +428,9 @@ export async function redemptionLetterFile(
 export async function signingView(db: Db, redemptionId: number): Promise<{
   stage: string;
   needs_signature: boolean;
+  /** The letter may be printed, even where nothing is gated — the 19 already
+   *  approved since the cut-off are exactly that case. */
+  can_download_letter: boolean;
   signing: SigningRow | null;
   stale: boolean;
   can_submit: boolean;
@@ -390,12 +438,20 @@ export async function signingView(db: Db, redemptionId: number): Promise<{
   const r = await redemptionFacts(db, redemptionId);
   const signing = await liveSigning(db, redemptionId);
   const stale = signing != null && signing.status === 'Signed' && isStale(signing, r);
+  const { consentLetterFrom } = await import('./letter.js');
+  const consentFrom = await consentLetterFrom(db);
+  const needs = needsSignature(r.type, r.source, r.created_at, consentFrom);
+  // The 19 already raised on or after the cut-off are approved and are NOT
+  // retrospectively gated — but their letter is still worth having on paper,
+  // so the screen is told it can be downloaded even where nothing is gated.
+  const onOrAfterCutOff = String(r.created_at ?? '').slice(0, 10) >= String(consentFrom).slice(0, 10);
   return {
-    stage: stageLabel(r, signing),
-    needs_signature: needsSignature(r.type, r.source),
+    stage: stageLabel(r, signing, consentFrom),
+    needs_signature: needs,
+    can_download_letter: r.type === 'premature' && onOrAfterCutOff,
     signing,
     stale,
     can_submit: r.status === 'Requested' && !r.approval_request_id
-      && (!needsSignature(r.type, r.source) || (signing?.status === 'Signed' && !stale)),
+      && (!needs || (signing?.status === 'Signed' && !stale)),
   };
 }

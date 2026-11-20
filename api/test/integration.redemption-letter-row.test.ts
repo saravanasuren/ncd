@@ -1,17 +1,16 @@
 /**
- * The bridge between a redemption in the book and the letter renderer.
+ * The bridge between a redemption in the book and the consent letter.
  *
- * The renderer itself (layout, wording, the three addressee eras) arrived with
- * the bulk-letter feature and is covered by unit.redemption-letter.test.ts.
- * Nothing here re-tests that. What IS tested here is the half that only exists
- * for a redemption raised in the system: that the right facts come out of the
- * database and reach the row — above all the BANK BLOCK, which is a payment
- * instruction and must name the same account the NEFT sheet will pay.
+ * The document itself — its six clauses, the declarations, where it breaks
+ * across pages — is covered by unit.consent-letter.test.ts. Nothing here
+ * re-tests that. What IS tested here is the half that only exists for a real
+ * redemption: that the right facts come out of the database, above all the
+ * BANK BLOCK (a payment instruction, which must name the same account the NEFT
+ * sheet pays) and the Mode of holding (which is answered by a person and must
+ * never be inferred).
  *
- * Fixture names are deliberately neutral word-only names: the letter prints
- * the holder and the series, and assertions below search the rendered text, so
- * a customer called "Bank Holder" would satisfy a search without the letter
- * being right.
+ * Fixture names are neutral word-only names: the letter prints the holder, and
+ * assertions search the rendered text for words like "Demat" and "Physical".
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { extractText } from './helpers/pdf-text.js';
@@ -29,18 +28,28 @@ beforeAll(async () => {
   await checker.post('/api/auth/login', { email: 'ncd@demo.local', password: 'Demo_1234' });
   seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
   schemeId = Number((await ctx.db.query("SELECT id FROM schemes WHERE code = 'NCD-DEMO'")).rows[0]!.id);
+  // The seeded demo series carries no face value; every real NCD series does
+  // (checked against production — all 19 redemptions since the cut-off have
+  // one). Without it the letter leaves the debenture count BLANK rather than
+  // inventing a denomination on a document somebody signs, which is correct
+  // and is what unit.consent-letter.test.ts pins. Give the fixture one so
+  // these tests can check the arithmetic that runs in production.
+  await ctx.db.query('UPDATE series SET face_value = 100000 WHERE id = $1', [seriesId]);
 });
 afterAll(async () => { await ctx.close(); });
 
 const squash = (s: string) => s.replace(/\s+/g, '');
 
-async function redemptionFor(holder: string, phone: string, amount: number, bank?: { acct: string; ifsc: string; name: string }) {
-  const cust = await admin.post('/api/customers', { full_name: holder, phone });
+async function redemptionFor(
+  holder: string, phone: string, amount: number,
+  opts: { bank?: { acct: string; ifsc: string; name: string }; mode?: 'Demat' | 'Physical'; redeem?: number } = {},
+) {
+  const cust = await admin.post('/api/customers', { full_name: holder, phone, pan: undefined });
   expect(cust.status, JSON.stringify(cust.json)).toBe(201);
   const cid = Number(cust.json.id);
-  if (bank) {
+  if (opts.bank) {
     await admin.post(`/api/customers/${cid}/bank-accounts`, {
-      account_number: bank.acct, ifsc: bank.ifsc, bank_name: bank.name, holder_name: holder,
+      account_number: opts.bank.acct, ifsc: opts.bank.ifsc, bank_name: opts.bank.name, holder_name: holder,
     });
   }
   const app = await admin.post('/api/applications', {
@@ -49,91 +58,99 @@ async function redemptionFor(holder: string, phone: string, amount: number, bank
   });
   expect(app.status, JSON.stringify(app.json)).toBe(201);
   await approveInvestment(checker, app);
-  const r = await checker.post('/api/redemptions/premature', { application_id: Number(app.json.id), reason: 'Needs it early' });
+  const r = await checker.post('/api/redemptions/premature', {
+    application_id: Number(app.json.id), reason: 'Needs it early',
+    holding_mode: opts.mode ?? 'Demat',
+    ...(opts.redeem ? { amount: opts.redeem } : {}),
+  });
   expect(r.status, JSON.stringify(r.json)).toBe(201);
-  return { cid, rid: Number(r.json.redemption_id) };
+  return { cid, appId: Number(app.json.id), rid: Number(r.json.redemption_id) };
 }
 
 const rowFor = async (rid: number) => {
-  const { redemptionLetterRow } = await import('../src/modules/redemptions/letter.js');
-  return redemptionLetterRow(ctx.db, rid);
+  const { redemptionConsentRow } = await import('../src/modules/redemptions/letter.js');
+  return redemptionConsentRow(ctx.db, rid);
 };
 const pdfFor = async (rid: number) => {
   const { redemptionLetterPdf } = await import('../src/modules/redemptions/letter.js');
   return squash(extractText(await redemptionLetterPdf(ctx.db, rid)));
 };
 
-describe('a redemption fills its own request letter', () => {
-  it('carries the holder, the series, the amount and the debenture count', async () => {
-    const { rid } = await redemptionFor('Letter Alpha', '9750000001', 400000);
+describe('a redemption fills its own consent letter', () => {
+  it('carries the holder, the series, the rate and the debenture count', async () => {
+    const { rid } = await redemptionFor('Holder Alpha', '9760000001', 400000);
     const row = await rowFor(rid);
-    expect(row.holder_name).toBe('Letter Alpha');
-    expect(row.amount).toBe(400000);
-    // Rs 4,00,000 at a face value of Rs 1,00,000 is four debentures.
-    expect(row.debentures).toBe('4');
+    expect(row.holder_name).toBe('Holder Alpha');
     expect(row.series).toBeTruthy();
+    expect(row.coupon_rate_pct).toBeGreaterThan(0);
+    // Rs 4,00,000 at a face value of Rs 1,00,000 is four debentures.
+    expect(row.ncd_count).toBe('4');
 
     const t = await pdfFor(rid);
-    expect(t).toContain('LetterAlpha');
-    expect(t).toContain('4,00,000');
+    expect(t).toContain('ConsentforPrematureRedemption');
+    expect(t).toContain('HolderAlpha');
   });
 
-  it('names the ACTIVE bank account — the one the NEFT sheet will pay', async () => {
-    const { cid, rid } = await redemptionFor('Letter Beta', '9750000002', 600000,
-      { acct: '975000000201', ifsc: 'ICIC0000202', name: 'ICICI Bank' });
-    // A second account that is NOT active must not win.
-    await admin.post(`/api/customers/${cid}/bank-accounts`, {
-      account_number: '975000000299', ifsc: 'SBIN0000202', bank_name: 'State Bank', holder_name: 'Letter Beta',
-    });
-    const row = await rowFor(rid);
-    expect(row.bank_name).toBe('ICICI Bank');
-    expect(row.account_no).toBe('975000000201');
-    expect(row.ifsc).toBe('ICIC0000202');
+  it('prints the Demat or Physical answer the person actually gave', async () => {
+    const demat = await redemptionFor('Holder Beta', '9760000002', 100000, { mode: 'Demat' });
+    expect((await rowFor(demat.rid)).mode_of_holding).toBe('Demat');
+    expect(await pdfFor(demat.rid)).toContain('Demat');
 
-    const t = await pdfFor(rid);
-    expect(t).toContain('975000000201');
-    expect(t).not.toContain('975000000299');
+    const physical = await redemptionFor('Holder Gamma', '9760000003', 100000, { mode: 'Physical' });
+    expect((await rowFor(physical.rid)).mode_of_holding).toBe('Physical');
+    const t = await pdfFor(physical.rid);
+    expect(t).toContain('Physical');
+    // Never both — the answer is recorded, not guessed from the demat columns.
+    expect(t).not.toContain('Demat');
   });
 
-  it('leaves the bank block blank rather than failing when no account is on file', async () => {
-    const { rid } = await redemptionFor('Letter Gamma', '9750000003', 100000);
-    const row = await rowFor(rid);
-    expect(row.bank_name).toBe('');
-    expect(row.account_no).toBe('');
-    // Still a letter, with the labels present to fill in by hand.
-    const t = await pdfFor(rid);
-    expect(t).toContain('BankName');
-    expect(t).toContain('IFSCCode');
-  });
-
-  it('asks for the part being withdrawn on a partial redemption', async () => {
-    const cust = await admin.post('/api/customers', { full_name: 'Letter Delta', phone: '9750000004' });
-    const cid = Number(cust.json.id);
+  it('refuses to raise a redemption without that answer', async () => {
+    const cust = await admin.post('/api/customers', { full_name: 'Holder Delta', phone: '9760000004' });
     const app = await admin.post('/api/applications', {
-      ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId,
-      amount: 900000, date_money_received: '2026-10-05',
+      ...requiredInvestmentFields(), customer_id: Number(cust.json.id), series_id: seriesId,
+      scheme_id: schemeId, amount: 100000, date_money_received: '2026-10-05',
     });
     await approveInvestment(checker, app);
     const r = await checker.post('/api/redemptions/premature', {
-      application_id: Number(app.json.id), reason: 'Partial need', amount: 300000,
+      application_id: Number(app.json.id), reason: 'No mode given',
     });
-    expect(r.status, JSON.stringify(r.json)).toBe(201);
-    const row = await rowFor(Number(r.json.redemption_id));
-    expect(row.amount).toBe(300000);
-    expect(row.debentures).toBe('3');
+    expect(r.status).toBe(400);
   });
 
-  it('is dated today, so it addresses the company as it is now', async () => {
-    const { rid } = await redemptionFor('Letter Epsilon', '9750000005', 100000);
+  it('names the ACTIVE bank account — the one the NEFT sheet will pay', async () => {
+    const { cid, rid } = await redemptionFor('Holder Epsilon', '9760000005', 600000,
+      { bank: { acct: '976000000501', ifsc: 'ICIC0000505', name: 'ICICI Bank' } });
+    // A second account that is NOT active must not win.
+    await admin.post(`/api/customers/${cid}/bank-accounts`, {
+      account_number: '976000000599', ifsc: 'SBIN0000505', bank_name: 'State Bank', holder_name: 'Holder Epsilon',
+    });
     const row = await rowFor(rid);
-    expect(row.letter_date).toBe(new Date().toISOString().slice(0, 10));
-    // Today is past both era boundaries, so a letter raised in the system
-    // addresses the current Dhanam block — which is what the owner asked for
-    // ("just use dhanam for all the upcoming redemption requests") without a
-    // second rule here to maintain.
+    expect(row.account_no).toBe('976000000501');
+    expect(row.ifsc).toBe('ICIC0000505');
+    expect(row.bank_and_branch).toContain('ICICI Bank');
+
     const t = await pdfFor(rid);
-    expect(t).toContain('TheBoardofDirectors,');
-    expect(t).toContain('DhanamInvestmentandFinance');
-    expect(t).not.toContain('KiaraMicrocreditPrivateLimited');
+    expect(t).toContain('976000000501');
+    expect(t).not.toContain('976000000599');
+  });
+
+  it('leaves the bank block blank rather than failing when no account is on file', async () => {
+    const { rid } = await redemptionFor('Holder Zeta', '9760000006', 100000);
+    const row = await rowFor(rid);
+    expect(row.account_no).toBe('');
+    expect(row.bank_and_branch).toBe('');
+    // Still a letter, with the labels there to fill in by hand.
+    const t = await pdfFor(rid);
+    expect(t).toContain('AccountNo.');
+    expect(t).toContain('IFSC');
+  });
+
+  it('consents to the part being withdrawn on a partial redemption', async () => {
+    const { rid } = await redemptionFor('Holder Theta', '9760000007', 900000, { redeem: 300000 });
+    const row = await rowFor(rid);
+    // Three of the nine, not all nine — the holder consents to what is
+    // actually being redeemed (owner 2026-11-20).
+    expect(row.ncd_count).toBe('3');
+    expect(await pdfFor(rid)).toContain(squash('to redeem all 3 NCDs held by me'));
   });
 });

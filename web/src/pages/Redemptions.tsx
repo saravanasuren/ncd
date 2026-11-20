@@ -17,6 +17,12 @@ interface Redemption {
   neft_downloaded_at: string | null; neft_downloaded_by: string | null; neft_download_count: number;
   reason: string | null; utr: string | null; utr_entered_by: string | null; utr_entered_at: string | null;
   broken_interest: string; requested_date: string | null; created_at: string; created_by: string | null;
+  /** Demat or Physical, asked when the redemption was raised. Null on the ones
+   *  raised before the question existed — their letter prints the row blank. */
+  holding_mode: string | null;
+  /** Premature, and raised on or after the consent-letter cut-off. Computed on
+   *  the server because the cut-off is a setting the owner can move. */
+  consent_letter_available: boolean;
 }
 
 type RedTab = 'all' | 'premature' | 'maturity';
@@ -182,6 +188,29 @@ const makeColumns = (canDownload: boolean, isSuperAdmin: boolean, refresh: () =>
     value: (r) => Number(r.net_payment), render: (r) => <span className="mono">{formatINR(r.net_payment)}</span> },
   { key: 'status', header: 'Status',
     render: (r) => <span className={`text-xs rounded px-1.5 py-0.5 ${pill[r.status] ?? 'bg-bg'}`}>{r.status}</span> },
+  // THE CONSENT LETTER, for the redemptions raised on or after the cut-off
+  // (owner 2026-11-20: "for the old ones just get me a download button").
+  //
+  // Nineteen of them were already approved, and several already paid, before
+  // the signing flow existed — so they have no stored letter and are not
+  // retrospectively blocked. The server renders one on demand for them. A
+  // redemption raised before the cut-off shows nothing: there is no consent to
+  // collect for something settled under the old rules.
+  //
+  // Opens in a tab rather than forcing a download, because the first thing
+  // anyone does with it is read it before printing.
+  { key: 'consent', header: 'Consent', sortable: false, filterable: false,
+    render: (r) => (r.consent_letter_available
+      ? (
+        <a className="text-xs text-primary hover:underline whitespace-nowrap"
+          href={`/api/redemptions/${r.id}/letter.pdf`} target="_blank" rel="noreferrer"
+          title={r.holding_mode
+            ? `Consent for Premature Redemption — ${r.holding_mode} holding`
+            : 'Consent for Premature Redemption. Mode of holding prints blank on this one — nobody was asked when it was raised, so tick it by hand.'}>
+          ↓ letter{r.holding_mode ? '' : ' *'}
+        </a>
+      )
+      : <span className="text-xs text-text-muted">—</span>) },
   ...(canDownload ? [{
     key: 'actions', header: '', sortable: false, filterable: false, align: 'right' as const,
     // One copy per redemption. Once it has gone out the row SAYS so — with the

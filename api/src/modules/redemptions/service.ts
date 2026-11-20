@@ -36,7 +36,7 @@ async function penaltySetting(db: Db): Promise<RateSpec> {
 /** Create a 'Requested' redemption record (no approval). Shared by all callers. */
 async function createRequest(
   tx: Db,
-  input: { applicationId: number; type: 'premature' | 'maturity'; reason: string; source: string; byCustomer: boolean; redemptionDate?: string; createdBy: number | null; amount?: number }
+  input: { applicationId: number; type: 'premature' | 'maturity'; reason: string; source: string; byCustomer: boolean; redemptionDate?: string; createdBy: number | null; amount?: number; holdingMode?: string | null }
 ): Promise<{ id: number; redemption_no: string; principal: number; penalty: number; netPayment: number; brokenInterest: number }> {
   const outstanding = await outstandingPrincipal(tx, input.applicationId);
   // Money pledged to a live locker deposit is that locker's security — it can't
@@ -95,9 +95,9 @@ async function createRequest(
   const netPayment = calc.netPayment;
   const redNo = await nextCode(tx, 'redemption', 'MCR-{yyyy}-{seq:6}');
   const { rows } = await tx.query<{ id: string }>(
-    `INSERT INTO redemptions (redemption_no, application_id, type, principal, penalty, net_payment, broken_interest, broken_tds, requested_date, redemption_date, reason, status, source, requested_by_customer, created_by_user_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'Requested',$12,$13,$14) RETURNING id`,
-    [redNo, input.applicationId, input.type, calc.principal, calc.penalty, netPayment, calc.brokenInterest, brokenTds, redDate, redDate, input.reason, input.source, input.byCustomer, input.createdBy]
+    `INSERT INTO redemptions (redemption_no, application_id, type, principal, penalty, net_payment, broken_interest, broken_tds, requested_date, redemption_date, reason, status, source, requested_by_customer, created_by_user_id, holding_mode)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'Requested',$12,$13,$14,$15) RETURNING id`,
+    [redNo, input.applicationId, input.type, calc.principal, calc.penalty, netPayment, calc.brokenInterest, brokenTds, redDate, redDate, input.reason, input.source, input.byCustomer, input.createdBy, input.holdingMode ?? null]
   );
   return { id: Number(rows[0]!.id), redemption_no: redNo, principal: calc.principal, penalty: calc.penalty, netPayment, brokenInterest: calc.brokenInterest };
 }
@@ -208,12 +208,12 @@ export async function submitForApproval(db: Db, staff: AuthUser, redemptionId: n
  * leave the record created and the caller looking at a 500 — the orphan shape
  * that cost us a day on the enrolment screen.
  */
-export async function initiatePremature(db: Db, actor: AuthUser, input: { application_id: number; redemption_date?: string; reason: string; amount?: number }) {
+export async function initiatePremature(db: Db, actor: AuthUser, input: { application_id: number; redemption_date?: string; reason: string; amount?: number; holding_mode?: string }) {
   const app = (await db.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [input.application_id])).rows[0];
   if (!app) throw errors.notFound('Application not found');
   if (app.status !== 'Active') throw errors.unprocessable('Only Active applications can be prematurely redeemed');
   const rec = await db.withTx(async (tx) =>
-    createRequest(tx, { applicationId: input.application_id, type: 'premature', reason: input.reason, source: 'staff', byCustomer: false, redemptionDate: input.redemption_date, createdBy: actor.id, amount: input.amount }));
+    createRequest(tx, { applicationId: input.application_id, type: 'premature', reason: input.reason, source: 'staff', byCustomer: false, redemptionDate: input.redemption_date, createdBy: actor.id, amount: input.amount, holdingMode: input.holding_mode ?? null }));
   const { generateLetter, signingView } = await import('./signing.js');
   try { await generateLetter(db, actor, rec.id); } catch (e) {
     console.warn(`[redemption] request letter could not be generated for ${rec.redemption_no}: ${(e as Error).message}`);
@@ -674,6 +674,11 @@ export async function listRedemptions(db: Db, actor: AuthUser, filter?: 'request
   const sc = redemptionScope(actor);
   const conds = [sc.sql];
   if (filter === 'requests') conds.push("r.status = 'Requested' AND r.approval_request_id IS NULL");
+  // Whether this row can produce a consent letter. Decided HERE rather than on
+  // the screen because the cut-off is a setting the owner can move, and a date
+  // hard-coded into the page would go stale the moment they moved it.
+  const { consentLetterFrom } = await import('./letter.js');
+  const consentFrom = await consentLetterFrom(db);
   return (await db.query(
     `SELECT r.id, r.redemption_no, r.type, r.status, r.source, r.requested_by_customer, r.principal, r.penalty, r.net_payment, r.redemption_date, r.approval_request_id,
             -- Whether the payment instruction has already left the building, so
@@ -689,12 +694,15 @@ export async function listRedemptions(db: Db, actor: AuthUser, filter?: 'request
             -- show two fields already in hand would just be latency.
             r.reason, r.utr, r.broken_interest, r.requested_date, r.created_at,
             cb.full_name AS created_by, uu.full_name AS utr_entered_by, r.utr_entered_at,
-            a.application_no, c.full_name AS customer_name
+            a.application_no, c.full_name AS customer_name, r.holding_mode,
+            (r.type = 'premature' AND r.created_at::date >= $${sc.params.length + 1}::date)
+              AS consent_letter_available
      FROM redemptions r JOIN applications a ON a.id = r.application_id JOIN customers c ON c.id = a.customer_id
      LEFT JOIN users nu ON nu.id = r.neft_downloaded_by_user_id
      LEFT JOIN users cb ON cb.id = r.created_by_user_id
      LEFT JOIN users uu ON uu.id = r.utr_entered_by_user_id
-     WHERE ${conds.join(' AND ')} ORDER BY r.created_at DESC LIMIT 2000`, sc.params)).rows;
+     WHERE ${conds.join(' AND ')} ORDER BY r.created_at DESC LIMIT 2000`,
+    [...sc.params, consentFrom])).rows;
 }
 
 // On REJECT of a redemption approval, mark the redemption Rejected (terminal).

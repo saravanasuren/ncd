@@ -18,6 +18,12 @@ redemptionsRouter.post('/premature', requirePermission('redemptions:initiate'),
     const input = z.object({
       application_id: z.number(), redemption_date: z.string().optional(), reason: z.string().min(2),
       amount: z.number().positive().optional(),
+      // REQUIRED (owner 2026-11-20). It prints on the consent letter the
+      // holder signs, and it cannot be derived — demat details were only ever
+      // synced for about a third of the book, so an empty record is not
+      // evidence of a physical holding. A moment's thought at the desk beats
+      // a guess on a signed document.
+      holding_mode: z.enum(['Demat', 'Physical']),
     }).parse(req.body);
     res.status(201).json(await s.initiatePremature(getDb(), req.user!, input));
   }));

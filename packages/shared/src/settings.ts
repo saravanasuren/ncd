@@ -190,6 +190,18 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     default: '2025-08-18',
     editableBy: 'super_admin',
   },
+  {
+    key: 'redemption.consent_letter_from',
+    group: 'Redemptions',
+    label: 'Consent letter required for redemptions from',
+    description: 'A premature redemption raised on or after this date cannot go for approval until the '
+      + 'holder has signed the Consent for Premature Redemption, on paper or through e-Sign. Redemptions '
+      + 'already raised on or after it can have the letter downloaded, but are not blocked. Anything '
+      + 'before this date is untouched.',
+    type: 'date',
+    default: '2026-11-13',
+    editableBy: 'super_admin',
+  },
 
   // ── Numbering ──
   {

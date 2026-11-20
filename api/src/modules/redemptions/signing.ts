@@ -227,8 +227,43 @@ export async function uploadSignedLetter(
   input: { data_base64: string; filename?: string | null; signed_on: string; note?: string | null },
 ): Promise<SigningRow> {
   const r = await redemptionFacts(db, redemptionId);
-  if (r.status !== 'Requested') throw errors.conflict(`This redemption is ${r.status}; a signed letter can only be added while it is awaiting submission.`);
-  const signing = await liveSigning(db, redemptionId);
+
+  // TWO CASES REACH HERE, and only the first one gates anything.
+  //
+  //  1. A redemption still awaiting submission. The scan is the thing that
+  //     unlocks approval, and everything below applies.
+  //
+  //  2. A redemption ALREADY APPROVED (or paid) on or after the cut-off. The
+  //     owner asked for the 19 of these to be filed rather than left in a
+  //     drawer: "let them be uploaded against the redemption". Nothing is
+  //     re-gated by it — the gate only ever runs at submit and at approval,
+  //     both long past for these — so this is a record and nothing more. The
+  //     alternative was 19 signed letters the system has no idea exist.
+  const alreadySettled = r.status !== 'Requested';
+  if (alreadySettled) {
+    const { consentLetterFrom } = await import('./letter.js');
+    const from = await consentLetterFrom(db);
+    const eligible = r.type === 'premature'
+      && String(r.created_at).slice(0, 10) >= from.slice(0, 10)
+      && (r.status === 'Approved' || r.status === 'Paid');
+    if (!eligible) {
+      throw errors.conflict(
+        `This redemption is ${r.status}; a signed letter can only be filed against one awaiting submission, `
+        + `or against a premature redemption raised on or after ${from}.`);
+    }
+  }
+
+  let signing = await liveSigning(db, redemptionId);
+
+  // A settled one never went through the signing flow, so it has no row to
+  // attach the scan to. Create it here rather than making staff press
+  // "Generate letter" first on a redemption that is already paid.
+  if (!signing && alreadySettled) {
+    signing = (await db.query<SigningRow>(
+      `INSERT INTO redemption_signings (redemption_id, status, method, created_by_user_id)
+       VALUES ($1, 'Draft', 'physical', $2) RETURNING ${COLS}`,
+      [redemptionId, actor.id])).rows[0]!;
+  }
   if (!signing) throw errors.badRequest('Generate the redemption letter first.');
   if (signing.status === 'Signed') throw errors.conflict('A signed letter is already on file for this redemption.');
   if (signing.method === 'esign') {

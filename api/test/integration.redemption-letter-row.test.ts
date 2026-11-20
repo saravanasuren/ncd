@@ -14,7 +14,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { extractText } from './helpers/pdf-text.js';
-import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields, SIGNED_SCAN_PNG} from './helpers/server.js';
 
 let ctx: TestCtx;
 let admin: Client, checker: Client;
@@ -152,5 +152,53 @@ describe('a redemption fills its own consent letter', () => {
     // actually being redeemed (owner 2026-11-20).
     expect(row.ncd_count).toBe('3');
     expect(await pdfFor(rid)).toContain(squash('to redeem all 3 NCDs held by me'));
+  });
+});
+
+describe('filing a signed consent letter against a redemption already approved', () => {
+  it('accepts the scan, and does not un-approve or re-gate anything', async () => {
+    const { rid, appId } = await redemptionFor('Holder Iota', '9760000008', 500000);
+    // Carry it all the way through, the way the 19 already went.
+    await checker.post(`/api/redemptions/${rid}/signed-letter`, {
+      data_base64: SIGNED_SCAN_PNG, filename: 'first.png', signed_on: new Date().toISOString().slice(0, 10),
+    });
+    const submit = await checker.post(`/api/redemptions/${rid}/submit-for-approval`);
+    expect(submit.status, JSON.stringify(submit.json)).toBe(201);
+    const cxo = new Client(ctx.base);
+    await cxo.post('/api/auth/login', { email: 'cxo@demo.local', password: 'Demo_1234' });
+    expect((await cxo.post(`/api/approvals/${submit.json.request.id}/approve`)).json.request.status).toBe('Approved');
+
+    // Now it is Approved — exactly the state the 19 are in. Clear the signing
+    // row so this stands in for one that never had a letter at all.
+    await ctx.db.query('DELETE FROM redemption_signings WHERE redemption_id = $1', [rid]);
+
+    const up = await checker.post(`/api/redemptions/${rid}/signed-letter`, {
+      data_base64: SIGNED_SCAN_PNG, filename: 'collected-later.png',
+      signed_on: new Date().toISOString().slice(0, 10), note: 'Collected after approval',
+    });
+    expect(up.status, JSON.stringify(up.json)).toBe(201);
+    expect(up.json.status).toBe('Signed');
+
+    // The redemption is untouched by the filing — this records, it does not act.
+    const red = (await ctx.db.query('SELECT status FROM redemptions WHERE id = $1', [rid])).rows[0] as any;
+    expect(red.status).toBe('Approved');
+    const app = (await ctx.db.query('SELECT status FROM applications WHERE id = $1', [appId])).rows[0] as any;
+    expect(app.status).toBe('Redeemed');
+    // And it can be read back.
+    expect((await checker.raw(`/api/redemptions/${rid}/signed-letter.pdf`)).status).toBe(200);
+  });
+
+  it('still refuses a redemption that was settled before the cut-off', async () => {
+    const { rid } = await redemptionFor('Holder Kappa', '9760000009', 100000);
+    // Backdate it to before the consent letter applied, and settle it.
+    await ctx.db.query(
+      "UPDATE redemptions SET status = 'Approved', created_at = DATE '2026-10-01' WHERE id = $1", [rid]);
+    await ctx.db.query('DELETE FROM redemption_signings WHERE redemption_id = $1', [rid]);
+    const up = await checker.post(`/api/redemptions/${rid}/signed-letter`, {
+      data_base64: SIGNED_SCAN_PNG, filename: 'x.png', signed_on: new Date().toISOString().slice(0, 10),
+    });
+    expect(up.status).toBe(409);
+    // There is no consent to collect for something settled under the old rules.
+    expect(String(up.json.error.message)).toContain('on or after');
   });
 });

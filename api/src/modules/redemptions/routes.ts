@@ -41,6 +41,63 @@ redemptionsRouter.post('/:id/redemption-date', requirePermission('approvals:chec
     res.json(await s.changePrematureRedemptionDate(getDb(), req.user!, Number(req.params.id), input));
   }));
 
+// ── The customer's signed request letter (owner 2026-11-18) ────────────────
+// Nothing here moves money. These routes prepare the letter, record how it was
+// signed and serve the two documents an approver needs to look at. The gate
+// itself lives in the service, on submit-for-approval and again on approval.
+
+// What the investment screen asks on every render: is there a redemption in
+// flight on this investment, and what is it waiting for? Three segments, so it
+// cannot be swallowed by the two-segment '/:id/signing' below.
+redemptionsRouter.get('/for-application/:applicationId/signing', requirePermission('redemptions:initiate', 'approvals:check-premature'),
+  asyncHandler(async (req, res) => res.json(await s.liveRedemptionForApplication(getDb(), Number(req.params.applicationId)))));
+
+// Where this redemption's letter stands, in the owner's own stage words.
+redemptionsRouter.get('/:id/signing', requirePermission('redemptions:initiate', 'approvals:check-premature'),
+  asyncHandler(async (req, res) => res.json(await s.signingView(getDb(), Number(req.params.id)))));
+
+// Regenerate — staff fixed a bank account or a spelling. Refused once signed.
+redemptionsRouter.post('/:id/letter', requirePermission('redemptions:initiate'),
+  asyncHandler(async (req, res) => res.json(await s.generateLetter(getDb(), req.user!, Number(req.params.id)))));
+
+// How it is going to be signed: on paper, or through Digio.
+redemptionsRouter.post('/:id/letter/method', requirePermission('redemptions:initiate'),
+  asyncHandler(async (req, res) => {
+    const { method } = z.object({ method: z.enum(['esign', 'physical']) }).parse(req.body);
+    res.json(await s.setMethod(getDb(), req.user!, Number(req.params.id), method));
+  }));
+
+// The letter we generated, exactly as stored — not re-rendered. The customer
+// signs THIS file, so serving a fresh render could hand back a different one.
+redemptionsRouter.get('/:id/letter.pdf', requirePermission('redemptions:initiate', 'approvals:check-premature'),
+  asyncHandler(async (req, res) => {
+    const { buffer, mime, filename } = await s.redemptionLetterFile(getDb(), req.user!, Number(req.params.id), 'letter');
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.end(buffer);
+  }));
+
+// The scan that came back, for the approver to check the signature on.
+redemptionsRouter.get('/:id/signed-letter.pdf', requirePermission('redemptions:initiate', 'approvals:check-premature'),
+  asyncHandler(async (req, res) => {
+    const { buffer, mime, filename } = await s.redemptionLetterFile(getDb(), req.user!, Number(req.params.id), 'signed');
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.end(buffer);
+  }));
+
+// The signed paper copy, scanned back in.
+redemptionsRouter.post('/:id/signed-letter', requirePermission('redemptions:initiate'),
+  asyncHandler(async (req, res) => {
+    const input = z.object({
+      data_base64: z.string().min(1),
+      filename: z.string().optional().nullable(),
+      signed_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD'),
+      note: z.string().optional().nullable(),
+    }).parse(req.body);
+    res.status(201).json(await s.uploadSignedLetter(getDb(), req.user!, Number(req.params.id), input));
+  }));
+
 // Staff picks up a customer/app request and starts the 2-level approval.
 redemptionsRouter.post('/:id/submit-for-approval', requirePermission('redemptions:initiate'),
   asyncHandler(async (req, res) => res.status(201).json({ request: await s.submitForApproval(getDb(), req.user!, Number(req.params.id)) })));

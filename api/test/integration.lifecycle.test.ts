@@ -6,7 +6,7 @@
  * approval needs a second person.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields, redeemPrematurely} from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number;
@@ -142,7 +142,7 @@ describe('incentives accrued at allotment', () => {
 describe('premature redemption closes the application (docs/17 regression)', () => {
   it('maker → single CXO approval (old-app parity), then the app is Redeemed', async () => {
     const ncd = await as('ncd@demo.local');
-    const init = await ncd.post('/api/redemptions/premature', { application_id: appId, redemption_date: '2027-01-15', reason: 'Customer request' });
+    const init = await redeemPrematurely(ncd, { application_id: appId, redemption_date: '2027-01-15', reason: 'Customer request' });
     expect(init.status).toBe(201);
     // 5L − 1% penalty (₹495,000) + accrued broken interest now settled with it.
     expect(Number(init.json.netPayment)).toBeGreaterThanOrEqual(495000);

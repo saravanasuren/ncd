@@ -14,7 +14,7 @@
  * one already on file.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields, redeemPrematurely} from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -39,7 +39,7 @@ async function approvedRedemption(name: string, phone: string, reason: string): 
     amount: 500000, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
   await approveInvestment(ncd, app);
-  const init = await ncd.post('/api/redemptions/premature', { application_id: Number(app.json.id), reason });
+  const init = await redeemPrematurely(ncd, { application_id: Number(app.json.id), reason });
   const reqId = init.json.request?.id ?? init.json.approval_request_id;
   await (await as('cxo@demo.local')).post(`/api/approvals/${reqId}/approve`);
   return Number((await ncd.get('/api/redemptions')).json.rows.find((r: any) => r.customer_name === name).id);

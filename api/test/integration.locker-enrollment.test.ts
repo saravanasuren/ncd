@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { startTestServer, Client, type TestCtx, requiredInvestmentFields, uniqueName } from './helpers/server.js';
+import { startTestServer, Client, type TestCtx, requiredInvestmentFields, uniqueName, redeemPrematurely} from './helpers/server.js';
 import { config } from '../src/config.js';
 
 let ctx: TestCtx;
@@ -342,11 +342,11 @@ describe('locker deposit links (NCD backs the deposit)', () => {
     expect(pledge.json.linked_amount).toBe(300000); // ₹3L pledged
 
     // More than the free portion is refused.
-    const tooMuch = await staff.post('/api/redemptions/premature', { application_id: appId, reason: 'test', amount: 2300000 });
+    const tooMuch = await redeemPrematurely(staff, { application_id: appId, reason: 'test', amount: 2300000 });
     expect(tooMuch.status).toBe(422);
 
     // Exactly the free ₹22L is allowed.
-    const red = await staff.post('/api/redemptions/premature', { application_id: appId, reason: 'partial exit', amount: 2200000 });
+    const red = await redeemPrematurely(staff, { application_id: appId, reason: 'partial exit', amount: 2200000 });
     expect(red.status).toBe(201);
     expect(Number(red.json.principal)).toBe(2200000);
 
@@ -368,7 +368,7 @@ describe('locker deposit links (NCD backs the deposit)', () => {
     const link = await staff.post('/api/lockers/deposit-links', { application_id: appId, lockerhub_application_id: 'la_med' });
     expect(link.json.linked_amount).toBe(100000);
 
-    const blocked = await staff.post('/api/redemptions/premature', { application_id: appId, reason: 'test' });
+    const blocked = await redeemPrematurely(staff, { application_id: appId, reason: 'test' });
     expect(blocked.status).toBe(422);
 
     // Locker closed → release frees it.

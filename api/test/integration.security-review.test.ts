@@ -6,7 +6,7 @@
  *  - Rejecting a redemption / interest batch cleanly reverses it.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields, redeemPrematurely} from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -61,7 +61,7 @@ describe('security review — access control', () => {
   it('redemptions list is scoped, and an agent cannot reach it at all', async () => {
     const inv = await activeInvestment('Scoped Redeem', '9722200003');
     const ncd = await as('ncd@demo.local');
-    await ncd.post('/api/redemptions/premature', { application_id: inv.appId, reason: 'test scope' });
+    await redeemPrematurely(ncd, { application_id: inv.appId, reason: 'test scope' });
     const adminList = await (await admin()).get('/api/redemptions');
     expect(adminList.json.rows.some((x: any) => x.application_no)).toBe(true);
 
@@ -84,7 +84,7 @@ describe('security review — lifecycle reject cleanup', () => {
   it('rejecting a premature redemption marks it Rejected and unblocks a new one', async () => {
     const inv = await activeInvestment('Reject Redeem', '9722200004');
     const ncd = await as('ncd@demo.local');
-    const init = await ncd.post('/api/redemptions/premature', { application_id: inv.appId, reason: 'first try' });
+    const init = await redeemPrematurely(ncd, { application_id: inv.appId, reason: 'first try' });
     expect(init.status).toBe(201);
     const redId = init.json.redemption_id;
     const reqId = init.json.request.id;
@@ -94,7 +94,7 @@ describe('security review — lifecycle reject cleanup', () => {
     const red = (await ctx.db.query('SELECT status FROM redemptions WHERE id = $1', [redId])).rows[0] as any;
     expect(red.status).toBe('Rejected');
     // The investment is no longer locked — a fresh premature can be raised.
-    const again = await ncd.post('/api/redemptions/premature', { application_id: inv.appId, reason: 'second try' });
+    const again = await redeemPrematurely(ncd, { application_id: inv.appId, reason: 'second try' });
     expect(again.status).toBe(201);
   });
 
@@ -104,7 +104,7 @@ describe('security review — lifecycle reject cleanup', () => {
     // interest batch as a 'Redemption' row, so the customer gets two transfers.
     const inv = await activeInvestment('Broken Interest', '9722200006');
     const ncd = await as('ncd@demo.local');
-    const init = await ncd.post('/api/redemptions/premature', { application_id: inv.appId, reason: 'exit' });
+    const init = await redeemPrematurely(ncd, { application_id: inv.appId, reason: 'exit' });
     expect(init.status).toBe(201);
     // Accrued interest is still computed (>0 for a funded, days-elapsed investment)…
     expect(Number(init.json.brokenInterest)).toBeGreaterThan(0);

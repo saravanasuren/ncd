@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import ExcelJS from 'exceljs';
-import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields, redeemPrematurely} from './helpers/server.js';
 
 let ctx: TestCtx;
 const as = async (email: string, password = 'Demo_1234') => { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; };
@@ -344,7 +344,7 @@ describe('redemption interest lands in that month\'s payout sheet', () => {
 
     // Redeem mid-cycle so a real broken-period slice accrues.
     redDate = '2026-09-15';
-    const red = await a.post('/api/redemptions/premature', { application_id: appId, reason: 'exit', redemption_date: redDate });
+    const red = await redeemPrematurely(a, { application_id: appId, reason: 'exit', redemption_date: redDate });
     expect(red.status).toBe(201);
     await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
 
@@ -455,7 +455,7 @@ describe('a redemption slice\'s "Interest From" starts the day AFTER the line wa
     // Redeem 11 days after that paid cutoff — a real multi-day gap.
     const [y, m, d] = payDate.split('-').map(Number);
     const redDate = new Date(Date.UTC(y!, m! - 1, d! + 11)).toISOString().slice(0, 10);
-    const red = await a.post('/api/redemptions/premature', { application_id: appId, reason: 'exit', redemption_date: redDate });
+    const red = await redeemPrematurely(a, { application_id: appId, reason: 'exit', redemption_date: redDate });
     expect(red.status).toBe(201);
     await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
 
@@ -506,7 +506,7 @@ describe('a zero-interest redemption slice still shows on its month\'s sheet, no
     // Redeem the VERY NEXT DAY — last paid through 28-Aug, redemption stops
     // the day before it (still 28-Aug), so zero new days have accrued.
     const redDate = '2026-08-29';
-    const red = await a.post('/api/redemptions/premature', { application_id: appId, reason: 'exit', redemption_date: redDate });
+    const red = await redeemPrematurely(a, { application_id: appId, reason: 'exit', redemption_date: redDate });
     expect(red.status).toBe(201);
     await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
 
@@ -563,7 +563,7 @@ describe('a rejected batch releases the redemption slice instead of deleting it'
     await approveInvestment(ncd, app);
 
     const rDate = '2026-11-15';
-    const red = await a.post('/api/redemptions/premature', { application_id: id, reason: 'exit', redemption_date: rDate });
+    const red = await redeemPrematurely(a, { application_id: id, reason: 'exit', redemption_date: rDate });
     await cxo.post(`/api/approvals/${red.json.request.id}/approve`);
     const before = (await ctx.db.query(
       "SELECT id, gross_amount FROM disbursement_schedule WHERE application_id=$1 AND due_type='BrokenInterest' AND due_date=$2::date", [id, rDate])).rows[0] as any;
@@ -618,7 +618,7 @@ describe('a customer\'s redemption row sits with their interest rows', () => {
 
     // A PARTIAL exit: the line stays live, so this customer has both a regular
     // interest row and a redemption slice in the same sheet.
-    const red = await a.post('/api/redemptions/premature', {
+    const red = await redeemPrematurely(a, {
       application_id: midId, reason: 'part exit', redemption_date: '2027-01-15', amount: 400000,
     });
     expect(red.status).toBe(201);
@@ -723,7 +723,7 @@ describe('"Invested (Rs)" reflects the outstanding balance after a partial redem
     const a = await admin();
     const cxo = await as('cxo@demo.local');
     const appId = await mkPartial('Partial Preview Investor', '9600000061', '2027-02-01');
-    const red = await a.post('/api/redemptions/premature', {
+    const red = await redeemPrematurely(a, {
       application_id: appId, reason: 'part exit', redemption_date: '2027-03-10', amount: 400000,
     });
     expect(red.status).toBe(201);
@@ -745,7 +745,7 @@ describe('"Invested (Rs)" reflects the outstanding balance after a partial redem
     const cxo = await as('cxo@demo.local');
     const ncd = await as('ncd@demo.local');
     const appId = await mkPartial('Partial Batch Investor', '9600000062', '2027-02-01');
-    const red = await a.post('/api/redemptions/premature', {
+    const red = await redeemPrematurely(a, {
       application_id: appId, reason: 'part exit', redemption_date: '2027-04-10', amount: 400000,
     });
     expect(red.status).toBe(201);
@@ -781,7 +781,7 @@ describe('"Invested (Rs)" reflects the outstanding balance after a partial redem
     const a = await admin();
     const cxo = await as('cxo@demo.local');
     const appId = await mkPartial('Withdrawn Basis Investor', '9600000065', '2027-09-01');
-    const red = await a.post('/api/redemptions/premature', {
+    const red = await redeemPrematurely(a, {
       application_id: appId, reason: 'part exit', redemption_date: '2027-10-10', amount: 400000,
     });
     expect(red.status).toBe(201);

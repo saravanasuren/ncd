@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import ExcelJS from 'exceljs';
-import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields, redeemPrematurely, SIGNED_SCAN_PNG} from './helpers/server.js';
 
 let ctx: TestCtx;
 let seriesId: number, schemeId: number;
@@ -196,7 +196,7 @@ describe('premature penalty waiver (CXO)', () => {
   it('CXO waives the penalty → net = principal; a non-CXO cannot, and it can only reduce', async () => {
     const inv = await activeInvestment('Waive Cust', '9333300001', 500000);
     const ncd = await as('ncd@demo.local');
-    const init = await ncd.post('/api/redemptions/premature', { application_id: inv.appId, reason: 'hardship' });
+    const init = await redeemPrematurely(ncd, { application_id: inv.appId, reason: 'hardship' });
     expect(init.status).toBe(201);
     const redId = init.json.redemption_id;
     expect(Number(init.json.penalty)).toBeGreaterThan(0);          // 1% of ₹5L = ₹5,000
@@ -218,6 +218,22 @@ describe('premature penalty waiver (CXO)', () => {
     expect(Number(row.penalty)).toBe(0);
     expect(Number(row.net_payment)).toBeGreaterThanOrEqual(500000);
     expect(Number(row.penalty_original)).toBe(5000);
+
+    // THE WAIVER VOIDED THE CUSTOMER'S SIGNATURE (owner 2026-11-18), so the
+    // approval is refused until they sign for the figure they are actually
+    // getting. This used to approve straight through, and the change is the
+    // point: the letter said ₹5,000 penalty and the payment no longer does.
+    expect(Number(w.json.signature_voided)).toBeTruthy();
+    const blocked = await cxo.post(`/api/approvals/${init.json.request.id}/approve`);
+    expect(blocked.status).toBeGreaterThanOrEqual(400);
+
+    // A fresh letter, signed against the waived figures, releases it.
+    expect((await ncd.post(`/api/redemptions/${redId}/letter`, {})).status).toBe(200);
+    const resign = await ncd.post(`/api/redemptions/${redId}/signed-letter`, {
+      data_base64: SIGNED_SCAN_PNG, filename: 'resigned.png', signed_on: new Date().toISOString().slice(0, 10),
+    });
+    expect(resign.status, JSON.stringify(resign.json)).toBe(201);
+    expect(Number(resign.json.signed_penalty)).toBe(0);
 
     // Approve → app Redeemed at the waived net.
     expect((await cxo.post(`/api/approvals/${init.json.request.id}/approve`)).json.request.status).toBe('Approved');

@@ -186,13 +186,60 @@ export function redemptionLetterPdf(row: RedemptionLetterRow, era: AddresseeEra)
       y = doc.y;
     }
 
+    // ── Waiver of the Trust Deed's 2% premium (owner 2026-11-20) ─────────────
+    //
+    // The holder gives up a payment right here, so it is set apart rather than
+    // folded into the body: a bold heading over a justified paragraph, the
+    // owner's choice when asked, and the same emphasis the Subject line and
+    // the amounts already carry. A clause somebody is signing away money under
+    // should be visible on the page.
+    //
+    // EVERY LETTER CARRIES IT, whatever the letter's date — the owner's answer
+    // when asked whether back-dated Kiara-era letters should be exempt. So it
+    // sits outside the addressee-era machinery entirely: this is one fixed
+    // block, not a fourth thing that varies by date.
+    //
+    // The single signature at the foot covers it, also the owner's choice; it
+    // is body text of the letter, not a separate instrument, so there is no
+    // second signature line to chase here or to place in the e-Sign flow.
+    //
+    // Wording is the owner's, verbatim.
+    y += 16;
+    doc.font('Helvetica-Bold').fontSize(11)
+      .text('Waiver of 2% additional premium.', PAGE_LEFT, y, { width: CONTENT_W });
+    y = doc.y + 4;
+    doc.font('Helvetica').fontSize(11).text(
+      'I understand that the Debenture Trust Deed provides for an additional premium of 2% (two per'
+      + ' cent) on premature redemption. I hereby voluntarily and irrevocably waive my right to receive'
+      + ' this 2% additional premium, and any other prepayment premium, penalty or charge payable on'
+      + ' premature redemption.',
+      PAGE_LEFT, y, { width: CONTENT_W, align: 'justify' });
+    y = doc.y;
+
     y += 18;
     line('Thanking You');
     y += 14;
     line('Yours faithfully,');
 
     // Room for the holder's pen, then the signature line and the second date.
-    y += 64;
+    //
+    // THE GAP GIVES BEFORE THE PAGE DOES. 64pt is generous and right on a
+    // normal letter, but it is also the only slack on the page, and the
+    // waiver clause above cost roughly a gap's worth of it. A holder with a
+    // long name — "VENKATACHALAM GOVINDARAJ SUBRAMANIAN IYER" wraps both the
+    // body sentence and the table's first column — pushed the whole closing
+    // onto a second page, which would have printed a signature line, a date
+    // and nothing else. A signature on a page of its own is not a signed
+    // letter, and nobody would have noticed until a customer returned one.
+    //
+    // So the gap shrinks to whatever still fits, down to a floor that is
+    // still enough to sign in. Below that floor the page may break, but by
+    // then the letter is genuinely too full for any gap to save.
+    const bottomLimit = doc.page.height - doc.page.margins.bottom;
+    // Still to come after the gap: the Signature line, its 14pt gap, and the
+    // Date line — about 42pt all told.
+    const penGap = Math.max(30, Math.min(64, bottomLimit - y - 42));
+    y += penGap;
     line('Signature');
     y += 14;
     doc.font('Helvetica-Bold').text('Date:', PAGE_LEFT, y, { continued: true })

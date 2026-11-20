@@ -339,3 +339,98 @@ describe('the zip bundle', () => {
     expect(safeFilename('trailing.')).toBe('trailing');
   });
 });
+
+// ── The 2% premium waiver (owner 2026-11-20) ────────────────────────────────
+//
+// A clause where the holder signs away a payment right, so these tests hold it
+// to the owner's wording character for character. Fixture names are neutral and
+// word-only: assertions below search the rendered text for "Waiver", "premium"
+// and "Thanking You", and a customer called "Premium Holder" would satisfy one
+// of those searches without the clause being on the page at all.
+const waiverRow = (holder = 'Holder Alpha', date = '2026-11-20') => ({
+  letter_date: date,
+  holder_name: holder,
+  series: 'NCD 27',
+  debentures: '5',
+  amount: 500000,
+  bank_name: 'Indian Overseas Bank',
+  account_holder_name: holder,
+  account_no: '005301000012345',
+  ifsc: 'IOBA0000534',
+});
+
+/** Pages in a PDFKit document — /Type /Page, not /Pages. */
+const pageCount = (b: Buffer) => (b.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+
+describe('the 2% additional premium waiver', () => {
+  it('prints the heading and the clause, in the owner\'s words', async () => {
+    const { extractText } = await import('./helpers/pdf-text.js');
+    const t = extractText(await redemptionLetterPdf(waiverRow(), addresseeFor('2026-11-20')));
+    // The clause is JUSTIFIED, and pdfkit spaces justified text by positioning
+    // rather than by emitting space characters — so the extractor recovers the
+    // letters but not the gaps between words. Comparing with all whitespace
+    // stripped from BOTH sides is the only assertion that means anything here;
+    // normalising runs of spaces (the obvious first attempt) fails against text
+    // that has no spaces left in it at all.
+    const squash = (x: string) => x.replace(/\s+/g, '');
+    const flat = squash(t);
+    // The heading is not justified, so it keeps its spaces and is checked as-is.
+    expect(t.replace(/\s+/g, ' ')).toContain('Waiver of 2% additional premium.');
+    expect(flat).toContain(squash(
+      'I understand that the Debenture Trust Deed provides for an additional premium of 2% (two per cent)'
+      + ' on premature redemption.'));
+    expect(flat).toContain(squash(
+      'I hereby voluntarily and irrevocably waive my right to receive this 2% additional premium,'
+      + ' and any other prepayment premium, penalty or charge payable on premature redemption.'));
+  });
+
+  it('sits below the bank details and above the sign-off, where the owner put it', async () => {
+    const { extractText } = await import('./helpers/pdf-text.js');
+    const t = extractText(await redemptionLetterPdf(waiverRow(), addresseeFor('2026-11-20')));
+    const ifsc = t.indexOf('IFSC Code');
+    const waiver = t.indexOf('Waiver of 2% additional premium');
+    const thanks = t.indexOf('Thanking You');
+    expect(ifsc).toBeGreaterThan(-1);
+    expect(waiver).toBeGreaterThan(ifsc);
+    expect(thanks).toBeGreaterThan(waiver);
+  });
+
+  it('is on EVERY letter, whatever its date — the owner\'s answer on back-dated ones', async () => {
+    const { extractText } = await import('./helpers/pdf-text.js');
+    // One date in each of the three addressee eras.
+    for (const [date, company] of [
+      ['2024-05-06', KIARA],
+      ['2026-01-10', DHANAM_PVT],
+      ['2026-11-20', DHANAM_LTD],
+    ] as const) {
+      const t = extractText(await redemptionLetterPdf(waiverRow('Holder Beta', date), addresseeFor(date)));
+      expect(t, `era ${company}`).toContain('Waiver of 2% additional premium');
+      expect(t.replace(/\s+/g, ' '), `era ${company}`).toContain(company);
+    }
+  });
+
+  it('still fits on one page, even for a holder whose name wraps', async () => {
+    // The waiver cost roughly a signature-gap's worth of the page. Before the
+    // gap was made to shrink, this exact name pushed the whole closing onto a
+    // second page — a signature line, a date, and nothing else.
+    for (const holder of [
+      'Holder Alpha',
+      'VENKATACHALAM GOVINDARAJ SUBRAMANIAN IYER',
+      'SARATCHANDRAN PERIASAMY THANGAPANDIAN VENKATARAMAN',
+    ]) {
+      const pdf = await redemptionLetterPdf(waiverRow(holder), addresseeFor('2026-11-20'));
+      expect(pageCount(pdf), `one page for ${holder}`).toBe(1);
+    }
+  });
+
+  it('keeps the signature and its date together with the sign-off', async () => {
+    const { extractText } = await import('./helpers/pdf-text.js');
+    const t = extractText(await redemptionLetterPdf(
+      waiverRow('SARATCHANDRAN PERIASAMY THANGAPANDIAN VENKATARAMAN'), addresseeFor('2026-11-20')));
+    const thanks = t.indexOf('Thanking You');
+    const faithfully = t.indexOf('Yours faithfully');
+    const signature = t.indexOf('Signature');
+    expect(faithfully).toBeGreaterThan(thanks);
+    expect(signature).toBeGreaterThan(faithfully);
+  });
+});

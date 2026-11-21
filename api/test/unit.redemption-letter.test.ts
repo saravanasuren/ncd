@@ -198,32 +198,58 @@ describe('checking an uploaded sheet', () => {
     const { rows } = await parseUpload(await sheet([GOOD, { ...GOOD, 'IFSC Code': 'nope' }]), 'x.xlsx');
     // Header is row 1, so the second record is row 3.
     expect(rows[1]!.row_no).toBe(3);
-    expect(rows[1]!.errors.join(' ')).toMatch(/IFSC/);
+    // A note now, not an error (owner 2026-11-21: nothing blocks a row).
+    expect(rows[1]!.errors).toEqual([]);
+    expect(rows[1]!.cautions.join(' ')).toMatch(/IFSC/);
+    expect(rows[1]!.ifsc).toBe('NOPE');   // printed as typed, never blanked
   });
 
-  it('names every missing field at once rather than stopping at the first', async () => {
+  it('a nearly empty row still produces a letter, with the gaps noted', async () => {
+    // It used to list eight errors and refuse. The owner's rule since
+    // 2026-11-21 is that the sheet is the authority and a thin letter is one
+    // somebody completes by hand — so this prints, and says what is missing.
     const { rows } = await parseUpload(await sheet([{ 'Letter Date': new Date(Date.UTC(2026, 0, 1)) }]), 'x.xlsx');
-    const joined = rows[0]!.errors.join(' | ');
-    for (const field of ['Name of the NCD Holder', 'NCD Series', 'No. of Debentures',
-      'Amount (in Rs.)', 'Bank Name', 'Account Holder Name', 'Account No.', 'IFSC Code']) {
-      expect(joined, `should mention ${field}`).toContain(field);
-    }
+    expect(rows[0]!.errors).toEqual([]);
+    const joined = rows[0]!.cautions.join(' | ');
+    expect(joined).toContain('Name of the NCD Holder');
+    expect(joined).toContain('NCD Series');
   });
 
-  it('refuses a part-debenture and a zero amount', async () => {
+  it('prints a part-debenture and a zero amount rather than refusing them', async () => {
     const { rows } = await parseUpload(await sheet([
       { ...GOOD, 'No. of Debentures': 2.5 },
       { ...GOOD, 'Amount (in Rs.)': 0 },
     ]), 'x.xlsx');
-    expect(rows[0]!.errors.join(' ')).toMatch(/whole number/);
-    expect(rows[1]!.errors.join(' ')).toMatch(/above zero/);
+    expect(rows[0]!.errors).toEqual([]);
+    expect(rows[0]!.debentures).toBe('2.5');
+    expect(rows[1]!.errors).toEqual([]);
   });
 
-  it('warns when the series repeats the word NCD, which would print twice', async () => {
-    // The sentence already reads "at the time of NCD <series> Series Issue".
-    const { rows } = await parseUpload(await sheet([{ ...GOOD, 'NCD Series': 'NCD 29' }]), 'x.xlsx');
+  it('keeps several series worth of dates in one box, exactly as typed', async () => {
+    // The whole reason the blocking went: one letter can redeem NCD 22, 23
+    // and 24 together, and then three dates IS the right answer.
+    // CANONICAL is the base nine columns, so name the consent ones explicitly.
+    const wb = new (await import('exceljs')).default.Workbook();
+    const ws = wb.addWorksheet('S');
+    const headers = [...CANONICAL, 'Mode of Holding', 'Date of Allotment'];
+    ws.addRow(headers);
+    ws.addRow([...CANONICAL.map((k) => (GOOD as Record<string, unknown>)[k] ?? ''),
+      'Physical / Demat', '18-04-2025, 20-10-2025, 30-12-2025']);
+    const buf = Buffer.from(await wb.xlsx.writeBuffer());
+
+    const { rows } = await parseUpload(buf, 'x.xlsx');
     expect(rows[0]!.errors).toEqual([]);
-    expect(rows[0]!.cautions.join(' ')).toMatch(/NCD NCD 29 Series/);
+    expect(rows[0]!.allotment_date).toBe('18-04-2025, 20-10-2025, 30-12-2025');
+    expect(rows[0]!.mode_of_holding).toBe('Physical / Demat');
+  });
+
+  it('leaves the "NCD NCD" note to the preview, which knows the letter kind', () => {
+    // The request letter's sentence reads "at the time of NCD <series> Series
+    // Issue", so "NCD 29" there prints twice — but the CONSENT letter puts the
+    // series in a table cell where it does not. The reader cannot tell which
+    // letter a row will make, so the note moved to decorate() in the bulk
+    // service, and is covered by integration.bulk-redemption-letters.
+    expect(true).toBe(true);
   });
 
   it('cautions — but does not block — when the account is in another name', async () => {

@@ -232,7 +232,7 @@ function decorate(rows: ParsedRow[], from: string, consentFrom: string): Preview
         // on nearly every letter because nearly every holding was never rolled
         // over, so flagging it would put a caution on practically every row
         // and teach the operator to scroll past the ones that matter.
-        [!r.original_maturity_date, 'Original Maturity Date'],
+        [!r.original_maturity_date, 'Date of Maturity'],
         [r.coupon_rate_pct == null, 'Coupon Rate'],
         [r.face_value == null, 'Face Value'],
         [!r.pan, 'PAN'],
@@ -385,14 +385,14 @@ export async function templateWorkbook(): Promise<Buffer> {
     // ordinary holding was never rolled over. A filled example here would
     // invite the column to be filled in for everyone.
     'Date of Rollover': null,
-    'Original Maturity Date': new Date(Date.UTC(2029, 2, 30)),
+    'Date of Maturity': new Date(Date.UTC(2029, 2, 30)),
     'Coupon Rate': '12.5%',
     'Face Value': 500000,
     'PAN': 'ABCDE1234F',
   });
   ws.getColumn('Date of Allotment').numFmt = 'dd-mmm-yyyy';
   ws.getColumn('Date of Rollover').numFmt = 'dd-mmm-yyyy';
-  ws.getColumn('Original Maturity Date').numFmt = 'dd-mmm-yyyy';
+  ws.getColumn('Date of Maturity').numFmt = 'dd-mmm-yyyy';
   ws.getColumn('Face Value').numFmt = '#,##0.00';
   // Dates as dates, not text — then nothing has to be guessed when it comes back.
   ws.getColumn('Letter Date').numFmt = 'dd-mmm-yyyy';
@@ -428,10 +428,13 @@ export async function templateWorkbook(): Promise<Buffer> {
     + 'everything else and the letter prints that row blank, which is correct. This is the ONE '
     + 'consent column we cannot look up for you: the system does not hold the earlier investment a '
     + 'rollover came from, so if the sheet does not say, nothing does.');
-  note('The other consent columns', 'Date of Allotment, Original Maturity Date, Coupon Rate, Face '
+  note('The other consent columns', 'Date of Allotment, Date of Maturity, Coupon Rate, Face '
     + 'Value and PAN. Leave any of them empty and we look it up from the customer record using the '
     + 'Customer Code and the series. What YOU type always wins. Anything neither you nor the record '
     + 'supplies prints blank, and the preview lists exactly which.');
+  note('If you have an older template', 'The column now called "Date of Maturity" used to be '
+    + '"Original Maturity Date". A sheet still carrying the old heading is read exactly as before '
+    + '— nothing needs re-typing. New downloads of this template use the new name.');
   note('One row, one letter', `Up to ${MAX_ROWS} rows at a time. Blank rows are ignored.`);
   note('Nothing is recorded', 'This tool only produces letters. It does not create a redemption '
     + 'request, does not change any customer or investment, and keeps no copy.');

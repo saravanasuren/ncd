@@ -290,7 +290,12 @@ function particulars(
     // above. Repeating it here under a second label would read as a second
     // fact. Staff are asked instead, and an unanswered row prints empty.
     ['Date of Rollover', fmtDay(row.rollover_date)],
-    ['Original maturity date', fmtDay(row.original_maturity_date)],
+    // "Date of Maturity", the Word file's own wording (owner 2026-11-21). It
+    // read "Original maturity date" — a phrase that appears nowhere in the
+    // format. The FIELD keeps its name: it is internal, nothing reads it by
+    // label, and renaming it would churn four files to change no one's
+    // experience.
+    ['Date of Maturity', fmtDay(row.original_maturity_date)],
     ['Number of NCDs held', row.ncd_count],
     // "Rs." NOT "₹". The Word file writes the rupee sign, but Helvetica has no
     // glyph for it and pdfkit's WinAnsi encoding rendered it as a superscript

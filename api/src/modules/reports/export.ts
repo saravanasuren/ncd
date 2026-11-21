@@ -13,50 +13,16 @@ import type { Writable } from 'node:stream';
 import type { Db } from '../../db/types.js';
 import type { AuthUser } from '../../lib/authUser.js';
 import * as book from './book.js';
+// The header fill, money format and collapsible groups live in xlsx.ts so the
+// Locker Master Report can be the same object to look at as this one.
+import {
+  INR, HEADER_FILL, fmtDate, startSheet, boldRow, outlineSheet,
+  type ColDef, type WB, type WS,
+} from './xlsx.js';
 
-const INR = '#,##,##0.00';
-const HEADER_FILL: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B3A6F' } };
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-interface ColDef { header: string; width: number; money?: boolean }
-type WB = ExcelJS.stream.xlsx.WorkbookWriter;
-type WS = ExcelJS.Worksheet;
-
-/** 'YYYY-MM-DD…' → 'Mmm DD YYYY'. */
-function fmtDate(v: unknown): string {
-  const s = String(v ?? '').slice(0, 10);
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-  return m ? `${MONTHS[Number(m[2]) - 1] ?? m[2]} ${m[3]} ${m[1]}` : s;
-}
 /** Descending by the number embedded in a series code (NCD_27 → NCD_10). */
 const seriesDesc = (a: { code?: string; label?: string }, b: { code?: string; label?: string }) =>
   String(b.code ?? b.label).localeCompare(String(a.code ?? a.label), undefined, { numeric: true });
-
-function startSheet(wb: WB, title: string, cols: ColDef[]): WS {
-  const ws = wb.addWorksheet(title, { views: [{ state: 'frozen', ySplit: 1 }] });
-  ws.columns = cols.map((c) => ({ header: c.header, width: c.width, style: c.money ? { numFmt: INR, alignment: { horizontal: 'right' } } : {} }));
-  const hdr = ws.getRow(1);
-  hdr.eachCell((c) => { c.fill = HEADER_FILL; c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; });
-  hdr.commit();
-  return ws;
-}
-function boldRow(ws: WS, values: unknown[]) {
-  const r = ws.addRow(values); r.eachCell((c) => { c.font = { bold: true }; }); r.commit();
-}
-
-interface OutlineGroup { summary: unknown[]; details: unknown[][] }
-/** Grouped sheet with collapsible Excel outlining: bold summary row (level 0),
- * detail rows collapsed underneath (level 1, hidden). Optional grand total. */
-async function outlineSheet(wb: WB, title: string, cols: ColDef[], groups: OutlineGroup[], grandTotal?: unknown[]) {
-  const ws = startSheet(wb, title, cols);
-  ws.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
-  for (const g of groups) {
-    const sr = ws.addRow(g.summary); sr.eachCell((c) => { c.font = { bold: true }; }); sr.commit();
-    for (const d of g.details) { const dr = ws.addRow(d); dr.outlineLevel = 1; dr.hidden = true; dr.commit(); }
-  }
-  if (grandTotal) boldRow(ws, grandTotal);
-  await ws.commit();
-}
 
 /**
  * The Transactions sheet on its own, as an in-memory workbook — the daily email

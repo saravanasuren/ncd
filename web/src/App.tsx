@@ -23,6 +23,7 @@ import { LockerAgreementsPage } from './pages/LockerAgreements.js';
 import { LockerProfilePage } from './pages/LockerProfile.js';
 import { LockerRenewalsPage } from './pages/LockerRenewals.js';
 import { LockerRentReportPage } from './pages/LockerRentReport.js';
+import { LockerMasterReportPage } from './pages/LockerMasterReport.js';
 import { LockerVisitsPage } from './pages/LockerVisits.js';
 import { ApprovalsPage } from './pages/Approvals.js';
 import { ApplicationsPage } from './pages/Applications.js';
@@ -136,6 +137,7 @@ export function App() {
           <Route path="locker-renewals" element={<RequirePerm perm="lockers:enroll"><LockerRenewalsPage /></RequirePerm>} />
           <Route path="locker-visits" element={<RequirePerm perm="lockers:enroll"><LockerVisitsPage /></RequirePerm>} />
           <Route path="locker-rent-report" element={<RequirePerm perm="lockers:enroll"><LockerRentReportPage /></RequirePerm>} />
+          <Route path="locker-master-report" element={<RequirePerm perm="lockers:enroll"><LockerMasterReportPage /></RequirePerm>} />
           <Route path="applications" element={<RequirePerm perm="customers:read"><ApplicationsPage /></RequirePerm>} />
           <Route path="applications/:id" element={<RequirePerm perm="customers:read"><ApplicationDetailPage /></RequirePerm>} />
           <Route path="outstanding" element={<RequirePerm perm="customers:read" notRoles={['agent', 'branch_staff']}><OutstandingPage /></RequirePerm>} />

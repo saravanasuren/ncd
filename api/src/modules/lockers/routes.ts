@@ -262,6 +262,23 @@ lockersRouter.get('/rent-report.xlsx', asyncHandler(async (req, res) => {
   res.send(buf);
 }));
 
+// Master report — the whole locker book, vacant lockers included (owner
+// 2026-11-21). Built on the rent report, so the two cannot disagree about rent.
+lockersRouter.get('/master-report', asyncHandler(async (req, res) => {
+  const { lockerMasterReport } = await import('./masterReport.js');
+  res.json(await lockerMasterReport(getDb(), req.user!));
+}));
+lockersRouter.get('/master-report.xlsx', asyncHandler(async (req, res) => {
+  const { lockerMasterReport } = await import('./masterReport.js');
+  const { buildLockerMasterBook } = await import('./masterReportXlsx.js');
+  // Same data by another door — the same scope, from the same one call.
+  const rep = await lockerMasterReport(getDb(), req.user!);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="locker-master-report.xlsx"');
+  // Streamed straight to the response, as the NCD book is.
+  await buildLockerMasterBook(res, rep);
+}));
+
 // ── Writes (staff injected from the session) ──────────────────────────────
 // Pass `customer_id` and the full profile is assembled HERE from our own book
 // — address, DOB, the lot. LockerHub writes the profile on locker-application

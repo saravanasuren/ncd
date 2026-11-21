@@ -32,25 +32,40 @@
 
 import { renderToBuffer } from './shared.js';
 
+/**
+ * A particular that may be a real value OR free text the operator typed.
+ *
+ * The bulk tool can cover SEVERAL SERIES in one letter (owner 2026-11-21), and
+ * then a single box legitimately holds three dates — "18-04-2025, 20-10-2025,
+ * 30-12-2025" — or a mixed "Physical / Demat". There is no date, rate or
+ * amount to parse there, and refusing or blanking it threw away the only
+ * information the letter had. So: format it when it IS a date or a number,
+ * and otherwise print exactly what was typed.
+ *
+ * The live redemption screen still passes real ISO dates and numbers, so its
+ * letters are byte-for-byte what they were.
+ */
+export type Particular = string | number | null;
+
 export interface ConsentLetterRow {
   /** ISO yyyy-mm-dd — prints nowhere, but dates the file and the audit trail. */
   letter_date: string;
   holder_name: string;
   pan: string;
   series: string;
-  /** ISO or blank. */
-  allotment_date: string;
+  /** ISO, free text, or blank. */
+  allotment_date: Particular;
   /**
    * When this holding was rolled over — ISO, or blank for the great majority
    * that never were. Asked at redemption time, never derived: see the row
    * itself for why the book cannot answer it.
    */
-  rollover_date: string;
-  original_maturity_date: string;
+  rollover_date: Particular;
+  original_maturity_date: Particular;
   /** The number being REDEEMED (owner 2026-11-20), not the whole holding. */
   ncd_count: string;
-  face_value: number | null;
-  coupon_rate_pct: number | null;
+  face_value: Particular;
+  coupon_rate_pct: Particular;
   /** 'Demat' | 'Physical' | '' — blank prints the empty box to tick by hand. */
   mode_of_holding: string;
   account_name: string;
@@ -89,6 +104,33 @@ function ratePct(v: number | null): string {
   if (v == null || !isFinite(Number(v))) return '';
   const n = Number(v);
   return `${Number.isInteger(n) ? n : Number(n.toFixed(2))}%`;
+}
+
+/** A date when it is one, otherwise the text as typed. */
+function dateOrText(v: Particular): string {
+  const raw = v == null ? '' : String(v).trim();
+  if (!raw) return '';
+  return fmtDay(raw) || raw;
+}
+
+/** Indian-grouped money when it is a number, otherwise the text as typed. */
+function moneyOrText(v: Particular): string {
+  if (v == null) return '';
+  if (typeof v === 'number') return plainINR(v);
+  const raw = String(v).trim();
+  if (!raw) return '';
+  const n = Number(raw.replace(/[,\s]/g, ''));
+  return raw !== '' && Number.isFinite(n) && /^[\d.,\s]+$/.test(raw) ? plainINR(n) : raw;
+}
+
+/** "12.5%" when it is a rate, otherwise the text as typed. */
+function rateOrText(v: Particular): string {
+  if (v == null) return '';
+  if (typeof v === 'number') return ratePct(v);
+  const raw = String(v).trim();
+  if (!raw) return '';
+  const n = Number(raw.replace(/[%\s]/g, ''));
+  return /^[\d.\s%]+$/.test(raw) && Number.isFinite(n) ? ratePct(n) : raw;
 }
 
 export function consentLetterPdf(row: ConsentLetterRow): Promise<Buffer> {
@@ -277,7 +319,7 @@ function particulars(
 ): number {
   const rows: [string, string][] = [
     ['Series / Tranche', row.series],
-    ['Date of allotment', fmtDay(row.allotment_date)],
+    ['Date of allotment', dateOrText(row.allotment_date)],
     // ASKED, NOT DERIVED, and blank for almost everyone.
     //
     // This row is in the owner's Word file and was missing from the first
@@ -289,13 +331,13 @@ function particulars(
     // hold for a rolled-over holding is already printing as Date of allotment
     // above. Repeating it here under a second label would read as a second
     // fact. Staff are asked instead, and an unanswered row prints empty.
-    ['Date of Rollover', fmtDay(row.rollover_date)],
+    ['Date of Rollover', dateOrText(row.rollover_date)],
     // "Date of Maturity", the Word file's own wording (owner 2026-11-21). It
     // read "Original maturity date" — a phrase that appears nowhere in the
     // format. The FIELD keeps its name: it is internal, nothing reads it by
     // label, and renaming it would churn four files to change no one's
     // experience.
-    ['Date of Maturity', fmtDay(row.original_maturity_date)],
+    ['Date of Maturity', dateOrText(row.original_maturity_date)],
     ['Number of NCDs held', row.ncd_count],
     // "Rs." NOT "₹". The Word file writes the rupee sign, but Helvetica has no
     // glyph for it and pdfkit's WinAnsi encoding rendered it as a superscript
@@ -303,8 +345,8 @@ function particulars(
     // other Dhanam PDF writes "Rs." for exactly this reason (fmtINR in
     // shared.ts), so this follows them rather than embedding a second font for
     // one character. Flagged to the owner as a forced deviation.
-    ['Face value per NCD (Rs.)', plainINR(row.face_value)],
-    ['Coupon rate (% p.a.)', ratePct(row.coupon_rate_pct)],
+    ['Face value per NCD (Rs.)', moneyOrText(row.face_value)],
+    ['Coupon rate (% p.a.)', rateOrText(row.coupon_rate_pct)],
     // Blank unless staff answered it. The owner chose to be ASKED at redemption
     // time rather than have it inferred: demat details were only ever synced
     // for about a third of the book, so an empty record does not mean physical,

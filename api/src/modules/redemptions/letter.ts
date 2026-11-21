@@ -37,9 +37,12 @@ import { consentLetterPdf, type ConsentLetterRow } from '../reports/forms/consen
 export const DEFAULT_CONSENT_FROM = '2026-11-01';
 
 export async function consentLetterFrom(db: Db): Promise<string> {
-  const map = await getSettingsMap(db);
-  const v = map['redemption.consent_letter_from'];
-  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : DEFAULT_CONSENT_FROM;
+  // READ FROM THE LETTER CONFIGURATION, not a setting (owner 2026-11-21 —
+  // the four ranges and their dates are now edited on one screen). The old
+  // `redemption.consent_letter_from` setting had no stored row in production,
+  // so this reads the same 1 November it always did until somebody moves it.
+  const { consentFromDate } = await import('../letters/service.js');
+  return consentFromDate(db);
 }
 
 /**

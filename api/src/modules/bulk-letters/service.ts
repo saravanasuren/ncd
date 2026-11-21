@@ -22,6 +22,7 @@ import {
   addresseeFor, DEFAULT_DHANAM_FROM, type AddresseeEra,
 } from '../reports/forms/redemption-letter-addressee.js';
 import { COLUMNS, parseUpload, type ParsedRow } from './parse.js';
+import { listTemplates, pickFor, type LetterTemplate } from '../letters/service.js';
 import { makeZip, safeFilename, type ZipEntry } from './zip.js';
 
 /** A sheet big enough to be a mistake rather than a batch. */
@@ -52,10 +53,16 @@ export interface PreviewResult {
   };
 }
 
-async function dhanamFrom(db: Db): Promise<string> {
-  const map = await getSettingsMap(db);
-  const v = map['redemption.letter_dhanam_from'];
-  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : DEFAULT_DHANAM_FROM;
+/**
+ * The deep fallback boundary for the built-in era list.
+ *
+ * It was a setting until 2026-11-21; the Redemption Letters screen now owns
+ * every boundary, and this is only reached when no configured range matches a
+ * date at all. A constant is honest about that — a setting here would be read
+ * by almost nothing and changed by somebody expecting it to matter.
+ */
+function dhanamFrom(): string {
+  return DEFAULT_DHANAM_FROM;
 }
 
 /** "Ramanuja K - 27-Oct-2026.pdf" */
@@ -102,78 +109,42 @@ const toConsentRow = (r: ParsedRow): ConsentLetterRow => ({
 });
 
 /**
- * Fill the consent particulars the sheet left empty, from the customer's own
- * record.
+ * THE CUSTOMER RECORD IS NO LONGER READ (owner 2026-11-21).
  *
- * THE SHEET WINS. The owner chose the typed value over the looked-up one, so
- * this only ever writes into a field that is still blank — a figure somebody
- * entered deliberately is never silently replaced by one from the book.
+ * `fillConsentGaps` used to look up an empty particular from the book,
+ * matched on customer code and series. It was removed, not disabled, and the
+ * reason is the multi-series letter: a redemption covering NCD 22, 23 and 24
+ * has three allotment dates, and the record only ever knows one investment.
+ * The looked-up value therefore LOOKED right while being wrong — the worst
+ * kind of wrong on a document somebody signs.
  *
- * MATCHED ON CUSTOMER CODE + SERIES, which is not unique: 81 of 847
- * customer/series pairs hold more than one investment. That turns out not to
- * matter here, and it was checked rather than assumed — not one of those pairs
- * disagrees on allotment date, maturity date or coupon rate, which are the
- * only per-investment fields this letter prints. Every investment a customer
- * holds in a series shares them, the same fact the bond certificate relies on.
+ * Asked directly, the owner chose the sheet as the only source: "just take in
+ * the datas from the excel and fill it in the approriate blanks". An empty
+ * cell now prints an empty row for someone to complete by hand.
  *
- * A miss is not an error. The letter prints the row blank and the preview says
- * which, because the alternative — refusing the row — would deny a letter over
- * a particular that can be written in by hand.
- *
- * DATE OF ROLLOVER IS NOT FILLED HERE, and that is not an omission. There is
- * nothing in the book to fill it from: the rollover feature has never been
- * used, rollovers exist only as the six "NCD 05 Rollover"-style series, and
- * the pre-rollover investment is not held at all — so the only date on record
- * for a rolled-over holding is its allotment date, which already prints on its
- * own row. The sheet is the single source for that column.
+ * `crossCheck` below STAYS. It only ever adds a note and never changes what
+ * prints, and the owner asked for that name check specifically.
  */
-async function fillConsentGaps(db: Db, rows: ParsedRow[], consentFrom: string): Promise<void> {
-  const wanted = rows.filter((r) => letterKindFor(r.letter_date, consentFrom) === 'consent');
-  if (!wanted.length) return;
-  const codes = [...new Set(wanted.map((r) => r.customer_code).filter(Boolean))];
-  if (!codes.length) return;
 
-  const { rows: found } = await db.query<{
-    customer_code: string; pan: string | null; series_name: string | null; series_code: string | null;
-    allotment_date: string | null; maturity_date: string | null;
-    coupon_rate_pct: string | null; face_value: string | null;
-  }>(
-    `SELECT upper(c.customer_code) AS customer_code, c.pan,
-            s.name AS series_name, s.code AS series_code, s.face_value,
-            a.allotment_date, a.maturity_date, l.coupon_rate_pct
-       FROM customers c
-       JOIN applications a ON a.customer_id = c.id
-       LEFT JOIN series s ON s.id = a.series_id
-       LEFT JOIN LATERAL (
-         SELECT coupon_rate_pct FROM application_lines
-          WHERE application_id = a.id ORDER BY id LIMIT 1
-       ) l ON TRUE
-      WHERE upper(c.customer_code) = ANY($1)
-      ORDER BY a.id`, [codes]);
-
-  const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
-  // First match wins; they agree, so which one is immaterial.
-  const bySeries = new Map<string, typeof found[number]>();
-  const panByCode = new Map<string, string>();
-  for (const f of found) {
-    if (f.pan && !panByCode.has(f.customer_code)) panByCode.set(f.customer_code, f.pan);
-    for (const key of [norm(f.series_name), norm(f.series_code)]) {
-      if (!key) continue;
-      const k = `${f.customer_code}|${key}`;
-      if (!bySeries.has(k)) bySeries.set(k, f);
-    }
+/**
+ * The configured block for a row, or the built-in era it has always used.
+ *
+ * A consent template carries a company NAME but no letterhead, so it never
+ * supplies a block — a consent row does not print one.
+ */
+function eraFor(t: LetterTemplate | null, letterDate: string, from: string): AddresseeEra {
+  if (t && t.kind === 'request' && t.legal_name && t.off_address.length) {
+    const [first, ...rest] = t.off_address;
+    return {
+      from: t.valid_from,
+      legal_name: t.legal_name,
+      ...(t.formerly ? { formerly: t.formerly } : {}),
+      off_address_line1: first ?? '',
+      off_address_rest: rest,
+      corp_office: t.corp_office,
+    };
   }
-
-  for (const r of wanted) {
-    if (!r.customer_code) continue;
-    if (!r.pan) r.pan = panByCode.get(r.customer_code) ?? '';
-    const hit = bySeries.get(`${r.customer_code}|${norm(r.series)}`);
-    if (!hit) continue;
-    if (!r.allotment_date && hit.allotment_date) r.allotment_date = String(hit.allotment_date).slice(0, 10);
-    if (!r.original_maturity_date && hit.maturity_date) r.original_maturity_date = String(hit.maturity_date).slice(0, 10);
-    if (r.coupon_rate_pct == null && hit.coupon_rate_pct != null) r.coupon_rate_pct = Number(hit.coupon_rate_pct);
-    if (r.face_value == null && hit.face_value != null) r.face_value = Number(hit.face_value);
-  }
+  return addresseeFor(letterDate, from);
 }
 
 const toLetterRow = (r: ParsedRow): RedemptionLetterRow => ({
@@ -181,7 +152,8 @@ const toLetterRow = (r: ParsedRow): RedemptionLetterRow => ({
   holder_name: r.holder_name,
   series: r.series,
   debentures: r.debentures,
-  amount: r.amount,
+  // The number when it is one, else exactly what was typed.
+  amount: r.amount > 0 ? r.amount : r.amount_text,
   bank_name: r.bank_name,
   account_holder_name: r.account_holder_name,
   account_no: r.account_no,
@@ -214,16 +186,35 @@ async function crossCheck(db: Db, rows: ParsedRow[]): Promise<void> {
   }
 }
 
-function decorate(rows: ParsedRow[], from: string, consentFrom: string): PreviewRow[] {
+function decorate(
+  rows: ParsedRow[], from: string, consentFrom: string, templates: LetterTemplate[],
+): PreviewRow[] {
   return rows.map((r) => {
-    // A row whose date would not parse has no company yet; say so rather than
-    // defaulting it to one, or the operator fixes the date and gets a surprise.
+    // WHICH LETTER AND WHICH COMPANY ARE NOW ONE LOOKUP (owner 2026-11-21).
+    // They used to be two — addresseeFor for the company, letterKindFor for
+    // the document — which could in principle disagree about the same date.
+    // The configured ranges answer both at once.
+    //
+    // Both old helpers stay as the fallback for a date that resolves to
+    // nothing, so an unparseable date behaves exactly as it did.
+    const t = r.letter_date ? pickFor(templates, r.letter_date) : null;
     const era: AddresseeEra | null = r.letter_date ? addresseeFor(r.letter_date, from) : null;
-    const kind = letterKindFor(r.letter_date, consentFrom);
+    const kind = t ? t.kind : letterKindFor(r.letter_date, consentFrom);
 
     // WHICH PARTICULARS WILL PRINT BLANK, said here rather than discovered in
     // the zip. The owner can fix the sheet before generating; finding it
     // afterwards means collecting signatures on an incomplete document.
+    //
+    // Since the record is no longer read, this is simply "cells you left
+    // empty" — there is nothing else that could have filled them.
+    // "NCD 22" in the series box makes the REQUEST letter read "NCD NCD 22
+    // Series", because its sentence already says NCD. The consent letter puts
+    // the series in a table cell where no such duplication happens, so this
+    // note was pure noise on exactly the rows the owner was looking at.
+    if (kind === 'request' && /^ncd\b/i.test(r.series)) {
+      r.cautions.push(`NCD Series "${r.series}" will read "NCD ${r.series} Series" — the letter says NCD already`);
+    }
+
     const missing = kind === 'consent'
       ? ([
         [!r.mode_of_holding, 'Mode of Holding'],
@@ -233,8 +224,8 @@ function decorate(rows: ParsedRow[], from: string, consentFrom: string): Preview
         // over, so flagging it would put a caution on practically every row
         // and teach the operator to scroll past the ones that matter.
         [!r.original_maturity_date, 'Date of Maturity'],
-        [r.coupon_rate_pct == null, 'Coupon Rate'],
-        [r.face_value == null, 'Face Value'],
+        [r.coupon_rate_pct == null || r.coupon_rate_pct === '', 'Coupon Rate'],
+        [r.face_value == null || r.face_value === '', 'Face Value'],
         [!r.pan, 'PAN'],
       ] as const).filter(([bad]) => bad).map(([, name]) => name)
       : [];
@@ -244,7 +235,7 @@ function decorate(rows: ParsedRow[], from: string, consentFrom: string): Preview
 
     return {
       ...r,
-      addressed_to: era ? era.legal_name : '—',
+      addressed_to: t?.legal_name || (era ? era.legal_name : '—'),
       filename: letterFilename(r),
       letter_kind: kind,
       blank_particulars: missing,
@@ -261,8 +252,7 @@ export async function previewUpload(db: Db, buf: Buffer, filename: string): Prom
   }
   await crossCheck(db, parsed.rows);
   const consentFrom = await consentLetterFrom(db);
-  await fillConsentGaps(db, parsed.rows, consentFrom);
-  const rows = decorate(parsed.rows, await dhanamFrom(db), consentFrom);
+  const rows = decorate(parsed.rows, dhanamFrom(), consentFrom, await listTemplates(db));
 
   const counts = new Map<string, number>();
   for (const r of rows) counts.set(r.addressed_to, (counts.get(r.addressed_to) ?? 0) + 1);
@@ -299,7 +289,8 @@ export async function generateLetters(db: Db, buf: Buffer, filename: string): Pr
   const preview = await previewUpload(db, buf, filename);
   if (preview.header_errors.length) throw errors.badRequest(preview.header_errors.join('; '));
 
-  const from = await dhanamFrom(db);
+  const from = dhanamFrom();
+  const templates = await listTemplates(db);
   const entries: ZipEntry[] = [];
   const failed: GenerateResult['failed'] = [];
 
@@ -311,7 +302,8 @@ export async function generateLetters(db: Db, buf: Buffer, filename: string): Pr
     try {
       const pdf = row.letter_kind === 'consent'
         ? await consentLetterPdf(toConsentRow(row))
-        : await redemptionLetterPdf(toLetterRow(row), addresseeFor(row.letter_date, from));
+        : await redemptionLetterPdf(toLetterRow(row),
+            eraFor(pickFor(templates, row.letter_date), row.letter_date, from));
       entries.push({ name: row.filename, data: pdf });
     } catch (e) {
       failed.push({
@@ -339,7 +331,8 @@ export async function generateOne(db: Db, buf: Buffer, filename: string, rowNo: 
   if (row.errors.length) throw errors.badRequest(`Row ${rowNo}: ${row.errors.join('; ')}`);
   const pdf = row.letter_kind === 'consent'
     ? await consentLetterPdf(toConsentRow(row))
-    : await redemptionLetterPdf(toLetterRow(row), addresseeFor(row.letter_date, await dhanamFrom(db)));
+    : await redemptionLetterPdf(toLetterRow(row), eraFor(
+        pickFor(await listTemplates(db), row.letter_date), row.letter_date, dhanamFrom()));
   return { pdf, filename: row.filename };
 }
 
@@ -401,8 +394,12 @@ export async function templateWorkbook(): Promise<Buffer> {
   const notes = wb.addWorksheet('How to fill this in');
   notes.columns = [{ width: 26 }, { width: 96 }];
   const note = (a: string, b: string) => notes.addRow([a, b]);
+  note('Nothing is rejected', 'Every row produces a letter. What you type is what prints — if a '
+    + 'box holds three dates because the letter covers three series, all three print. Anything '
+    + 'worth a second look is shown as a note next to the row in the preview; none of them stop a '
+    + 'letter being made.');
   note('Every column is required', 'except Customer Code and the seven consent columns at the end, '
-    + 'which are all optional.');
+    + 'which are all optional. An empty one prints an empty space on the letter.');
   note('Letter Date', 'Prints at the top and bottom of the letter AND decides which company it is '
     + 'addressed to. Keep the cell formatted as a date. If you type it as text, it is read '
     + 'day first — 08/09/2025 is 8 September, not 9 August. The preview shows every date back to you '
@@ -416,22 +413,20 @@ export async function templateWorkbook(): Promise<Buffer> {
   note('Bank details', 'Bank Name, Account Holder Name, Account No. and IFSC Code print in the '
     + 'block the holder is asking you to credit. IFSC is 4 letters, a zero, then 6 characters.');
   note('Customer Code', 'Optional. If you give one we check the name against the system and show a '
-    + 'caution when they differ. It never changes what prints.');
+    + 'note when they differ. It NEVER changes what prints — the sheet is the only source.');
   note('Which letter you get', 'A row dated BEFORE 01-Nov-2026 produces the Request for Redemption '
     + 'letter, exactly as this tool has always done. A row dated ON or AFTER it produces the Consent '
     + 'for Premature Redemption instead — the same document the redemption screen produces. One '
     + 'letter per row either way. The preview tells you which each row will be.');
-  note('Mode of Holding', 'Demat or Physical. Only used by the consent letter. It CANNOT be worked '
-    + 'out from the system, so if you leave it empty the letter prints that row blank for you to '
-    + 'tick by hand when it is signed.');
+  note('Mode of Holding', 'Demat or Physical. Only used by the consent letter. If the letter covers '
+    + 'several series held differently, write what is true — "Physical / Demat" prints exactly as '
+    + 'you type it. Leave it empty and the row prints blank to tick by hand.');
   note('Date of Rollover', 'Only for a holding that was actually rolled over — leave it empty for '
-    + 'everything else and the letter prints that row blank, which is correct. This is the ONE '
-    + 'consent column we cannot look up for you: the system does not hold the earlier investment a '
-    + 'rollover came from, so if the sheet does not say, nothing does.');
-  note('The other consent columns', 'Date of Allotment, Date of Maturity, Coupon Rate, Face '
-    + 'Value and PAN. Leave any of them empty and we look it up from the customer record using the '
-    + 'Customer Code and the series. What YOU type always wins. Anything neither you nor the record '
-    + 'supplies prints blank, and the preview lists exactly which.');
+    + 'everything else and the letter prints that row blank, which is correct.');
+  note('The other consent columns', 'Date of Allotment, Date of Maturity, Coupon Rate, Face Value '
+    + 'and PAN. Whatever you type is what prints. A single date is tidied to 18-Apr-2025; several '
+    + 'dates for several series print just as you wrote them. Nothing is ever read from the '
+    + 'customer record — an empty box prints an empty space, and the preview lists which.');
   note('If you have an older template', 'The column now called "Date of Maturity" used to be '
     + '"Original Maturity Date". A sheet still carrying the old heading is read exactly as before '
     + '— nothing needs re-typing. New downloads of this template use the new name.');

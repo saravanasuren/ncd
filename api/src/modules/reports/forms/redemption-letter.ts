@@ -21,6 +21,15 @@
 import { renderToBuffer } from './shared.js';
 import type { AddresseeEra } from './redemption-letter-addressee.js';
 
+/** Indian grouping when it is a number, otherwise exactly what was typed. */
+function amountText(v: number | string): string {
+  if (typeof v === 'number') return plainINR(v);
+  const raw = String(v ?? '').trim();
+  if (!raw) return '';
+  const n = Number(raw.replace(/[,\s]/g, ''));
+  return /^[\d.,\s]+$/.test(raw) && Number.isFinite(n) ? plainINR(n) : raw;
+}
+
 export interface RedemptionLetterRow {
   /** ISO yyyy-mm-dd. Prints at the head and foot, and picks the addressee. */
   letter_date: string;
@@ -28,7 +37,12 @@ export interface RedemptionLetterRow {
   series: string;
   /** Printed as given — the template's "No. of Debentures" column. */
   debentures: string;
-  amount: number;
+  /**
+   * A number, or the text as typed. One letter can cover several series
+   * (owner 2026-11-21), and then the box may hold a sum rather than a figure
+   * — printing it as written beats printing Rs.0/-.
+   */
+  amount: number | string;
   bank_name: string;
   account_holder_name: string;
   account_no: string;
@@ -64,7 +78,7 @@ export function plainINR(v: number): string {
 /** The 4-column details table, drawn with the same ruled cells as the Word original. */
 function detailsTable(doc: PDFKit.PDFDocument, y: number, row: RedemptionLetterRow): number {
   const headers = ['Name of the NCD Holder', 'No. of Debentures', 'Amount (in Rs.)', 'NCD Series'];
-  const values = [row.holder_name, row.debentures, plainINR(row.amount), row.series];
+  const values = [row.holder_name, row.debentures, amountText(row.amount), row.series];
   // The holder's name needs the room; the three short columns share the rest.
   const widths = [CONTENT_W * 0.37, CONTENT_W * 0.21, CONTENT_W * 0.21, CONTENT_W * 0.21];
   const pad = 5;
@@ -158,7 +172,7 @@ export function redemptionLetterPdf(row: RedemptionLetterRow, era: AddresseeEra)
         'Issue, Non-Convertible Debentures was allotted under above mentioned series.'
         + ' I kindly request you to redeem the NCD investment made by me in your Company for ',
         { continued: true })
-      .font('Helvetica-Bold').text(`Rs.${plainINR(row.amount)}/-`, { continued: true })
+      .font('Helvetica-Bold').text(`Rs.${amountText(row.amount)}/-`, { continued: true })
       .font('Helvetica').text('( NCD) under the aforementioned Series of NCDs.', { continued: false });
     y = doc.y + 12;
 

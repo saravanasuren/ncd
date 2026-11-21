@@ -28,6 +28,9 @@ export const NAV: NavItem[] = [
   { to: '/app/locker-renewals', label: 'Locker Renewals', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/locker-visits', label: 'Locker Visit Log', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/locker-rent-report', label: 'Locker Rent Report', anyOf: ['lockers:enroll'], group: 'Daily' },
+  // The whole locker book in one place, vacant lockers included (owner
+  // 2026-11-21) — the only locker view that can say what is free.
+  { to: '/app/locker-master-report', label: 'Locker Master Report', anyOf: ['lockers:enroll'], group: 'Daily' },
   { to: '/app/applications', label: 'Applications', anyOf: ['customers:read'], group: 'Daily', hideForRoles: ['cxo'] },
   // Outstanding is a back-office queue (settle failures, pending items) — hidden
   // from agents and branch staff (owner 2026-09-09); they hold customers:read for

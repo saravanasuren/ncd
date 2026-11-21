@@ -51,7 +51,7 @@ export async function consentLetterFrom(db: Db): Promise<string> {
  */
 export async function redemptionConsentRow(db: Db, redemptionId: number): Promise<ConsentLetterRow> {
   const r = (await db.query<Record<string, unknown>>(
-    `SELECT r.principal, r.holding_mode, r.created_at,
+    `SELECT r.principal, r.holding_mode, r.rollover_date, r.created_at,
             c.full_name AS customer_name, c.pan,
             a.allotment_date, a.maturity_date,
             s.name AS series_name, s.code AS series_code, s.face_value,
@@ -90,6 +90,10 @@ export async function redemptionConsentRow(db: Db, redemptionId: number): Promis
     pan: text(r.pan),
     series: text(r.series_name) || text(r.series_code),
     allotment_date: text(r.allotment_date).slice(0, 10),
+    // Blank unless somebody was asked, like the mode of holding. Never taken
+    // from the allotment date, which for a rolled-over holding IS the rollover
+    // date — printing it twice would turn one fact into two.
+    rollover_date: text(r.rollover_date).slice(0, 10),
     original_maturity_date: text(r.maturity_date).slice(0, 10),
     ncd_count: ncdCount,
     face_value: faceValue,

@@ -287,6 +287,12 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
   // consent letter and cannot be derived (owner 2026-11-20). No default: a
   // pre-selected value is a guess somebody signs.
   const [holdingMode, setHoldingMode] = useState<'' | 'Demat' | 'Physical'>('');
+  // Date of Rollover, the eighth row of the consent letter. OPTIONAL and
+  // normally left empty — it only means anything for a holding that was
+  // actually rolled over, and the book cannot work it out (the rollover
+  // feature has never been used here; rollovers exist only as the six
+  // "NCD 05 Rollover"-style series, whose earlier investment we do not hold).
+  const [rolloverDate, setRolloverDate] = useState('');
   // Defaults to today (editable). Blank is still accepted by the API (it also
   // defaults to today), but showing the date makes the default explicit.
   const [date, setDate] = useState(todayLocalISO());
@@ -301,7 +307,7 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
   });
 
   const fire = (p: Promise<unknown>, msg: string) =>
-    p.then(() => { setOpen(null); setReason(''); setAmount(''); setHoldingMode(''); setDate(todayLocalISO()); setToCustomer(null); setCustQ(''); onDone(msg); }).catch(onError);
+    p.then(() => { setOpen(null); setReason(''); setAmount(''); setHoldingMode(''); setRolloverDate(''); setDate(todayLocalISO()); setToCustomer(null); setCustQ(''); onDone(msg); }).catch(onError);
 
   const inp = 'px-2.5 py-1.5 text-xs border border-border-strong rounded outline-none focus:border-primary';
   const act = 'text-xs border border-border rounded px-3 py-1.5 hover:bg-bg';
@@ -331,10 +337,16 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
               <option value="Demat">Demat</option>
               <option value="Physical">Physical</option>
             </select>
+            <label className="text-xs text-text-muted flex items-center gap-1.5"
+              title="Only for a holding that was rolled over. Leave it empty and the consent letter prints that row blank — which is right for an investment that was never rolled over.">
+              Rolled over on
+              <input className={inp} type="date" value={rolloverDate} onChange={(e) => setRolloverDate(e.target.value)} />
+            </label>
             <button className={go} disabled={reason.trim().length < 2 || !holdingMode || (amount !== '' && !(Number(amount) > 0))}
               title={holdingMode ? '' : 'Choose Demat or Physical — it prints on the consent letter'}
               onClick={() => fire(api.post('/api/redemptions/premature', {
                 application_id: appId, reason, holding_mode: holdingMode,
+                ...(rolloverDate ? { rollover_date: rolloverDate } : {}),
                 ...(amount ? { amount: Number(amount) } : {}),
                 ...(date ? { redemption_date: date } : {}),
               }), 'Redemption initiated and the consent letter generated — get it signed below.')}>Initiate</button>

@@ -33,6 +33,8 @@ export const COLUMNS = [
   // to look it up, not an error.
   'Mode of Holding',
   'Date of Allotment',
+  // Sheet-only: there is nothing in the book to fall back on for this one.
+  'Date of Rollover',
   'Original Maturity Date',
   'Coupon Rate',
   'Face Value',
@@ -42,13 +44,13 @@ export const COLUMNS = [
 /**
  * Columns a file may leave out entirely.
  *
- * Customer Code was always optional (a cross-check). The six consent columns
+ * Customer Code was always optional (a cross-check). The seven consent columns
  * join it because a file of pre-cut-off rows has no reason to carry them, and
  * demanding them would break every spreadsheet already in use.
  */
 export const OPTIONAL_COLUMNS: ReadonlySet<string> = new Set([
-  'Customer Code', 'Mode of Holding', 'Date of Allotment', 'Original Maturity Date',
-  'Coupon Rate', 'Face Value', 'PAN',
+  'Customer Code', 'Mode of Holding', 'Date of Allotment', 'Date of Rollover',
+  'Original Maturity Date', 'Coupon Rate', 'Face Value', 'PAN',
 ]);
 
 export interface ParsedRow {
@@ -67,6 +69,7 @@ export interface ParsedRow {
   // Consent-letter particulars, as typed. Blank means "look it up".
   mode_of_holding: string;
   allotment_date: string;          // ISO yyyy-mm-dd, or '' 
+  rollover_date: string;           // ISO yyyy-mm-dd, or '' (usually '')
   original_maturity_date: string;  // ISO yyyy-mm-dd, or ''
   coupon_rate_pct: number | null;
   face_value: number | null;
@@ -253,6 +256,7 @@ export const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 function consentCells(get: (col: string) => Cell, cautions: string[]): {
   mode_of_holding: string;
   allotment_date: string;
+  rollover_date: string;
   original_maturity_date: string;
   coupon_rate_pct: number | null;
   face_value: number | null;
@@ -271,7 +275,14 @@ function consentCells(get: (col: string) => Cell, cautions: string[]): {
     const raw = get(col);
     if (text(raw) === '') return '';
     const iso = parseDateCell(raw);
-    if (!iso) { cautions.push(`${col} "${text(raw)}" could not be read as a date — the customer's record will be used`); return ''; }
+    if (!iso) {
+      // Date of Rollover has no record to fall back on, so promising one would
+      // be a lie on the only warning the operator gets.
+      cautions.push(col === 'Date of Rollover'
+        ? `${col} "${text(raw)}" could not be read as a date — the letter will print that row blank`
+        : `${col} "${text(raw)}" could not be read as a date — the customer's record will be used`);
+      return '';
+    }
     return iso;
   };
 
@@ -295,6 +306,8 @@ function consentCells(get: (col: string) => Cell, cautions: string[]): {
   return {
     mode_of_holding: mode,
     allotment_date: dateCell('Date of Allotment'),
+    // No lookup behind this one — if the sheet does not say, nobody does.
+    rollover_date: dateCell('Date of Rollover'),
     original_maturity_date: dateCell('Original Maturity Date'),
     coupon_rate_pct: rate,
     face_value: faceValue,

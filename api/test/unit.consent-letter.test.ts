@@ -22,6 +22,9 @@ const row = (over: Partial<ConsentLetterRow> = {}): ConsentLetterRow => ({
   pan: 'ABCDE1234F',
   series: 'NCD 12',
   allotment_date: '2021-12-31',
+  // Empty by default — that is the ordinary holding. Only the six
+  // "NCD 05 Rollover"-style series were ever rolled over.
+  rollover_date: '',
   original_maturity_date: '2026-12-31',
   ncd_count: '3',
   face_value: 500000,
@@ -116,6 +119,35 @@ describe('the consent letter says what the owner wrote', () => {
     expect(t).toContain('ABCDE1234F');    // PAN at the foot
   });
 
+  it('prints the Date of Rollover row, blank unless somebody supplied one', async () => {
+    // The row is in the owner's Word file and the first version of this
+    // generator dropped it, so a letter printed seven particulars where the
+    // format has eight. It must be on the page either way: an absent row
+    // cannot be completed by hand, and for a rolled-over holding the date is
+    // the whole point of the row.
+    const empty = squash(extractText(await consentLetterPdf(row())));
+    expect(empty).toContain('DateofRollover');
+    // Nothing invented into it — and in particular NOT the allotment date,
+    // which for a rolled-over holding is the one date the book actually holds.
+    expect(empty.match(/31-Dec-2021/g) ?? []).toHaveLength(1);
+
+    const filled = squash(extractText(await consentLetterPdf(row({ rollover_date: '2024-05-04' }))));
+    expect(filled).toContain('DateofRollover');
+    expect(filled).toContain('04-May-2024');
+  });
+
+  it('keeps the particulars in the order the Word file lists them', async () => {
+    const t = squash(extractText(await consentLetterPdf(row({ rollover_date: '2024-05-04' }))));
+    const order = ['Series/Tranche', 'Dateofallotment', 'DateofRollover', 'Originalmaturitydate',
+      'NumberofNCDsheld', 'FacevalueperNCD(Rs.)', 'Couponrate', 'Modeofholding'];
+    let at = -1;
+    for (const label of order) {
+      const i = t.indexOf(label);
+      expect(i, label).toBeGreaterThan(at);
+      at = i;
+    }
+  });
+
   it('names the number being REDEEMED in the consent sentence', async () => {
     // Owner 2026-11-20: a partial redemption consents to the part, not the
     // whole holding.
@@ -125,12 +157,13 @@ describe('the consent letter says what the owner wrote', () => {
 
   it('leaves unknown particulars blank rather than inventing a dash', async () => {
     const t = extractText(await consentLetterPdf(row({
-      allotment_date: '', original_maturity_date: '', face_value: null,
+      allotment_date: '', rollover_date: '', original_maturity_date: '', face_value: null,
       coupon_rate_pct: null, mode_of_holding: '', ncd_count: '',
     })));
     // The labels are still there to be completed by hand...
     expect(squash(t)).toContain('Modeofholding');
     expect(squash(t)).toContain('Dateofallotment');
+    expect(squash(t)).toContain('DateofRollover');
     // ...and nothing is asserted that we do not know. "Physical" in
     // particular: demat details were only synced for about a third of the
     // book, so an empty record is not evidence of a physical holding.

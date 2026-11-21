@@ -260,13 +260,15 @@ describe('the configurable boundary', () => {
 // the Request letter. Earlier rows are untouched, which is why every test
 // above still passes unchanged: all of them predate the cut-off.
 //
-// The six consent columns are optional. What the sheet says wins; what it
+// The seven consent columns are optional. What the sheet says wins; what it
 // leaves empty is looked up from the customer's own record; what neither
-// supplies prints blank and is named in the preview.
+// supplies prints blank and is named in the preview. Date of Rollover is the
+// exception to the lookup — nothing in the book can answer it.
 
 const CONSENT_HEADERS = [
   ...HEADERS,
-  'Mode of Holding', 'Date of Allotment', 'Original Maturity Date', 'Coupon Rate', 'Face Value', 'PAN',
+  'Mode of Holding', 'Date of Allotment', 'Date of Rollover', 'Original Maturity Date',
+  'Coupon Rate', 'Face Value', 'PAN',
 ];
 
 async function consentSheetB64(rows: Record<string, unknown>[]): Promise<string> {
@@ -404,6 +406,50 @@ describe('bulk letters after the consent cut-off', () => {
     expect(row.pan).toBe('LOOKU1234P');
     // Only the one a person must answer is left.
     expect(row.blank_particulars).toEqual(['Mode of Holding']);
+  });
+
+  it('prints the Date of Rollover the sheet gives it', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const b64 = await consentSheetB64([{
+      ...AFTER, 'Name of the NCD Holder': 'Rolled Holder',
+      'Date of Rollover': new Date(Date.UTC(2024, 4, 4)),
+      'Mode of Holding': 'Demat',
+    }]);
+    const p = await previewOf(c, b64);
+    expect(p.rows[0].rollover_date).toBe('2024-05-04');
+
+    const one = await postRaw(c, '/api/bulk-redemption-letters/letter',
+      { data_base64: b64, filename: 'c.xlsx', row_no: 2 });
+    expect(one.status).toBe(200);
+    const { extractText } = await import('./helpers/pdf-text.js');
+    const t = extractText(one.buffer).replace(/\s+/g, '');
+    expect(t).toContain('DateofRollover');
+    expect(t).toContain('04-May-2024');
+  });
+
+  it('never flags Date of Rollover as a blank to fix', async () => {
+    // It is empty on nearly every letter, because nearly every holding was
+    // never rolled over. Listing it would put a caution on practically every
+    // row and train the operator to ignore the ones that matter.
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([{ ...AFTER }]));
+    expect(p.rows[0].rollover_date).toBe('');
+    expect(p.rows[0].blank_particulars).not.toContain('Date of Rollover');
+    expect(p.rows[0].errors).toEqual([]);
+  });
+
+  it('says the row will print blank when the rollover date is unreadable', async () => {
+    // And does NOT promise a lookup, because there is no record behind this
+    // column to fall back on.
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([
+      { ...AFTER, 'Date of Rollover': 'last summer' },
+    ]));
+    const cautions = p.rows[0].cautions.join(' | ');
+    expect(cautions).toContain('Date of Rollover');
+    expect(cautions).toContain('print that row blank');
+    expect(cautions).not.toContain("Date of Rollover \"last summer\" could not be read as a date — the customer's record");
+    expect(p.rows[0].errors).toEqual([]);
   });
 
   it('a mixed file produces both kinds in one zip, and still changes nothing', async () => {

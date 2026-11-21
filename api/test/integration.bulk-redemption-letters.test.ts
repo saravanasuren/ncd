@@ -124,14 +124,18 @@ describe('preview', () => {
     expect(companies).toHaveLength(2);
   });
 
-  it('names the row and the problem when something is wrong', async () => {
+  it('names what is worth a look WITHOUT refusing the row', async () => {
+    // Until 2026-11-21 a missing IFSC was an error and the row produced no
+    // letter. The owner's rule now is that nothing blocks: the sheet is the
+    // authority and they read the letter before anyone signs it.
     const ncd = await as('ncd@demo.local');
     const r = await ncd.post('/api/bulk-redemption-letters/preview',
-      { filename: 'x.xlsx', data_base64: await sheetB64([GOOD, { ...GOOD, 'IFSC Code': '' }]) });
-    expect(r.json.summary.with_errors).toBe(1);
-    const bad = r.json.rows.find((x: { errors: string[] }) => x.errors.length);
-    expect(bad.row_no).toBe(3);
-    expect(bad.errors.join(' ')).toContain('IFSC Code');
+      { filename: 'x.xlsx', data_base64: await sheetB64([GOOD, { ...GOOD, 'IFSC Code': 'NOTANIFSC' }]) });
+    expect(r.json.summary.with_errors).toBe(0);
+    expect(r.json.rows.every((x: { errors: string[] }) => x.errors.length === 0)).toBe(true);
+    const flagged = r.json.rows.find((x: { row_no: number }) => x.row_no === 3);
+    expect(flagged.cautions.join(' ')).toContain('IFSC');
+    expect(flagged.ifsc).toBe('NOTANIFSC');   // printed as typed, not blanked
   });
 
   it('says which columns are missing rather than guessing', async () => {
@@ -168,19 +172,29 @@ describe('generate', () => {
     expect(r.buffer.toString('latin1')).toContain('Sundaramam K S');
   });
 
-  it('skips the rows that need fixing and still produces the rest', async () => {
+  it('produces a letter for EVERY row, including the odd-looking ones', async () => {
     const ncd = await as('ncd@demo.local');
     const r = await postRaw(ncd, '/api/bulk-redemption-letters/generate',
       { filename: 'x.xlsx', data_base64: await sheetB64([GOOD, { ...GOOD, 'Account No.': '' }]) });
     expect(r.status).toBe(200);
-    expect(r.headers.get('x-letters-generated')).toBe('1');
-    expect(r.headers.get('x-letters-failed')).toBe('1');
+    expect(r.headers.get('x-letters-generated')).toBe('2');
+    expect(r.headers.get('x-letters-failed')).toBe('0');
   });
 
-  it('refuses rather than returning an empty archive when nothing is usable', async () => {
+  it('still produces a letter when the bank details are thin', async () => {
+    // The old rule returned 400 here. A letter with a blank bank line is one
+    // the holder completes by hand; refusing to print it helped nobody.
+    const ncd = await as('ncd@demo.local');
+    const r = await postRaw(ncd, '/api/bulk-redemption-letters/generate',
+      { filename: 'x.xlsx', data_base64: await sheetB64([{ ...GOOD, 'IFSC Code': '', 'Account No.': '' }]) });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('x-letters-generated')).toBe('1');
+  });
+
+  it('refuses only when the file has no records at all', async () => {
     const ncd = await as('ncd@demo.local');
     const r = await ncd.post('/api/bulk-redemption-letters/generate',
-      { filename: 'x.xlsx', data_base64: await sheetB64([{ ...GOOD, 'IFSC Code': '', 'Account No.': '' }]) });
+      { filename: 'x.xlsx', data_base64: await sheetB64([]) });
     expect(r.status).toBe(400);
   });
 
@@ -216,11 +230,12 @@ describe('a single letter', () => {
     expect(r.buffer.subarray(0, 5).toString()).toBe('%PDF-');
   });
 
-  it('refuses a row that has errors instead of printing a half-filled letter', async () => {
+  it('prints a row the old rule would have refused', async () => {
     const ncd = await as('ncd@demo.local');
-    const r = await ncd.post('/api/bulk-redemption-letters/letter',
+    const r = await postRaw(ncd, '/api/bulk-redemption-letters/letter',
       { filename: 'x.xlsx', data_base64: await sheetB64([{ ...GOOD, 'IFSC Code': '' }]), row_no: 2 });
-    expect(r.status).toBe(400);
+    expect(r.status).toBe(200);
+    expect(r.buffer.subarray(0, 5).toString()).toBe('%PDF-');
   });
 
   it('404s on a row that is not in the file', async () => {
@@ -232,24 +247,30 @@ describe('a single letter', () => {
 });
 
 describe('the configurable boundary', () => {
-  it('moving the setting moves which company the letters name', async () => {
+  it('moving a range on the Redemption Letters screen moves which company the letters name', async () => {
+    // This used to move the `redemption.letter_dhanam_from` SETTING. That
+    // setting was retired on 2026-11-21 when all four ranges moved onto one
+    // screen; the boundary is now the Kiara range's end date, edited through
+    // /api/letter-templates. What the test proves is unchanged: moving the
+    // boundary moves which company a given letter date names.
     const ncd = await as('ncd@demo.local');
+    const admin = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const body = { filename: 'x.xlsx', data_base64: await sheetB64([KIARA_ERA]) };
 
     const before = await ncd.post('/api/bulk-redemption-letters/preview', body);
     expect(before.json.rows[0].addressed_to).toBe('Kiara Microcredit Private Limited');
 
-    // Move the boundary back so the same date now falls on the Dhanam side.
-    await ctx.db.query(
-      `INSERT INTO app_settings (key, value, group_name, label)
-       VALUES ('redemption.letter_dhanam_from', '"2025-01-01"'::jsonb, 'Redemptions', 'x')
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`);
+    // Close the Kiara range early so the same date falls on the Dhanam side.
+    await admin.put('/api/letter-templates/kiara', { valid_to: '2024-12-31' });
+    await admin.put('/api/letter-templates/dhanam-private', { valid_from: '2025-01-01' });
 
     const after = await ncd.post('/api/bulk-redemption-letters/preview', body);
     expect(after.json.rows[0].addressed_to).toBe('Dhanam Investment and Finance Private Limited');
 
-    await ctx.db.query(
-      `UPDATE app_settings SET value = '"2025-08-18"'::jsonb WHERE key = 'redemption.letter_dhanam_from'`);
+    await admin.del('/api/letter-templates/kiara');
+    await admin.del('/api/letter-templates/dhanam-private');
+    const back = await ncd.post('/api/bulk-redemption-letters/preview', body);
+    expect(back.json.rows[0].addressed_to).toBe('Kiara Microcredit Private Limited');
   });
 });
 
@@ -362,10 +383,45 @@ describe('bulk letters after the consent cut-off', () => {
     ]));
     expect(p.rows[0].mode_of_holding).toBe('Demat');
     expect(p.rows[1].mode_of_holding).toBe('Physical');
-    expect(p.rows[2].mode_of_holding).toBe('');
-    expect(p.rows[2].cautions.join(' ')).toContain('not Demat or Physical');
-    // An unreadable one is a caution, never an error — the letter still prints.
+    // Anything else prints EXACTLY as typed. A letter covering three series
+    // held differently says "Physical / Demat", and that is the true answer
+    // for that box — it used to be discarded as not-Demat-or-Physical.
+    expect(p.rows[2].mode_of_holding).toBe('dunno');
     expect(p.rows[2].errors).toEqual([]);
+  });
+
+  it('keeps a split holding across several series exactly as written', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([{
+      ...AFTER, 'NCD Series': 'NCD 22, NCD 23, NCD 24',
+      'Mode of Holding': 'Physical / Demat',
+      'Date of Allotment': '18-04-2025, 20-10-2025, 30-12-2025',
+      'Date of Maturity': '18-04-2030, 20-10-2030, 30-12-2030',
+      'Coupon Rate': '12.5%, 13%, 13%',
+    }]));
+    const row = p.rows[0];
+    expect(row.mode_of_holding).toBe('Physical / Demat');
+    expect(row.allotment_date).toBe('18-04-2025, 20-10-2025, 30-12-2025');
+    expect(row.original_maturity_date).toBe('18-04-2030, 20-10-2030, 30-12-2030');
+    expect(row.coupon_rate_pct).toBe('12.5%, 13%, 13%');
+    expect(row.errors).toEqual([]);
+    // None of them counts as blank, because none of them IS blank.
+    expect(row.blank_particulars).not.toContain('Mode of Holding');
+    expect(row.blank_particulars).not.toContain('Date of Allotment');
+    expect(row.blank_particulars).not.toContain('Date of Maturity');
+    // And the consent letter prints all three dates on the page.
+    const b64 = await consentSheetB64([{
+      ...AFTER, 'NCD Series': 'NCD 22, NCD 23, NCD 24',
+      'Mode of Holding': 'Physical / Demat',
+      'Date of Allotment': '18-04-2025, 20-10-2025, 30-12-2025',
+    }]);
+    const one = await postRaw(c, '/api/bulk-redemption-letters/letter',
+      { data_base64: b64, filename: 'c.xlsx', row_no: 2 });
+    expect(one.status).toBe(200);
+    const { extractText } = await import('./helpers/pdf-text.js');
+    const t = extractText(one.buffer).replace(/\s+/g, '');
+    expect(t).toContain('18-04-2025,20-10-2025,30-12-2025');
+    expect(t).toContain('Physical/Demat');
   });
 
   it('names the particulars that will print blank, before anything is generated', async () => {
@@ -399,7 +455,7 @@ describe('bulk letters after the consent cut-off', () => {
     expect(row.blank_particulars).not.toContain('PAN');
   });
 
-  it('fills the gaps from the customer record when the sheet leaves them empty', async () => {
+  it('never reads the customer record — an empty cell stays empty', async () => {
     const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
     // A customer with a real investment to look up.
     const cust = await c.post('/api/customers', { full_name: 'Lookup Holder', phone: '9790000001', pan: 'LOOKU1234P' });
@@ -425,14 +481,20 @@ describe('bulk letters after the consent cut-off', () => {
       ...AFTER, 'Name of the NCD Holder': 'Lookup Holder',
       'NCD Series': seriesName, 'Customer Code': code,
     }]));
+    // The customer, the investment and the series above all exist and match.
+    // NONE of it is used (owner 2026-11-21): one letter can cover several
+    // series, and the record only ever knows one investment, so a looked-up
+    // date would LOOK right while being wrong.
     const row = p.rows[0];
-    expect(row.allotment_date).toBe('2024-03-30');
-    expect(row.original_maturity_date).toBe('2029-03-30');
-    expect(row.coupon_rate_pct).toBe(12.5);
-    expect(row.face_value).toBe(250000);
-    expect(row.pan).toBe('LOOKU1234P');
-    // Only the one a person must answer is left.
-    expect(row.blank_particulars).toEqual(['Mode of Holding']);
+    expect(row.allotment_date).toBe('');
+    expect(row.original_maturity_date).toBe('');
+    expect(row.coupon_rate_pct).toBeNull();
+    expect(row.face_value).toBeNull();
+    expect(row.pan).toBe('');
+    expect(row.blank_particulars).toContain('Date of Allotment');
+    expect(row.blank_particulars).toContain('PAN');
+    // ...and the row still produces a letter.
+    expect(row.errors).toEqual([]);
   });
 
   it('prints the Date of Rollover the sheet gives it', async () => {
@@ -465,18 +527,16 @@ describe('bulk letters after the consent cut-off', () => {
     expect(p.rows[0].errors).toEqual([]);
   });
 
-  it('says the row will print blank when the rollover date is unreadable', async () => {
-    // And does NOT promise a lookup, because there is no record behind this
-    // column to fall back on.
+  it('prints a rollover date that is not a date exactly as typed', async () => {
     const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const p = await previewOf(c, await consentSheetB64([
       { ...AFTER, 'Date of Rollover': 'last summer' },
     ]));
-    const cautions = p.rows[0].cautions.join(' | ');
-    expect(cautions).toContain('Date of Rollover');
-    expect(cautions).toContain('print that row blank');
-    expect(cautions).not.toContain("Date of Rollover \"last summer\" could not be read as a date — the customer's record");
+    expect(p.rows[0].rollover_date).toBe('last summer');
     expect(p.rows[0].errors).toEqual([]);
+    // No caution either: printing what was typed is the intended behaviour,
+    // not a problem to warn about.
+    expect(p.rows[0].cautions.join(' | ')).not.toContain('Date of Rollover');
   });
 
   it('still reads a sheet headed "Original Maturity Date" — the old template', async () => {

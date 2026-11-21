@@ -6,6 +6,24 @@
  * (owner 2026-11-18). A customer code may be given, and if it is we look it up
  * only to raise a CAUTION next to the row — never to overrule the sheet.
  *
+ * ── NOTHING BLOCKS A ROW, AND NOTHING IS REWRITTEN (owner 2026-11-21) ────────
+ * "dont have any blockers, just take in the datas from the excel and make it
+ * visible in the needed spaces. so dont confuse it with the original
+ * software." Every row produces a letter, and every cell prints as typed.
+ *
+ * The reason is ONE LETTER CAN COVER SEVERAL SERIES. A redemption of NCD 22,
+ * 23 and 24 together has three allotment dates, three maturity dates and may
+ * be part demat and part physical — so "18-04-2025, 20-10-2025, 30-12-2025"
+ * is the correct and complete answer for that box, not a broken date. This
+ * reader used to call it unparseable, blank it, and substitute one investment
+ * from the book: wrong on a multi-series letter in the most misleading way
+ * possible, because the substituted date LOOKS right.
+ *
+ * So a value that parses is tidied (a real date prints as 18-Apr-2025) and a
+ * value that does not is printed exactly as written. Checks that used to
+ * refuse a row are now notes beside it; the operator reads the letter before
+ * anybody signs it, and the sheet is the authority.
+ *
  * Row numbers reported to the operator are SPREADSHEET rows, so the header is
  * row 1 and the first record is row 2. Anything else means hunting for the row
  * they were told about.
@@ -63,6 +81,8 @@ export interface ParsedRow {
   series: string;
   debentures: string;
   amount: number;
+  /** Exactly as typed — what the letter prints when it is not one number. */
+  amount_text: string;
   bank_name: string;
   account_holder_name: string;
   account_no: string;
@@ -73,9 +93,14 @@ export interface ParsedRow {
   allotment_date: string;          // ISO yyyy-mm-dd, or '' 
   rollover_date: string;           // ISO yyyy-mm-dd, or '' (usually '')
   original_maturity_date: string;  // ISO yyyy-mm-dd, or ''
-  coupon_rate_pct: number | null;
-  face_value: number | null;
+  coupon_rate_pct: string | number | null;
+  face_value: string | number | null;
   pan: string;
+  /**
+   * Always EMPTY since 2026-11-21 — nothing blocks a row any more. Kept so
+   * the preview and the generator keep one shape, and so a future check that
+   * genuinely must stop a letter has somewhere to go.
+   */
   errors: string[];
   cautions: string[];
 }
@@ -275,49 +300,43 @@ function consentCells(get: (col: string) => Cell, cautions: string[]): {
   allotment_date: string;
   rollover_date: string;
   original_maturity_date: string;
-  coupon_rate_pct: number | null;
-  face_value: number | null;
+  coupon_rate_pct: string | number | null;
+  face_value: string | number | null;
   pan: string;
 } {
+  // "Demat", "d" and "physical" are tidied to the words the form uses; a
+  // holding that is genuinely split — "Physical / Demat" across three series
+  // — prints exactly as typed rather than being thrown away.
   const modeRaw = text(get('Mode of Holding'));
-  let mode = '';
-  if (modeRaw) {
-    const m = modeRaw.trim().toLowerCase();
-    if (m === 'demat' || m === 'd') mode = 'Demat';
-    else if (m === 'physical' || m === 'p' || m === 'phy') mode = 'Physical';
-    else cautions.push(`Mode of Holding "${modeRaw}" is not Demat or Physical — the letter will leave it blank`);
-  }
+  let mode = modeRaw;
+  const m = modeRaw.trim().toLowerCase();
+  if (m === 'demat' || m === 'd') mode = 'Demat';
+  else if (m === 'physical' || m === 'p' || m === 'phy') mode = 'Physical';
 
+  // A single date comes back as ISO so the letter can format it; anything
+  // else — most often several dates for several series — comes back as
+  // typed. No caution: this is the intended answer, not a mistake.
   const dateCell = (col: string): string => {
     const raw = get(col);
-    if (text(raw) === '') return '';
-    const iso = parseDateCell(raw);
-    if (!iso) {
-      // Date of Rollover has no record to fall back on, so promising one would
-      // be a lie on the only warning the operator gets.
-      cautions.push(col === 'Date of Rollover'
-        ? `${col} "${text(raw)}" could not be read as a date — the letter will print that row blank`
-        : `${col} "${text(raw)}" could not be read as a date — the customer's record will be used`);
-      return '';
-    }
-    return iso;
+    const asTyped = text(raw);
+    if (asTyped === '') return '';
+    return parseDateCell(raw) || asTyped;
   };
 
-  // "12.5", "12.5%" and "12.5 % p.a." all mean the same thing on a form.
+  // "12.5", "12.5%" and "12.5 % p.a." all mean the same thing on a form; a
+  // multi-series "12.5%, 13%, 13%" means exactly what it says and prints so.
   const rateRaw = text(get('Coupon Rate'));
-  let rate: number | null = null;
+  let rate: string | number | null = rateRaw || null;
   if (rateRaw) {
     const n = Number(rateRaw.replace(/[%\s]|p\.?a\.?/gi, ''));
     if (Number.isFinite(n) && n > 0) rate = n;
-    else cautions.push(`Coupon Rate "${rateRaw}" could not be read — the customer's record will be used`);
   }
 
   const fvRaw = get('Face Value');
-  let faceValue: number | null = null;
+  let faceValue: string | number | null = text(fvRaw) || null;
   if (text(fvRaw) !== '') {
     const n = parseAmount(fvRaw);
     if (n !== null && n > 0) faceValue = n;
-    else cautions.push(`Face Value "${text(fvRaw)}" could not be read — the customer's record will be used`);
   }
 
   return {
@@ -332,64 +351,58 @@ function consentCells(get: (col: string) => Cell, cautions: string[]): {
   };
 }
 
+/**
+ * Validate and normalise one record.
+ *
+ * NOTHING HERE REFUSES A ROW (owner 2026-11-21). Every check that used to
+ * push an error now pushes a note, and the value prints as typed either way.
+ * The list below is what the operator should glance at, not what the tool
+ * will withhold a letter over.
+ */
 function buildRow(rowNo: number, get: (col: string) => Cell): ParsedRow {
-  const errors: string[] = [];
+  const errors: string[] = [];   // stays empty — see ParsedRow.errors
   const cautions: string[] = [];
 
   const rawDate = get('Letter Date');
   const letterDate = parseDateCell(rawDate);
-  if (!text(rawDate)) errors.push('Letter Date is missing');
+  if (!text(rawDate)) cautions.push('Letter Date is empty — the letter prints without one, and the oldest configured letter is used');
   else if (!letterDate) {
-    errors.push(`Letter Date "${text(rawDate)}" is not a date we can read — use dd/mm/yyyy or 18-Aug-2025`);
+    cautions.push(`Letter Date "${text(rawDate)}" is not a date we can read, so it cannot decide which letter to use — try dd/mm/yyyy or 18-Aug-2025`);
   } else {
     const year = Number(letterDate.slice(0, 4));
     if (year < 2010 || year > new Date().getUTCFullYear() + 1) {
-      errors.push(`Letter Date ${displayDate(letterDate)} looks wrong — check the year`);
+      cautions.push(`Letter Date ${displayDate(letterDate)} looks wrong — check the year`);
     }
   }
 
   const holder = text(get('Name of the NCD Holder'));
-  if (!holder) errors.push('Name of the NCD Holder is missing');
-  else if (holder.length < 2) errors.push(`Name of the NCD Holder "${holder}" is too short`);
+  if (!holder) cautions.push('Name of the NCD Holder is empty');
 
   const series = text(get('NCD Series'));
-  if (!series) errors.push('NCD Series is missing');
-  // The template's sentence already reads "at the time of NCD <series> Series
-  // Issue", so a value that repeats the word prints "NCD NCD 29 Series".
-  else if (/^ncd\b/i.test(series)) {
-    cautions.push(`NCD Series "${series}" will read "NCD ${series} Series" — the letter says NCD already`);
-  }
+  if (!series) cautions.push('NCD Series is empty');
 
+  // Printed as typed — a multi-series letter says "10, 5, 8" and means it.
   const debRaw = get('No. of Debentures');
   const deb = parseAmount(debRaw);
-  if (!text(debRaw)) errors.push('No. of Debentures is missing');
-  else if (deb === null) errors.push(`No. of Debentures "${text(debRaw)}" is not a number`);
-  else if (deb <= 0 || !Number.isInteger(deb)) {
-    errors.push(`No. of Debentures must be a whole number above zero, not "${text(debRaw)}"`);
-  }
 
+  // The total being asked back. A sum that is not a single number still
+  // prints; it is only the preview's running total that cannot count it.
   const amtRaw = get('Amount (in Rs.)');
   const amount = parseAmount(amtRaw);
-  if (!text(amtRaw)) errors.push('Amount (in Rs.) is missing');
-  else if (amount === null) errors.push(`Amount (in Rs.) "${text(amtRaw)}" is not a number`);
-  else if (amount <= 0) errors.push(`Amount (in Rs.) must be above zero, not "${text(amtRaw)}"`);
-
-  const bankName = text(get('Bank Name'));
-  if (!bankName) errors.push('Bank Name is missing');
-  const accHolder = text(get('Account Holder Name'));
-  if (!accHolder) errors.push('Account Holder Name is missing');
-
-  const accNo = text(get('Account No.')).replace(/\s/g, '');
-  if (!accNo) errors.push('Account No. is missing');
-  else if (!/^\d{5,20}$/.test(accNo)) {
-    errors.push(`Account No. "${accNo}" should be 5 to 20 digits`);
+  if (text(amtRaw) !== '' && amount === null) {
+    cautions.push(`Amount "${text(amtRaw)}" is not a single number, so it is left out of the total below — the letter still prints it as typed`);
   }
 
+  const bankName = text(get('Bank Name'));
+  const accHolder = text(get('Account Holder Name'));
+
+  // Kept as typed, spaces and all: an account number is a payment
+  // instruction and reformatting one is not this tool's business.
+  const accNo = text(get('Account No.'));
   const ifscRaw = text(get('IFSC Code'));
-  const ifsc = ifscRaw.toUpperCase().replace(/\s/g, '');
-  if (!ifsc) errors.push('IFSC Code is missing');
-  else if (!IFSC_RE.test(ifsc)) {
-    errors.push(`IFSC Code "${ifscRaw}" is not a valid IFSC — it is 4 letters, a zero, then 6 characters`);
+  const ifsc = ifscRaw.toUpperCase();
+  if (ifsc && !IFSC_RE.test(ifsc)) {
+    cautions.push(`IFSC "${ifscRaw}" is not the usual 4 letters, a zero, then 6 characters — printing it as typed`);
   }
 
   // The letter says "credit the proceeds to", so a name mismatch here is worth
@@ -407,6 +420,7 @@ function buildRow(rowNo: number, get: (col: string) => Cell): ParsedRow {
     series,
     debentures: deb !== null ? String(deb) : text(debRaw),
     amount: amount ?? 0,
+    amount_text: text(amtRaw),
     bank_name: bankName,
     account_holder_name: accHolder,
     account_no: accNo,

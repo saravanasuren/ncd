@@ -178,31 +178,15 @@ export const SETTINGS_CATALOG: SettingDef[] = [
     default: true,
     editableBy: 'admin',
   },
-  {
-    key: 'redemption.letter_dhanam_from',
-    group: 'Redemptions',
-    label: 'Redemption letters name Dhanam from',
-    description: 'Bulk Redemption Letters addresses the company by the letter date. On and after this date '
-      + 'the letter is addressed to Dhanam Investment and Finance; before it, to Kiara Microcredit Private '
-      + 'Limited. Letters dated on or after 29-Sep-2026 drop "Private" from the Dhanam name, the same rule '
-      + 'the bond certificates follow.',
-    type: 'date',
-    default: '2025-08-18',
-    editableBy: 'super_admin',
-  },
-  {
-    key: 'redemption.consent_letter_from',
-    group: 'Redemptions',
-    label: 'Consent letter applies from',
-    description: 'ONE DATE, TWO PLACES. A premature redemption raised on or after it cannot go for '
-      + 'approval until the holder has signed the Consent for Premature Redemption, on paper or through '
-      + 'e-Sign; and a row dated on or after it in Bulk Redemption Letters produces that same consent '
-      + 'letter instead of the Request for Redemption. Redemptions already raised on or after it can '
-      + 'have the letter downloaded, but are not blocked. Anything before this date is untouched.',
-    type: 'date',
-    default: '2026-11-01',
-    editableBy: 'super_admin',
-  },
+
+  // ── Retired 2026-11-21 ──────────────────────────────────────────────────
+  // `redemption.letter_dhanam_from` and `redemption.consent_letter_from` used
+  // to live here. Both now belong to the Redemption Letters screen
+  // (letter_templates), which holds all four ranges, their dates and the
+  // company block in one place. They were REMOVED rather than left in: a
+  // setting that still renders but no longer decides anything is worse than
+  // no setting at all, because somebody will change it and believe it worked.
+  // Neither had a stored row in production, so nothing was carried over.
 
   // ── Numbering ──
   {

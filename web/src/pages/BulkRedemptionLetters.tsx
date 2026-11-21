@@ -66,7 +66,7 @@ function saveBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-type Filter = 'all' | 'ready' | 'errors' | 'cautions';
+type Filter = 'all' | 'cautions';
 
 export function BulkRedemptionLettersPage() {
   const [msg, setMsg] = useState('');
@@ -95,7 +95,7 @@ export function BulkRedemptionLettersPage() {
       setPreview(p);
       setErr('');
       setMsg(p.header_errors.length ? '' : `Read ${p.summary.total} record${p.summary.total === 1 ? '' : 's'}.`);
-      setFilter(p.summary.with_errors ? 'errors' : 'all');
+      setFilter(p.summary.with_cautions ? 'cautions' : 'all');
     },
     onError: (e) => {
       setPreview(null);
@@ -129,21 +129,8 @@ export function BulkRedemptionLettersPage() {
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Could not generate that letter'),
   });
 
-  const downloadErrors = () => {
-    if (!preview) return;
-    const bad = preview.rows.filter((r) => r.errors.length);
-    const esc = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
-    const csv = ['Row,Name,What to fix']
-      .concat(bad.map((r) => [r.row_no, esc(r.holder_name), esc(r.errors.join('; '))].join(',')))
-      .join('\n');
-    saveBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'redemption-letter-errors.csv');
-  };
-
   const rows = preview?.rows ?? [];
-  const shown = rows.filter((r) => filter === 'all' ? true
-    : filter === 'ready' ? !r.errors.length
-      : filter === 'errors' ? r.errors.length > 0
-        : r.cautions.length > 0 && !r.errors.length);
+  const shown = rows.filter((r) => filter === 'all' ? true : r.cautions.length > 0);
 
   const s = preview?.summary;
   const blocked = !!preview?.header_errors.length;
@@ -152,7 +139,9 @@ export function BulkRedemptionLettersPage() {
     <div>
       <h1 className="text-xl font-semibold mb-1">Bulk Redemption Letter Generation</h1>
       <p className="text-sm text-text-muted mb-4 max-w-3xl">
-        Produces one redemption request letter per row of a spreadsheet, ready to print and sign.
+        One letter per row of a spreadsheet, ready to print and sign. What you type is what prints —
+        the sheet is the only source, nothing is read from the customer record, and every row
+        produces a letter.
         The letter is the <strong>holder&apos;s</strong> request to the Board, so the customer signs it.
         This tool only makes documents — it does not start a redemption, does not need an approval
         and changes nothing in the book.
@@ -217,8 +206,10 @@ export function BulkRedemptionLettersPage() {
 
             <div className="flex flex-wrap gap-4 mb-3 text-sm">
               <Stat label="Records" value={String(s.total)} />
-              <Stat label="Ready" value={String(s.ready)} tone={s.ready ? 'good' : undefined} />
-              <Stat label="To fix" value={String(s.with_errors)} tone={s.with_errors ? 'bad' : undefined} />
+              {/* "To fix" is gone: since 2026-11-21 nothing stops a row, so every
+                  record produces a letter and the count was always zero. What is
+                  left is what the operator should GLANCE at before printing. */}
+              <Stat label="Letters" value={String(s.ready)} tone={s.ready ? 'good' : undefined} />
               <Stat label="Worth a look" value={String(s.with_cautions)} tone={s.with_cautions ? 'warn' : undefined} />
               <Stat label="Total amount" value={formatINR(s.total_amount)} />
             </div>
@@ -240,16 +231,10 @@ export function BulkRedemptionLettersPage() {
                 {generate.isPending ? 'Generating…'
                   : `Generate ${s.ready} letter${s.ready === 1 ? '' : 's'}`}
               </button>
-              {s.with_errors > 0 && (
-                <button onClick={downloadErrors}
-                  className="px-3 py-2 rounded-md border border-border hover:bg-bg text-sm">
-                  ⬇ Error report ({s.with_errors})
-                </button>
-              )}
-              {!s.ready && <span className="text-sm text-danger">Every record needs a fix first.</span>}
-              {s.ready > 0 && s.with_errors > 0 && (
+              {!s.ready && <span className="text-sm text-text-muted">No records in this file.</span>}
+              {s.with_cautions > 0 && (
                 <span className="text-sm text-text-muted">
-                  The {s.with_errors} with errors will be skipped.
+                  {s.with_cautions} {s.with_cautions === 1 ? 'row is' : 'rows are'} worth a glance — all of them still print.
                 </span>
               )}
             </div>
@@ -258,8 +243,6 @@ export function BulkRedemptionLettersPage() {
           <div className="flex gap-1 mb-2 text-sm">
             {([
               ['all', `All (${s.total})`],
-              ['ready', `Ready (${s.ready})`],
-              ['errors', `To fix (${s.with_errors})`],
               ['cautions', `Worth a look (${s.with_cautions})`],
             ] as [Filter, string][]).map(([k, label]) => (
               <button key={k} onClick={() => setFilter(k)}

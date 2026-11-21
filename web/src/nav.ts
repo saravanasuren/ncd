@@ -54,6 +54,7 @@ export const NAV: NavItem[] = [
   { to: '/app/reports', label: 'Reports', anyOf: ['reports:download'], group: 'Periodic', hideForRoles: ['cxo'] },
   { to: '/app/masters', label: 'Masters', anyOf: ['products:manage'], group: 'Admin' },
   { to: '/app/system', label: 'System', anyOf: ['audit:read', 'notifications:admin'], group: 'Admin' },
+  { to: '/app/letter-templates', label: 'Redemption Letters', anyOf: ['settings:manage'], group: 'Admin' },
   { to: '/app/settings', label: 'Settings', anyOf: ['settings:manage', 'settings:workflow-config'], group: 'Admin' },
   { to: '/app/users', label: 'Users', anyOf: ['users:manage'], group: 'Admin' },
 ];

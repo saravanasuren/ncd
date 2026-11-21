@@ -14,12 +14,19 @@
  * between a redemption and its approver.
  *
  * WHEN IT APPLIES. From the date in `redemption.consent_letter_from`
- * (13 November 2026, movable in Settings). A redemption raised before that is
+ * (1 November 2026, movable in Settings). A redemption raised before that is
  * untouched — no letter, no gate — because those were settled under the old
- * rules and asking for consent afterwards would be inventing it. The 19
+ * rules and asking for consent afterwards would be inventing it. The 22
  * already raised on or after that date are a middle case: their letters can be
  * DOWNLOADED so staff can collect a signature on paper, but they are already
  * approved and are not retrospectively blocked.
+ *
+ * THE DATE MOVED FROM 13 NOVEMBER TO 1 NOVEMBER (owner 2026-11-21), asked for
+ * so the bulk letter tool covers the start of the month. It is the same one
+ * setting on both sides, which the owner chose over a second date for the
+ * bulk tool: nothing was in flight in the 1–12 November window — all three
+ * redemptions raised in it were already approved, so moving the boundary
+ * blocked nothing and simply gave those three a letter to download.
  */
 import type { Db } from '../../db/types.js';
 import { errors } from '../../lib/errors.js';
@@ -27,7 +34,7 @@ import { getSettingsMap } from '../settings/service.js';
 import { consentLetterPdf, type ConsentLetterRow } from '../reports/forms/consent-letter.js';
 
 /** The owner-movable date the consent letter starts applying from. */
-export const DEFAULT_CONSENT_FROM = '2026-11-13';
+export const DEFAULT_CONSENT_FROM = '2026-11-01';
 
 export async function consentLetterFrom(db: Db): Promise<string> {
   const map = await getSettingsMap(db);

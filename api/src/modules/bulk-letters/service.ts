@@ -417,7 +417,7 @@ export async function templateWorkbook(): Promise<Buffer> {
     + 'block the holder is asking you to credit. IFSC is 4 letters, a zero, then 6 characters.');
   note('Customer Code', 'Optional. If you give one we check the name against the system and show a '
     + 'caution when they differ. It never changes what prints.');
-  note('Which letter you get', 'A row dated BEFORE 13-Nov-2026 produces the Request for Redemption '
+  note('Which letter you get', 'A row dated BEFORE 01-Nov-2026 produces the Request for Redemption '
     + 'letter, exactly as this tool has always done. A row dated ON or AFTER it produces the Consent '
     + 'for Premature Redemption instead — the same document the redemption screen produces. One '
     + 'letter per row either way. The preview tells you which each row will be.');

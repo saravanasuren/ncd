@@ -255,10 +255,13 @@ describe('the configurable boundary', () => {
 
 // ── The Consent letter in bulk (owner 2026-11-21) ───────────────────────────
 //
-// A row dated on or after 13 November 2026 produces the Consent for Premature
+// A row dated on or after 1 November 2026 produces the Consent for Premature
 // Redemption — the same document the live redemption screen makes — INSTEAD OF
 // the Request letter. Earlier rows are untouched, which is why every test
 // above still passes unchanged: all of them predate the cut-off.
+//
+// THE DATE MOVED from 13 November to 1 November (owner 2026-11-21). It is one
+// setting, read by this tool and by the live redemption gate alike.
 //
 // The seven consent columns are optional. What the sheet says wins; what it
 // leaves empty is looked up from the customer's own record; what neither
@@ -286,7 +289,7 @@ const previewOf = async (c: Client, b64: string, name = 'c.xlsx') =>
   (await c.post('/api/bulk-redemption-letters/preview', { data_base64: b64, filename: name })).json;
 
 describe('bulk letters after the consent cut-off', () => {
-  it('a row on or after 13 Nov 2026 makes the Consent letter, an earlier one does not', async () => {
+  it('a row on or after 1 Nov 2026 makes the Consent letter, an earlier one does not', async () => {
     const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const p = await previewOf(c, await consentSheetB64([
       { ...AFTER, 'Name of the NCD Holder': 'Holder After' },
@@ -304,10 +307,31 @@ describe('bulk letters after the consent cut-off', () => {
   it('the boundary day belongs to the consent letter', async () => {
     const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const p = await previewOf(c, await consentSheetB64([
-      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 12)), 'Name of the NCD Holder': 'Holder Twelfth' },
-      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 13)), 'Name of the NCD Holder': 'Holder Thirteenth' },
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 9, 31)), 'Name of the NCD Holder': 'Holder Last Oct' },
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 1)), 'Name of the NCD Holder': 'Holder First Nov' },
     ]));
     expect(p.rows.map((r: any) => r.letter_kind)).toEqual(['request', 'consent']);
+  });
+
+  it('the fortnight the owner moved the date back over now gets the consent letter', async () => {
+    // 1–12 November 2026 used to produce the Request letter and now produces
+    // the Consent letter. This is the whole of the change made on 2026-11-21,
+    // so it is pinned on its own rather than left to the boundary test.
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 3)), 'Name of the NCD Holder': 'Holder Third' },
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 12)), 'Name of the NCD Holder': 'Holder Twelfth' },
+    ]));
+    expect(p.rows.map((r: any) => r.letter_kind)).toEqual(['consent', 'consent']);
+  });
+
+  it('October is still the Request letter — the move did not swallow the old book', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 9, 1)), 'Name of the NCD Holder': 'Holder Oct One' },
+      { ...KIARA_ERA, 'Name of the NCD Holder': 'Holder Kiara' },
+    ]));
+    expect(p.rows.map((r: any) => r.letter_kind)).toEqual(['request', 'request']);
   });
 
   it('generates a real Consent PDF for the post-cut-off row', async () => {

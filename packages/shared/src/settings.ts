@@ -193,13 +193,14 @@ export const SETTINGS_CATALOG: SettingDef[] = [
   {
     key: 'redemption.consent_letter_from',
     group: 'Redemptions',
-    label: 'Consent letter required for redemptions from',
-    description: 'A premature redemption raised on or after this date cannot go for approval until the '
-      + 'holder has signed the Consent for Premature Redemption, on paper or through e-Sign. Redemptions '
-      + 'already raised on or after it can have the letter downloaded, but are not blocked. Anything '
-      + 'before this date is untouched.',
+    label: 'Consent letter applies from',
+    description: 'ONE DATE, TWO PLACES. A premature redemption raised on or after it cannot go for '
+      + 'approval until the holder has signed the Consent for Premature Redemption, on paper or through '
+      + 'e-Sign; and a row dated on or after it in Bulk Redemption Letters produces that same consent '
+      + 'letter instead of the Request for Redemption. Redemptions already raised on or after it can '
+      + 'have the letter downloaded, but are not blocked. Anything before this date is untouched.',
     type: 'date',
-    default: '2026-11-13',
+    default: '2026-11-01',
     editableBy: 'super_admin',
   },
 

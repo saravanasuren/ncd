@@ -5,9 +5,11 @@
  * Reproduced from the owner's "Consent for Waiver and Redemption from Each NCD
  * Holder.docx" (supplied 2026-11-20). Like the redemption request letter, this
  * is written BY THE HOLDER: "I, <name>, am the registered holder…", and the
- * only signature on it is theirs. So no letterhead and no logo — the Word file
- * has neither, and the company appears only as the issuer named in the opening
- * sentence.
+ * only signature on it is theirs. No logo and no letterhead — but it IS
+ * addressed to the Board: the owner's revised format of 2026-11-21 puts the
+ * "To, The Board of Directors…" block at the head, the same block the request
+ * letter carries, labelled "Regd Off Address -" here. The first format
+ * supplied had none, which is why the letter shipped without one.
  *
  * IT REPLACES THE REQUEST LETTER IN THE SIGNING FLOW (owner 2026-11-20, asked
  * outright). The request letter from #530 is untouched and the bulk
@@ -47,9 +49,30 @@ import { renderToBuffer } from './shared.js';
  */
 export type Particular = string | number | null;
 
+/** The "To, The Board of Directors…" block at the head of the letter. */
+export interface ConsentAddressee {
+  legal_name: string;
+  formerly?: string;
+  /** Street that follows the bold "Regd Off Address -" label. */
+  off_address_line1: string;
+  off_address_rest: string[];
+  /** Lines after the bold "Corp Office:" label; empty when there are none. */
+  corp_office: string[];
+}
+
 export interface ConsentLetterRow {
   /** ISO yyyy-mm-dd — prints nowhere, but dates the file and the audit trail. */
   letter_date: string;
+  /**
+   * The addressee block (owner 2026-11-21, with an updated format showing it).
+   *
+   * The letter had none: the first format supplied carried no letterhead, and
+   * since the holder is its author there was nothing to address. The owner's
+   * revised format puts the Board block back at the head, so it is drawn when
+   * supplied and the letter is unchanged when it is not — which keeps every
+   * letter already rendered reproducible.
+   */
+  addressee?: ConsentAddressee | null;
   holder_name: string;
   pan: string;
   series: string;
@@ -165,6 +188,41 @@ export function consentLetterPdf(row: ConsentLetterRow): Promise<Buffer> {
 
     // ── Title ────────────────────────────────────────────────────────────────
     para('Consent for Premature Redemption', { font: 'Helvetica-Bold', size: 13.5, gap: 14 });
+
+    // ── Addressee ────────────────────────────────────────────────────────────
+    //
+    // Laid out exactly as the request letter's, except the label reads
+    // "Regd Off Address -" rather than "Off Address -", which is what the
+    // owner's format for THIS letter says.
+    const a = row.addressee;
+    if (a && a.legal_name) {
+      const line = (t: string, font = 'Helvetica') => {
+        room(measure(t, font, BODY) + 2);
+        doc.font(font).fontSize(BODY).fillColor('#000').text(t, LEFT, y, { width: WIDTH });
+        y = doc.y;
+      };
+      line('To,');
+      line('The Board of Directors,');
+      line(`${a.legal_name},`);
+      if (a.formerly) line(`(${a.formerly})`);
+      if (a.off_address_line1) {
+        room(16);
+        doc.font('Helvetica-Bold').fontSize(BODY).fillColor('#000')
+          .text('Regd Off Address -', LEFT, y, { continued: true })
+          .font('Helvetica').text(` ${a.off_address_line1}`);
+        y = doc.y;
+      }
+      for (const l of a.off_address_rest) line(l);
+      if (a.corp_office.length) {
+        room(16);
+        doc.font('Helvetica-Bold').fontSize(BODY).fillColor('#000')
+          .text('Corp Office:', LEFT, y, { continued: true })
+          .font('Helvetica').text(` ${a.corp_office[0]}`);
+        y = doc.y;
+        for (const l of a.corp_office.slice(1)) line(l);
+      }
+      y += 14;
+    }
 
     // ── Opening sentence. The company is named here and nowhere else. ────────
     para(

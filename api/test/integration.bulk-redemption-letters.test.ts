@@ -370,8 +370,12 @@ describe('bulk letters after the consent cut-off', () => {
     expect(t).toContain('Waiverof2%additionalpremium.');
     expect(t).toContain('Demat');
     expect(t).toContain('ABCDE1234F');
-    // ...and NOT the request letter's opening.
-    expect(t).not.toContain('TheBoardofDirectors,');
+    // It IS addressed to the Board now (owner 2026-11-21) — so the thing
+    // that tells the two letters apart is the request letter's Subject line,
+    // which the consent letter has never had.
+    expect(t).toContain('TheBoardofDirectors,');
+    expect(t).not.toContain('Subject:');
+    expect(t).not.toContain('RequestforRedemptionofNCDinvestment');
   });
 
   it('takes Demat / Physical from the sheet, and cautions on anything else', async () => {

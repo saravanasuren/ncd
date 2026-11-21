@@ -174,6 +174,44 @@ describe('the consent letter says what the owner wrote', () => {
   });
 });
 
+describe('the Board block at the head', () => {
+  const BLOCK = {
+    legal_name: 'Dhanam Investment and Finance Limited',
+    formerly: 'Formerly Kiara Microcredit Pvt Ltd',
+    off_address_line1: 'No. 22/3 2nd Street,',
+    off_address_rest: ['Nehru Nagar, Behind CMS School,', 'Ganapathy, Coimbatore TN 641006.'],
+    corp_office: ['2/191 B. Mylampatty Road, Karayampalayam.', 'Mylampatty Post, Chinniyampalayam,'],
+  };
+
+  it('addresses the Board when a block is supplied', async () => {
+    // The owner's revised format of 2026-11-21 puts this back at the head.
+    const t = squash(extractText(await consentLetterPdf(row({ addressee: BLOCK }))));
+    expect(t).toContain('To,');
+    expect(t).toContain('TheBoardofDirectors,');
+    expect(t).toContain(squash('Dhanam Investment and Finance Limited,'));
+    expect(t).toContain(squash('(Formerly Kiara Microcredit Pvt Ltd)'));
+    // Their format labels it "Regd Off Address -", not the request letter's
+    // "Off Address -".
+    expect(t).toContain('RegdOffAddress-');
+    expect(t).toContain(squash('No. 22/3 2nd Street,'));
+    expect(t).toContain('CorpOffice:');
+  });
+
+  it('prints the letter unchanged when no block is given', async () => {
+    // Every letter rendered before this change had none, and must still
+    // reproduce byte for byte.
+    const t = squash(extractText(await consentLetterPdf(row())));
+    expect(t).not.toContain('TheBoardofDirectors,');
+    expect(t).toContain('ConsentforPrematureRedemption');
+    expect(t).toContain(squash('I, Holder Alpha, am the registered holder'));
+  });
+
+  it('keeps the block above the sentence that names the issuer', async () => {
+    const t = squash(extractText(await consentLetterPdf(row({ addressee: BLOCK }))));
+    expect(t.indexOf('TheBoardofDirectors,')).toBeLessThan(t.indexOf('amtheregisteredholder'));
+  });
+});
+
 describe('where the consent letter breaks across pages', () => {
   it('never leaves a page carrying only the signature', async () => {
     for (const holder of [

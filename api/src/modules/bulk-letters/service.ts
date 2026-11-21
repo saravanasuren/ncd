@@ -22,7 +22,7 @@ import {
   addresseeFor, DEFAULT_DHANAM_FROM, type AddresseeEra,
 } from '../reports/forms/redemption-letter-addressee.js';
 import { COLUMNS, parseUpload, type ParsedRow } from './parse.js';
-import { listTemplates, pickFor, type LetterTemplate } from '../letters/service.js';
+import { listTemplates, pickFor, blockOf, type LetterTemplate } from '../letters/service.js';
 import { makeZip, safeFilename, type ZipEntry } from './zip.js';
 
 /** A sheet big enough to be a mistake rather than a batch. */
@@ -89,8 +89,9 @@ export function letterKindFor(letterDate: string, consentFrom: string): 'request
   return letterDate.slice(0, 10) >= consentFrom.slice(0, 10) ? 'consent' : 'request';
 }
 
-const toConsentRow = (r: ParsedRow): ConsentLetterRow => ({
+const toConsentRow = (r: ParsedRow, t?: LetterTemplate | null): ConsentLetterRow => ({
   letter_date: r.letter_date,
+  addressee: t && t.legal_name ? blockOf(t) : null,
   holder_name: r.holder_name,
   pan: r.pan,
   series: r.series,
@@ -301,7 +302,7 @@ export async function generateLetters(db: Db, buf: Buffer, filename: string): Pr
     }
     try {
       const pdf = row.letter_kind === 'consent'
-        ? await consentLetterPdf(toConsentRow(row))
+        ? await consentLetterPdf(toConsentRow(row, pickFor(templates, row.letter_date)))
         : await redemptionLetterPdf(toLetterRow(row),
             eraFor(pickFor(templates, row.letter_date), row.letter_date, from));
       entries.push({ name: row.filename, data: pdf });
@@ -329,10 +330,11 @@ export async function generateOne(db: Db, buf: Buffer, filename: string, rowNo: 
   const row = preview.rows.find((r) => r.row_no === rowNo);
   if (!row) throw errors.notFound(`Row ${rowNo} is not in this file`);
   if (row.errors.length) throw errors.badRequest(`Row ${rowNo}: ${row.errors.join('; ')}`);
+  const templates = await listTemplates(db);
   const pdf = row.letter_kind === 'consent'
-    ? await consentLetterPdf(toConsentRow(row))
+    ? await consentLetterPdf(toConsentRow(row, pickFor(templates, row.letter_date)))
     : await redemptionLetterPdf(toLetterRow(row), eraFor(
-        pickFor(await listTemplates(db), row.letter_date), row.letter_date, dhanamFrom()));
+        pickFor(templates, row.letter_date), row.letter_date, dhanamFrom()));
   return { pdf, filename: row.filename };
 }
 

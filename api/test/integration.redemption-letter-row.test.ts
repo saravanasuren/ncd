@@ -42,7 +42,7 @@ const squash = (s: string) => s.replace(/\s+/g, '');
 
 async function redemptionFor(
   holder: string, phone: string, amount: number,
-  opts: { bank?: { acct: string; ifsc: string; name: string }; mode?: 'Demat' | 'Physical'; redeem?: number } = {},
+  opts: { bank?: { acct: string; ifsc: string; name: string }; mode?: 'Demat' | 'Physical'; redeem?: number; rolloverDate?: string } = {},
 ) {
   const cust = await admin.post('/api/customers', { full_name: holder, phone, pan: undefined });
   expect(cust.status, JSON.stringify(cust.json)).toBe(201);
@@ -61,6 +61,7 @@ async function redemptionFor(
   const r = await checker.post('/api/redemptions/premature', {
     application_id: Number(app.json.id), reason: 'Needs it early',
     holding_mode: opts.mode ?? 'Demat',
+    ...(opts.rolloverDate ? { rollover_date: opts.rolloverDate } : {}),
     ...(opts.redeem ? { amount: opts.redeem } : {}),
   });
   expect(r.status, JSON.stringify(r.json)).toBe(201);
@@ -75,6 +76,45 @@ const pdfFor = async (rid: number) => {
   const { redemptionLetterPdf } = await import('../src/modules/redemptions/letter.js');
   return squash(extractText(await redemptionLetterPdf(ctx.db, rid)));
 };
+
+describe('Date of Rollover is asked, never derived', () => {
+  it('prints what staff typed, and nothing when they typed nothing', async () => {
+    const plain = await redemptionFor('Holder Theta', '9760000071', 300000);
+    const rolled = await redemptionFor('Holder Iota', '9760000072', 300000,
+      { rolloverDate: '2024-05-04' });
+
+    expect((await rowFor(plain.rid)).rollover_date).toBe('');
+    expect((await rowFor(rolled.rid)).rollover_date).toBe('2024-05-04');
+
+    // The LABEL is on both letters — an absent row cannot be filled in by
+    // hand — but only one of them carries a date.
+    const a = await pdfFor(plain.rid);
+    const b = await pdfFor(rolled.rid);
+    expect(a).toContain('DateofRollover');
+    expect(b).toContain('DateofRollover');
+    expect(a).not.toContain('04-May-2024');
+    expect(b).toContain('04-May-2024');
+  });
+
+  it('never falls back to the allotment date', async () => {
+    // For a rolled-over holding the allotment date in the book IS the rollover
+    // date — the earlier investment is not held at all. Printing it under both
+    // labels would turn one fact into two on a document somebody signs, so an
+    // unanswered row stays empty.
+    const { rid, appId } = await redemptionFor('Holder Kappa', '9760000073', 300000);
+    await ctx.db.query("UPDATE applications SET allotment_date = '2024-05-04' WHERE id = $1", [appId]);
+    const row = await rowFor(rid);
+    expect(row.allotment_date).toBe('2024-05-04');
+    expect(row.rollover_date).toBe('');
+  });
+
+  it('is optional — a redemption can be raised without it', async () => {
+    // Unlike Mode of holding. Almost no holding was ever rolled over, so a
+    // required field here would block every ordinary redemption.
+    const { rid } = await redemptionFor('Holder Lambda', '9760000074', 300000);
+    expect(rid).toBeGreaterThan(0);
+  });
+});
 
 describe('a redemption fills its own consent letter', () => {
   it('carries the holder, the series, the rate and the debenture count', async () => {

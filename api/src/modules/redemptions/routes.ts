@@ -24,6 +24,11 @@ redemptionsRouter.post('/premature', requirePermission('redemptions:initiate'),
       // evidence of a physical holding. A moment's thought at the desk beats
       // a guess on a signed document.
       holding_mode: z.enum(['Demat', 'Physical']),
+      // OPTIONAL, unlike holding_mode. It prints on the same letter, but the
+      // question only applies to a holding that was actually rolled over —
+      // and almost none were. Requiring it would stop every ordinary
+      // redemption to answer something that is not true of it.
+      rollover_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD').optional(),
     }).parse(req.body);
     res.status(201).json(await s.initiatePremature(getDb(), req.user!, input));
   }));

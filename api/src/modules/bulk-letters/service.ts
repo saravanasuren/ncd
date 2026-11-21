@@ -88,6 +88,7 @@ const toConsentRow = (r: ParsedRow): ConsentLetterRow => ({
   pan: r.pan,
   series: r.series,
   allotment_date: r.allotment_date,
+  rollover_date: r.rollover_date,
   original_maturity_date: r.original_maturity_date,
   // The number being redeemed, which is what the sheet's own column holds.
   ncd_count: r.debentures,
@@ -118,6 +119,13 @@ const toConsentRow = (r: ParsedRow): ConsentLetterRow => ({
  * A miss is not an error. The letter prints the row blank and the preview says
  * which, because the alternative — refusing the row — would deny a letter over
  * a particular that can be written in by hand.
+ *
+ * DATE OF ROLLOVER IS NOT FILLED HERE, and that is not an omission. There is
+ * nothing in the book to fill it from: the rollover feature has never been
+ * used, rollovers exist only as the six "NCD 05 Rollover"-style series, and
+ * the pre-rollover investment is not held at all — so the only date on record
+ * for a rolled-over holding is its allotment date, which already prints on its
+ * own row. The sheet is the single source for that column.
  */
 async function fillConsentGaps(db: Db, rows: ParsedRow[], consentFrom: string): Promise<void> {
   const wanted = rows.filter((r) => letterKindFor(r.letter_date, consentFrom) === 'consent');
@@ -220,6 +228,10 @@ function decorate(rows: ParsedRow[], from: string, consentFrom: string): Preview
       ? ([
         [!r.mode_of_holding, 'Mode of Holding'],
         [!r.allotment_date, 'Date of Allotment'],
+        // Date of Rollover is deliberately absent from this list. It is blank
+        // on nearly every letter because nearly every holding was never rolled
+        // over, so flagging it would put a caution on practically every row
+        // and teach the operator to scroll past the ones that matter.
         [!r.original_maturity_date, 'Original Maturity Date'],
         [r.coupon_rate_pct == null, 'Coupon Rate'],
         [r.face_value == null, 'Face Value'],
@@ -369,12 +381,17 @@ export async function templateWorkbook(): Promise<Buffer> {
     // customer's record answers instead.
     'Mode of Holding': 'Demat',
     'Date of Allotment': new Date(Date.UTC(2024, 2, 30)),
+    // Shown EMPTY on purpose: the example is an ordinary holding, and an
+    // ordinary holding was never rolled over. A filled example here would
+    // invite the column to be filled in for everyone.
+    'Date of Rollover': null,
     'Original Maturity Date': new Date(Date.UTC(2029, 2, 30)),
     'Coupon Rate': '12.5%',
     'Face Value': 500000,
     'PAN': 'ABCDE1234F',
   });
   ws.getColumn('Date of Allotment').numFmt = 'dd-mmm-yyyy';
+  ws.getColumn('Date of Rollover').numFmt = 'dd-mmm-yyyy';
   ws.getColumn('Original Maturity Date').numFmt = 'dd-mmm-yyyy';
   ws.getColumn('Face Value').numFmt = '#,##0.00';
   // Dates as dates, not text — then nothing has to be guessed when it comes back.
@@ -384,7 +401,7 @@ export async function templateWorkbook(): Promise<Buffer> {
   const notes = wb.addWorksheet('How to fill this in');
   notes.columns = [{ width: 26 }, { width: 96 }];
   const note = (a: string, b: string) => notes.addRow([a, b]);
-  note('Every column is required', 'except Customer Code and the six consent columns at the end, '
+  note('Every column is required', 'except Customer Code and the seven consent columns at the end, '
     + 'which are all optional.');
   note('Letter Date', 'Prints at the top and bottom of the letter AND decides which company it is '
     + 'addressed to. Keep the cell formatted as a date. If you type it as text, it is read '
@@ -407,6 +424,10 @@ export async function templateWorkbook(): Promise<Buffer> {
   note('Mode of Holding', 'Demat or Physical. Only used by the consent letter. It CANNOT be worked '
     + 'out from the system, so if you leave it empty the letter prints that row blank for you to '
     + 'tick by hand when it is signed.');
+  note('Date of Rollover', 'Only for a holding that was actually rolled over — leave it empty for '
+    + 'everything else and the letter prints that row blank, which is correct. This is the ONE '
+    + 'consent column we cannot look up for you: the system does not hold the earlier investment a '
+    + 'rollover came from, so if the sheet does not say, nothing does.');
   note('The other consent columns', 'Date of Allotment, Original Maturity Date, Coupon Rate, Face '
     + 'Value and PAN. Leave any of them empty and we look it up from the customer record using the '
     + 'Customer Code and the series. What YOU type always wins. Anything neither you nor the record '

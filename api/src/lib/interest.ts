@@ -46,7 +46,12 @@ export type PayoutFrequency =
   | 'HalfYearly'
   | 'Annual'
   | 'Cumulative'
-  | 'LockIn';
+  | 'LockIn'
+  // The Doubling product. It was in the DATA and the scheme row from the
+  // start but never in this union, so generateSchedule fell off the end of
+  // its if/else and returned NO ROWS — ten live lines, Rs 1.08 crore, with
+  // nothing scheduled and no maturity date stamped (owner 2026-11-21).
+  | 'AtMaturity';
 
 export type DueType = 'Interest' | 'BrokenInterest' | 'Redemption' | 'Premature';
 
@@ -57,6 +62,65 @@ const FREQ_MONTHS: Record<string, number> = {
   Annual: 12,
 };
 const PERIOD_DAYS_PER_MONTH = 30;
+
+/**
+ * What a CUMULATIVE holding is worth at maturity.
+ *
+ * THE ONE PLACE THIS IS COMPUTED. The certificate used to work it out on its
+ * own and the engine did not work it out at all, which is how a document
+ * promising Rs 42,00,000 came to sit over a schedule holding nothing. The
+ * schedule, the maturity payout and the printed certificate now all read this
+ * function, so they cannot drift apart again.
+ *
+ * TWO PARTS, by the owner's decision of 2026-11-21, asked outright:
+ *
+ *   term   = principal x rate x tenure/12 — the CERTIFICATE'S OWN FORMULA, so
+ *            a Doubling holding earns exactly 100% and the paid figure can
+ *            never fall short of the printed promise. Deliberately NOT a
+ *            day count: Actual365 across five years picks up the 2028 leap
+ *            day and would quietly pay more than the certificate says.
+ *   broken = rate on the days the money sat with the Company BEFORE the term
+ *            began — every one of the ten paid 2 to 30 days before the deemed
+ *            date, and interest_start_date already records it. Day-counted on
+ *            the line's own convention, exactly as every other product's
+ *            broken period is.
+ *
+ * The deemed date itself belongs to the term, so the broken period ends the
+ * day before it and nothing is counted twice.
+ *
+ * MONEY THAT ARRIVED LATE IS NOT CHARGED BACK. A negative gap clamps to zero
+ * rather than shaving the term, because the holder's certificate promises the
+ * full term and paying under it is the one error that cannot be defended.
+ */
+export function cumulativeMaturityValue(input: {
+  principal: number;
+  ratePct: unknown;
+  tenureMonths: unknown;
+  /** When the money actually arrived — the line's own date. */
+  interestStartDate?: ISODate | null;
+  /** When the term starts; the deemed date the maturity is measured from. */
+  seriesDeemedDate?: ISODate | null;
+  convention?: DayCountConvention;
+}): { term: number; broken: number; brokenDays: number; interest: number; total: number } {
+  const principal = Number(input.principal);
+  const rate = Number(input.ratePct);
+  const months = Number(input.tenureMonths);
+  const none = { term: 0, broken: 0, brokenDays: 0, interest: 0, total: round2(principal || 0) };
+  if (!Number.isFinite(principal) || principal <= 0) return { ...none, total: 0 };
+  if (!Number.isFinite(rate) || !Number.isFinite(months) || rate <= 0 || months <= 0) return none;
+
+  const term = round2(principal * (rate / 100) * (months / 12));
+
+  let brokenDays = 0;
+  if (input.interestStartDate && input.seriesDeemedDate) {
+    brokenDays = Math.max(0, daysBetween(input.interestStartDate, input.seriesDeemedDate));
+  }
+  const denom = denominatorFor(input.convention || 'Actual365', input.interestStartDate || undefined);
+  const broken = brokenDays > 0 ? round2(principal * (rate / 100) * brokenDays / denom) : 0;
+
+  const interest = round2(term + broken);
+  return { term, broken, brokenDays, interest, total: round2(principal + interest) };
+}
 
 export interface ScheduleLine {
   amount: number;
@@ -265,6 +329,24 @@ export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): Schedu
         }
       }
     }
+  } else if (freq === 'AtMaturity') {
+    // ONE COMBINED ROW (owner 2026-11-21, asked: "combined pluse the broken
+    // period interest"). Principal and the whole of the interest land together
+    // on the maturity date, because that is when the holder is actually paid —
+    // nothing on a cumulative product reaches them before it.
+    const v = cumulativeMaturityValue({
+      principal: amount, ratePct: rate, tenureMonths: tenure,
+      interestStartDate, seriesDeemedDate, convention,
+    });
+    out.push({
+      due_date: maturityDate,
+      due_type: 'Redemption',
+      gross_amount: v.total,
+      // The day-counted part only. The term is formula-based, not counted in
+      // days, so putting the whole five years here would misdescribe it.
+      period_days: v.brokenDays,
+      is_broken_period: false,
+    });
   } else if (freq === 'Cumulative' || freq === 'LockIn') {
     const units = Math.floor(amount / Number(line.face_value || 1000));
     const redemptionPerUnit = Number(line.redemption_amount_per_unit || line.face_value || 1000);

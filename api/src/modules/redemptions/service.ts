@@ -13,6 +13,7 @@ import { writeAudit } from '../../lib/audit.js';
 import { assertTransition } from '../../lib/statusMachine.js';
 import { nextCode } from '../../lib/sequences.js';
 import { computeRedemption } from '../../lib/redemption.js';
+import { cumulativeMaturityValue } from '../../lib/interest.js';
 import { computeTds, DEFAULT_TDS_RULE } from '../../lib/tds.js';
 import { round2, roundRupee, toISODate } from '../../lib/dates.js';
 import type { RateSpec } from '../../lib/incentive.js';
@@ -83,9 +84,26 @@ async function createRequest(
   //       owed: 40L x 7d            +  20L x 23d              = Rs 24,328
   // The retained half keeps every day it earned — it is simply paid on its own
   // row, from the last paid date, which is what that row was always for.
+  //
+  // A MATURITY REDEMPTION IS NO LONGER ASSUMED TO OWE NOTHING. This read
+  // `: { gross: 0 }` for every maturity, which is right for a periodic
+  // holding — its interest was paid month by month and the stub to the
+  // maturity date is already a BrokenInterest row on the schedule. It was
+  // catastrophically wrong for a CUMULATIVE one, whose entire interest falls
+  // due precisely here. Ten Doubling lines, Rs 1.08 crore, would have paid
+  // back exactly what went in against certificates promising double.
+  //
+  // It left a cliff you could fall off by a day: redeemed 30-Aug-2031 the
+  // premature path paid Rs 42,02,301 on APP-2026-001274's Rs 21,00,000, and
+  // redeemed 31-Aug-2031 — ON the maturity date, the normal thing to do —
+  // the same holding paid Rs 21,00,000.
+  //
+  // Periodic holdings are untouched: accrueCumulativeMaturity returns zero
+  // for anything that is not 'AtMaturity', so this is the same `{ gross: 0 }`
+  // for every line in the book bar those ten.
   const broken = input.type === 'premature'
     ? await accrueBrokenInterest(tx, input.applicationId, principal, redDate)
-    : { gross: 0, tds: 0, paidThrough: null };
+    : await accrueCumulativeMaturity(tx, input.applicationId, principal);
   calc.brokenInterest = broken.gross;
   const brokenTds = broken.tds;
   // Owner 2026-07-24: the broken interest is NOT bundled into the redemption
@@ -150,6 +168,70 @@ async function accrueBrokenInterest(
     { due_type: 'BrokenInterest', gross_amount: gross, due_date: redDate },
   ));
   return { gross, tds, paidThrough };
+}
+
+/**
+ * What a CUMULATIVE line owes when it reaches maturity.
+ *
+ * Zero for everything else, which is the whole of the safety here: a periodic
+ * holding takes exactly the path it always did.
+ *
+ * The figure comes from `cumulativeMaturityValue` — the same function the
+ * schedule is generated from and the certificate is printed from — so the
+ * promise, the projection and the payment are one number by construction
+ * rather than by three pieces of code agreeing.
+ *
+ * It rides home on `broken_interest`, the field a premature redemption already
+ * uses, so it is paid in that month's interest batch as a 'Redemption' row and
+ * is taxed through the existing TDS path (owner 2026-07-24). No new way of
+ * moving money was invented for this; the one that is already proven carries
+ * it.
+ */
+async function accrueCumulativeMaturity(
+  tx: Db, applicationId: number, principal: number
+): Promise<{ gross: number; tds: number; paidThrough: string | null }> {
+  const nothing = { gross: 0, tds: 0, paidThrough: null };
+  const line = (await tx.query<Record<string, unknown>>(
+    `SELECT l.id AS line_id, l.coupon_rate_pct, l.day_count_convention, l.payout_frequency,
+            l.tenure_months, l.amount AS line_amount, l.scheme_id,
+            a.interest_start_date, l.date_money_received, s.deemed_date,
+            c.is_nri, c.tds_applicable AS cust_tds, c.tax_form, c.tax_form_expires_on
+       FROM application_lines l
+       JOIN applications a ON a.id = l.application_id
+       JOIN customers c ON c.id = a.customer_id
+       LEFT JOIN series s ON s.id = a.series_id
+      WHERE l.application_id = $1 AND l.status = 'Active' ORDER BY l.id LIMIT 1`, [applicationId])).rows[0];
+  if (!line || String(line.payout_frequency) !== 'AtMaturity') return nothing;
+
+  // The line's own money date, falling back to the application's — the same
+  // precedence the payout run uses for a clubbed tranche.
+  const moneyDate = toISODate((line.date_money_received as string | null) ?? null)
+    ?? toISODate((line.interest_start_date as string | null) ?? null);
+
+  const value = cumulativeMaturityValue({
+    principal,
+    ratePct: line.coupon_rate_pct,
+    tenureMonths: line.tenure_months,
+    interestStartDate: moneyDate,
+    seriesDeemedDate: toISODate((line.deemed_date as string | null) ?? null),
+    convention: line.day_count_convention as never,
+  });
+  // 🔒 Whole rupees, owner-approved 2026-08-16 — the interest sheet takes this
+  // AS IS and never recomputes it, so paise here reach the NEFT file.
+  const gross = roundRupee(value.interest);
+  if (gross <= 0) return nothing;
+
+  const tdsRule = line.scheme_id
+    ? (await tx.query<{ rate_pct: number }>('SELECT tr.* FROM schemes s JOIN tds_rules tr ON tr.id = s.tds_rule_id WHERE s.id = $1', [line.scheme_id])).rows[0] ?? DEFAULT_TDS_RULE
+    : DEFAULT_TDS_RULE;
+  const tds = roundRupee(computeTds(
+    tdsRule,
+    { is_nri: line.is_nri as boolean, tds_applicable: line.cust_tds as boolean,
+      tax_form: line.tax_form as string | null, tax_form_expires_on: toISODate(line.tax_form_expires_on as string | null) },
+    { payout_frequency: line.payout_frequency as string, amount: Number(line.line_amount) },
+    { due_type: 'BrokenInterest', gross_amount: gross, due_date: toISODate((line.deemed_date as string | null) ?? null) ?? new Date().toISOString().slice(0, 10) },
+  ));
+  return { gross, tds, paidThrough: moneyDate };
 }
 
 /** Customer / app requests a redemption (no approval yet — lands in the staff queue). */

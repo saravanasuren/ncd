@@ -489,6 +489,28 @@ export function ApprovalsPage() {
                 <span className="text-xs text-text-muted italic">awaiting another checker</span>
               )}
             </div>
+            {/* WHAT THE APPROVER IS ACTUALLY APPROVING (owner 2026-11-20:
+                "once the approver sees the letter being signed then they
+                approve it").
+
+                Shown to every checker who can see the card, not only the one
+                whose turn it is to act — reading the document is how you
+                decide, and a second checker should be able to look before the
+                first has moved. The signature cannot be verified from a status
+                word, so both documents are one click away rather than a
+                navigation to the investment page and back. */}
+            {r.request_type === 'premature_redemption' && r.metadata.redemption_id != null && (
+              <div className="flex gap-3 flex-wrap items-center mt-2 text-xs">
+                <span className="text-text-muted">Consent letter:</span>
+                <a className="text-primary hover:underline"
+                  href={`/api/redemptions/${Number(r.metadata.redemption_id)}/letter.pdf`}
+                  target="_blank" rel="noreferrer">↗ the letter sent for signing</a>
+                <a className="text-primary hover:underline"
+                  href={`/api/redemptions/${Number(r.metadata.redemption_id)}/signed-letter.pdf`}
+                  target="_blank" rel="noreferrer"
+                  title="The copy that came back. Check the signature before approving.">↗ signed copy</a>
+              </div>
+            )}
             {r.canAct && r.request_type === 'premature_redemption' && waiverEnabled && (
               <PrematureWaive
                 redemptionId={Number(r.metadata.redemption_id)}

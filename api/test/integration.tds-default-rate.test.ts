@@ -89,7 +89,10 @@ describe('TDS default rate applies even when the line has no scheme', () => {
   it('a premature redemption on a schemeless line also deducts 10% on its broken-interest slice', async () => {
     const { appId } = await makeSchemelessLine(500000, '9700055504');
     const ncd = await asNcd();
-    const init = await ncd.post('/api/redemptions/premature', { application_id: appId, redemption_date: '2026-07-15', reason: 'Customer request' });
+    // holding_mode is required on a staff premature redemption since the
+    // consent letter landed (owner 2026-11-20) — it prints on the document the
+    // holder signs. This suite is about the TDS rate, so it just answers.
+    const init = await ncd.post('/api/redemptions/premature', { application_id: appId, redemption_date: '2026-07-15', reason: 'Customer request', holding_mode: 'Demat' });
     expect(init.status).toBe(201);
     const row = (await ctx.db.query(
       `SELECT gross_amount, tds_amount FROM disbursement_schedule

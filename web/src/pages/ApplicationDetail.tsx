@@ -185,11 +185,11 @@ function RedemptionSigning({ appId, onDone, onError }: { appId: number; onDone: 
 
       <div className="flex gap-2 flex-wrap items-center">
         {s?.letter_generated_at && (
-          <a className={act} href={`/api/redemptions/${rid}/letter.pdf`} target="_blank" rel="noreferrer">Download letter</a>
+          <a className={act} href={`/api/redemptions/${rid}/letter.pdf`} target="_blank" rel="noreferrer">Download consent letter</a>
         )}
         <button className={act} disabled={busy || s?.status === 'Signed'}
-          onClick={() => run(api.post(`/api/redemptions/${rid}/letter`, {}), 'Redemption letter generated.')}>
-          {s?.letter_generated_at ? 'Regenerate letter' : 'Generate letter'}
+          onClick={() => run(api.post(`/api/redemptions/${rid}/letter`, {}), 'Consent letter generated.')}>
+          {s?.letter_generated_at ? 'Regenerate consent letter' : 'Generate consent letter'}
         </button>
         {s?.signed_doc_filename && (
           <a className={act} href={`/api/redemptions/${rid}/signed-letter.pdf`} target="_blank" rel="noreferrer">View signed copy</a>
@@ -283,6 +283,10 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
   const [open, setOpen] = useState<'premature' | 'transfer' | 'transformation' | null>(null);
   const [reason, setReason] = useState('');
   const [amount, setAmount] = useState('');
+  // Demat or Physical, asked at redemption time because it prints on the
+  // consent letter and cannot be derived (owner 2026-11-20). No default: a
+  // pre-selected value is a guess somebody signs.
+  const [holdingMode, setHoldingMode] = useState<'' | 'Demat' | 'Physical'>('');
   // Defaults to today (editable). Blank is still accepted by the API (it also
   // defaults to today), but showing the date makes the default explicit.
   const [date, setDate] = useState(todayLocalISO());
@@ -297,7 +301,7 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
   });
 
   const fire = (p: Promise<unknown>, msg: string) =>
-    p.then(() => { setOpen(null); setReason(''); setAmount(''); setDate(todayLocalISO()); setToCustomer(null); setCustQ(''); onDone(msg); }).catch(onError);
+    p.then(() => { setOpen(null); setReason(''); setAmount(''); setHoldingMode(''); setDate(todayLocalISO()); setToCustomer(null); setCustQ(''); onDone(msg); }).catch(onError);
 
   const inp = 'px-2.5 py-1.5 text-xs border border-border-strong rounded outline-none focus:border-primary';
   const act = 'text-xs border border-border rounded px-3 py-1.5 hover:bg-bg';
@@ -321,12 +325,19 @@ function LifecycleActions({ appId, locker, onDone, onError }: { appId: number; l
             <input className={`${inp} w-44`} type="number" min="1" placeholder="Amount (blank = all)" value={amount} onChange={(e) => setAmount(e.target.value)}
               title="Partial withdrawal — leave blank to redeem everything redeemable" />
             <input className={inp} type="date" value={date} onChange={(e) => setDate(e.target.value)} title="Redemption date (optional, default today)" />
-            <button className={go} disabled={reason.trim().length < 2 || (amount !== '' && !(Number(amount) > 0))}
+            <select className={inp} value={holdingMode} onChange={(e) => setHoldingMode(e.target.value as '' | 'Demat' | 'Physical')}
+              title="Prints on the consent letter the customer signs — it cannot be worked out from the record">
+              <option value="">Mode of holding…</option>
+              <option value="Demat">Demat</option>
+              <option value="Physical">Physical</option>
+            </select>
+            <button className={go} disabled={reason.trim().length < 2 || !holdingMode || (amount !== '' && !(Number(amount) > 0))}
+              title={holdingMode ? '' : 'Choose Demat or Physical — it prints on the consent letter'}
               onClick={() => fire(api.post('/api/redemptions/premature', {
-                application_id: appId, reason,
+                application_id: appId, reason, holding_mode: holdingMode,
                 ...(amount ? { amount: Number(amount) } : {}),
                 ...(date ? { redemption_date: date } : {}),
-              }), 'Redemption initiated and the request letter generated — get it signed below.')}>Initiate</button>
+              }), 'Redemption initiated and the consent letter generated — get it signed below.')}>Initiate</button>
           </div>
           {/* A pledged investment can only redeem its free portion — the rest secures a locker. */}
           {locker && locker.linked_to_lockers > 0 && (

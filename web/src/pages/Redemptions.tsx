@@ -17,6 +17,12 @@ interface Redemption {
   neft_downloaded_at: string | null; neft_downloaded_by: string | null; neft_download_count: number;
   reason: string | null; utr: string | null; utr_entered_by: string | null; utr_entered_at: string | null;
   broken_interest: string; requested_date: string | null; created_at: string; created_by: string | null;
+  /** Demat or Physical, asked when the redemption was raised. Null on the ones
+   *  raised before the question existed — their letter prints the row blank. */
+  holding_mode: string | null;
+  /** Premature, and raised on or after the consent-letter cut-off. Computed on
+   *  the server because the cut-off is a setting the owner can move. */
+  consent_letter_available: boolean;
 }
 
 type RedTab = 'all' | 'premature' | 'maturity';
@@ -88,6 +94,73 @@ const Fact = ({ label, children }: { label: string; children: ReactNode }) => (
  * payment has gone out. Entering it records the transaction and nothing else:
  * the status does not move (owner's choice), so the NEFT rules are untouched.
  */
+/**
+ * Download the consent letter, and file the signed copy once it comes back.
+ *
+ * Shown on any redemption the letter applies to. For one still awaiting
+ * approval the investment screen drives the whole signing flow and this is
+ * just the same two documents; for one already approved — the 19 raised since
+ * the cut-off — this is the only place the signed copy can be filed.
+ *
+ * A scan may be a PDF or a photograph: what the branch sends back is as often
+ * a phone picture as a scan.
+ */
+function ConsentUpload({ r, canUpload, onSaved }: {
+  r: Redemption; canUpload: boolean; onSaved: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [signedOn, setSignedOn] = useState(new Date().toISOString().slice(0, 10));
+
+  const send = async (file: File | null) => {
+    if (!file) return;
+    setBusy(true); setErr('');
+    try {
+      const b64 = await new Promise<string>((resolve, reject) => {
+        const rd = new FileReader();
+        rd.onload = () => resolve(String(rd.result).split(',')[1] ?? '');
+        rd.onerror = () => reject(new Error('Could not read that file'));
+        rd.readAsDataURL(file);
+      });
+      await api.post(`/api/redemptions/${r.id}/signed-letter`, {
+        data_base64: b64, filename: file.name, signed_on: signedOn,
+      });
+      onSaved();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not file that copy.');
+    } finally { setBusy(false); }
+  };
+
+  const link = 'text-xs text-primary hover:underline whitespace-nowrap';
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex gap-3 flex-wrap items-center">
+        <a className={link} href={`/api/redemptions/${r.id}/letter.pdf`} target="_blank" rel="noreferrer">↓ letter</a>
+        <a className={link} href={`/api/redemptions/${r.id}/signed-letter.pdf`} target="_blank" rel="noreferrer">↗ signed copy</a>
+      </div>
+      {canUpload && (
+        <div className="flex gap-2 flex-wrap items-center">
+          <input className="px-2 py-1 text-xs border border-border-strong rounded" type="date"
+            value={signedOn} max={new Date().toISOString().slice(0, 10)}
+            onChange={(e) => setSignedOn(e.target.value)}
+            title="The date written on the paper, not today" />
+          <label className="text-xs border border-border rounded px-2 py-1 hover:bg-bg cursor-pointer">
+            {busy ? 'Filing…' : 'File signed copy…'}
+            <input type="file" className="hidden" accept="application/pdf,image/*" disabled={busy}
+              onChange={(e) => { void send(e.target.files?.[0] ?? null); e.target.value = ''; }} />
+          </label>
+        </div>
+      )}
+      {!r.holding_mode && (
+        <span className="text-xs text-text-muted">
+          Mode of holding prints blank — nobody was asked when this was raised. Tick it by hand.
+        </span>
+      )}
+      {err && <span className="text-xs text-danger">{err}</span>}
+    </div>
+  );
+}
+
 function RedemptionDetail({ r, canEnterUtr, isSuperAdmin, onSaved }: {
   r: Redemption; canEnterUtr: boolean; isSuperAdmin: boolean; onSaved: () => void;
 }) {
@@ -123,6 +196,20 @@ function RedemptionDetail({ r, canEnterUtr, isSuperAdmin, onSaved }: {
           <span className="mono">{Number(r.broken_interest) > 0 ? formatINR(r.broken_interest) : '—'}</span>
         </Fact>
         <Fact label="Net payable"><span className="mono font-semibold">{formatINR(r.net_payment)}</span></Fact>
+        {/* FILING A SIGNED CONSENT LETTER AFTER THE FACT (owner 2026-11-20).
+
+            The 19 redemptions raised on or after the cut-off were approved,
+            and several paid, before the signing flow existed. Their letters
+            are being collected on paper now, and this is where they land —
+            otherwise 19 signed documents sit in a drawer and the system has
+            no idea they exist. It RECORDS only: the server will not let this
+            un-approve or re-gate anything, because the gate runs at submit
+            and at approval, both long past for these. */}
+        {r.consent_letter_available && (
+          <Fact label="Consent letter">
+            <ConsentUpload r={r} canUpload={canEnterUtr} onSaved={onSaved} />
+          </Fact>
+        )}
         <Fact label="NEFT sheet">
           {r.neft_downloaded_at
             ? <>released {String(r.neft_downloaded_at).slice(0, 10)}
@@ -182,6 +269,29 @@ const makeColumns = (canDownload: boolean, isSuperAdmin: boolean, refresh: () =>
     value: (r) => Number(r.net_payment), render: (r) => <span className="mono">{formatINR(r.net_payment)}</span> },
   { key: 'status', header: 'Status',
     render: (r) => <span className={`text-xs rounded px-1.5 py-0.5 ${pill[r.status] ?? 'bg-bg'}`}>{r.status}</span> },
+  // THE CONSENT LETTER, for the redemptions raised on or after the cut-off
+  // (owner 2026-11-20: "for the old ones just get me a download button").
+  //
+  // Nineteen of them were already approved, and several already paid, before
+  // the signing flow existed — so they have no stored letter and are not
+  // retrospectively blocked. The server renders one on demand for them. A
+  // redemption raised before the cut-off shows nothing: there is no consent to
+  // collect for something settled under the old rules.
+  //
+  // Opens in a tab rather than forcing a download, because the first thing
+  // anyone does with it is read it before printing.
+  { key: 'consent', header: 'Consent', sortable: false, filterable: false,
+    render: (r) => (r.consent_letter_available
+      ? (
+        <a className="text-xs text-primary hover:underline whitespace-nowrap"
+          href={`/api/redemptions/${r.id}/letter.pdf`} target="_blank" rel="noreferrer"
+          title={r.holding_mode
+            ? `Consent for Premature Redemption — ${r.holding_mode} holding`
+            : 'Consent for Premature Redemption. Mode of holding prints blank on this one — nobody was asked when it was raised, so tick it by hand.'}>
+          ↓ letter{r.holding_mode ? '' : ' *'}
+        </a>
+      )
+      : <span className="text-xs text-text-muted">—</span>) },
   ...(canDownload ? [{
     key: 'actions', header: '', sortable: false, filterable: false, align: 'right' as const,
     // One copy per redemption. Once it has gone out the row SAYS so — with the

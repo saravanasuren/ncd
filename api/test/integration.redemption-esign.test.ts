@@ -43,7 +43,7 @@ async function readyToSign(name: string, phone: string) {
   const app = await a.post('/api/applications', { ...requiredInvestmentFields(), customer_id: cid, series_id: seriesId, scheme_id: schemeId, amount: 500000, date_money_received: '2026-07-12' });
   await a.post(`/api/applications/${app.json.id}/mark-esigned`);
   await approveInvestment(ncd, app);
-  const r = await ncd.post('/api/redemptions/premature', { application_id: Number(app.json.id), reason: 'Needs it back early' });
+  const r = await ncd.post('/api/redemptions/premature', { holding_mode: 'Demat', application_id: Number(app.json.id), reason: 'Needs it back early' });
   expect(r.status, JSON.stringify(r.json)).toBe(201);
   return { ncd, appId: Number(app.json.id), rid: Number(r.json.redemption_id) };
 }

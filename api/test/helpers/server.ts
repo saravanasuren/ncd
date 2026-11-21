@@ -157,9 +157,13 @@ export const SIGNED_SCAN_PNG =
  */
 export async function redeemPrematurely(
   client: Client,
-  body: { application_id: number; reason: string; redemption_date?: string; amount?: number },
+  body: { application_id: number; reason: string; redemption_date?: string; amount?: number; holding_mode?: 'Demat' | 'Physical' },
 ): Promise<{ status: number; json: any }> {
-  const created = await client.post('/api/redemptions/premature', body);
+  // Demat/Physical is required on a staff premature redemption (owner
+  // 2026-11-20) because it prints on the consent letter. These suites are not
+  // about that choice, so the helper answers it and the call sites stay as
+  // they were; a suite that cares passes its own.
+  const created = await client.post('/api/redemptions/premature', { holding_mode: 'Demat', ...body });
   // Pass refusals straight back: several callers assert on them (a pledged
   // investment, an over-sized partial), and swallowing one here would turn a
   // meaningful 4xx into a confusing failure three lines later.

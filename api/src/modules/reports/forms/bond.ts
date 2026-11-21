@@ -22,6 +22,7 @@ import { errors } from '../../../lib/errors.js';
 import { nextSeq, isUniqueViolation } from '../../../lib/sequences.js';
 import { formatNumber, DEFAULT_NUMBER_FORMATS } from '../../../lib/numbering.js';
 import { addMonths } from '../../../lib/dates.js';
+import { cumulativeMaturityValue } from '../../../lib/interest.js';
 import { getCompanyProfile, getBondSignature } from '../../products/service.js';
 import { companyHeader, companyAsAt, withCorrectedOffice, COMPANY, LOGO_PATH, HAS_LOGO, customerAddress, addressColumns, amountInWords } from './shared.js';
 
@@ -370,11 +371,20 @@ export function redemptionValue(
   principal: number, ratePct: unknown, tenureMonths: unknown, payoutFrequency: unknown,
 ): number {
   if (PERIODIC_FREQ.has(String(payoutFrequency))) return principal;
-  const rate = Number(ratePct), months = Number(tenureMonths);
+  // THE SAME FUNCTION THE ENGINE PAYS FROM (cumulativeMaturityValue), so the
+  // printed promise and the scheduled amount cannot drift. They did drift:
+  // this certificate said Rs 42,00,000 while the schedule held nothing.
+  //
+  // The TERM only. The broken days before the deemed date are deliberately
+  // left off a certificate — it states the term's promise, it is minted once
+  // and 187 are already issued, so its number must not move. The engine pays
+  // the term AND the broken days, which is at worst slightly MORE than the
+  // document promises, never less.
+  const { term } = cumulativeMaturityValue({ principal, ratePct, tenureMonths });
   // Anything unreadable falls back to the principal. A certificate that
   // understates is recoverable; one that invents a number is not.
-  if (!Number.isFinite(rate) || !Number.isFinite(months) || rate <= 0 || months <= 0) return principal;
-  return Math.round(principal + principal * (rate / 100) * (months / 12));
+  if (term <= 0) return principal;
+  return Math.round(principal + term);
 }
 
 export function bondLegalParagraph(

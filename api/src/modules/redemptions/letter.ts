@@ -94,8 +94,15 @@ export async function redemptionConsentRow(db: Db, redemptionId: number): Promis
   // "Indian Overseas Bank, Ganapathy" — the branch only when we hold one.
   const bankAndBranch = [text(r.bank_name), text(r.branch_name)].filter(Boolean).join(', ');
 
+  // The Board block at the head (owner 2026-11-21), from the configured
+  // consent letter, so editing it on the Redemption Letters screen moves it
+  // here as well as in the bulk tool.
+  const { consentAddresseeFor } = await import('../letters/service.js');
+  const letterDate = new Date().toISOString().slice(0, 10);
+
   return {
-    letter_date: new Date().toISOString().slice(0, 10),
+    letter_date: letterDate,
+    addressee: await consentAddresseeFor(db, letterDate),
     holder_name: text(r.customer_name),
     pan: text(r.pan),
     series: text(r.series_name) || text(r.series_code),

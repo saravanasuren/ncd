@@ -128,8 +128,11 @@ export function builtIn(): LetterTemplate[] {
       ...base, slug: 'consent', kind: 'consent', label: 'Consent for Premature Redemption',
       valid_from: DEFAULT_CONSENT_FROM, valid_to: null,
       legal_name: 'Dhanam Investment and Finance Limited',
-      formerly: 'Formerly Kiara Microcredit Private Limited',
-      off_address: [], corp_office: [], sort_order: 40,
+      formerly: 'Formerly Kiara Microcredit Pvt Ltd',
+      // The Board block, added 2026-11-21 when the owner's revised format
+      // showed one. Same addresses as the request letters, and editable on
+      // the same screen.
+      off_address: [...OFF_ADDRESS], corp_office: [...CORP_OFFICE], sort_order: 40,
     },
   ];
 }
@@ -371,6 +374,14 @@ export async function addresseeBlockFor(db: Db, date: string): Promise<{
 } | null> {
   const t = pickFor(await listTemplates(db), date);
   if (!t || t.kind !== 'request' || !t.legal_name) return null;
+  return blockOf(t);
+}
+
+/** A template's Board block, whichever kind of letter it is. */
+export function blockOf(t: LetterTemplate): {
+  legal_name: string; formerly?: string;
+  off_address_line1: string; off_address_rest: string[]; corp_office: string[];
+} {
   const [first, ...rest] = t.off_address;
   return {
     legal_name: t.legal_name,
@@ -379,4 +390,19 @@ export async function addresseeBlockFor(db: Db, date: string): Promise<{
     off_address_rest: rest,
     corp_office: t.corp_office,
   };
+}
+
+/**
+ * The Board block for a CONSENT letter dated `date`.
+ *
+ * Falls back to the built-in consent template when nothing is configured, so
+ * the block appears even on a date no range covers.
+ */
+export async function consentAddresseeFor(db: Db, date: string) {
+  const all = await listTemplates(db);
+  const hit = pickFor(all, date);
+  const t = hit && hit.kind === 'consent' ? hit
+    : (all.find((x) => x.slug === 'consent' && x.enabled)
+       ?? builtIn().find((x) => x.slug === 'consent')!);
+  return t.legal_name ? blockOf(t) : null;
 }

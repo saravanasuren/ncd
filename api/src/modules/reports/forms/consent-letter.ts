@@ -24,7 +24,7 @@
  *
  * THE COMPANY NAME IS FIXED, not era-driven. The request letter swings between
  * three addressee blocks by date because the bulk tool back-dates letters for
- * years. This document applies only from 13 November 2026 onward, so every
+ * years. This document applies only from 1 November 2026 onward, so every
  * letter it ever prints falls in the current era — and the Word file states
  * that name outright. A second era mechanism here would be a branch nobody
  * crosses.
@@ -40,6 +40,12 @@ export interface ConsentLetterRow {
   series: string;
   /** ISO or blank. */
   allotment_date: string;
+  /**
+   * When this holding was rolled over — ISO, or blank for the great majority
+   * that never were. Asked at redemption time, never derived: see the row
+   * itself for why the book cannot answer it.
+   */
+  rollover_date: string;
   original_maturity_date: string;
   /** The number being REDEEMED (owner 2026-11-20), not the whole holding. */
   ncd_count: string;
@@ -272,6 +278,18 @@ function particulars(
   const rows: [string, string][] = [
     ['Series / Tranche', row.series],
     ['Date of allotment', fmtDay(row.allotment_date)],
+    // ASKED, NOT DERIVED, and blank for almost everyone.
+    //
+    // This row is in the owner's Word file and was missing from the first
+    // version of this generator. It cannot be filled from the book: the
+    // rollover feature here has never been used (the `rollovers` table is
+    // empty, nothing has source = 'rollover'), real rollovers exist only as
+    // six series named "NCD 05 Rollover" … "NCD 10 Rollover", and the
+    // pre-rollover investment is not in the book at all — so the one date we
+    // hold for a rolled-over holding is already printing as Date of allotment
+    // above. Repeating it here under a second label would read as a second
+    // fact. Staff are asked instead, and an unanswered row prints empty.
+    ['Date of Rollover', fmtDay(row.rollover_date)],
     ['Original maturity date', fmtDay(row.original_maturity_date)],
     ['Number of NCDs held', row.ncd_count],
     // "Rs." NOT "₹". The Word file writes the rupee sign, but Helvetica has no

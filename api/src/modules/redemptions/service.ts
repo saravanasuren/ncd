@@ -36,7 +36,7 @@ async function penaltySetting(db: Db): Promise<RateSpec> {
 /** Create a 'Requested' redemption record (no approval). Shared by all callers. */
 async function createRequest(
   tx: Db,
-  input: { applicationId: number; type: 'premature' | 'maturity'; reason: string; source: string; byCustomer: boolean; redemptionDate?: string; createdBy: number | null; amount?: number; holdingMode?: string | null }
+  input: { applicationId: number; type: 'premature' | 'maturity'; reason: string; source: string; byCustomer: boolean; redemptionDate?: string; createdBy: number | null; amount?: number; holdingMode?: string | null; rolloverDate?: string | null }
 ): Promise<{ id: number; redemption_no: string; principal: number; penalty: number; netPayment: number; brokenInterest: number }> {
   const outstanding = await outstandingPrincipal(tx, input.applicationId);
   // Money pledged to a live locker deposit is that locker's security — it can't
@@ -95,9 +95,9 @@ async function createRequest(
   const netPayment = calc.netPayment;
   const redNo = await nextCode(tx, 'redemption', 'MCR-{yyyy}-{seq:6}');
   const { rows } = await tx.query<{ id: string }>(
-    `INSERT INTO redemptions (redemption_no, application_id, type, principal, penalty, net_payment, broken_interest, broken_tds, requested_date, redemption_date, reason, status, source, requested_by_customer, created_by_user_id, holding_mode)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'Requested',$12,$13,$14,$15) RETURNING id`,
-    [redNo, input.applicationId, input.type, calc.principal, calc.penalty, netPayment, calc.brokenInterest, brokenTds, redDate, redDate, input.reason, input.source, input.byCustomer, input.createdBy, input.holdingMode ?? null]
+    `INSERT INTO redemptions (redemption_no, application_id, type, principal, penalty, net_payment, broken_interest, broken_tds, requested_date, redemption_date, reason, status, source, requested_by_customer, created_by_user_id, holding_mode, rollover_date)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'Requested',$12,$13,$14,$15,$16) RETURNING id`,
+    [redNo, input.applicationId, input.type, calc.principal, calc.penalty, netPayment, calc.brokenInterest, brokenTds, redDate, redDate, input.reason, input.source, input.byCustomer, input.createdBy, input.holdingMode ?? null, input.rolloverDate || null]
   );
   return { id: Number(rows[0]!.id), redemption_no: redNo, principal: calc.principal, penalty: calc.penalty, netPayment, brokenInterest: calc.brokenInterest };
 }
@@ -208,12 +208,12 @@ export async function submitForApproval(db: Db, staff: AuthUser, redemptionId: n
  * leave the record created and the caller looking at a 500 — the orphan shape
  * that cost us a day on the enrolment screen.
  */
-export async function initiatePremature(db: Db, actor: AuthUser, input: { application_id: number; redemption_date?: string; reason: string; amount?: number; holding_mode?: string }) {
+export async function initiatePremature(db: Db, actor: AuthUser, input: { application_id: number; redemption_date?: string; reason: string; amount?: number; holding_mode?: string; rollover_date?: string }) {
   const app = (await db.query<{ status: string }>('SELECT status FROM applications WHERE id = $1', [input.application_id])).rows[0];
   if (!app) throw errors.notFound('Application not found');
   if (app.status !== 'Active') throw errors.unprocessable('Only Active applications can be prematurely redeemed');
   const rec = await db.withTx(async (tx) =>
-    createRequest(tx, { applicationId: input.application_id, type: 'premature', reason: input.reason, source: 'staff', byCustomer: false, redemptionDate: input.redemption_date, createdBy: actor.id, amount: input.amount, holdingMode: input.holding_mode ?? null }));
+    createRequest(tx, { applicationId: input.application_id, type: 'premature', reason: input.reason, source: 'staff', byCustomer: false, redemptionDate: input.redemption_date, createdBy: actor.id, amount: input.amount, holdingMode: input.holding_mode ?? null, rolloverDate: input.rollover_date ?? null }));
   const { generateLetter, signingView } = await import('./signing.js');
   try { await generateLetter(db, actor, rec.id); } catch (e) {
     console.warn(`[redemption] request letter could not be generated for ${rec.redemption_no}: ${(e as Error).message}`);

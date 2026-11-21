@@ -255,18 +255,23 @@ describe('the configurable boundary', () => {
 
 // ── The Consent letter in bulk (owner 2026-11-21) ───────────────────────────
 //
-// A row dated on or after 13 November 2026 produces the Consent for Premature
+// A row dated on or after 1 November 2026 produces the Consent for Premature
 // Redemption — the same document the live redemption screen makes — INSTEAD OF
 // the Request letter. Earlier rows are untouched, which is why every test
 // above still passes unchanged: all of them predate the cut-off.
 //
-// The six consent columns are optional. What the sheet says wins; what it
+// THE DATE MOVED from 13 November to 1 November (owner 2026-11-21). It is one
+// setting, read by this tool and by the live redemption gate alike.
+//
+// The seven consent columns are optional. What the sheet says wins; what it
 // leaves empty is looked up from the customer's own record; what neither
-// supplies prints blank and is named in the preview.
+// supplies prints blank and is named in the preview. Date of Rollover is the
+// exception to the lookup — nothing in the book can answer it.
 
 const CONSENT_HEADERS = [
   ...HEADERS,
-  'Mode of Holding', 'Date of Allotment', 'Original Maturity Date', 'Coupon Rate', 'Face Value', 'PAN',
+  'Mode of Holding', 'Date of Allotment', 'Date of Rollover', 'Original Maturity Date',
+  'Coupon Rate', 'Face Value', 'PAN',
 ];
 
 async function consentSheetB64(rows: Record<string, unknown>[]): Promise<string> {
@@ -284,7 +289,7 @@ const previewOf = async (c: Client, b64: string, name = 'c.xlsx') =>
   (await c.post('/api/bulk-redemption-letters/preview', { data_base64: b64, filename: name })).json;
 
 describe('bulk letters after the consent cut-off', () => {
-  it('a row on or after 13 Nov 2026 makes the Consent letter, an earlier one does not', async () => {
+  it('a row on or after 1 Nov 2026 makes the Consent letter, an earlier one does not', async () => {
     const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const p = await previewOf(c, await consentSheetB64([
       { ...AFTER, 'Name of the NCD Holder': 'Holder After' },
@@ -302,10 +307,31 @@ describe('bulk letters after the consent cut-off', () => {
   it('the boundary day belongs to the consent letter', async () => {
     const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
     const p = await previewOf(c, await consentSheetB64([
-      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 12)), 'Name of the NCD Holder': 'Holder Twelfth' },
-      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 13)), 'Name of the NCD Holder': 'Holder Thirteenth' },
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 9, 31)), 'Name of the NCD Holder': 'Holder Last Oct' },
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 1)), 'Name of the NCD Holder': 'Holder First Nov' },
     ]));
     expect(p.rows.map((r: any) => r.letter_kind)).toEqual(['request', 'consent']);
+  });
+
+  it('the fortnight the owner moved the date back over now gets the consent letter', async () => {
+    // 1–12 November 2026 used to produce the Request letter and now produces
+    // the Consent letter. This is the whole of the change made on 2026-11-21,
+    // so it is pinned on its own rather than left to the boundary test.
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 3)), 'Name of the NCD Holder': 'Holder Third' },
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 12)), 'Name of the NCD Holder': 'Holder Twelfth' },
+    ]));
+    expect(p.rows.map((r: any) => r.letter_kind)).toEqual(['consent', 'consent']);
+  });
+
+  it('October is still the Request letter — the move did not swallow the old book', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 9, 1)), 'Name of the NCD Holder': 'Holder Oct One' },
+      { ...KIARA_ERA, 'Name of the NCD Holder': 'Holder Kiara' },
+    ]));
+    expect(p.rows.map((r: any) => r.letter_kind)).toEqual(['request', 'request']);
   });
 
   it('generates a real Consent PDF for the post-cut-off row', async () => {
@@ -404,6 +430,50 @@ describe('bulk letters after the consent cut-off', () => {
     expect(row.pan).toBe('LOOKU1234P');
     // Only the one a person must answer is left.
     expect(row.blank_particulars).toEqual(['Mode of Holding']);
+  });
+
+  it('prints the Date of Rollover the sheet gives it', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const b64 = await consentSheetB64([{
+      ...AFTER, 'Name of the NCD Holder': 'Rolled Holder',
+      'Date of Rollover': new Date(Date.UTC(2024, 4, 4)),
+      'Mode of Holding': 'Demat',
+    }]);
+    const p = await previewOf(c, b64);
+    expect(p.rows[0].rollover_date).toBe('2024-05-04');
+
+    const one = await postRaw(c, '/api/bulk-redemption-letters/letter',
+      { data_base64: b64, filename: 'c.xlsx', row_no: 2 });
+    expect(one.status).toBe(200);
+    const { extractText } = await import('./helpers/pdf-text.js');
+    const t = extractText(one.buffer).replace(/\s+/g, '');
+    expect(t).toContain('DateofRollover');
+    expect(t).toContain('04-May-2024');
+  });
+
+  it('never flags Date of Rollover as a blank to fix', async () => {
+    // It is empty on nearly every letter, because nearly every holding was
+    // never rolled over. Listing it would put a caution on practically every
+    // row and train the operator to ignore the ones that matter.
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([{ ...AFTER }]));
+    expect(p.rows[0].rollover_date).toBe('');
+    expect(p.rows[0].blank_particulars).not.toContain('Date of Rollover');
+    expect(p.rows[0].errors).toEqual([]);
+  });
+
+  it('says the row will print blank when the rollover date is unreadable', async () => {
+    // And does NOT promise a lookup, because there is no record behind this
+    // column to fall back on.
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([
+      { ...AFTER, 'Date of Rollover': 'last summer' },
+    ]));
+    const cautions = p.rows[0].cautions.join(' | ');
+    expect(cautions).toContain('Date of Rollover');
+    expect(cautions).toContain('print that row blank');
+    expect(cautions).not.toContain("Date of Rollover \"last summer\" could not be read as a date — the customer's record");
+    expect(p.rows[0].errors).toEqual([]);
   });
 
   it('a mixed file produces both kinds in one zip, and still changes nothing', async () => {

@@ -111,7 +111,9 @@ describe('the consent letter says what the owner wrote', () => {
     expect(t).toContain('Series/Tranche');
     expect(t).toContain('NCD12');
     expect(t).toContain('31-Dec-2021');   // allotment
-    expect(t).toContain('31-Dec-2026');   // original maturity
+    expect(t).toContain('31-Dec-2026');   // date of maturity
+    expect(squash(t)).toContain('DateofMaturity');   // the Word file's wording, not "Original maturity date"
+    expect(squash(t)).not.toContain('Originalmaturitydate');
     expect(t).toContain('5,00,000');      // face value
     expect(t).toContain('FacevalueperNCD(Rs.)'); // not the ₹ glyph — no Helvetica glyph for it
     expect(t).toContain('12.5%');         // coupon
@@ -138,7 +140,7 @@ describe('the consent letter says what the owner wrote', () => {
 
   it('keeps the particulars in the order the Word file lists them', async () => {
     const t = squash(extractText(await consentLetterPdf(row({ rollover_date: '2024-05-04' }))));
-    const order = ['Series/Tranche', 'Dateofallotment', 'DateofRollover', 'Originalmaturitydate',
+    const order = ['Series/Tranche', 'Dateofallotment', 'DateofRollover', 'DateofMaturity',
       'NumberofNCDsheld', 'FacevalueperNCD(Rs.)', 'Couponrate', 'Modeofholding'];
     let at = -1;
     for (const label of order) {

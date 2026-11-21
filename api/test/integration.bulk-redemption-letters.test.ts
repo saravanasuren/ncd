@@ -270,15 +270,18 @@ describe('the configurable boundary', () => {
 
 const CONSENT_HEADERS = [
   ...HEADERS,
-  'Mode of Holding', 'Date of Allotment', 'Date of Rollover', 'Original Maturity Date',
+  'Mode of Holding', 'Date of Allotment', 'Date of Rollover', 'Date of Maturity',
   'Coupon Rate', 'Face Value', 'PAN',
 ];
 
-async function consentSheetB64(rows: Record<string, unknown>[]): Promise<string> {
+/** The same sheet with the pre-2026-11-21 heading, as an old template has it. */
+const LEGACY_HEADERS = CONSENT_HEADERS.map((h) => (h === 'Date of Maturity' ? 'Original Maturity Date' : h));
+
+async function consentSheetB64(rows: Record<string, unknown>[], headers = CONSENT_HEADERS): Promise<string> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('S');
-  ws.addRow(CONSENT_HEADERS);
-  for (const r of rows) ws.addRow(CONSENT_HEADERS.map((h) => r[h] ?? ''));
+  ws.addRow(headers);
+  for (const r of rows) ws.addRow(headers.map((h) => r[h] ?? ''));
   return Buffer.from(await wb.xlsx.writeBuffer()).toString('base64');
 }
 
@@ -474,6 +477,30 @@ describe('bulk letters after the consent cut-off', () => {
     expect(cautions).toContain('print that row blank');
     expect(cautions).not.toContain("Date of Rollover \"last summer\" could not be read as a date — the customer's record");
     expect(p.rows[0].errors).toEqual([]);
+  });
+
+  it('still reads a sheet headed "Original Maturity Date" — the old template', async () => {
+    // The column was renamed on 2026-11-21. It is OPTIONAL, so an unmatched
+    // heading would NOT fail the file: the typed date would just be dropped
+    // and the letter would print whatever the record held. Silently ignoring
+    // a cell somebody filled in, on a document somebody signs, is the one
+    // outcome worth writing a compatibility branch for.
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const legacy = await consentSheetB64([{
+      ...AFTER, 'Name of the NCD Holder': 'Holder Legacy',
+      'Original Maturity Date': new Date(Date.UTC(2031, 2, 30)),
+    }], LEGACY_HEADERS);
+    const p = await previewOf(c, legacy);
+    expect(p.header_errors).toEqual([]);
+    expect(p.rows[0].original_maturity_date).toBe('2031-03-30');
+    expect(p.rows[0].blank_particulars).not.toContain('Date of Maturity');
+  });
+
+  it('names the renamed column by its new name when it prints blank', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([{ ...AFTER }]));
+    expect(p.rows[0].blank_particulars).toContain('Date of Maturity');
+    expect(p.rows[0].blank_particulars).not.toContain('Original Maturity Date');
   });
 
   it('a mixed file produces both kinds in one zip, and still changes nothing', async () => {

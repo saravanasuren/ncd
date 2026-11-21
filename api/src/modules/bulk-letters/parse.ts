@@ -35,7 +35,9 @@ export const COLUMNS = [
   'Date of Allotment',
   // Sheet-only: there is nothing in the book to fall back on for this one.
   'Date of Rollover',
-  'Original Maturity Date',
+  // Renamed from "Original Maturity Date" (owner 2026-11-21) to match the
+  // Word file. The old spelling still parses — see COLUMN_ALIASES.
+  'Date of Maturity',
   'Coupon Rate',
   'Face Value',
   'PAN',
@@ -50,7 +52,7 @@ export const COLUMNS = [
  */
 export const OPTIONAL_COLUMNS: ReadonlySet<string> = new Set([
   'Customer Code', 'Mode of Holding', 'Date of Allotment', 'Date of Rollover',
-  'Original Maturity Date', 'Coupon Rate', 'Face Value', 'PAN',
+  'Date of Maturity', 'Coupon Rate', 'Face Value', 'PAN',
 ]);
 
 export interface ParsedRow {
@@ -89,6 +91,21 @@ const isZip = (buf: Buffer): boolean =>
 
 /** Normalise a header for matching: case, spaces and punctuation are ignored. */
 const normHeader = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * Older headers a column still answers to.
+ *
+ * "Original Maturity Date" became "Date of Maturity" on 2026-11-21, to match
+ * the owner's Word file. Templates already downloaded carry the old name, and
+ * because the column is OPTIONAL a header that stops matching does NOT fail
+ * the file — the typed value is simply never read, and the letter prints
+ * whatever the customer record happens to hold instead. A silently ignored
+ * cell on a document somebody signs is the worst outcome available here, so
+ * the old spelling goes on working.
+ */
+const COLUMN_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  'Date of Maturity': ['Original Maturity Date'],
+};
 
 type Cell = string | number | Date | null;
 
@@ -308,7 +325,7 @@ function consentCells(get: (col: string) => Cell, cautions: string[]): {
     allotment_date: dateCell('Date of Allotment'),
     // No lookup behind this one — if the sheet does not say, nobody does.
     rollover_date: dateCell('Date of Rollover'),
-    original_maturity_date: dateCell('Original Maturity Date'),
+    original_maturity_date: dateCell('Date of Maturity'),
     coupon_rate_pct: rate,
     face_value: faceValue,
     pan: text(get('PAN')).toUpperCase(),
@@ -413,7 +430,13 @@ export async function parseUpload(buf: Buffer, filename: string): Promise<Parsed
   const header = matrix[headerIdx]!.map((c) => normHeader(text(c)));
   const colIndex = new Map<string, number>();
   for (const col of COLUMNS) {
-    const i = header.indexOf(normHeader(col));
+    let i = header.indexOf(normHeader(col));
+    if (i < 0) {
+      for (const alias of COLUMN_ALIASES[col] ?? []) {
+        i = header.indexOf(normHeader(alias));
+        if (i >= 0) break;
+      }
+    }
     if (i >= 0) colIndex.set(col, i);
     else if (!OPTIONAL_COLUMNS.has(col)) headerErrors.push(`Column "${col}" is missing from the file`);
   }

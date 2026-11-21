@@ -252,3 +252,175 @@ describe('the configurable boundary', () => {
       `UPDATE app_settings SET value = '"2025-08-18"'::jsonb WHERE key = 'redemption.letter_dhanam_from'`);
   });
 });
+
+// ── The Consent letter in bulk (owner 2026-11-21) ───────────────────────────
+//
+// A row dated on or after 13 November 2026 produces the Consent for Premature
+// Redemption — the same document the live redemption screen makes — INSTEAD OF
+// the Request letter. Earlier rows are untouched, which is why every test
+// above still passes unchanged: all of them predate the cut-off.
+//
+// The six consent columns are optional. What the sheet says wins; what it
+// leaves empty is looked up from the customer's own record; what neither
+// supplies prints blank and is named in the preview.
+
+const CONSENT_HEADERS = [
+  ...HEADERS,
+  'Mode of Holding', 'Date of Allotment', 'Original Maturity Date', 'Coupon Rate', 'Face Value', 'PAN',
+];
+
+async function consentSheetB64(rows: Record<string, unknown>[]): Promise<string> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('S');
+  ws.addRow(CONSENT_HEADERS);
+  for (const r of rows) ws.addRow(CONSENT_HEADERS.map((h) => r[h] ?? ''));
+  return Buffer.from(await wb.xlsx.writeBuffer()).toString('base64');
+}
+
+/** On or after the cut-off. */
+const AFTER = { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 20)) };
+
+const previewOf = async (c: Client, b64: string, name = 'c.xlsx') =>
+  (await c.post('/api/bulk-redemption-letters/preview', { data_base64: b64, filename: name })).json;
+
+describe('bulk letters after the consent cut-off', () => {
+  it('a row on or after 13 Nov 2026 makes the Consent letter, an earlier one does not', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([
+      { ...AFTER, 'Name of the NCD Holder': 'Holder After' },
+      { ...GOOD, 'Name of the NCD Holder': 'Holder Before' },
+      { ...KIARA_ERA, 'Name of the NCD Holder': 'Holder Kiara' },
+    ]));
+    const kinds = p.rows.map((r: any) => [r.holder_name, r.letter_kind]);
+    expect(kinds).toEqual([
+      ['Holder After', 'consent'],
+      ['Holder Before', 'request'],
+      ['Holder Kiara', 'request'],
+    ]);
+  });
+
+  it('the boundary day belongs to the consent letter', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 12)), 'Name of the NCD Holder': 'Holder Twelfth' },
+      { ...GOOD, 'Letter Date': new Date(Date.UTC(2026, 10, 13)), 'Name of the NCD Holder': 'Holder Thirteenth' },
+    ]));
+    expect(p.rows.map((r: any) => r.letter_kind)).toEqual(['request', 'consent']);
+  });
+
+  it('generates a real Consent PDF for the post-cut-off row', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const b64 = await consentSheetB64([{ ...AFTER, 'Mode of Holding': 'Demat', 'PAN': 'ABCDE1234F' }]);
+    const one = await postRaw(c, '/api/bulk-redemption-letters/letter', { data_base64: b64, filename: 'c.xlsx', row_no: 2 });
+    expect(one.status).toBe(200);
+    expect(one.buffer.subarray(0, 5).toString()).toBe('%PDF-');
+    const { extractText } = await import('./helpers/pdf-text.js');
+    const t = extractText(one.buffer).replace(/\s+/g, '');
+    expect(t).toContain('ConsentforPrematureRedemption');
+    expect(t).toContain('Waiverof2%additionalpremium.');
+    expect(t).toContain('Demat');
+    expect(t).toContain('ABCDE1234F');
+    // ...and NOT the request letter's opening.
+    expect(t).not.toContain('TheBoardofDirectors,');
+  });
+
+  it('takes Demat / Physical from the sheet, and cautions on anything else', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([
+      { ...AFTER, 'Name of the NCD Holder': 'Holder D', 'Mode of Holding': 'demat' },
+      { ...AFTER, 'Name of the NCD Holder': 'Holder P', 'Mode of Holding': 'PHYSICAL' },
+      { ...AFTER, 'Name of the NCD Holder': 'Holder X', 'Mode of Holding': 'dunno' },
+    ]));
+    expect(p.rows[0].mode_of_holding).toBe('Demat');
+    expect(p.rows[1].mode_of_holding).toBe('Physical');
+    expect(p.rows[2].mode_of_holding).toBe('');
+    expect(p.rows[2].cautions.join(' ')).toContain('not Demat or Physical');
+    // An unreadable one is a caution, never an error — the letter still prints.
+    expect(p.rows[2].errors).toEqual([]);
+  });
+
+  it('names the particulars that will print blank, before anything is generated', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([{ ...AFTER }]));
+    const row = p.rows[0];
+    expect(row.letter_kind).toBe('consent');
+    // Nothing typed and no customer code to look anything up by.
+    expect(row.blank_particulars).toContain('Mode of Holding');
+    expect(row.blank_particulars).toContain('Date of Allotment');
+    expect(row.blank_particulars).toContain('PAN');
+    expect(row.cautions.join(' ')).toContain('will print these blank');
+    // Still generable — a blank particular is written in by hand.
+    expect(row.errors).toEqual([]);
+  });
+
+  it('what the sheet says wins over what the record says', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const p = await previewOf(c, await consentSheetB64([{
+      ...AFTER,
+      'Date of Allotment': new Date(Date.UTC(2021, 0, 15)),
+      'Coupon Rate': '13.5%',
+      'Face Value': 100000,
+      'PAN': 'ZZZZZ9999Z',
+    }]));
+    const row = p.rows[0];
+    expect(row.allotment_date).toBe('2021-01-15');
+    expect(row.coupon_rate_pct).toBe(13.5);
+    expect(row.face_value).toBe(100000);
+    expect(row.pan).toBe('ZZZZZ9999Z');
+    expect(row.blank_particulars).not.toContain('PAN');
+  });
+
+  it('fills the gaps from the customer record when the sheet leaves them empty', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    // A customer with a real investment to look up.
+    const cust = await c.post('/api/customers', { full_name: 'Lookup Holder', phone: '9790000001', pan: 'LOOKU1234P' });
+    const cid = Number(cust.json.id);
+    const code = (await c.get(`/api/customers/${cid}`)).json.customer.customer_code;
+    const seriesId = Number((await ctx.db.query("SELECT id FROM series WHERE code = 'NCD DEMO'")).rows[0]!.id);
+    const seriesName = String((await ctx.db.query("SELECT name FROM series WHERE code = 'NCD DEMO'")).rows[0]!.name);
+    await ctx.db.query('UPDATE series SET face_value = 250000 WHERE id = $1', [seriesId]);
+    await ctx.db.query(
+      `UPDATE applications SET allotment_date = DATE '2024-03-30', maturity_date = DATE '2029-03-30'
+        WHERE id = (SELECT id FROM applications WHERE customer_id = $1 ORDER BY id LIMIT 1)`, [cid]);
+
+    const appId = (await ctx.db.query(
+      `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount,
+                                 allotment_date, maturity_date)
+       VALUES ('APP-LOOKUP-1', $1, $2, 'Active', 500000, DATE '2024-03-30', DATE '2029-03-30') RETURNING id`,
+      [cid, seriesId])).rows[0] as any;
+    await ctx.db.query(
+      `INSERT INTO application_lines (application_id, coupon_rate_pct, tenure_months, amount, outstanding_amount)
+       VALUES ($1, 12.5, 60, 500000, 500000)`, [Number(appId.id)]);
+
+    const p = await previewOf(c, await consentSheetB64([{
+      ...AFTER, 'Name of the NCD Holder': 'Lookup Holder',
+      'NCD Series': seriesName, 'Customer Code': code,
+    }]));
+    const row = p.rows[0];
+    expect(row.allotment_date).toBe('2024-03-30');
+    expect(row.original_maturity_date).toBe('2029-03-30');
+    expect(row.coupon_rate_pct).toBe(12.5);
+    expect(row.face_value).toBe(250000);
+    expect(row.pan).toBe('LOOKU1234P');
+    // Only the one a person must answer is left.
+    expect(row.blank_particulars).toEqual(['Mode of Holding']);
+  });
+
+  it('a mixed file produces both kinds in one zip, and still changes nothing', async () => {
+    const c = await as('admin@dhanam.finance', 'ChangeMe_Dev_123');
+    const before = (await ctx.db.query(
+      'SELECT (SELECT count(*) FROM redemptions) r, (SELECT count(*) FROM applications) a')).rows[0] as any;
+    const zip = await postRaw(c, '/api/bulk-redemption-letters/generate', {
+      data_base64: await consentSheetB64([
+        { ...AFTER, 'Name of the NCD Holder': 'Mixed After', 'Mode of Holding': 'Demat' },
+        { ...GOOD, 'Name of the NCD Holder': 'Mixed Before' },
+      ]),
+      filename: 'mixed.xlsx',
+    });
+    expect(zip.status).toBe(200);
+    expect(zip.buffer.subarray(0, 2).toString()).toBe('PK');
+    const after = (await ctx.db.query(
+      'SELECT (SELECT count(*) FROM redemptions) r, (SELECT count(*) FROM applications) a')).rows[0] as any;
+    expect(after).toEqual(before);
+  });
+});

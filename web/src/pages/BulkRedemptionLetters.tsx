@@ -31,6 +31,10 @@ interface PreviewRow {
   errors: string[];
   cautions: string[];
   addressed_to: string;
+  /** Which document this row produces, from its date against the cut-off. */
+  letter_kind: 'request' | 'consent';
+  /** Consent particulars that will print empty — neither typed nor found. */
+  blank_particulars: string[];
   filename: string;
 }
 
@@ -274,6 +278,7 @@ export function BulkRedemptionLettersPage() {
                   <th className="text-left px-3 py-2 font-medium">Row</th>
                   <th className="text-left px-3 py-2 font-medium">Holder</th>
                   <th className="text-left px-3 py-2 font-medium">Letter date</th>
+                  <th className="text-left px-3 py-2 font-medium">Letter</th>
                   <th className="text-left px-3 py-2 font-medium">Addressed to</th>
                   <th className="text-left px-3 py-2 font-medium">Series</th>
                   <th className="text-right px-3 py-2 font-medium">Debentures</th>
@@ -292,6 +297,23 @@ export function BulkRedemptionLettersPage() {
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       {r.letter_date_display || <span className="text-danger">—</span>}
+                    </td>
+                    {/* WHICH DOCUMENT, before anything is generated. A file
+                        can mix the two, and the difference matters: one is a
+                        request, the other waives the 2% premium and all
+                        further claims. Nobody should find that out from the
+                        zip. */}
+                    <td className="px-3 py-2">
+                      {r.letter_kind === 'consent' ? (
+                        <span className="text-xs rounded px-1.5 py-0.5 bg-[color:var(--warn-bg)] text-warn whitespace-nowrap"
+                          title={r.blank_particulars.length
+                            ? `Consent for Premature Redemption. Printing blank: ${r.blank_particulars.join(', ')}`
+                            : 'Consent for Premature Redemption — every particular filled'}>
+                          Consent{r.blank_particulars.length ? ` · ${r.blank_particulars.length} blank` : ''}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-text-muted whitespace-nowrap">Request</span>
+                      )}
                     </td>
                     <td className="px-3 py-2">{r.addressed_to}</td>
                     <td className="px-3 py-2">{r.series}</td>

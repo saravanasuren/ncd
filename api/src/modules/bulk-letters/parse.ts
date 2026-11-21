@@ -24,10 +24,32 @@ export const COLUMNS = [
   'Account No.',
   'IFSC Code',
   'Customer Code',
+  // ── The Consent letter's own particulars (owner 2026-11-21) ──────────────
+  //
+  // Only ever read for a row dated on or after the consent cut-off; a row
+  // before it produces the Request letter, which has no use for any of them.
+  // All optional: the owner chose the sheet to WIN where it is filled in and
+  // the customer's record to fill the gaps, so an empty cell is an instruction
+  // to look it up, not an error.
+  'Mode of Holding',
+  'Date of Allotment',
+  'Original Maturity Date',
+  'Coupon Rate',
+  'Face Value',
+  'PAN',
 ] as const;
 
-/** Customer Code is the only optional column — it is used for cross-checking. */
-export const OPTIONAL_COLUMNS: ReadonlySet<string> = new Set(['Customer Code']);
+/**
+ * Columns a file may leave out entirely.
+ *
+ * Customer Code was always optional (a cross-check). The six consent columns
+ * join it because a file of pre-cut-off rows has no reason to carry them, and
+ * demanding them would break every spreadsheet already in use.
+ */
+export const OPTIONAL_COLUMNS: ReadonlySet<string> = new Set([
+  'Customer Code', 'Mode of Holding', 'Date of Allotment', 'Original Maturity Date',
+  'Coupon Rate', 'Face Value', 'PAN',
+]);
 
 export interface ParsedRow {
   row_no: number;
@@ -42,6 +64,13 @@ export interface ParsedRow {
   account_no: string;
   ifsc: string;
   customer_code: string;
+  // Consent-letter particulars, as typed. Blank means "look it up".
+  mode_of_holding: string;
+  allotment_date: string;          // ISO yyyy-mm-dd, or '' 
+  original_maturity_date: string;  // ISO yyyy-mm-dd, or ''
+  coupon_rate_pct: number | null;
+  face_value: number | null;
+  pan: string;
   errors: string[];
   cautions: string[];
 }
@@ -207,6 +236,72 @@ export function parseAmount(v: Cell): number | null {
 export const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 
 /** Validate and normalise one record. */
+/**
+ * The Consent letter's own cells, read leniently.
+ *
+ * NONE OF THESE CAN FAIL A ROW. The owner's rule is that the sheet wins where
+ * it is filled in and the customer's record fills the gaps, so an empty cell
+ * is an instruction, not a mistake. A cell that is filled but unreadable — a
+ * date nobody can parse, a rate that is not a number — raises a CAUTION and is
+ * then treated as empty, which means the record answers instead. Erroring
+ * would stop a letter over a particular the system can usually supply itself.
+ *
+ * Mode of holding is the exception to the lookup: it is a question for a
+ * person, never derived, so an empty one stays empty and prints a blank row to
+ * tick by hand.
+ */
+function consentCells(get: (col: string) => Cell, cautions: string[]): {
+  mode_of_holding: string;
+  allotment_date: string;
+  original_maturity_date: string;
+  coupon_rate_pct: number | null;
+  face_value: number | null;
+  pan: string;
+} {
+  const modeRaw = text(get('Mode of Holding'));
+  let mode = '';
+  if (modeRaw) {
+    const m = modeRaw.trim().toLowerCase();
+    if (m === 'demat' || m === 'd') mode = 'Demat';
+    else if (m === 'physical' || m === 'p' || m === 'phy') mode = 'Physical';
+    else cautions.push(`Mode of Holding "${modeRaw}" is not Demat or Physical — the letter will leave it blank`);
+  }
+
+  const dateCell = (col: string): string => {
+    const raw = get(col);
+    if (text(raw) === '') return '';
+    const iso = parseDateCell(raw);
+    if (!iso) { cautions.push(`${col} "${text(raw)}" could not be read as a date — the customer's record will be used`); return ''; }
+    return iso;
+  };
+
+  // "12.5", "12.5%" and "12.5 % p.a." all mean the same thing on a form.
+  const rateRaw = text(get('Coupon Rate'));
+  let rate: number | null = null;
+  if (rateRaw) {
+    const n = Number(rateRaw.replace(/[%\s]|p\.?a\.?/gi, ''));
+    if (Number.isFinite(n) && n > 0) rate = n;
+    else cautions.push(`Coupon Rate "${rateRaw}" could not be read — the customer's record will be used`);
+  }
+
+  const fvRaw = get('Face Value');
+  let faceValue: number | null = null;
+  if (text(fvRaw) !== '') {
+    const n = parseAmount(fvRaw);
+    if (n !== null && n > 0) faceValue = n;
+    else cautions.push(`Face Value "${text(fvRaw)}" could not be read — the customer's record will be used`);
+  }
+
+  return {
+    mode_of_holding: mode,
+    allotment_date: dateCell('Date of Allotment'),
+    original_maturity_date: dateCell('Original Maturity Date'),
+    coupon_rate_pct: rate,
+    face_value: faceValue,
+    pan: text(get('PAN')).toUpperCase(),
+  };
+}
+
 function buildRow(rowNo: number, get: (col: string) => Cell): ParsedRow {
   const errors: string[] = [];
   const cautions: string[] = [];
@@ -287,6 +382,7 @@ function buildRow(rowNo: number, get: (col: string) => Cell): ParsedRow {
     account_no: accNo,
     ifsc,
     customer_code: text(get('Customer Code')).toUpperCase(),
+    ...consentCells(get, cautions),
     errors,
     cautions,
   };

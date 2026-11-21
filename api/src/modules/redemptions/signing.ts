@@ -112,7 +112,9 @@ export function needsSignature(
   if (String(type) !== 'premature') return false;
   if (String(source ?? 'staff') !== 'staff') return false;
   // AND RAISED ON OR AFTER THE CUT-OFF (owner 2026-11-20: "note this is only
-  // for from nov 13th and for the future one which goes hereafter").
+  // for from nov 13th and for the future one which goes hereafter" — then
+  // moved back to 1 November on 2026-11-21, one date for this gate and the
+  // bulk letter tool alike).
   //
   // Without a date this returns true, which is the right default: a brand new
   // redemption has no created_at yet at the moment the rule is first asked,
@@ -424,8 +426,10 @@ export async function redemptionLetterFile(
 
     // NOTHING STORED, SO RENDER IT NOW — this is the download button for the
     // redemptions already raised on or after the cut-off (owner 2026-11-20:
-    // "for the old ones just get me a download button"). Nineteen of them are
-    // already Approved and several already paid, so they never went through
+    // "for the old ones just get me a download button"). Twenty-two of them —
+    // nineteen from 13 November, three more once the owner moved the cut-off
+    // back to 1 November on 2026-11-21 — are already Approved and several
+    // already paid, so they never went through
     // the signing flow and have no stored letter. They still want the document
     // on paper, and refusing because no signing row exists would make the
     // button useless on exactly the rows it was asked for.

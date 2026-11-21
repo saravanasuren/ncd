@@ -24,7 +24,7 @@
  *
  * THE COMPANY NAME IS FIXED, not era-driven. The request letter swings between
  * three addressee blocks by date because the bulk tool back-dates letters for
- * years. This document applies only from 13 November 2026 onward, so every
+ * years. This document applies only from 1 November 2026 onward, so every
  * letter it ever prints falls in the current era — and the Word file states
  * that name outright. A second era mechanism here would be a branch nobody
  * crosses.

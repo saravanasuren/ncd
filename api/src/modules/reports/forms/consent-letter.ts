@@ -61,7 +61,12 @@ export interface ConsentAddressee {
 }
 
 export interface ConsentLetterRow {
-  /** ISO yyyy-mm-dd — prints nowhere, but dates the file and the audit trail. */
+  /**
+   * ISO yyyy-mm-dd. Prints as "Date:" at the HEAD and again at the FOOT
+   * (owner 2026-11-23: "Date at the top and bottom") — where the Word format
+   * carries it, and what the request letter has always done. It also dates the
+   * file and the audit trail, as it did when it printed nowhere.
+   */
   letter_date: string;
   /**
    * The addressee block (owner 2026-11-21, with an updated format showing it).
@@ -87,7 +92,20 @@ export interface ConsentLetterRow {
   original_maturity_date: Particular;
   /** The number being REDEEMED (owner 2026-11-20), not the whole holding. */
   ncd_count: string;
-  face_value: Particular;
+  /**
+   * TOTAL face value of the NCDs being redeemed — ncd_count x the per-unit
+   * face value — not the per-unit figure (owner 2026-11-23: "total face value
+   * of the NCD", which is what the Word format's row asks for).
+   *
+   * It used to be the per-unit value under the label "Face value per NCD", so
+   * number and label agreed and nothing read false; but the format asks for
+   * the total and the letter never showed one. A holder of 10 NCDs saw
+   * 1,00,000 where the format means 10,00,000.
+   *
+   * The per-unit value is still needed to DERIVE ncd_count, so the redemption
+   * path keeps it as a local divisor and passes the product here.
+   */
+  total_face_value: Particular;
   coupon_rate_pct: Particular;
   /** 'Demat' | 'Physical' | '' — blank prints the empty box to tick by hand. */
   mode_of_holding: string;
@@ -189,6 +207,18 @@ export function consentLetterPdf(row: ConsentLetterRow): Promise<Buffer> {
     // ── Title ────────────────────────────────────────────────────────────────
     para('Consent for Premature Redemption', { font: 'Helvetica-Bold', size: 13.5, gap: 14 });
 
+    // ── Date (head) ──────────────────────────────────────────────────────────
+    //
+    // Between the title and the Board block, which is where the Word format
+    // puts it, and drawn the way the request letter draws its own: a bold
+    // "Date:" then the day. A letter_date that is not a real date prints the
+    // label alone rather than "Invalid Date".
+    room(measure('Date:', 'Helvetica-Bold', BODY) + 2);
+    doc.font('Helvetica-Bold').fontSize(BODY).fillColor('#000')
+      .text('Date:', LEFT, y, { continued: true })
+      .font('Helvetica').text(fmtDay(row.letter_date) ? ` ${fmtDay(row.letter_date)}` : '');
+    y = doc.y + 12;
+
     // ── Addressee ────────────────────────────────────────────────────────────
     //
     // Laid out exactly as the request letter's, except the label reads
@@ -271,8 +301,15 @@ export function consentLetterPdf(row: ConsentLetterRow): Promise<Buffer> {
       room(measure(lead + rest, 'Helvetica', BODY, TEXT_W) + 8);
       doc.font('Helvetica').fontSize(BODY).fillColor('#000').text(`${i + 1}.`, LEFT, y, { width: NUM_W });
       doc.font('Helvetica-Bold').fontSize(BODY)
-        .text(lead, LEFT + NUM_W, y, { width: TEXT_W, align: 'justify', continued: true })
-        .font('Helvetica').text(rest, { align: 'justify' });
+        // The separator space rides on the END of the BOLD lead, not the start
+        // of the continuation. Justified text in pdfkit trims leading
+        // whitespace off a `continued` run, so every clause but the short
+        // fifth printed "Consent to premature redemption.I hereby give" — the
+        // lead-in welded to the sentence on a document a holder signs. A
+        // U+00A0 at the head of the continuation does not survive WinAnsi
+        // either; a trailing space on the run before it does.
+        .text(`${lead} `, LEFT + NUM_W, y, { width: TEXT_W, align: 'justify', continued: true })
+        .font('Helvetica').text(rest.replace(/^ +/, ''), { align: 'justify' });
       y = doc.y + 6;
 
       // The bank block belongs to clause 5 and is indented under it.
@@ -346,10 +383,11 @@ export function consentLetterPdf(row: ConsentLetterRow): Promise<Buffer> {
     // ── Sign-off, kept together ──────────────────────────────────────────────
     //
     // One block, measured as one: "Thanking you" at the foot of a page with the
-    // signature overleaf is not a signed document. 150pt covers the sign-off,
-    // the pen gap and the three identification lines.
+    // signature overleaf is not a signed document. 168pt covers the sign-off,
+    // the pen gap and the FOUR identification lines — Name, PAN and now Date,
+    // which is 18pt more than the three it was measured for.
     y += 14;
-    room(150);
+    room(168);
     doc.font('Helvetica').fontSize(BODY).fillColor('#000').text('Thanking you,', LEFT, y, { width: WIDTH });
     y = doc.y + 10;
     doc.text('Yours faithfully,', LEFT, y, { width: WIDTH });
@@ -361,6 +399,11 @@ export function consentLetterPdf(row: ConsentLetterRow): Promise<Buffer> {
     doc.text(`Name: ${row.holder_name || ''}`, LEFT, y, { width: WIDTH });
     y = doc.y + 4;
     doc.text(`PAN: ${row.pan || ''}`, LEFT, y, { width: WIDTH });
+    y = doc.y + 4;
+    // The second of the two the owner asked for. Plain, like the Name and PAN
+    // it sits with, rather than bold like the one at the head — the sign-off
+    // block has no bold labels and one here would read as a heading.
+    doc.text(`Date: ${fmtDay(row.letter_date)}`, LEFT, y, { width: WIDTH });
   });
 }
 
@@ -399,11 +442,11 @@ function particulars(
     ['Number of NCDs held', row.ncd_count],
     // "Rs." NOT "₹". The Word file writes the rupee sign, but Helvetica has no
     // glyph for it and pdfkit's WinAnsi encoding rendered it as a superscript
-    // one — "Face value per NCD ( ¹)" — on a document a customer signs. Every
-    // other Dhanam PDF writes "Rs." for exactly this reason (fmtINR in
-    // shared.ts), so this follows them rather than embedding a second font for
-    // one character. Flagged to the owner as a forced deviation.
-    ['Face value per NCD (Rs.)', moneyOrText(row.face_value)],
+    // one — "( ¹)" — on a document a customer signs. Every other Dhanam PDF
+    // writes "Rs." for exactly this reason (fmtINR in shared.ts), so this
+    // follows them rather than embedding a second font for one character.
+    // Flagged to the owner as a forced deviation.
+    ['Total Face value of NCDs (Rs.)', moneyOrText(row.total_face_value)],
     ['Coupon rate (% p.a.)', rateOrText(row.coupon_rate_pct)],
     // Blank unless staff answered it. The owner chose to be ASKED at redemption
     // time rather than have it inferred: demat details were only ever synced

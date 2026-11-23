@@ -27,7 +27,7 @@ const row = (over: Partial<ConsentLetterRow> = {}): ConsentLetterRow => ({
   rollover_date: '',
   original_maturity_date: '2026-12-31',
   ncd_count: '3',
-  face_value: 500000,
+  total_face_value: 500000,
   coupon_rate_pct: 12.5,
   mode_of_holding: 'Demat',
   account_name: 'Holder Alpha',
@@ -114,8 +114,9 @@ describe('the consent letter says what the owner wrote', () => {
     expect(t).toContain('31-Dec-2026');   // date of maturity
     expect(squash(t)).toContain('DateofMaturity');   // the Word file's wording, not "Original maturity date"
     expect(squash(t)).not.toContain('Originalmaturitydate');
-    expect(t).toContain('5,00,000');      // face value
-    expect(t).toContain('FacevalueperNCD(Rs.)'); // not the ₹ glyph — no Helvetica glyph for it
+    expect(t).toContain('5,00,000');      // TOTAL face value, not the per-unit figure
+    expect(t).toContain('TotalFacevalueofNCDs(Rs.)'); // not the ₹ glyph — no Helvetica glyph for it
+    expect(t).not.toContain('FacevalueperNCD');
     expect(t).toContain('12.5%');         // coupon
     expect(t).toContain('Demat');
     expect(t).toContain('ABCDE1234F');    // PAN at the foot
@@ -141,7 +142,7 @@ describe('the consent letter says what the owner wrote', () => {
   it('keeps the particulars in the order the Word file lists them', async () => {
     const t = squash(extractText(await consentLetterPdf(row({ rollover_date: '2024-05-04' }))));
     const order = ['Series/Tranche', 'Dateofallotment', 'DateofRollover', 'DateofMaturity',
-      'NumberofNCDsheld', 'FacevalueperNCD(Rs.)', 'Couponrate', 'Modeofholding'];
+      'NumberofNCDsheld', 'TotalFacevalueofNCDs(Rs.)', 'Couponrate', 'Modeofholding'];
     let at = -1;
     for (const label of order) {
       const i = t.indexOf(label);
@@ -159,7 +160,7 @@ describe('the consent letter says what the owner wrote', () => {
 
   it('leaves unknown particulars blank rather than inventing a dash', async () => {
     const t = extractText(await consentLetterPdf(row({
-      allotment_date: '', rollover_date: '', original_maturity_date: '', face_value: null,
+      allotment_date: '', rollover_date: '', original_maturity_date: '', total_face_value: null,
       coupon_rate_pct: null, mode_of_holding: '', ncd_count: '',
     })));
     // The labels are still there to be completed by hand...
@@ -172,6 +173,41 @@ describe('the consent letter says what the owner wrote', () => {
     expect(t).not.toContain('Physical');
     expect(t).not.toContain('Demat');
   });
+
+  it('prints the date at the top AND the bottom', async () => {
+    // Owner 2026-11-23: "Date at the top and bottom". The Word format carries
+    // it in both places and the request letter has always drawn both; this
+    // letter held letter_date but printed it nowhere.
+    const t = squash(extractText(await consentLetterPdf(row())));
+    expect(t.match(/Date:/g) ?? []).toHaveLength(2);
+    expect(t.match(/20-Nov-2026/g) ?? []).toHaveLength(2);
+    // The head one comes before the Board block; the foot one after the PAN.
+    const first = t.indexOf('Date:');
+    const last = t.lastIndexOf('Date:');
+    expect(first).toBeLessThan(t.indexOf('ConsentforPrematureRedemption') + 200);
+    expect(last).toBeGreaterThan(t.indexOf('ABCDE1234F'));
+  });
+
+  it('prints the label alone when the letter date is not a real date', async () => {
+    // Rather than "Invalid Date" on a document a holder signs.
+    const t = squash(extractText(await consentLetterPdf(row({ letter_date: '' }))));
+    expect(t).toContain('Date:');
+    expect(t).not.toContain('InvalidDate');
+    expect(t).not.toContain('NaN');
+  });
+
+  it('prints the TOTAL face value, not the per-NCD figure', async () => {
+    // Owner 2026-11-23: "total face value of the NCD". The row read
+    // "Face value per NCD" and carried the per-unit value — label and number
+    // agreed, but the format asks for the total and the letter showed none.
+    const t = squash(extractText(await consentLetterPdf(row({
+      ncd_count: '10', total_face_value: 1000000,
+    }))));
+    expect(t).toContain('TotalFacevalueofNCDs(Rs.)');
+    expect(t).toContain('10,00,000');
+    expect(t).not.toContain('1,00,000(');
+  });
+
 });
 
 describe('the Board block at the head', () => {

@@ -90,6 +90,11 @@ export async function redemptionConsentRow(db: Db, redemptionId: number): Promis
   // own half.
   const faceValue = Number(r.face_value ?? 0) > 0 ? Number(r.face_value) : null;
   const ncdCount = faceValue && principal > 0 ? String(Math.round(principal / faceValue)) : '';
+  // The letter prints the TOTAL face value (owner 2026-11-23), which for the
+  // part being redeemed IS the principal — ncdCount was just derived by
+  // dividing it by the per-unit value, so the two agree by construction. The
+  // per-unit figure stays a local divisor and no longer reaches the page.
+  const totalFaceValue = principal > 0 ? principal : null;
 
   // "Indian Overseas Bank, Ganapathy" — the branch only when we hold one.
   const bankAndBranch = [text(r.bank_name), text(r.branch_name)].filter(Boolean).join(', ');
@@ -113,7 +118,7 @@ export async function redemptionConsentRow(db: Db, redemptionId: number): Promis
     rollover_date: text(r.rollover_date).slice(0, 10),
     original_maturity_date: text(r.maturity_date).slice(0, 10),
     ncd_count: ncdCount,
-    face_value: faceValue,
+    total_face_value: totalFaceValue,
     coupon_rate_pct: r.coupon_rate_pct == null ? null : Number(r.coupon_rate_pct),
     // Blank unless somebody was asked. Never inferred from the demat columns.
     mode_of_holding: text(r.holding_mode),

@@ -100,7 +100,10 @@ const toConsentRow = (r: ParsedRow, t?: LetterTemplate | null): ConsentLetterRow
   original_maturity_date: r.original_maturity_date,
   // The number being redeemed, which is what the sheet's own column holds.
   ncd_count: r.debentures,
-  face_value: r.face_value,
+  // The sheet's "Face Value" column already carries the TOTAL — its sample
+  // value is 500000, five NCDs' worth, not a 1,00,000 per-unit figure — so
+  // only the field it feeds is renamed here, not what operators type.
+  total_face_value: r.face_value,
   coupon_rate_pct: r.coupon_rate_pct,
   mode_of_holding: r.mode_of_holding,
   account_name: r.account_holder_name,

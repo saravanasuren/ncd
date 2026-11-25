@@ -380,13 +380,59 @@ export async function ensureAgentForReferrerText(
 ): Promise<number | null> {
   const t = String(text ?? '').trim();
   if (!t) return null;
+
+  // ── THE CATCH ALONE WAS A TRAP (fixed 2026-11-25) ─────────────────────────
+  //
+  // This used to be a bare try/catch. Swallowing the JavaScript error does
+  // NOT un-abort a Postgres transaction: once a statement in it fails, every
+  // later statement fails too, with "current transaction is aborted". So a
+  // duplicate agent code — a condition this function is entitled to shrug off
+  // — silently poisoned the APPROVAL that called it, and the checker saw
+  // "Internal server error" with a warning in the log naming a cause that
+  // sounded harmless.
+  //
+  // A SAVEPOINT is what makes the catch mean what it looks like it means:
+  // rolling back to it leaves the outer transaction usable, so registering a
+  // referrer is genuinely best-effort and an approval can never die for it.
+  await tx.query('SAVEPOINT register_referrer');
   try {
-    if (await resolveReferrer(tx, t)) return null;   // a known agent or staff member
-    return await ensurePendingAgentForName(tx, actor, t);
+    if (await resolveReferrer(tx, t)) {
+      await tx.query('RELEASE SAVEPOINT register_referrer');
+      return null;                                   // a known agent or staff member
+    }
+    const id = await ensurePendingAgentForName(tx, actor, t);
+    await tx.query('RELEASE SAVEPOINT register_referrer');
+    return id;
   } catch (e) {
+    await tx.query('ROLLBACK TO SAVEPOINT register_referrer');
     console.warn(`[agents] could not register referrer "${t}": ${(e as Error).message}`);
     return null;
   }
+}
+
+/**
+ * The next free AG-#### code.
+ *
+ * `nextSeq` alone is not enough: the counter and the codes actually in use can
+ * drift apart, and on 2026-11-25 they had — the sequence stood at 30 while
+ * AG-0030 already belonged to an agent. Every attempt to register a referrer
+ * then died on the UNIQUE constraint, and because that happened inside an
+ * approval's transaction it took the whole approval down with it.
+ *
+ * (The same drift bit the DHN customer/staff codes in November. A counter is
+ * not evidence that a code is free; the table is.)
+ *
+ * So: take a number, and if something already holds that code take the next
+ * one, leaving the counter past it. Bounded, because an unbounded loop against
+ * a UNIQUE constraint is just a slower outage.
+ */
+export async function nextFreeAgentCode(tx: Db): Promise<string> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const code = `AG-${String(await nextSeq(tx, 'agent')).padStart(4, '0')}`;
+    const taken = await tx.query('SELECT 1 FROM agents WHERE upper(agent_code) = upper($1) LIMIT 1', [code]);
+    if (!taken.rows.length) return code;
+  }
+  throw new Error('Could not allocate a free agent code after 50 tries — the agent sequence is far behind the codes in use.');
 }
 
 export async function ensurePendingAgentForName(tx: Db, actor: AuthUser, name: string): Promise<number> {
@@ -394,7 +440,7 @@ export async function ensurePendingAgentForName(tx: Db, actor: AuthUser, name: s
   const existing = (await tx.query<{ id: string }>(
     'SELECT id FROM agents WHERE lower(btrim(full_name)) = lower($1) LIMIT 1', [norm])).rows[0];
   if (existing) return Number(existing.id);
-  const code = `AG-${String(await nextSeq(tx, 'agent')).padStart(4, '0')}`;
+  const code = await nextFreeAgentCode(tx);
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO agents (agent_code, full_name, source, commission_status, is_active)
      VALUES ($1,$2,'manual','PendingApproval',FALSE) RETURNING id`, [code, norm]);
@@ -458,7 +504,7 @@ export async function ensureReferralAgent(tx: Db, name: string): Promise<number>
   const existing = (await tx.query<{ id: string }>(
     'SELECT id FROM agents WHERE lower(btrim(full_name)) = lower($1) LIMIT 1', [norm])).rows[0];
   if (existing) return Number(existing.id);
-  const code = `AG-${String(await nextSeq(tx, 'agent')).padStart(4, '0')}`;
+  const code = await nextFreeAgentCode(tx);
   const { rows } = await tx.query<{ id: string }>(
     `INSERT INTO agents (agent_code, full_name, source, commission_status, is_active)
      VALUES ($1,$2,'referral','PendingApproval',TRUE) RETURNING id`, [code, norm]);

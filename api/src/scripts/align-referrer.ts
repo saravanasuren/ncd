@@ -36,7 +36,10 @@ async function main(): Promise<void> {
         if (r.changed_customer) console.log('    the customer record was updated too');
         for (const a of r.applications) {
           const change = a.was.toLowerCase() === a.now.toLowerCase() ? '(unchanged)' : `"${a.was}" -> "${a.now}"`;
-          console.log(`    ${a.application_no} ${change}`);
+          const who = a.moves
+            ? ` [earner moves off ${a.moved_from ? `${a.moved_from.kind} ${a.moved_from.name}` : 'nobody resolvable'}]`
+            : ' [same earner]';
+          console.log(`    ${a.application_no} ${change}${who}`);
           const show = (label: string, rows: typeof a.before) => rows.length
             ? rows.forEach((x) => console.log(`        ${label}: ${x.payee_type}#${x.payee_id} ${x.matrix_cell ?? '(imported)'} ${inr(x.amount)}`))
             : console.log(`        ${label}: (none)`);

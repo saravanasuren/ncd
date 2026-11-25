@@ -158,9 +158,12 @@ export interface MergeIntoStaffResult {
  * users, so a referred-by that names an employee can land on a stale agent
  * record of the same name instead of on them.
  *
- * Everything moves — accruals paid and unpaid, and the payout ledger rows that
- * settled them. Leaving paid history behind would keep the agent's name in the
- * reports and make the merge look half-done.
+ * Everything moves — accruals paid and unpaid, the payout ledger rows that
+ * settled them, and (since 2026-11-25) the referred-by text itself. Leaving
+ * paid history behind would keep the agent's name in the reports and make the
+ * merge look half-done; leaving the referred-by behind was worse than
+ * cosmetic, because the pointer then matched nobody and the next investment
+ * raised a fresh agent of the same name.
  *
  * The agent row is soft-deleted, never removed: `incentive_accruals.payee_id`
  * is a plain BIGINT with no FK, so a hard delete would orphan money records.
@@ -227,6 +230,38 @@ export async function mergeAgentIntoStaff(
       'UPDATE customers SET enrolled_by_agent_id = NULL, enrolled_by_user_id = coalesce(enrolled_by_user_id, $2) WHERE enrolled_by_agent_id = $1',
       [agentId, targetUserId]);
 
+    /**
+     * THE REFERRED-BY TEXT FOLLOWS THEM TOO (2026-11-25).
+     *
+     * Without this the merge moves the money and leaves the pointer: the
+     * customer still reads "ashokkumar s", the agent row is soft-deleted so
+     * resolveReferrer no longer finds it, and the staff user is not found
+     * either because their name is different. The referrer then resolves to
+     * NOBODY — and the next investment raises a BRAND NEW agent of the old
+     * name, recreating exactly the duplicate this merge just retired.
+     *
+     * Their CODE is written where they have one, because resolveReferrer
+     * checks agents before users: a staff member whose name also exists as
+     * another agent row is reachable only by code. Falling back to the name
+     * is safe once this agent is retired.
+     *
+     * Only rows naming THIS agent are touched — by their code or their exact
+     * name, the same two things resolveReferrer matches on.
+     */
+    const pointer = (await tx.query<{ code: string | null; full_name: string }>(
+      'SELECT code, full_name FROM users WHERE id = $1', [targetUserId])).rows[0]!;
+    const newRef = (pointer.code && pointer.code.trim()) ? pointer.code.trim() : pointer.full_name;
+    const refCusts = await tx.query(
+      `UPDATE customers SET referred_by_text = $3, updated_at = now()
+        WHERE upper(btrim(referred_by_text)) = upper($1)
+           OR lower(btrim(referred_by_text)) = lower($2)`,
+      [agent.agent_code, agent.full_name, newRef]);
+    const refApps = await tx.query(
+      `UPDATE applications SET referred_by_text = $3
+        WHERE upper(btrim(referred_by_text)) = upper($1)
+           OR lower(btrim(referred_by_text)) = lower($2)`,
+      [agent.agent_code, agent.full_name, newRef]);
+
     await tx.query('UPDATE agents SET deleted_at = now(), is_active = FALSE WHERE id = $1', [agentId]);
 
     // The placeholder login the agent row carried (ag-xxxx@agents.dhanam.local).
@@ -245,6 +280,9 @@ export async function mergeAgentIntoStaff(
         into_user_id: targetUserId, into_user_name: user.full_name,
         accruals_moved: moved.rowCount ?? 0, payouts_moved: payouts.rowCount ?? 0,
         applications_repointed: apps.rowCount ?? 0, customers_repointed: custs.rowCount ?? 0,
+        referred_by_rewritten_to: newRef,
+        referred_by_customers: refCusts.rowCount ?? 0,
+        referred_by_applications: refApps.rowCount ?? 0,
         shadow_user_deactivated: shadow,
       },
     });

@@ -190,3 +190,69 @@ describe('the staff shortlist', () => {
     expect(r.json.rows).toHaveLength(0);
   });
 });
+
+/**
+ * The pointer has to follow the money (2026-11-25).
+ *
+ * The merge moved accruals and payouts but left `referred_by_text` naming the
+ * retired agent. That pointer then matched NOBODY — the agent row is
+ * soft-deleted and the staff user has a different name — so the next
+ * investment raised a brand new agent of the old name, recreating the very
+ * duplicate the merge had just retired.
+ */
+describe('the referred-by pointer follows the merge', () => {
+  it('rewrites customers and investments that named the agent', async () => {
+    const a = await admin();
+    const { agentId } = await agentWithMoney({ unpaid: 5000 });
+    const ag = (await ctx.db.query<{ agent_code: string; full_name: string }>(
+      'SELECT agent_code, full_name FROM agents WHERE id = $1', [agentId])).rows[0]!;
+    const agentName = ag.full_name, agentCode = ag.agent_code;
+    const uid = await staffUserId('ncd@demo.local');
+    await ctx.db.query("UPDATE users SET code = 'MERGEPTR1', is_staff = TRUE WHERE id = $1", [uid]);
+
+    // One customer naming the agent by NAME, one investment naming it by CODE.
+    const cust = await a.post('/api/customers', { full_name: 'Pointer Follow Cust', phone: '9847200001' });
+    const cid = Number(cust.json.id);
+    await ctx.db.query('UPDATE customers SET referred_by_text = $1 WHERE id = $2', [agentName, cid]);
+    const appId = Number((await ctx.db.query(
+      `INSERT INTO applications (application_no, customer_id, series_id, status, total_amount, referred_by_text)
+       VALUES ('APP-PTR-1', $1, $2, 'Active', 100000, $3) RETURNING id`,
+      [cid, seriesId, agentCode])).rows[0]!.id);
+
+    const r = await a.post(`/api/agents/${agentId}/merge-into-staff`, { user_id: uid });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+
+    // Both now point at the staff member's CODE — resolveReferrer checks
+    // agents before users, so the code is the only reliable pointer.
+    const after = (await ctx.db.query<{ referred_by_text: string }>(
+      'SELECT referred_by_text FROM customers WHERE id = $1', [cid])).rows[0]!;
+    expect(after.referred_by_text).toBe('MERGEPTR1');
+    const appAfter = (await ctx.db.query<{ referred_by_text: string }>(
+      'SELECT referred_by_text FROM applications WHERE id = $1', [appId])).rows[0]!;
+    expect(appAfter.referred_by_text).toBe('MERGEPTR1');
+
+    // ...and it resolves to the staff member, not to nobody and not to a
+    // freshly-raised agent.
+    const { resolveReferrer } = await import('../src/modules/agents/service.js');
+    const who = await resolveReferrer(ctx.db, after.referred_by_text);
+    expect(who?.kind).toBe('staff');
+    expect(who?.id).toBe(uid);
+  });
+
+  it('leaves a customer who named somebody else alone', async () => {
+    const a = await admin();
+    const { agentId } = await agentWithMoney({ unpaid: 1000 });
+    const uid = await staffUserId('ncd@demo.local');
+    await ctx.db.query("UPDATE users SET code = 'MERGEPTR2', is_staff = TRUE WHERE id = $1", [uid]);
+
+    const other = await a.post('/api/customers', { full_name: 'Untouched Cust', phone: '9847200002' });
+    const oid = Number(other.json.id);
+    await ctx.db.query("UPDATE customers SET referred_by_text = 'Somebody Else Entirely' WHERE id = $1", [oid]);
+
+    await a.post(`/api/agents/${agentId}/merge-into-staff`, { user_id: uid });
+
+    const row = (await ctx.db.query<{ referred_by_text: string }>(
+      'SELECT referred_by_text FROM customers WHERE id = $1', [oid])).rows[0]!;
+    expect(row.referred_by_text).toBe('Somebody Else Entirely');
+  });
+});

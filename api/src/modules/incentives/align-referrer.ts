@@ -19,13 +19,29 @@
  * THE STALE ACCRUAL IS DELETED BEFORE THE ENGINE RE-RUNS. The upsert keys on
  * (application_id, payee_type, payee_id), so re-running for a new payee
  * INSERTS beside the old row rather than replacing it — the same commission
- * credited to two people. Removing the old `referrer` row first is the only
- * thing that makes this a move.
+ * credited to two people. The old row has to go first for this to be a move
+ * and not a duplication.
  *
- * PAID MONEY IS NEVER TOUCHED. Any accrual with paid_at set aborts that
- * customer: moving commission somebody has already received is a decision for
- * a person. Where the duplicate is really one human recorded twice, the
- * agent-merge path handles paid history deliberately — use that instead.
+ * DELETING THE `referrer` ROW IS NOT ENOUGH. An IMPORTED accrual carries
+ * matrix_cell NULL — 718 of 889 on production — so a delete scoped to
+ * matrix_cell = 'referrer' walks straight past it. A production dry run on
+ * 2026-11-25 showed what that costs: 7 investments across 4 customers would
+ * have kept the old earner's imported row AND gained a row for the new one,
+ * Rs 45,250 credited twice, including the very case this was built to repair.
+ * So the previously-named referrer is resolved to a payee and THAT payee's
+ * unpaid row is removed, whatever its matrix_cell. The unique key is
+ * (application_id, payee_type, payee_id), so one payee holds at most one row
+ * per investment — deleting by payee cannot catch a bystander, and anything
+ * the engine still owns it rebuilds on the spot.
+ *
+ * PAID MONEY IS NEVER TOUCHED, AND THE CHECK IS PER INVESTMENT. Only the
+ * investments whose earner actually changes are examined: a sibling
+ * investment that was already correct and already paid is no reason to refuse
+ * the repair (DHN0330 was blocked by exactly that). Where an investment that
+ * does change has been paid, that customer aborts — moving commission
+ * somebody has already received is a decision for a person. Where the
+ * duplicate is really one human recorded twice, the agent-merge path handles
+ * paid history deliberately — use that instead.
  */
 import type { Db } from '../../db/types.js';
 import { errors } from '../../lib/errors.js';
@@ -34,13 +50,15 @@ import { accrueForApplication } from './accrual.js';
 export interface AccrualRow {
   payee_type: string; payee_id: string; matrix_cell: string | null; amount: string; paid_at: string | null;
 }
+export interface Payee { kind: 'staff' | 'agent'; id: number; name: string }
 export interface AlignReport {
   customer_code: string;
   customer_name: string;
   referrer: string;
   changed_customer: boolean;
-  resolved_to: { kind: 'staff' | 'agent'; id: number; name: string } | null;
+  resolved_to: Payee | null;
   applications: { application_no: string; status: string; was: string; now: string;
+                  moves: boolean; moved_from: Payee | null;
                   before: AccrualRow[]; after: AccrualRow[] }[];
 }
 
@@ -70,13 +88,30 @@ export async function alignReferrer(
     'SELECT id, application_no, status, referred_by_text FROM applications WHERE customer_id = $1 ORDER BY id',
     [Number(cust.id)])).rows;
 
-  const paid = (await tx.query<{ n: string }>(
-    `SELECT count(*) AS n FROM incentive_accruals
-      WHERE application_id = ANY($1::bigint[]) AND paid_at IS NOT NULL`,
-    [apps.map((a) => Number(a.id))])).rows[0]!;
-  if (Number(paid.n) > 0) {
-    throw errors.unprocessable(
-      `${code} has ${paid.n} commission row(s) already PAID. Use the agent-merge path, which moves paid history on purpose, or settle it by hand.`);
+  // Who each investment's commission reads TODAY: its own text when it has one,
+  // otherwise the customer's — the same COALESCE the accrual engine applies.
+  const samePayee = (a: Payee | null, b: Payee | null) =>
+    !!a && !!b && a.kind === b.kind && Number(a.id) === Number(b.id);
+  const custWas = (cust.referred_by_text ?? '').trim();
+
+  const plan: { app: typeof apps[number]; was: string; from: Payee | null; moves: boolean }[] = [];
+  for (const app of apps) {
+    const was = (app.referred_by_text ?? '').trim();
+    const effective = was || custWas;
+    const from = effective ? await resolveReferrer(tx, effective) : null;
+    plan.push({ app, was, from, moves: !samePayee(from, resolved) });
+  }
+
+  // Only the investments that actually change earner can be blocked by paid money.
+  const moving = plan.filter((p) => p.moves).map((p) => Number(p.app.id));
+  if (moving.length) {
+    const paid = (await tx.query<{ n: string }>(
+      `SELECT count(*) AS n FROM incentive_accruals
+        WHERE application_id = ANY($1::bigint[]) AND paid_at IS NOT NULL`, [moving])).rows[0]!;
+    if (Number(paid.n) > 0) {
+      throw errors.unprocessable(
+        `${code} has ${paid.n} commission row(s) already PAID on the investment(s) whose earner would change. Use the agent-merge path, which moves paid history on purpose, or settle it by hand.`);
+    }
   }
 
   let changedCustomer = false;
@@ -87,18 +122,28 @@ export async function alignReferrer(
   }
 
   const report: AlignReport['applications'] = [];
-  for (const app of apps) {
-    const was = (app.referred_by_text ?? '').trim();
-    const before = await accrualsOf(tx, Number(app.id));
+  for (const { app, was, from, moves } of plan) {
+    const id = Number(app.id);
+    const before = await accrualsOf(tx, id);
     if (was.toLowerCase() !== target.toLowerCase()) {
-      await tx.query('UPDATE applications SET referred_by_text = $1 WHERE id = $2', [target, Number(app.id)]);
+      await tx.query('UPDATE applications SET referred_by_text = $1 WHERE id = $2', [target, id]);
     }
+    // Anything the engine wrote for the referrer slot, whoever holds it.
     await tx.query(
       `DELETE FROM incentive_accruals
-        WHERE application_id = $1 AND matrix_cell = 'referrer' AND paid_at IS NULL`, [Number(app.id)]);
-    await accrueForApplication(tx, Number(app.id));
+        WHERE application_id = $1 AND matrix_cell = 'referrer' AND paid_at IS NULL`, [id]);
+    // And the earner we are moving away from, including an imported row the
+    // clause above cannot see because its matrix_cell is NULL.
+    if (moves && from) {
+      await tx.query(
+        `DELETE FROM incentive_accruals
+          WHERE application_id = $1 AND payee_type = $2 AND payee_id = $3 AND paid_at IS NULL`,
+        [id, from.kind, from.id]);
+    }
+    await accrueForApplication(tx, id);
     report.push({ application_no: app.application_no, status: app.status, was, now: target,
-                  before, after: await accrualsOf(tx, Number(app.id)) });
+                  moves, moved_from: moves ? from : null,
+                  before, after: await accrualsOf(tx, id) });
   }
 
   return {

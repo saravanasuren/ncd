@@ -60,6 +60,18 @@ export interface SummaryRow {
   deduction_amount?: number | string | null;
   /** What the bank actually pays: net + addition − deduction. */
   total_amount?: number | string | null;
+  /**
+   * Interest EARNED but not paid, as at the sheet's payout date — the figure
+   * the owner asked for on 2026-11-26 for the Doubling holdings, which pay
+   * nothing until maturity. Set only on those information-only rows; a cash
+   * row leaves it null and the column prints blank, because on a cash row the
+   * accrued interest IS the Gross beside it and repeating it would read like a
+   * second amount owed.
+   *
+   * It is deliberately NOT part of gross/net/total. Nothing sums it, the NEFT
+   * file never sees it, and no batch can settle it.
+   */
+  accrued_amount?: number | string | null;
 }
 
 const COLUMNS = [
@@ -75,6 +87,11 @@ const COLUMNS = [
   // Appended, not inserted — ops reconcile this sheet against the Federal Net
   // file by column position, so every existing column keeps its index.
   'Phone', 'Payment Mode', 'Cheque / Ref No',
+  // Appended for the same reason as the three above — ops reconcile by column
+  // position. This one carries no money that anybody is owed TODAY, so it sits
+  // outside the gross/TDS/net block on purpose: nothing should ever add it to
+  // a payout total.
+  'Accrued (Rs)',
 ];
 
 /** Completed years at the payout date. Blank when either date is unusable. */
@@ -180,6 +197,7 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
       r.phone ?? '',
       r.collection_method ?? '',
       r.collection_reference ?? '',
+      amt(r.accrued_amount),
     ]);
     // Application No, PAN, Bank A/C, IFSC and Phone must stay TEXT — otherwise
     // Excel drops leading zeros and renders long numbers in scientific
@@ -195,5 +213,9 @@ export async function buildSummarySheet(rows: SummaryRow[], sheetName = 'Summary
     { width: 13 }, { width: 14 }, { width: 13 },
     { width: 14 }, { width: 14 },
   ];
+  // Set by index, not by extending the array above: that array stops short of
+  // the last columns, so pushing onto it would resize 'Payment Mode' rather
+  // than this.
+  ws.getColumn(COLUMNS.length).width = 15;
   return Buffer.from(await wb.xlsx.writeBuffer());
 }

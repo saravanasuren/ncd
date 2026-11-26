@@ -18,12 +18,17 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import ExcelJS from 'exceljs';
 import { startTestServer, Client, approveInvestment, type TestCtx, requiredInvestmentFields } from './helpers/server.js';
+import { accruedAtMaturity } from '../src/lib/interest.js';
 
 let ctx: TestCtx;
 const as = async (email: string, password = 'Demo_1234') => { const c = new Client(ctx.base); await c.post('/api/auth/login', { email, password }); return c; };
 const admin = () => as('admin@dhanam.finance', 'ChangeMe_Dev_123');
 const D = '2026-09-28';
-let cumLineId = 0, cumAppNo = '', payAppNo = '';
+// The Accrued tests run AFTER the batch above is cut for D, which settles that
+// date — a second preview for it has nothing due and 422s. They use the next
+// payout day instead, where the monthly line has accrued again.
+const D2 = '2026-10-28';
+let cumLineId = 0, cumAppNo = '', payAppNo = '', dblAppNo = '', dblLineId = 0;
 
 beforeAll(async () => {
   ctx = await startTestServer();
@@ -45,6 +50,16 @@ beforeAll(async () => {
   // What matters is the frequency previewDue filters on, not how it got there.
   await ctx.db.query("UPDATE application_lines SET payout_frequency = 'Cumulative' WHERE application_id = $1", [cumId]);
   cumLineId = Number((await ctx.db.query('SELECT id FROM application_lines WHERE application_id = $1', [cumId])).rows[0]!.id);
+
+  // A Doubling holding proper — 20% over 60 months, at maturity. This is the
+  // one the Accrued column exists for (owner 2026-11-26).
+  const dblId = await make('9611000003', 'Accruing Doubler', 1000000);
+  dblAppNo = String((await ctx.db.query('SELECT application_no FROM applications WHERE id = $1', [dblId])).rows[0]!.application_no);
+  await ctx.db.query(
+    `UPDATE application_lines SET payout_frequency = 'AtMaturity', coupon_rate_pct = 20,
+            tenure_months = 60, maturity_date = '2031-07-31'
+      WHERE application_id = $1`, [dblId]);
+  dblLineId = Number((await ctx.db.query('SELECT id FROM application_lines WHERE application_id = $1', [dblId])).rows[0]!.id);
 });
 afterAll(async () => { await ctx.close(); });
 
@@ -150,5 +165,98 @@ describe('a cumulative product on the sheet but not in the bank file', () => {
     expect(row, 'and so is the cumulative one').toBeTruthy();
     expect(Number((row as unknown[])[cInv])).toBe(400000);
     expect(Number((row as unknown[])[cTotal])).toBe(0);
+  });
+});
+
+/**
+ * ACCRUED, BUT STILL NOT PAYABLE (owner 2026-11-26):
+ *
+ *   "additionally - in the summary sheet ill be needing their accured interest
+ *    as on date but no interest should be going to them in the payout."
+ *
+ * So the sheet gains ONE column and loses nothing: Gross/TDS/Net/Total stay at
+ * zero on these rows, the NEFT file still cannot see them, and no total moves.
+ * The arithmetic itself is pinned in interest.test.ts against the ten live
+ * investments; what matters here is that the sheet is wired to it — reading the
+ * right dates, for the right as-on date.
+ */
+describe('the Accrued column', () => {
+  it('is appended last, so every existing column keeps its position', async () => {
+    const a = await admin();
+    const ws = await sheetOf((await a.raw(`/api/payouts/preview.summary.xlsx?date=${D2}`)).buffer);
+    const hdr = (ws.getRow(1).values as unknown[]).map((v) => String(v ?? '').trim()).filter(Boolean);
+    expect(hdr[hdr.length - 1]).toBe('Accrued (Rs)');
+    // Ops reconcile this sheet against the bank file by position — the money
+    // block must not have shifted to make room.
+    expect(hdr.indexOf('Gross (Rs)')).toBeLessThan(hdr.indexOf('Net (Rs)'));
+    expect(hdr.indexOf('Total (Rs)')).toBe(hdr.indexOf('Net (Rs)') + 3);
+  });
+
+  it('states what the Doubling holding has earned, while paying it nothing', async () => {
+    const a = await admin();
+    const ws = await sheetOf((await a.raw(`/api/payouts/preview.summary.xlsx?date=${D2}`)).buffer);
+    const cApp = colOf(ws, 'Application No'), cAcc = colOf(ws, 'Accrued (Rs)');
+    const cInv = colOf(ws, 'Invested (Rs)'), cGross = colOf(ws, 'Gross (Rs)');
+    const cNet = colOf(ws, 'Net (Rs)'), cTotal = colOf(ws, 'Total (Rs)');
+    let dbl: unknown[] | null = null, payer: unknown[] | null = null;
+    ws.eachRow((r, n) => {
+      if (n === 1) return;
+      const v = r.values as unknown[];
+      if (String(v[cApp] ?? '') === dblAppNo) dbl = v;
+      if (String(v[cApp] ?? '') === payAppNo) payer = v;
+    });
+    expect(dbl, 'the Doubling holding is on the sheet').toBeTruthy();
+    const v = dbl as unknown[];
+
+    // Its money is stated, something has accrued on it...
+    expect(Number(v[cInv])).toBe(1000000);
+    expect(Number(v[cAcc]), 'interest has been earned').toBeGreaterThan(0);
+
+    // ...and it is the figure the engine computes from this line's own dates,
+    // valued at the sheet's date — which is what proves the wiring, not the
+    // arithmetic (that is pinned in interest.test.ts).
+    const line = (await ctx.db.query(
+      `SELECT l.outstanding_amount, l.coupon_rate_pct, l.tenure_months, l.day_count_convention,
+              l.maturity_date::text AS mat, l.date_money_received::text AS money,
+              s.deemed_date::text AS deemed
+         FROM application_lines l JOIN applications a ON a.id = l.application_id
+         LEFT JOIN series s ON s.id = a.series_id WHERE l.id = $1`, [dblLineId])).rows[0]!;
+    const expected = accruedAtMaturity({
+      principal: Number(line.outstanding_amount), ratePct: line.coupon_rate_pct,
+      tenureMonths: line.tenure_months, interestStartDate: line.money,
+      seriesDeemedDate: line.deemed, maturityDate: line.mat, asOf: D2,
+    }).interest;
+    expect(Number(v[cAcc])).toBe(Math.round(expected));
+
+    // NOT ONE RUPEE IS PAYABLE. This is the whole point of the column.
+    expect(Number(v[cGross])).toBe(0);
+    expect(Number(v[cNet])).toBe(0);
+    expect(Number(v[cTotal])).toBe(0);
+
+    // A cash row leaves it blank: there, the accrued interest IS the Gross
+    // beside it, and repeating it would read as a second amount owed.
+    expect(payer, 'the ordinary payer is still on the sheet').toBeTruthy();
+    expect(String((payer as unknown[])[cAcc] ?? '')).toBe('');
+  });
+
+  it('adds nothing to any total, and still never reaches the bank file', async () => {
+    const a = await admin();
+    const due = (await a.get(`/api/payouts/preview?date=${D2}`)).json as {
+      count: number; totals: { gross: number; net: number; total: number };
+      rows: Record<string, unknown>[] };
+    const row = due.rows.find((r) => r.application_no === dblAppNo)!;
+    expect(Number(row.accrued_amount), 'the figure is on the row').toBeGreaterThan(0);
+    expect(row.info_only).toBe(true);
+
+    // Totals are the payable rows and nothing else.
+    const payable = due.rows.filter((r) => !r.info_only);
+    expect(due.count).toBe(payable.length);
+    expect(due.totals.gross).toBe(payable.reduce((t, r) => t + Number(r.gross_amount), 0));
+    expect(due.totals.total).toBe(payable.reduce((t, r) => t + Number(r.total_amount), 0));
+
+    const neft = await sheetOf((await a.raw(`/api/payouts/sheet.xlsx?date=${D2}`)).buffer);
+    const blob: string[] = [];
+    neft.eachRow((r) => blob.push((r.values as unknown[]).map((x) => String(x ?? '')).join('|')));
+    expect(blob.join('\n'), 'accruing, not paying').not.toContain('Accruing Doubler');
   });
 });

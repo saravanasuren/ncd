@@ -8,7 +8,7 @@ import type { AuthUser } from '../../lib/authUser.js';
 import { errors } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import { round2, roundRupee, toISODate, daysBetween, addDays } from '../../lib/dates.js';
-import { denominatorFor, rollsToNextBatch, type DayCountConvention } from '../../lib/interest.js';
+import { accruedAtMaturity, denominatorFor, rollsToNextBatch, type DayCountConvention } from '../../lib/interest.js';
 import { computeTds, DEFAULT_TDS_RULE } from '../../lib/tds.js';
 import { OUTSTANDING_APPLICATION_STATUSES, payoutRupees } from '@new-wealth/shared';
 import { nextCode } from '../../lib/sequences.js';
@@ -47,6 +47,29 @@ const OUTSTANDING_SQL_LIST = OUTSTANDING_APPLICATION_STATUSES.map((x) => `'${x}'
  * gathered differs.
  */
 export type ProductType = 'ncd' | 'subordinate_bond';
+
+/**
+ * Interest EARNED, as at the sheet's date, on a holding that pays nothing until
+ * maturity — the Accrued column the owner asked for on 2026-11-26.
+ *
+ * A thin adapter onto `accruedAtMaturity` (lib/interest.ts) so the preview
+ * sheet and a saved batch's sheet read the identical figure from the identical
+ * formula. It returns a number for display and NOTHING else: no caller adds it
+ * to a total, writes it to a schedule row, or lets it near the NEFT file.
+ */
+function accruedAtMaturityFor(r: Record<string, unknown>, asOf: string): number {
+  const iso = (v: unknown): string | null => (v ? toISODate(v as string | Date) : null);
+  return accruedAtMaturity({
+    principal: Number(r.outstanding_amount ?? 0),
+    ratePct: r.coupon_rate_pct,
+    tenureMonths: r.tenure_months,
+    interestStartDate: iso(r.money_date),
+    seriesDeemedDate: iso(r.deemed_date),
+    maturityDate: iso(r.maturity_date),
+    asOf: asOf.slice(0, 10),
+    convention: (r.day_count_convention as DayCountConvention) || undefined,
+  }).interest;
+}
 
 export async function previewDue(db: Db, payoutDate: string, productType: ProductType = 'ncd') {
   const { rows: lines } = await db.query<Record<string, unknown>>(
@@ -380,10 +403,17 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
   // reach.
   const { rows: infoRows } = await db.query<Record<string, unknown>>(
     `SELECT l.id AS line_id, a.id AS application_id, c.id AS customer_id,
-            a.application_no, c.full_name AS customer_name, l.payout_frequency
+            a.application_no, c.full_name AS customer_name, l.payout_frequency,
+            -- Everything accruedAtMaturity needs to value the holding. These
+            -- feed the Accrued column ONLY; not one of them touches a total.
+            l.outstanding_amount, l.coupon_rate_pct, l.tenure_months,
+            l.day_count_convention, l.maturity_date,
+            COALESCE(l.date_money_received, a.date_money_received, a.interest_start_date) AS money_date,
+            s.deemed_date
        FROM application_lines l
        JOIN applications a ON a.id = l.application_id
        JOIN customers c ON c.id = a.customer_id
+       LEFT JOIN series s ON s.id = a.series_id
       WHERE l.status = 'Active' AND a.status IN (${OUTSTANDING_SQL_LIST})
         AND a.product_type = $1
         -- The exact complement of the cash run's allow-list above, so a
@@ -402,6 +432,11 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
       from_date: null, period_days: 0,
       gross_amount: 0, tds_amount: 0, net_amount: 0,
       addition_amount: 0, deduction_amount: 0, total_amount: 0,
+      // Earned, not payable (owner 2026-11-26). Every money column above
+      // stays 0 so this row cannot settle, cannot enter a total and cannot
+      // reach the bank file; this one number says what the holding is worth
+      // so far. `info_only` is what keeps the whole row out of all three.
+      accrued_amount: accruedAtMaturityFor(r, payoutDate),
       info_only: true,
     });
   }
@@ -1514,6 +1549,10 @@ async function infoOnlySummaryRows(
             c.investor_category AS category, s.name AS series_name,
             l.payout_frequency AS row_type,
             l.outstanding_amount AS investment_amount, l.coupon_rate_pct,
+            l.outstanding_amount, l.tenure_months, l.day_count_convention,
+            l.maturity_date,
+            COALESCE(l.date_money_received, a.date_money_received, a.interest_start_date) AS money_date,
+            s.deemed_date,
             COALESCE(l.collection_method, a.collection_method) AS collection_method,
             COALESCE(l.collection_reference, a.collection_reference) AS collection_reference,
             COALESCE(pb.holder_name, cb.holder_name) AS beneficiary_name,
@@ -1535,6 +1574,8 @@ async function infoOnlySummaryRows(
         AND COALESCE(l.outstanding_amount, 0) > 0
         AND a.date_money_received <= $2::date
       ORDER BY c.full_name`, [productType, payoutDate]);
+  // Same figure, same helper as the preview sheet — the two must never differ.
+  for (const r of rows) r.accrued_amount = accruedAtMaturityFor(r, payoutDate);
   return rows;
 }
 
@@ -1630,6 +1671,10 @@ async function summaryRowsForDate(db: Db, payoutDate: string, productType: Produ
       addition_amount: r.addition_amount,
       deduction_amount: r.deduction_amount,
       total_amount: r.total_amount,
+      // Earned, not payable. This row list is rebuilt field by field, so a new
+      // column has to be named here or the preview sheet silently drops it
+      // while the batch sheet shows it — the two must be one dataset.
+      accrued_amount: r.accrued_amount,
     };
   });
 }

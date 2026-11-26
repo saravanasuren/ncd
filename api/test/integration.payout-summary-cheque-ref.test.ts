@@ -105,10 +105,12 @@ describe('cheque / UTR reference on the summary sheet', () => {
   it('sits immediately after Payment Mode, and appends rather than shifting any existing column', async () => {
     const ws = await previewSheet('2026-07-28');
     expect(colOf(ws, 'Cheque / Ref No')).toBe(colOf(ws, 'Payment Mode') + 1);
-    // Appended at the END: the Federal-file reconciliation depends on the
-    // earlier columns keeping their index, so nothing may sit after it.
-    const headers = (ws.getRow(1).values as unknown[]).filter(Boolean);
-    expect(headers[headers.length - 1]).toBe('Cheque / Ref No');
+    // Appended, never inserted: the Federal-file reconciliation depends on the
+    // earlier columns keeping their index. Anything added later must go AFTER
+    // this one, which is what the tail assertion pins — 'Accrued (Rs)' (owner
+    // 2026-11-26) was added that way and is the only thing beyond it.
+    const headers = (ws.getRow(1).values as unknown[]).filter(Boolean).map(String);
+    expect(headers.slice(headers.indexOf('Cheque / Ref No'))).toEqual(['Cheque / Ref No', 'Accrued (Rs)']);
   });
 
   it('an ordinary one-payment investment shows its own cheque number and method', async () => {

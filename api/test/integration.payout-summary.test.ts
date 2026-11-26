@@ -45,6 +45,11 @@ const HEADERS = [
   // The tranche's own cheque/UTR (owner 2026-08-26) — APPENDED, so no existing
   // column moved. Its behaviour lives in integration.payout-summary-cheque-ref.
   'Cheque / Ref No',
+  // Interest earned but not payable on an at-maturity holding (owner
+  // 2026-11-26) — appended for the same reason, and deliberately outside the
+  // gross/TDS/net block so nothing can add it to a payout. Its behaviour lives
+  // in integration.payout-cumulative-on-sheet.
+  'Accrued (Rs)',
 ];
 
 /** Column index BY HEADER NAME. The sheet has had two columns inserted mid-way

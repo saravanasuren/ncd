@@ -46,6 +46,7 @@
 import type { Db } from '../../db/types.js';
 import { errors } from '../../lib/errors.js';
 import { accrueForApplication } from './accrual.js';
+import { writeAudit } from '../../lib/audit.js';
 
 export interface AccrualRow {
   payee_type: string; payee_id: string; matrix_cell: string | null; amount: string; paid_at: string | null;
@@ -59,6 +60,8 @@ export interface AlignReport {
   resolved_to: Payee | null;
   applications: { application_no: string; status: string; was: string; now: string;
                   moves: boolean; moved_from: Payee | null;
+                  /** Paid accrual + payout rows rewritten onto the new payee. */
+                  paid_history_moved: { accruals: number; payouts: number; amount: number } | null;
                   before: AccrualRow[]; after: AccrualRow[] }[];
 }
 
@@ -66,8 +69,21 @@ const accrualsOf = (tx: Db, appId: number) => tx.query<AccrualRow>(
   `SELECT payee_type, payee_id, matrix_cell, amount, paid_at
      FROM incentive_accruals WHERE application_id = $1 ORDER BY id`, [appId]).then((r) => r.rows);
 
+export interface AlignOptions {
+  /**
+   * Move commission that has ALREADY BEEN PAID, rewriting the payout record
+   * with it. Off by default and never inferred: it rewrites financial history,
+   * so it is set only for a customer the owner has named, after they have been
+   * shown who the payout rows currently say was paid.
+   */
+  includePaidHistory?: boolean;
+  /** Why, in the owner's terms. Required with includePaidHistory; it lands in the audit row. */
+  reason?: string;
+  actorId?: number | null;
+}
+
 export async function alignReferrer(
-  tx: Db, customerCode: string, setTo?: string | null,
+  tx: Db, customerCode: string, setTo?: string | null, opts: AlignOptions = {},
 ): Promise<AlignReport> {
   const code = String(customerCode ?? '').trim().toUpperCase();
   if (!code) throw errors.badRequest('A customer code is required.');
@@ -104,13 +120,22 @@ export async function alignReferrer(
 
   // Only the investments that actually change earner can be blocked by paid money.
   const moving = plan.filter((p) => p.moves).map((p) => Number(p.app.id));
-  if (moving.length) {
+  if (moving.length && !opts.includePaidHistory) {
     const paid = (await tx.query<{ n: string }>(
       `SELECT count(*) AS n FROM incentive_accruals
         WHERE application_id = ANY($1::bigint[]) AND paid_at IS NOT NULL`, [moving])).rows[0]!;
     if (Number(paid.n) > 0) {
       throw errors.unprocessable(
         `${code} has ${paid.n} commission row(s) already PAID on the investment(s) whose earner would change. Use the agent-merge path, which moves paid history on purpose, or settle it by hand.`);
+    }
+  }
+  if (opts.includePaidHistory) {
+    if (!String(opts.reason ?? '').trim()) {
+      throw errors.badRequest('Rewriting paid commission needs a reason for the audit row.');
+    }
+    if (!resolved) {
+      throw errors.unprocessable(
+        `${code}: "${target}" matches no agent or staff member, so paid commission cannot be moved onto them.`);
     }
   }
 
@@ -140,9 +165,58 @@ export async function alignReferrer(
           WHERE application_id = $1 AND payee_type = $2 AND payee_id = $3 AND paid_at IS NULL`,
         [id, from.kind, from.id]);
     }
+
+    // Paid commission, when the owner has asked for the history to move with
+    // it. The row is UPDATED, never deleted and re-made: that is what keeps
+    // paid_at, the amount actually paid and the payout reference intact. The
+    // engine cannot rebuild a paid row — its upsert is guarded by
+    // `WHERE paid_at IS NULL` — so re-accruing afterwards leaves it alone.
+    let paidMoved: { accruals: number; payouts: number; amount: number } | null = null;
+    if (opts.includePaidHistory && moves && from && resolved) {
+      const paidRows = (await tx.query<{ id: string; amount: string }>(
+        `SELECT id, amount FROM incentive_accruals
+          WHERE application_id = $1 AND payee_type = $2 AND payee_id = $3 AND paid_at IS NOT NULL`,
+        [id, from.kind, from.id])).rows;
+      if (paidRows.length) {
+        // (application_id, payee_type, payee_id) is unique, so the new payee
+        // must not already hold a row here or the UPDATE would collide.
+        const clash = (await tx.query<{ n: string }>(
+          `SELECT count(*) AS n FROM incentive_accruals
+            WHERE application_id = $1 AND payee_type = $2 AND payee_id = $3`,
+          [id, resolved.kind, resolved.id])).rows[0]!;
+        if (Number(clash.n) > 0) {
+          throw errors.unprocessable(
+            `${app.application_no}: ${resolved.name} already has a commission row here, so the paid row cannot be moved onto them without merging the two. Settle this one by hand.`);
+        }
+        const acc = await tx.query(
+          `UPDATE incentive_accruals SET payee_type = $2, payee_id = $3
+            WHERE application_id = $1 AND payee_type = $4 AND payee_id = $5 AND paid_at IS NOT NULL`,
+          [id, resolved.kind, resolved.id, from.kind, from.id]);
+        const pay = await tx.query(
+          `UPDATE incentive_payouts SET payee_type = $2, payee_id = $3
+            WHERE application_id = $1 AND payee_type = $4 AND payee_id = $5`,
+          [id, resolved.kind, resolved.id, from.kind, from.id]);
+        paidMoved = {
+          accruals: acc.rowCount ?? 0,
+          payouts: pay.rowCount ?? 0,
+          amount: paidRows.reduce((t, r) => t + Number(r.amount), 0),
+        };
+        await writeAudit(tx, {
+          actorId: opts.actorId ?? null,
+          action: 'incentive.paid-history-moved',
+          entityType: 'applications',
+          entityId: id,
+          before: { payee_type: from.kind, payee_id: from.id, payee_name: from.name,
+                    accruals: paidMoved.accruals, payouts: paidMoved.payouts, amount: paidMoved.amount },
+          after: { payee_type: resolved.kind, payee_id: resolved.id, payee_name: resolved.name,
+                   customer_code: code, reason: opts.reason },
+        });
+      }
+    }
+
     await accrueForApplication(tx, id);
     report.push({ application_no: app.application_no, status: app.status, was, now: target,
-                  moves, moved_from: moves ? from : null,
+                  moves, moved_from: moves ? from : null, paid_history_moved: paidMoved,
                   before, after: await accrualsOf(tx, id) });
   }
 

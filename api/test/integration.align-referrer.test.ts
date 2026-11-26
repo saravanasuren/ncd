@@ -31,6 +31,10 @@ const align = async (code: string, to?: string) => {
   const { alignReferrer } = await import('../src/modules/incentives/align-referrer.js');
   return ctx.db.withTx((tx) => alignReferrer(tx, code, to ?? null));
 };
+const alignWithPaidHistory = async (code: string, to: string, reason = 'Owner confirmed the money reached the other person.') => {
+  const { alignReferrer } = await import('../src/modules/incentives/align-referrer.js');
+  return ctx.db.withTx((tx) => alignReferrer(tx, code, to, { includePaidHistory: true, reason }));
+};
 const refRows = async (code: string) => (await ctx.db.query<Record<string, unknown>>(
   `SELECT i.payee_type, i.payee_id, i.amount FROM incentive_accruals i
      JOIN applications ap ON ap.id = i.application_id JOIN customers c ON c.id = ap.customer_id
@@ -208,6 +212,84 @@ describe('aligning an investment to its customer', () => {
     expect(Number(onSecond[0]!.payee_id)).toBe(r.resolved_to!.id);
     expect(after.filter((x) => x.payee_type === 'agent' && Number(x.payee_id) === strayId),
       'the stray introducer keeps nothing').toHaveLength(0);
+  });
+
+  /**
+   * The deliberate override, owner-authorised per customer (2026-11-25, DHN0534).
+   * The system recorded one person as paid while the money had reached another.
+   * Moving the earner alone would have left the payout record pointing at
+   * somebody who never received it, so the payout row moves too — and the
+   * accrual is UPDATED, not re-made, because a rebuilt row would lose paid_at
+   * and the amount actually paid.
+   */
+  it('moves paid commission AND its payout record when the override is set', async () => {
+    const { code, cid } = await drifted('Align Holder Six', '9848100006', 'Recorded Earner', 'Recorded Earner');
+    await ctx.db.query(
+      `INSERT INTO agents (agent_code, full_name, source, commission_status, is_active)
+       VALUES ('AG-DACTUAL','Actual Earner','manual','Approved',TRUE) ON CONFLICT (agent_code) DO NOTHING`);
+
+    const appId = Number((await ctx.db.query<{ id: string }>(
+      'SELECT id FROM applications WHERE customer_id = $1 ORDER BY id LIMIT 1', [cid])).rows[0]!.id);
+    const paidRow = (await ctx.db.query<{ id: string; payee_type: string; payee_id: string; amount: string }>(
+      `SELECT id, payee_type, payee_id, amount FROM incentive_accruals
+        WHERE application_id = $1 AND matrix_cell = 'referrer'`, [appId])).rows[0]!;
+
+    // It has been paid, and a payout record names the same person.
+    await ctx.db.query("UPDATE incentive_accruals SET paid_at = now() WHERE id = $1", [paidRow.id]);
+    await ctx.db.query(
+      `INSERT INTO incentive_payouts (payee_type, payee_id, amount, reference, paid_at, application_id)
+       VALUES ($1,$2,$3,$4,now(),$5)`,
+      [paidRow.payee_type, Number(paidRow.payee_id), paidRow.amount, `APP:${appId}`, appId]);
+
+    // Without the override it must still refuse.
+    await expect(align(code, 'Actual Earner')).rejects.toThrow(/PAID/i);
+
+    const r = await alignWithPaidHistory(code, 'Actual Earner');
+    const newPayeeId = r.resolved_to!.id;
+    expect(r.resolved_to?.name).toBe('Actual Earner');
+
+    const moved = r.applications.find((a) => a.application_no && a.paid_history_moved);
+    expect(moved?.paid_history_moved?.accruals, 'the accrual moved').toBe(1);
+    expect(moved?.paid_history_moved?.payouts, 'and so did the payout record').toBe(1);
+    expect(moved?.paid_history_moved?.amount).toBe(Number(paidRow.amount));
+
+    // The accrual kept its paid_at and amount — it was updated, not rebuilt.
+    const acc = (await ctx.db.query<{ payee_type: string; payee_id: string; amount: string; paid_at: string | null }>(
+      'SELECT payee_type, payee_id, amount, paid_at FROM incentive_accruals WHERE id = $1', [paidRow.id])).rows[0]!;
+    expect(Number(acc.payee_id)).toBe(newPayeeId);
+    expect(acc.paid_at, 'still recorded as paid').not.toBeNull();
+    expect(Number(acc.amount)).toBe(Number(paidRow.amount));
+
+    // The payout record now names the person who actually received it.
+    const pay = (await ctx.db.query<{ payee_type: string; payee_id: string; amount: string }>(
+      'SELECT payee_type, payee_id, amount FROM incentive_payouts WHERE application_id = $1', [appId])).rows;
+    expect(pay).toHaveLength(1);
+    expect(Number(pay[0]!.payee_id)).toBe(newPayeeId);
+    expect(Number(pay[0]!.amount)).toBe(Number(paidRow.amount));
+
+    // Nothing is left on the person the system used to name.
+    const stale = (await ctx.db.query<{ n: string }>(
+      `SELECT count(*) AS n FROM incentive_accruals
+        WHERE application_id = $1 AND payee_type = $2 AND payee_id = $3`,
+      [appId, paidRow.payee_type, Number(paidRow.payee_id)])).rows[0]!;
+    expect(Number(stale.n), 'the old earner keeps nothing').toBe(0);
+
+    // And it is on the record who authorised rewriting payment history.
+    const audit = (await ctx.db.query<{ action: string; after_data: unknown }>(
+      `SELECT action, after_data FROM audit_log WHERE action = 'incentive.paid-history-moved'
+        AND entity_id = $1 ORDER BY id DESC LIMIT 1`, [String(appId)])).rows[0];
+    expect(audit, 'an audit row exists').toBeTruthy();
+    expect(JSON.stringify(audit!.after_data)).toMatch(/reason/);
+  });
+
+  it('will not rewrite paid history without a reason for the audit row', async () => {
+    const { code } = await drifted('Align Holder Seven', '9848100007', 'Someone Paid', 'Someone Paid');
+    await ctx.db.query(
+      `INSERT INTO agents (agent_code, full_name, source, commission_status, is_active)
+       VALUES ('AG-DNOREASON','No Reason Target','manual','Approved',TRUE) ON CONFLICT (agent_code) DO NOTHING`);
+    const { alignReferrer } = await import('../src/modules/incentives/align-referrer.js');
+    await expect(ctx.db.withTx((tx) => alignReferrer(tx, code, 'No Reason Target',
+      { includePaidHistory: true, reason: '   ' }))).rejects.toThrow(/reason/i);
   });
 
   it('still refuses when the money on a CHANGING investment is already paid', async () => {

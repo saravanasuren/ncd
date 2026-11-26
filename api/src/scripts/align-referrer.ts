@@ -20,7 +20,23 @@ async function main(): Promise<void> {
   const args = process.argv.filter((a) => /^DHN\w+(=.+)?$/i.test(a))
     .map((a) => { const [code, ...rest] = a.split('='); return { code: code!.toUpperCase(), to: rest.length ? rest.join('=') : null }; });
   const commit = process.argv.includes('--commit');
+  const withPaid = process.argv.includes('--with-paid-history');
+  const reason = (process.argv.find((a) => a.startsWith('--reason='))?.slice('--reason='.length) ?? '').trim();
   if (!args.length) { console.error('Pass CUSTOMERCODE or CUSTOMERCODE=NEW_REFERRER'); process.exit(1); }
+  // Rewriting paid commission is a per-customer decision the owner has made
+  // after seeing the payout rows. It must never ride along on a batch.
+  if (withPaid && args.length !== 1) {
+    console.error('--with-paid-history takes exactly ONE customer code. It rewrites payment history; it is not a batch option.');
+    process.exit(1);
+  }
+  if (withPaid && !reason) {
+    console.error('--with-paid-history also needs --reason="..." for the audit row.');
+    process.exit(1);
+  }
+  if (withPaid) {
+    console.log(`\n!! PAID HISTORY WILL MOVE for ${args[0]!.code} — payout records are rewritten, not just future earnings.`);
+    console.log(`   reason: ${reason}`);
+  }
   await loadSecretsFromSsm();
   const db = createDb();
 
@@ -29,7 +45,8 @@ async function main(): Promise<void> {
     const ROLLBACK = Symbol('rollback');
     try {
       await db.withTx(async (tx) => {
-        const r = await alignReferrer(tx, code, to);
+        const r = await alignReferrer(tx, code, to,
+          withPaid ? { includePaidHistory: true, reason } : {});
         console.log(`\n[align] ${r.customer_code} — ${r.customer_name}`);
         console.log(`    referrer "${r.referrer}" -> ${r.resolved_to
           ? `${r.resolved_to.kind} ${r.resolved_to.name}` : 'NOBODY (an agent would be raised)'}`);
@@ -45,6 +62,10 @@ async function main(): Promise<void> {
             : console.log(`        ${label}: (none)`);
           show('before', a.before);
           show('after ', a.after);
+          if (a.paid_history_moved) {
+            const m = a.paid_history_moved;
+            console.log(`        PAID HISTORY MOVED: ${m.accruals} accrual row(s), ${m.payouts} payout record(s), ${inr(m.amount)}`);
+          }
           moved += a.after.reduce((s, x) => s + Number(x.amount), 0);
         }
         if (!commit) throw ROLLBACK;

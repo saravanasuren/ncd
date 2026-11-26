@@ -260,3 +260,55 @@ describe('the Accrued column', () => {
     expect(blob.join('\n'), 'accruing, not paying').not.toContain('Accruing Doubler');
   });
 });
+
+/**
+ * THE DOUBLING LINE ON THE PAYOUT SCREEN (owner 2026-11-26: "in the payout
+ * table i need a seperate line in the last row which says the amount in the
+ * doubling scheme, no of ncd in doubling scheme, no of customers, and accrued
+ * interest … just a seperate line to easily know how much is in doubling
+ * scheme and how much is the accured int as on date").
+ *
+ * A LINE, not a column and not a total. The whole point of these rows is that
+ * their money is not leaving the bank, so the figure must sit beside the
+ * payable totals without ever being added to them.
+ */
+describe('the Doubling summary line', () => {
+  it('states the amount, the NCDs, the customers and the accrued interest', async () => {
+    const a = await admin();
+    const due = (await a.get(`/api/payouts/preview?date=${D2}`)).json as {
+      doubling: { amount: number; accrued: number; investments: number; customers: number };
+      rows: Record<string, unknown>[] };
+
+    const info = due.rows.filter((r) => r.info_only);
+    expect(info.length).toBeGreaterThan(1);   // the Cumulative one and the Doubling one
+
+    // Every figure is the rows underneath it, totalled — so the line and the
+    // sheet can never quote different numbers.
+    expect(due.doubling.amount).toBeGreaterThan(0);
+    expect(due.doubling.investments).toBe(new Set(info.map((r) => r.application_id)).size);
+    expect(due.doubling.customers).toBe(new Set(info.map((r) => r.customer_id)).size);
+    expect(due.doubling.accrued)
+      .toBeCloseTo(info.reduce((t, r) => t + Number(r.accrued_amount ?? 0), 0), 2);
+    // Accrued is what has been EARNED so far, so it is less than the principal.
+    expect(due.doubling.accrued).toBeLessThan(due.doubling.amount);
+  });
+
+  it('is added to NO total — this money is not leaving the bank', async () => {
+    const a = await admin();
+    const due = (await a.get(`/api/payouts/preview?date=${D2}`)).json as {
+      count: number; customers: number; investments: number;
+      doubling: { amount: number; accrued: number; investments: number };
+      totals: { gross: number; net: number; total: number; outstanding: number };
+      rows: Record<string, unknown>[] };
+    const payable = due.rows.filter((r) => !r.info_only);
+
+    expect(due.totals.gross).toBe(payable.reduce((t, r) => t + Number(r.gross_amount), 0));
+    expect(due.totals.total).toBe(payable.reduce((t, r) => t + Number(r.total_amount), 0));
+    expect(due.count).toBe(payable.length);
+    // The counts beside the payable totals stay the payable ones — the owner
+    // asked for a separate line, not for the existing figures to move.
+    expect(due.investments).toBe(
+      new Set(payable.filter((r) => !r.schedule_id).map((r) => r.application_id)).size);
+    expect(due.doubling.investments).toBeGreaterThan(0);
+  });
+});

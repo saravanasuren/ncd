@@ -122,6 +122,72 @@ export function cumulativeMaturityValue(input: {
   return { term, broken, brokenDays, interest, total: round2(principal + interest) };
 }
 
+/**
+ * What a cumulative / at-maturity holding has EARNED by `asOf`, none of which
+ * has been paid to anyone yet.
+ *
+ * Owner 2026-11-26: "in the summary sheet ill be needing their accured interest
+ * as on date but no interest should be going to them in the payout." This is
+ * the figure for that column, and nothing else — it never becomes a schedule
+ * row, never enters a batch and never reaches the NEFT file.
+ *
+ * It runs the same two legs `cumulativeMaturityValue` pays at maturity, in the
+ * order they are earned:
+ *
+ *   1. THE BROKEN PERIOD — the days from the money arriving to the deemed date,
+ *      on the line's own day-count convention. Complete on the deemed date,
+ *      which is where the term's clock starts, so nothing is counted twice.
+ *   2. THE TERM — pro-rated straight-line across deemed -> maturity.
+ *
+ * The term leg is a SHARE OF THE PROMISED AMOUNT, not a rate re-applied to the
+ * elapsed days. The promise is a fixed sum (20% x 60 months = the principal
+ * over again), so only a share of that sum lands back on it to the rupee;
+ * running 20%/365 across the actual days overshoots it by a day's interest
+ * every leap year. At `asOf` = the maturity date this returns exactly
+ * `cumulativeMaturityValue().interest` — asserted in interest.test.ts.
+ */
+export function accruedAtMaturity(input: {
+  principal: number;
+  ratePct: unknown;
+  tenureMonths: unknown;
+  /** When the money actually arrived — the line's own date. */
+  interestStartDate?: ISODate | null;
+  /** When the term starts; the deemed date maturity is measured from. */
+  seriesDeemedDate?: ISODate | null;
+  /** The line's maturity date — the far end of the term leg. */
+  maturityDate?: ISODate | null;
+  /** The date to value the holding at. */
+  asOf: ISODate;
+  convention?: DayCountConvention;
+}): { broken: number; term: number; interest: number } {
+  const nothing = { broken: 0, term: 0, interest: 0 };
+  const { asOf, interestStartDate: start, seriesDeemedDate: deemed, maturityDate: mat } = input;
+  const full = cumulativeMaturityValue(input);
+  if (!asOf || !start || full.interest <= 0) return nothing;
+  // Nothing has accrued on or before the day the money landed. Same boundary
+  // cumulativeMaturityValue counts the broken period from, so the two agree.
+  if (asOf <= start) return nothing;
+
+  const principal = Number(input.principal);
+  const rate = Number(input.ratePct);
+
+  // Leg 1 — still inside the broken period.
+  if (!deemed || asOf < deemed) {
+    const denom = denominatorFor(input.convention || 'Actual365', start);
+    const days = Math.max(0, daysBetween(start, asOf));
+    const broken = round2((principal * (rate / 100) * days) / denom);
+    return { broken, term: 0, interest: broken };
+  }
+
+  // Leg 2 — the broken period is complete; the term is running.
+  if (!mat || mat <= deemed) return { broken: full.broken, term: 0, interest: full.broken };
+  const span = daysBetween(deemed, mat);
+  if (span <= 0) return { broken: full.broken, term: 0, interest: full.broken };
+  const elapsed = Math.min(span, Math.max(0, daysBetween(deemed, asOf)));
+  const term = round2((full.term * elapsed) / span);
+  return { broken: full.broken, term, interest: round2(full.broken + term) };
+}
+
 export interface ScheduleLine {
   amount: number;
   coupon_rate_pct: number;
@@ -358,6 +424,25 @@ export function generateSchedule(line: ScheduleLine, opts: ScheduleOpts): Schedu
       period_days: 0,
       is_broken_period: false,
     });
+  } else {
+    // NO SILENT EMPTY SCHEDULE (owner 2026-11-26).
+    //
+    // 'AtMaturity' sat in the scheme row and in the data for months while this
+    // if/else had no branch for it. generateSchedule fell off the end and
+    // returned [], so ten live Doubling lines — Rs 1.08 crore — carried no
+    // payout at all, and nothing complained: an empty schedule is
+    // indistinguishable from "nothing due yet".
+    //
+    // Every rebuild path (applications/service.ts club + date edits,
+    // approvals/service.ts, scripts/rematerialize-application.ts) DELETEs the
+    // unpaid rows and re-materialises inside ONE transaction, so throwing here
+    // rolls that delete back. An unknown frequency can no longer quietly erase
+    // a payout it is unable to regenerate. A loud failure is recoverable; a
+    // schedule that vanished is found years later, if at all.
+    throw new Error(
+      `generateSchedule has no branch for the payout frequency ${JSON.stringify(freq)} — `
+      + 'refusing to return an empty schedule. Add one before any investment on '
+      + 'this frequency is saved, approved or rebuilt.');
   }
   return out;
 }

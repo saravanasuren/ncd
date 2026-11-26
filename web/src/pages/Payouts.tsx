@@ -15,9 +15,15 @@ interface LastInterestSummary {
    *  between the two columns (see BatchComparison's note). */
   movement: {
     since: string;
+    /** Money this batch is the FIRST to pay on — received between the last
+     *  batch's cut-off and this one's. */
     added: { customers: number; investments: number; amount: number };
-    /** The whole book — what `Last + Added − Redeemed` comes to. */
+    /** The book as at THIS batch's cut-off — what `Last + Added − Redeemed`
+     *  comes to. Excludes `next_batch`. */
     this_outstanding: number;
+    /** Received from this batch's cut-off on: next month's addition, counted
+     *  in NO column here (owner 2026-11-26). */
+    next_batch: { amount: number; investments: number };
     /** The snapshot written when that batch was cut, before late entries. */
     recorded_outstanding: number | null;
     /** On the book by then, but only reached the system afterwards. Measured. */
@@ -25,7 +31,7 @@ interface LastInterestSummary {
     /** On the book and never yet paid interest — it waits for the next batch. */
     awaiting_first_interest: { amount: number; investments: number };
     /** What `this_outstanding` is made of — these sum to it. */
-    book: { in_run: number; cumulative: number; rolled: number; other: number };
+    book: { in_run: number; cumulative: number; other: number };
     redeemed: { customers: number; redemptions: number; amount: number };
   };
 }
@@ -133,8 +139,6 @@ function BatchComparison({ last, now }: {
                   note: 'the principal behind the gross above' },
                 { label: 'doubling / at-maturity', value: m.book.cumulative,
                   note: 'interest accrues into the maturity value — nothing paid now' },
-                { label: 'received after the cut-off', value: m.book.rolled,
-                  note: 'paid in next month’s batch, from the day the money arrived' },
                 { label: 'not in this run', value: m.book.other,
                   note: 'no interest accrued to this date' },
               ].filter((x) => x.value !== 0);
@@ -167,6 +171,18 @@ function BatchComparison({ last, now }: {
                       payout is the next batch, covering every day from the day the money arrived.
                     </div>
                   )}
+                  {/* OUTSIDE every column, deliberately (owner 2026-11-26).
+                      This money arrived after this batch's cut-off, so this
+                      batch no more pays it than the last one did — putting it
+                      in Added would repeat the mistake the cut-off fixed. */}
+                  {m.next_batch.amount > 0 && (
+                    <div className="text-[11px] text-text-muted mt-1.5">
+                      A further <strong>{formatINR(m.next_batch.amount)}</strong>{' '}
+                      ({m.next_batch.investments} investment(s)) arrived on or after this batch’s
+                      cut-off. It is on the book but in none of the figures above — it is next
+                      month’s addition, and next month’s batch pays it from the day it arrived.
+                    </div>
+                  )}
                 </div>
               );
             })()}
@@ -177,7 +193,7 @@ function BatchComparison({ last, now }: {
             {(() => {
               const chain = last.outstanding + m.added.amount - m.redeemed.amount;
               const residual = Math.round((chain - m.this_outstanding) * 100) / 100;
-              const parts = m.book.in_run + m.book.cumulative + m.book.rolled + m.book.other;
+              const parts = m.book.in_run + m.book.cumulative + m.book.other;
               const split = Math.round((parts - m.this_outstanding) * 100) / 100;
               if (residual === 0 && split === 0) return null;
               return (
@@ -196,10 +212,12 @@ function BatchComparison({ last, now }: {
               );
             })()}
             <div className="text-[11px] text-text-muted mt-1.5">
-              <strong>Outstanding</strong> reconciles: Last batch + Added − Redeemed = This batch. Both
-              sides are the whole book, split on the money-received date. Last batch is the book as it
-              stood on {m.since} — everything that had landed by then, including the{' '}
-              {m.redeemed.redemptions} since redeemed.
+              <strong>Outstanding</strong> reconciles: Last batch + Added − Redeemed = This batch.
+              Each side is the book as at that batch’s CUT-OFF, not its payout date — a batch pays
+              the money that reached it before the cut-off, so money that arrived after it belongs
+              to the next one. Last batch is the book as it stood at the cut-off before {m.since} —
+              everything that had landed by then, including the {m.redeemed.redemptions} since
+              redeemed.
               {m.late_entry !== 0 && (
                 <>
                   {' '}Of it, {formatINR(m.late_entry)} was already on the book then but only reached

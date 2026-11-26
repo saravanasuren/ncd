@@ -1,8 +1,15 @@
 /**
- * The two Outstanding figures must PARTITION this run by money-received date
- * (owner 2026-09-10: "to the last batch outstanding only add those investments
- * which landed on and before 28.8.26, investments after 28th have to come in
- * added").
+ * The two Outstanding figures must PARTITION this run by money-received date.
+ *
+ * WHERE THE LINE FALLS — owner 2026-11-26, reversing the 2026-09-10 rule:
+ * at the last batch's CUT-OFF, not its payout date. "the batch cutoff has only
+ * till 25th of that month - so from 26th oct to 28th oct we received 24 lakhs
+ * which should be in addition because that last month batch dint pay them."
+ * The boundary is `interest.next_batch_from_day` (26) — the same setting
+ * previewDue uses to decide what a run pays, so the two cannot disagree about
+ * where the month ends. On production the 28-10 batch read ₹80.69 Cr against
+ * the owner's ₹80.45 Cr; the ₹24,00,000 between them was five investments
+ * funded 26–28 Oct that the batch never paid.
  *
  * Before this they were two different tests — Last batch counted the principal
  * behind the rows in that BATCH, Added asked "did the money arrive after the
@@ -53,6 +60,12 @@ async function invest(a: Client, name: string, phone: string, amount: number, mo
     ...requiredInvestmentFields(), customer_id: cid,
     series_id: series.id, scheme_id: scheme.id, amount, date_money_received: moneyDate,
   });
+  // Say WHY when the create is refused. Without this a rejected investment
+  // surfaces several frames later as "no subscription_request to approve",
+  // which names neither the investment nor the reason.
+  if (create.status !== 201) {
+    throw new Error(`invest(${name}, ${moneyDate}) failed ${create.status}: ${JSON.stringify(create.json)}`);
+  }
   await approveInvestment(await checker(), create);
   return Number(create.json.id);
 }
@@ -99,8 +112,9 @@ describe('the payout comparison explains its own total', () => {
     await ctx.db.query("UPDATE payout_batches SET status = 'Paid' WHERE id = $1", [batchId]);
     await ctx.db.query("UPDATE disbursement_schedule SET status = 'Paid', paid_at = $2::date WHERE batch_id = $1", [batchId, PAYOUT]);
 
-    // ON the payout date, keyed in afterwards — belongs with LAST batch under
-    // the owner's rule ("on and before 28.8.26"), and used to be in neither.
+    // ON the payout date, keyed in afterwards. This used to belong with LAST
+    // batch; since 2026-11-26 it is ADDED — the batch never paid a rupee on it,
+    // because the cut-off was the 26th. See the note on the next test.
     onBoundary = await invest(a, 'On The Boundary', '9564000003', 700000, PAYOUT);
     // Backdated: money BEFORE the payout date, entered now — also LAST batch.
     await invest(a, 'Backdated Entry', '9564000004', 300000, '2026-08-05');
@@ -114,23 +128,27 @@ describe('the payout comparison explains its own total', () => {
     // then "compute it automatically".
     //
     // The recorded snapshot is 1,500,000 — the two investments that existed
-    // when the batch was cut. But the boundary entry (700,000, money ON the
-    // payout date) and the backdated one (300,000, money 05-Aug) were BOTH on
-    // the book by then; they merely reached the system afterwards. A figure
-    // that leaves them out is not the book as it stood, it is the book as the
-    // paperwork happened to look that morning.
+    // when the batch was cut. The backdated one (300,000, money 05-Aug) was on
+    // the book by then and merely reached the system afterwards, so it belongs
+    // here: a figure that leaves it out is not the book as it stood, it is the
+    // book as the paperwork happened to look that morning.
+    //
+    // The boundary entry (700,000, money ON the payout date) is NOT here — see
+    // the next test. 1,500,000 + 300,000 = 1,800,000.
     const s = await summary(await admin(), NEXT);
     expect(s).toBeTruthy();
     expect(s!.payout_date).toBe(PAYOUT);
-    expect(s!.outstanding).toBe(2500000);
+    expect(s!.outstanding).toBe(1800000);
     // The snapshot itself still never moves, and the difference is named — so
     // a figure that changes can always be explained.
     expect(s!.movement.recorded_outstanding).toBe(1500000);
-    expect(s!.movement.late_entry).toBe(1000000);
+    // Only the backdated one: late entry counts money that was on the book as
+    // at the CUT-OFF, which is the same boundary Last batch uses.
+    expect(s!.movement.late_entry).toBe(300000);
   });
 
-  it('Added is ONLY money that arrived in the window', async () => {
-    // Three owner rulings in sequence, now finally consistent:
+  it('Added is money the last batch did not pay — the split is the CUT-OFF', async () => {
+    // Owner rulings in sequence, the last one REVERSING the boundary:
     //   2026-09-10  money received on/before the payout date belongs in Last
     //               batch even when keyed in later
     //   2026-09-24  "THE OLD BATCH AMOUNT WHY IS IT CHANGING - IF THERE IS
@@ -138,18 +156,25 @@ describe('the payout comparison explains its own total', () => {
     //   2026-10-27  "those which was received from 29th sep to oct till date
     //               should be in the addition panal", and the last-batch figure
     //               is to absorb the backdated ones, computed automatically.
+    //   2026-11-26  "the batch cutoff has only till 25th of that month - so
+    //               from 26th oct to 28th oct we received 24 lakhs which should
+    //               be in addition because that last month batch dint pay
+    //               them."
     //
-    // The first and second looked irreconcilable while Last batch was a single
-    // frozen number. Measuring it instead settles both: it moves ONLY when
-    // money genuinely was, or ceases to be, on the book as at that date — never
-    // for a redemption or a later investment.
+    // So the split is NOT the payout date. A batch cut on the 28th pays money
+    // received up to the 25th; `interest.next_batch_from_day` (26) is the first
+    // day that waits for the next batch. Crediting the last batch with the
+    // 26th–28th overstated it by ₹24,00,000 on production.
+    //
+    // Backdating still works exactly as before — it is the DATE that moved, not
+    // the principle. Money dated before the cut-off and keyed in later is still
+    // Last batch's.
     const s = await summary(await admin(), NEXT);
-    // The genuine 29-Aug one, and nothing else.
-    expect(s!.movement.added.amount).toBe(900000);
-    // The boundary (700,000 ON the payout date) and the backdated one (300,000
-    // on 05-Aug) are in Last batch, not here: they are not this period's new
-    // business, they are book the snapshot missed.
-    expect(s!.movement.late_entry).toBe(1000000);
+    // 900,000 on 29-Aug + 700,000 on 28-Aug: neither was paid by the 28-Aug
+    // batch, whose cut-off was 26-Aug.
+    expect(s!.movement.added.amount).toBe(1600000);
+    // The backdated 300,000 (05-Aug) stays in Last batch — before the cut-off.
+    expect(s!.movement.late_entry).toBe(300000);
   });
 
   it('bridges exactly: last + added − redeemed = this', async () => {
@@ -446,5 +471,41 @@ describe('Added counts money the interest run never sees', () => {
       series_id: series.id, scheme_id: scheme.id, amount: 800000, date_money_received: '2027-05-10',
     });
     expect((await summary(a, D))!.movement.added.amount).toBe(before);
+  });
+});
+
+/**
+ * THE CUT-OFF IS THE BOUNDARY, STATED ON ITS OWN (owner 2026-11-26).
+ *
+ * The 25th is the last day a batch pays for; the 26th is the first day that
+ * waits. This is the only test that puts money on both of those days AND on
+ * the payout date itself, so a future change to the split has to come past it.
+ */
+describe('Last batch ends at its cut-off, not at its payout date', () => {
+  const P = '2027-06-28';
+  const D = '2027-07-28';
+
+  it('the 25th is Last batch; the 26th and the payout date are Added', async () => {
+    const a = await admin();
+    await invest(a, 'Well Before', '9568000001', 1000000, '2027-06-10');
+    const batch = await a.post('/api/payouts', { payout_date: P });
+    const id = Number(batch.json.id ?? batch.json.batch_id);
+    await ctx.db.query("UPDATE payout_batches SET status = 'Paid' WHERE id = $1", [id]);
+    await ctx.db.query("UPDATE disbursement_schedule SET status = 'Paid', paid_at = $2::date WHERE batch_id = $1", [id, P]);
+
+    const before = (await summary(a, D))!;
+    // The last day this batch pays for — stays with Last batch.
+    await invest(a, 'On The Twenty Fifth', '9568000002', 200000, '2027-06-25');
+    // The first day that waits for the next batch — Added.
+    await invest(a, 'On The Twenty Sixth', '9568000003', 400000, '2027-06-26');
+    // The payout date itself. Under the OLD rule this sat in Last batch, and
+    // that is exactly the ₹24,00,000 the owner caught on the 28-10 batch.
+    await invest(a, 'On Payout Day', '9568000004', 800000, P);
+
+    const s = (await summary(a, D))!;
+    expect(s.outstanding).toBe(before.outstanding + 200000);
+    expect(s.movement.added.amount).toBe(before.movement.added.amount + 1200000);
+    // And the row still explains itself end to end.
+    bridges(s);
   });
 });

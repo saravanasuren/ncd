@@ -618,14 +618,43 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
   // apart the way they did when each was measured separately.
   const periodic = "('Monthly', 'Quarterly', 'HalfYearly', 'Annual')";
   const cutoffDay = Number((await getSettingsMap(db))['interest.next_batch_from_day'] ?? 0) || 0;
+  /**
+   * THE LAST BATCH'S BOOK ENDS AT ITS CUT-OFF, NOT AT ITS PAYOUT DATE (owner
+   * 2026-11-26: "the batch cutoff has only till 25th of that month - so from
+   * 26th oct to 28th oct we received 24 lakhs which should be in addition
+   * because that last month batch dint pay them").
+   *
+   * The split used to be the payout date, which quietly credited the last
+   * batch with money it had not paid a rupee on. A batch cut on the 28th pays
+   * money received up to the 25th; `interest.next_batch_from_day` (26) is the
+   * first day that waits for the next batch — the same setting previewDue uses
+   * to decide what this run pays, so the two can never disagree about where
+   * the month ends.
+   *
+   * Measured on production the day this was written: the 28-10 batch read
+   * ₹80.69 Cr against the owner's ₹80.45 Cr. The ₹24,00,000 between them is
+   * five investments funded 26–28 Oct, none of which that batch paid. They now
+   * sit in Added, where the owner expected to find them.
+   *
+   * `moneyUpTo` is an EXCLUSIVE upper bound, so old money is `< moneyUpTo` and
+   * Added is `>= moneyUpTo` — one boundary, one operator, no gap. The fallback
+   * is the day after the payout date, which reproduces the old `<= since`
+   * exactly: used when the setting is off, and when a batch was paid BEFORE
+   * its own month's cut-off (it can only have covered money up to its own
+   * payout date).
+   */
+  const cutoffDate = cutoffDay > 0
+    ? `${since.slice(0, 7)}-${String(cutoffDay).padStart(2, '0')}`
+    : null;
+  const moneyUpTo = cutoffDate && cutoffDate <= since ? cutoffDate : addDays(since, 1);
   const add = (await db.query<{
     amount: string; investments: string; customers: string;
     old_money: string; book_total: string; cumulative: string; rolled: string;
   }>(
-    `SELECT COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received >  $1::date), 0) AS amount,
-            count(DISTINCT a.id)          FILTER (WHERE a.date_money_received >  $1::date) AS investments,
-            count(DISTINCT a.customer_id) FILTER (WHERE a.date_money_received >  $1::date) AS customers,
-            COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received <= $1::date), 0) AS old_money,
+    `SELECT COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received >= $1::date), 0) AS amount,
+            count(DISTINCT a.id)          FILTER (WHERE a.date_money_received >= $1::date) AS investments,
+            count(DISTINCT a.customer_id) FILTER (WHERE a.date_money_received >= $1::date) AS customers,
+            COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received <  $1::date), 0) AS old_money,
             COALESCE(sum(l.outstanding_amount), 0) AS book_total,
             -- Doubling / at-maturity: on the book, earning into its maturity
             -- value, paid nothing by any monthly run (owner asked for this on
@@ -643,7 +672,7 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
       WHERE a.status IN (${OUTSTANDING_SQL_LIST})
         AND a.product_type = $2
         AND l.status = 'Active'`,
-    [since, batch.product_type ?? 'ncd', cutoffDay,
+    [moneyUpTo, batch.product_type ?? 'ncd', cutoffDay,
      payoutDate ?? new Date().toISOString().slice(0, 10)])).rows[0]!;
 
   // What LEFT the last batch's book: redeemed after that date, and whose money
@@ -670,8 +699,8 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
             COALESCE(sum(r.principal), 0) AS amount
        FROM redemptions r JOIN applications a ON a.id = r.application_id
       WHERE r.redemption_date > $1::date
-        AND a.date_money_received <= $1::date
-        AND r.status IN ('Approved', 'Paid')`, [since])).rows[0]!;
+        AND a.date_money_received < $2::date
+        AND r.status IN ('Approved', 'Paid')`, [since, moneyUpTo])).rows[0]!;
 
   /**
    * THE BOOK AS AT THAT DATE — remembered, not recomputed (owner 2026-09-24:
@@ -820,12 +849,12 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
   const lateEntry = round2(Number((await db.query<{ amt: string }>(
     `SELECT COALESCE(sum(l.outstanding_amount), 0) AS amt
        FROM applications a JOIN application_lines l ON l.application_id = a.id
-      WHERE a.date_money_received <= $1::date
+      WHERE a.date_money_received < $1::date
         AND a.created_at > $2::timestamptz
         AND a.status IN (${OUTSTANDING_SQL_LIST})
         AND a.product_type = $3
         AND l.status = 'Active'`,
-    [since, batch.created_at, batch.product_type ?? 'ncd'])).rows[0]!.amt));
+    [moneyUpTo, batch.created_at, batch.product_type ?? 'ncd'])).rows[0]!.amt));
 
   /**
    * ON THE BOOK, BUT NOT YET PAID A RUPEE OF INTEREST (owner 2026-10-29: "in

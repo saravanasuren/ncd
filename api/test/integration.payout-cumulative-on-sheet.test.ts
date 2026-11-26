@@ -287,8 +287,12 @@ describe('the Doubling summary line', () => {
     expect(due.doubling.amount).toBeGreaterThan(0);
     expect(due.doubling.investments).toBe(new Set(info.map((r) => r.application_id)).size);
     expect(due.doubling.customers).toBe(new Set(info.map((r) => r.customer_id)).size);
+    // WHOLE RUPEES, and specifically the sheet's Accrued column added up:
+    // each row rounded, then summed, so the line and the sheet agree to the
+    // rupee (owner 2026-11-26 saw ₹3,77,645.96 beside whole-rupee figures).
     expect(due.doubling.accrued)
-      .toBeCloseTo(info.reduce((t, r) => t + Number(r.accrued_amount ?? 0), 0), 2);
+      .toBe(info.reduce((t, r) => t + Math.round(Number(r.accrued_amount ?? 0)), 0));
+    expect(Number.isInteger(due.doubling.accrued), 'no paise on the line').toBe(true);
     // Accrued is what has been EARNED so far, so it is less than the principal.
     expect(due.doubling.accrued).toBeLessThan(due.doubling.amount);
   });

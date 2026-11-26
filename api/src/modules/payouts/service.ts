@@ -438,7 +438,12 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
   const dblCustomers = new Set<number>();
   for (const r of infoRows) {
     doubling.amount += Number(r.outstanding_amount ?? 0);
-    doubling.accrued += accruedAtMaturityFor(r, payoutDate);
+    // WHOLE RUPEES, ROUNDED PER ROW — the same figure the sheet's Accrued
+    // column prints (lib/payout-summary `amt`), so adding that column up gives
+    // this line to the rupee. Rounding the SUM instead would differ from the
+    // sheet by a rupee or two, and the screen showed paise against whole-rupee
+    // figures either side of it (owner 2026-11-26, from the live screen).
+    doubling.accrued += Math.round(accruedAtMaturityFor(r, payoutDate));
     dblApps.add(Number(r.application_id));
     dblCustomers.add(Number(r.customer_id));
     out.push({
@@ -460,7 +465,7 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
     });
   }
   doubling.amount = round2(doubling.amount);
-  doubling.accrued = round2(doubling.accrued);
+  // Already whole — each row was rounded before it was added.
   doubling.investments = dblApps.size;
   doubling.customers = dblCustomers.size;
 

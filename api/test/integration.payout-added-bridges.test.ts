@@ -76,7 +76,8 @@ const summary = async (a: Client, date: string) =>
     movement: {
       added: { investments: number; customers: number; amount: number };
       this_outstanding: number; recorded_outstanding: number | null; late_entry: number;
-      book: { in_run: number; cumulative: number; rolled: number; other: number };
+      book: { in_run: number; cumulative: number; other: number };
+      next_batch: { amount: number; investments: number };
       redeemed: { redemptions: number; customers: number; amount: number };
     };
   } | null;
@@ -437,19 +438,25 @@ describe('Added counts money the interest run never sees', () => {
 
     const s = (await summary(a, D))!;
     expect(s.payout_date).toBe(P);
-    // ALL THREE count as money received, whatever this run does with them.
-    expect(s.movement.added.amount).toBe(1200000);
-    expect(s.movement.added.investments).toBe(3);
-    expect(s.movement.added.customers).toBe(3);
-    // ...and the breakdown says WHICH of it this run pays nothing on — the
-    // separate line the owner asked for (2026-10-27: "show those doublung
-    // scheme in a seperate line in that panel as interest in not paid to them.
-    // so we will ahve a better clarity on the figures").
+    // The monthly one and the cumulative one: both arrived in THIS batch's
+    // window, and both count as money received whatever the run does with them.
+    expect(s.movement.added.amount).toBe(900000);
+    expect(s.movement.added.investments).toBe(2);
+    expect(s.movement.added.customers).toBe(2);
+    // The 26th is past this batch's cut-off, so it is NEXT month's addition
+    // (owner 2026-11-26: "it should be 4.70 because that is the addition
+    // amount"). On the book, named, and in no column above.
+    expect(s.movement.next_batch.amount).toBe(300000);
+    expect(s.movement.next_batch.investments).toBe(1);
+    // ...and the breakdown says WHICH of what IS here the run pays nothing on
+    // — the separate line the owner asked for (2026-10-27: "show those
+    // doublung scheme in a seperate line in that panel as interest in not paid
+    // to them. so we will ahve a better clarity on the figures").
     expect(s.movement.book.cumulative).toBe(400000);   // earns into maturity
-    expect(s.movement.book.rolled).toBe(300000);       // paid next month
-    // The parts account for the whole book, with nothing unexplained.
+    // The parts account for This batch, with nothing unexplained — and the
+    // next-batch money is NOT one of them.
     const b = s.movement.book;
-    expect(b.in_run + b.cumulative + b.rolled + b.other).toBe(s.movement.this_outstanding);
+    expect(b.in_run + b.cumulative + b.other).toBe(s.movement.this_outstanding);
 
     // And the row still explains itself end to end.
     bridges(s);
@@ -501,11 +508,18 @@ describe('Last batch ends at its cut-off, not at its payout date', () => {
     // The payout date itself. Under the OLD rule this sat in Last batch, and
     // that is exactly the ₹24,00,000 the owner caught on the 28-10 batch.
     await invest(a, 'On Payout Day', '9568000004', 800000, P);
+    // THE OTHER END OF THE WINDOW: the 26th of THIS batch's month. This batch
+    // no more pays it than the last one did, so it is next month's addition
+    // (owner 2026-11-26: "it should be 4.70 because that is the addition
+    // amount" — 4.92 less the ₹22,00,000 that arrived from the 26th).
+    await invest(a, 'Next Batch Money', '9568000005', 900000, '2027-07-26');
 
     const s = (await summary(a, D))!;
     expect(s.outstanding).toBe(before.outstanding + 200000);
     expect(s.movement.added.amount).toBe(before.movement.added.amount + 1200000);
-    // And the row still explains itself end to end.
+    expect(s.movement.next_batch.amount).toBe(before.movement.next_batch.amount + 900000);
+    // And the row still explains itself end to end — on the book as at THIS
+    // batch's cut-off, which is what the identity closes on.
     bridges(s);
   });
 });

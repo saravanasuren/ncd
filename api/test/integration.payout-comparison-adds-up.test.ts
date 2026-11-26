@@ -55,7 +55,8 @@ const summary = async (a: Client, date: string) =>
       redeemed: { amount: number }; this_outstanding: number;
       recorded_outstanding: number | null; late_entry: number;
       awaiting_first_interest: { amount: number; investments: number };
-      book: { in_run: number; cumulative: number; rolled: number; other: number };
+      book: { in_run: number; cumulative: number; other: number };
+      next_batch: { amount: number; investments: number };
     };
   } | null;
 
@@ -121,7 +122,7 @@ describe('the Outstanding chain lands on the printed total', () => {
     // The Cumulative line is on the book and in no interest run: ₹4,00,000.
     expect(b.cumulative).toBe(400000);
     // And the named parts account for the whole thing, with nothing left over.
-    expect(b.in_run + b.cumulative + b.rolled + b.other).toBe(s.movement.this_outstanding);
+    expect(b.in_run + b.cumulative + b.other).toBe(s.movement.this_outstanding);
     expect(s.movement.this_outstanding).toBeGreaterThan(printed);
   });
 

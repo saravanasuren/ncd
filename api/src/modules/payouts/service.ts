@@ -491,10 +491,16 @@ export interface LastInterestBatchSummary {
   movement: {
     /** Exclusive lower bound: the last batch's payout date. */
     since: string;
-    /** Money RECEIVED since `since`, measured over the whole book. */
+    /** Money this batch is the FIRST to pay on: received between the last
+     *  batch's cut-off and this one's. */
     added: { customers: number; investments: number; amount: number };
-    /** The whole book: what `Last + Added − Redeemed` comes to. */
+    /** The book as at THIS batch's cut-off — what `Last + Added − Redeemed`
+     *  comes to. Excludes `next_batch`, which nobody has been paid yet. */
     this_outstanding: number;
+    /** On the book, but received from this batch's cut-off on, so it is next
+     *  month's addition. Counted in NO column above — reported so it is
+     *  visible without being counted twice (owner 2026-11-26). */
+    next_batch: { amount: number; investments: number };
     /** `outstanding_at_payout` as written when that batch was cut, or null. */
     recorded_outstanding: number | null;
     /** On the book by then, but only reached the system afterwards. Measured. */
@@ -502,7 +508,7 @@ export interface LastInterestBatchSummary {
     /** On the book and never yet paid interest — it waits for the next batch. */
     awaiting_first_interest: { amount: number; investments: number };
     /** What `this_outstanding` is made of — they sum to it. */
-    book: { in_run: number; cumulative: number; rolled: number; other: number };
+    book: { in_run: number; cumulative: number; other: number };
     redeemed: { customers: number; redemptions: number; amount: number };
   };
 }
@@ -643,37 +649,58 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
    * its own month's cut-off (it can only have covered money up to its own
    * payout date).
    */
-  const cutoffDate = cutoffDay > 0
-    ? `${since.slice(0, 7)}-${String(cutoffDay).padStart(2, '0')}`
-    : null;
-  const moneyUpTo = cutoffDate && cutoffDate <= since ? cutoffDate : addDays(since, 1);
+  const cutoffOf = (d: string) => {
+    const c = cutoffDay > 0 ? `${d.slice(0, 7)}-${String(cutoffDay).padStart(2, '0')}` : null;
+    // A batch paid BEFORE its own month's cut-off can only have covered money
+    // up to its own payout date, so fall back to the day after it. Same
+    // fallback when the setting is off — that reproduces the old `<= date`.
+    return c && c <= d ? c : addDays(d, 1);
+  };
+  /** Money before this was the LAST batch's; from here on, it was not paid. */
+  const moneyUpTo = cutoffOf(since);
+  /**
+   * ...AND THE SAME CUT-OFF CLOSES THIS BATCH (owner 2026-11-26, on being shown
+   * 4.84: "it should be 4.70 because that is the addition amount").
+   *
+   * One rule, both ends. Added is the money THIS batch is the first to pay on:
+   * received on or after the last cut-off and BEFORE this one. Money from this
+   * batch's cut-off is next month's addition and belongs in no column here —
+   * reported on its own as `next_batch`, so it is visible without being
+   * counted twice.
+   *
+   * Every figure below is therefore measured on the book as at THIS cut-off:
+   * `Last + Added − Redeemed = This` closes on that, not on the whole book
+   * (83.37 Cr against 83.59 Cr the day this was written; the ₹22,00,000
+   * between them arrived 26-Nov and is paid in December).
+   */
+  const thisCutoff = cutoffOf(payoutDate ?? new Date().toISOString().slice(0, 10));
   const add = (await db.query<{
     amount: string; investments: string; customers: string;
-    old_money: string; book_total: string; cumulative: string; rolled: string;
+    old_money: string; cumulative: string; next_batch: string; next_batch_investments: string;
   }>(
-    `SELECT COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received >= $1::date), 0) AS amount,
-            count(DISTINCT a.id)          FILTER (WHERE a.date_money_received >= $1::date) AS investments,
-            count(DISTINCT a.customer_id) FILTER (WHERE a.date_money_received >= $1::date) AS customers,
+    `SELECT COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received >= $1::date
+                                                         AND a.date_money_received <  $3::date), 0) AS amount,
+            count(DISTINCT a.id)          FILTER (WHERE a.date_money_received >= $1::date
+                                                    AND a.date_money_received <  $3::date) AS investments,
+            count(DISTINCT a.customer_id) FILTER (WHERE a.date_money_received >= $1::date
+                                                    AND a.date_money_received <  $3::date) AS customers,
             COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received <  $1::date), 0) AS old_money,
-            COALESCE(sum(l.outstanding_amount), 0) AS book_total,
             -- Doubling / at-maturity: on the book, earning into its maturity
             -- value, paid nothing by any monthly run (owner asked for this on
             -- its own line: "so we will ahve a better clarity on the figures").
+            -- Measured on the same population as the total it breaks down.
             COALESCE(sum(l.outstanding_amount) FILTER (
-              WHERE l.payout_frequency NOT IN ${periodic}), 0) AS cumulative,
-            -- Money that arrived on or after the cut-off day of the payout
-            -- month: real, on the book, and paid in NEXT month's batch.
-            COALESCE(sum(l.outstanding_amount) FILTER (
-              WHERE l.payout_frequency IN ${periodic}
-                AND $3::int > 0
-                AND EXTRACT(DAY FROM a.date_money_received) >= $3::int
-                AND to_char(a.date_money_received, 'YYYY-MM') = to_char($4::date, 'YYYY-MM')), 0) AS rolled
+              WHERE a.date_money_received < $3::date
+                AND l.payout_frequency NOT IN ${periodic}), 0) AS cumulative,
+            -- Money from this batch's cut-off on: real, on the book, and paid
+            -- in NEXT month's batch. Outside every column above.
+            COALESCE(sum(l.outstanding_amount) FILTER (WHERE a.date_money_received >= $3::date), 0) AS next_batch,
+            count(DISTINCT a.id)          FILTER (WHERE a.date_money_received >= $3::date) AS next_batch_investments
        FROM applications a JOIN application_lines l ON l.application_id = a.id
       WHERE a.status IN (${OUTSTANDING_SQL_LIST})
         AND a.product_type = $2
         AND l.status = 'Active'`,
-    [moneyUpTo, batch.product_type ?? 'ncd', cutoffDay,
-     payoutDate ?? new Date().toISOString().slice(0, 10)])).rows[0]!;
+    [moneyUpTo, batch.product_type ?? 'ncd', thisCutoff])).rows[0]!;
 
   // What LEFT the last batch's book: redeemed after that date, and whose money
   // had landed on or before it — the same population `before_amount` measures,
@@ -822,11 +849,14 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
   const bookTotal = round2(oldMoneyNow + addedAmount);
   const inRun = round2(Number(due.totals.outstanding));
   const cumulative = round2(Number(add.cumulative));
-  const rolled = round2(Number(add.rolled));
-  // Whatever the three named parts do not account for. Normally ₹0; it exists
+  // Money from this batch's cut-off on. NOT a part of the breakdown any more
+  // (owner 2026-11-26): it is not in `this_outstanding` at all, so adding it
+  // would make the parts over-run their total. Reported on its own instead.
+  const nextBatch = round2(Number(add.next_batch));
+  // Whatever the two named parts do not account for. Normally ₹0; it exists
   // so an unexpected exclusion shows up as a number instead of quietly making
   // the breakdown wrong.
-  const otherOffRun = round2(bookTotal - inRun - cumulative - rolled);
+  const otherOffRun = round2(bookTotal - inRun - cumulative);
   const recordedOutstanding = snapshot != null ? round2(snapshot) : null;
 
   /**
@@ -905,7 +935,8 @@ export async function lastPaidInterestSummary(db: Db, payoutDate?: string): Prom
       this_outstanding: bookTotal,
       recorded_outstanding: recordedOutstanding,
       late_entry: lateEntry,
-      book: { in_run: inRun, cumulative, rolled, other: otherOffRun },
+      book: { in_run: inRun, cumulative, other: otherOffRun },
+      next_batch: { amount: nextBatch, investments: Number(add.next_batch_investments) },
       awaiting_first_interest: {
         amount: round2(Number(awaiting.amt)), investments: Number(awaiting.investments),
       },

@@ -559,7 +559,30 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
     await tx.query("UPDATE applications SET status = 'Redeemed', redemption_date = $1, updated_at = now() WHERE id = $2", [redDate, appId]);
     await emitForApplication(tx, 'redemption.completed', appId, `red:${redId}`);
     await tx.query("UPDATE application_lines SET status = 'PrematureWithdrawn', outstanding_amount = 0 WHERE application_id = $1 AND status = 'Active'", [appId]);
-    await tx.query("UPDATE disbursement_schedule SET status = 'Skipped' WHERE application_id = $1 AND status = 'Scheduled'", [appId]);
+    // Clear the projection — but NEVER a payout row for a redemption on this
+    // ALREADY EARNED (owner 2026-11-26, Baskaran TTS).
+    //
+    // This sweep exists to clear the PROJECTION — the months that will now
+    // never happen. A Premature / BrokenInterest row dated on or before the
+    // redemption is not a projection: it is money a redemption has already
+    // put on the books, and skipping it is how it stops being payable.
+    //
+    // Two redemptions on one investment on one date: the first wrote its rows,
+    // the second came through here minutes later and Skipped them, then could
+    // not write its own because the unique key (line, date, type) was already
+    // taken. Both rows ended Skipped, the line left the book, and ₹6,246 of
+    // broken interest became unpayable by any sheet — no batch looks at a line
+    // that is no longer outstanding. The same thing happens to an EARLIER
+    // partial redemption's unpaid slice, which is why the guard is by date
+    // rather than by "this redemption's own rows".
+    //
+    // The line's original at-maturity BrokenInterest row is dated far in the
+    // future, so it is still swept, exactly as before.
+    await tx.query(
+      `UPDATE disbursement_schedule SET status = 'Skipped'
+        WHERE application_id = $1 AND status = 'Scheduled'
+          AND NOT (due_type IN ('Premature', 'BrokenInterest') AND due_date <= $2::date)`,
+      [appId, redDate]);
   }
   const red = (await tx.query<{ principal: string; penalty: string; net_payment: string; broken_interest: string; broken_tds: string }>(
     'SELECT principal, penalty, net_payment, broken_interest, broken_tds FROM redemptions WHERE id = $1', [redId])).rows[0]!;
@@ -577,9 +600,20 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
     const brokenGross = Number(red.broken_interest);
     const brokenTds = Number(red.broken_tds);
     const brokenNet = round2(brokenGross - brokenTds);
+    // TWO REDEMPTIONS ON ONE DAY SHARE ONE ROW, so the second ADDS to the
+    // first rather than being dropped (owner 2026-11-26). The unique key is
+    // (line, date, type), so the slot can only hold one row per day — under
+    // DO NOTHING the second redemption's money silently never reached a sheet.
+    // Re-arming `status` matters as much as the sum: a sibling redemption may
+    // have Skipped this row on its way through the full-redemption branch.
     await tx.query(
       `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status)
-       VALUES ($1,$2,$3,'Premature',$4,0,$4,'Scheduled') ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,
+       VALUES ($1,$2,$3,'Premature',$4,0,$4,'Scheduled')
+       ON CONFLICT (line_id, due_date, due_type) DO UPDATE
+         SET gross_amount = disbursement_schedule.gross_amount + EXCLUDED.gross_amount,
+             net_amount   = disbursement_schedule.net_amount   + EXCLUDED.net_amount,
+             status       = 'Scheduled'
+       WHERE disbursement_schedule.status <> 'Paid'`,
       [Number(lineId), appId, redDate, principalNet]);
     if (brokenGross >= 0) {
       // principal_basis = the principal this interest was actually earned on,
@@ -596,9 +630,20 @@ registerOnFinalApprove('premature_redemption', async (tx, req) => {
       // the day right after the last payout genuinely earns ₹0 broken
       // interest, but it still belongs to that month's batch/sheet — the row
       // must exist so it can show up paid at ₹0, not be silently absent.
+      // Same-day sibling: ADD, never drop — see the Premature insert above.
+      // principal_basis adds too, so the sheet's "Invested" still states the
+      // principal this interest was earned on. net stays gross − tds across
+      // the sum, which is what chk_ds_net proves.
       await tx.query(
         `INSERT INTO disbursement_schedule (line_id, application_id, due_date, due_type, gross_amount, tds_amount, net_amount, status, principal_basis)
-         VALUES ($1,$2,$3,'BrokenInterest',$4,$5,$6,'Scheduled',$7) ON CONFLICT (line_id, due_date, due_type) DO NOTHING`,
+         VALUES ($1,$2,$3,'BrokenInterest',$4,$5,$6,'Scheduled',$7)
+         ON CONFLICT (line_id, due_date, due_type) DO UPDATE
+           SET gross_amount    = disbursement_schedule.gross_amount + EXCLUDED.gross_amount,
+               tds_amount      = disbursement_schedule.tds_amount   + EXCLUDED.tds_amount,
+               net_amount      = disbursement_schedule.net_amount   + EXCLUDED.net_amount,
+               principal_basis = COALESCE(disbursement_schedule.principal_basis, 0) + COALESCE(EXCLUDED.principal_basis, 0),
+               status          = 'Scheduled'
+         WHERE disbursement_schedule.status <> 'Paid'`,
         [Number(lineId), appId, redDate, brokenGross, brokenTds, brokenNet, withdrawn]);
     }
   }

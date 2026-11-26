@@ -444,6 +444,23 @@ export function PayoutsPage() {
           {(sheetTotals.addition > 0 || sheetTotals.deduction > 0) && (
             <span className="text-text-muted"> · additions <span className="mono">+{formatINR(sheetTotals.addition)}</span> · deductions <span className="mono">−{formatINR(sheetTotals.deduction)}</span> · payable <span className="mono font-semibold">{formatINR(sheetTotals.total)}</span></span>
           )}
+          {/* THE DOUBLING LINE (owner 2026-11-26: "just a seperate line to
+              easily know how much is in doubling scheme and how much is the
+              accured int as on date").
+              A LINE OF ITS OWN, on purpose: none of this money is in the
+              figures above, because a Doubling holding earns into its maturity
+              value and the batch pays it nothing. Totalled on the server off
+              the same rows the sheet prints, so the two cannot disagree. */}
+          {preview.data.doubling?.amount > 0 && (
+            <div className="mt-2 pt-2 border-t border-border/60 text-text-muted">
+              <span className="text-text-label font-semibold">Doubling scheme</span>{' '}
+              <span className="mono font-semibold text-text">{formatINR(preview.data.doubling.amount)}</span>
+              {' '}· <span className="font-semibold">{preview.data.doubling.investments}</span> NCD{preview.data.doubling.investments === 1 ? '' : 's'}
+              {' '}· <span className="font-semibold">{preview.data.doubling.customers}</span> customer{preview.data.doubling.customers === 1 ? '' : 's'}
+              {' '}· interest accrued as on {date} <span className="mono font-semibold text-text">{formatINR(preview.data.doubling.accrued)}</span>
+              <span className="text-xs"> — earned, not paid in this batch.</span>
+            </div>
+          )}
           {/* Say WHY the downloads are greyed out, instead of leaving dead buttons. */}
           {preview.data.count === 0 && (
             <div className="text-xs text-warn mt-1.5">

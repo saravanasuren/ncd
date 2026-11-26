@@ -421,7 +421,26 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
         AND l.payout_frequency NOT IN ('Monthly', 'Quarterly', 'HalfYearly', 'Annual')
         AND COALESCE(l.outstanding_amount, 0) > 0
       ORDER BY c.full_name`, [productType]);
+  /**
+   * THE DOUBLING LINE (owner 2026-11-26: "in the payout table i need a
+   * seperate line in the last row which says the amount in the doubling
+   * scheme, no of ncd in doubling scheme, no of customers, and accrued
+   * interest … just a seperate line to easily know how much is in doubling
+   * scheme and how much is the accured int as on date").
+   *
+   * Totalled HERE, off the same rows the sheet prints, so the line can never
+   * quote a different figure from the rows underneath it. Returned as its own
+   * object and added to NOTHING: `totals` is money leaving the bank and this
+   * money is not, which is the whole reason these rows are `info_only`.
+   */
+  const doubling = { amount: 0, accrued: 0, investments: 0, customers: 0 };
+  const dblApps = new Set<number>();
+  const dblCustomers = new Set<number>();
   for (const r of infoRows) {
+    doubling.amount += Number(r.outstanding_amount ?? 0);
+    doubling.accrued += accruedAtMaturityFor(r, payoutDate);
+    dblApps.add(Number(r.application_id));
+    dblCustomers.add(Number(r.customer_id));
     out.push({
       line_id: Number(r.line_id), application_id: Number(r.application_id),
       customer_id: Number(r.customer_id),
@@ -440,6 +459,10 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
       info_only: true,
     });
   }
+  doubling.amount = round2(doubling.amount);
+  doubling.accrued = round2(doubling.accrued);
+  doubling.investments = dblApps.size;
+  doubling.customers = dblCustomers.size;
 
   // Same order as the saved-batch sheet (wealth's): each application's rows
   // together, regular interest first and its redemption slices under it. Built
@@ -465,6 +488,9 @@ export async function previewDue(db: Db, payoutDate: string, productType: Produc
       // in the last-batch-vs-this-batch comparison (owner 2026-08-16).
       outstanding: round2(totals.outstanding),
     },
+    // The Doubling / at-maturity holdings as one line, for the screen. NOT part
+    // of `totals` — none of this money is leaving the bank in this batch.
+    doubling,
     // Information-only rows are not payable, so they gate nothing: a month with
     // only Cumulative lines must still refuse to cut a batch.
     count: out.filter((r) => !r.info_only).length,
